@@ -56,7 +56,7 @@ The evidence that Layer 2 is the real moat:
 
 ## Current status
 
-**Pre-MVP — validation phase.** The problem and the strategic wedge have been adversarially fact-checked through deep research (see [docs/RESEARCH_FINDINGS.md](docs/RESEARCH_FINDINGS.md)). We are now defining the product and execution architecture before building.
+**MVP engine built; validating.** The Layer-2 core — run → capture → **self-heal** → verify → reproduce — works end-to-end as a CLI on one pipeline (`nf-core/rnaseq`), built test-first (see [Getting started](#getting-started)). The problem and strategic wedge were adversarially fact-checked through deep research ([docs/RESEARCH_FINDINGS.md](docs/RESEARCH_FINDINGS.md)). Next: willingness-to-pay validation with design partners, and breadth — see [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
 
@@ -77,6 +77,43 @@ The evidence that Layer 2 is the real moat:
 
 ---
 
-## Getting started for contributors
+## Getting started
 
-> _Placeholder._ Setup, local development, and contribution guidelines will land once the MVP architecture is committed. For now, start with [VISION.md](VISION.md) and [docs/RESEARCH_FINDINGS.md](docs/RESEARCH_FINDINGS.md) to understand the bet, then [docs/technical/ARCHITECTURE.md](docs/technical/ARCHITECTURE.md) for the system direction.
+Contig is a Python 3.12 package managed with [`uv`](https://github.com/astral-sh/uv).
+
+```bash
+uv sync                 # create the venv and install deps
+uv run pytest           # run the full test suite
+```
+
+### The CLI
+
+```bash
+uv run contig --help                     # version | plan | run | show | list
+uv run contig run --run-id my-run        # run nf-core/rnaseq, self-heal, verify, report
+uv run contig show my-run                # the verdict + provenance + repair chain of a past run
+uv run contig list                       # all bundled runs
+```
+
+A real `contig run` executes `nf-core/rnaseq` via Nextflow on Docker, so it needs
+**Nextflow** (`brew install nextflow`), a **Java runtime**, and a running
+**Docker** daemon. Set `JAVA_HOME` to a JDK (e.g. Homebrew's `openjdk`).
+
+### What works today (MVP)
+
+The end-to-end **run → capture → self-heal → verify → reproduce** loop:
+
+- runs a real pipeline on your compute and captures every task;
+- on a recoverable failure (OOM, time limit, transient container error) it
+  **diagnoses, applies a safe fix, and re-runs** — bounded and fully logged;
+- **verifies** the result with layered QC (structural, per-sample rule pack,
+  cross-sample) and emits an **honest verdict** (`pass`/`warn`/`fail`/`unverified`);
+- writes a **reproducible bundle** (`run_record.json`) pinning inputs, versions,
+  parameters, QC, and the full repair chain.
+
+Not yet built: the natural-language planning layer (you specify the pipeline),
+a web UI, and breadth beyond RNA-seq. See [docs/ROADMAP.md](docs/ROADMAP.md).
+
+New here? Read [VISION.md](VISION.md) and [docs/RESEARCH_FINDINGS.md](docs/RESEARCH_FINDINGS.md)
+for the bet, then [docs/technical/ARCHITECTURE.md](docs/technical/ARCHITECTURE.md)
+for the system design.
