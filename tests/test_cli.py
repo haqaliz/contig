@@ -17,9 +17,17 @@ TRACE_OK = (
     "task_id\thash\tnative_id\tname\tstatus\texit\tsubmit\tduration\trealtime\n"
     "1\tab/cd\t1\tFASTQC (S1)\tCOMPLETED\t0\t-\t-\t-\n"
 )
-TRACE_FAIL = (
+TRACE_FAIL = (  # unrecoverable tool crash (exit 1) -> self-heal gives up in one attempt
+    "task_id\thash\tnative_id\tname\tstatus\texit\tsubmit\tduration\trealtime\n"
+    "1\tab/cd\t1\tSTAR (S1)\tFAILED\t1\t-\t-\t-\n"
+)
+TRACE_OOM = (  # exit 137 -> OOM -> a safe resource patch the loop can auto-apply
     "task_id\thash\tnative_id\tname\tstatus\texit\tsubmit\tduration\trealtime\n"
     "1\tab/cd\t1\tSTAR (S1)\tFAILED\t137\t-\t-\t-\n"
+)
+TRACE_RUN_OK = (
+    "task_id\thash\tnative_id\tname\tstatus\texit\tsubmit\tduration\trealtime\n"
+    "1\tab/cd\t1\tSTAR (S1)\tCOMPLETED\t0\t-\t-\t-\n"
 )
 
 
@@ -80,6 +88,27 @@ def test_run_reports_failure_but_still_captures_bundle(tmp_path, monkeypatch):
     assert "FAIL" in result.output
     # the bundle was still written despite the failure
     assert (tmp_path / "rf" / "run_record.json").exists()
+
+
+def test_run_self_heals_oom_and_shows_repair_chain(tmp_path, monkeypatch):
+    state = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        p = Path(trace_path)
+        if state["n"] == 1:
+            p.write_text(TRACE_OOM)
+            (p.parent / "run.log").write_text("Process killed: out of memory (exit 137)")
+            return 1
+        p.write_text(TRACE_RUN_OK)
+        (p.parent / "run.log").write_text("ok")
+        return 0
+
+    monkeypatch.setattr("contig.cli.default_executor", executor)
+    result = runner.invoke(app, ["run", "--run-id", "h", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "oom" in result.output.lower()
+    assert "patched_and_retried" in result.output
 
 
 def test_version_prints_package_version():

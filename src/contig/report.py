@@ -28,4 +28,12 @@ def render_run_report(record: RunRecord) -> str:
             lines.append(f"  - {qc.check}: {qc.status.upper()} (value {qc.value})")
     else:
         lines.append("QC checks: no QC checks ran (run is unverified).")
+    if record.repair_history:
+        lines.append("Repair history:")
+        for step in record.repair_history:
+            patch_kind = step.patch.kind if step.patch else "none"
+            lines.append(
+                f"  - attempt {step.attempt}: {step.diagnosis.failure_class} "
+                f"→ {patch_kind} patch → {step.outcome}"
+            )
     return "\n".join(lines)

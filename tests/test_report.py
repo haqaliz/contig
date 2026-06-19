@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from contig.models import (
+    Diagnosis,
     ExecutionTarget,
+    Patch,
     QCResult,
+    RepairStep,
     RunRecord,
     TaskEvent,
 )
@@ -106,6 +109,28 @@ def test_report_states_no_qc_when_empty() -> None:
     report = render_run_report(record)
     assert "UNVERIFIED" in report
     assert "no qc" in report.lower()
+
+
+def test_report_shows_repair_chain_when_present() -> None:
+    record = RunRecord(
+        run_id="r1",
+        pipeline="rnaseq",
+        pipeline_revision="3.26.0",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="ALIGN", status="COMPLETED", exit=0)],
+        repair_history=[
+            RepairStep(
+                attempt=1,
+                diagnosis=Diagnosis(failure_class="oom", root_cause="OOM", evidence=["exit 137"], confidence=0.9),
+                patch=Patch(kind="resource", operation={"multiply": {"memory": 2}}, rationale="bump", risk="safe", expected_signal="no OOM"),
+                outcome="patched_and_retried",
+            )
+        ],
+    )
+    report = render_run_report(record)
+    assert "oom" in report.lower()
+    assert "patched_and_retried" in report
 
 
 def test_report_includes_versions_and_input_count_when_set() -> None:

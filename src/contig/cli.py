@@ -12,9 +12,10 @@ from importlib.metadata import version as _pkg_version
 import typer
 from pydantic import ValidationError
 
-from contig.models import ExecutionTarget
+from contig.models import ExecutionTarget, RunSummary
 from contig.report import render_run_report
-from contig.runner import PipelineExecutionError, default_executor, run_pipeline
+from contig.runner import PipelineExecutionError, default_executor
+from contig.self_heal import self_heal_run
 from contig.workspace import RunNotFoundError, list_run_ids, load_run
 
 app = typer.Typer(help="Contig — agentic bioinformatics analyst.")
@@ -69,9 +70,9 @@ def run(
     backend: str = typer.Option("local", "--backend", help="Execution backend."),
     container_runtime: str = typer.Option("docker", "--container-runtime", help="Container runtime."),
     outdir: str = typer.Option(None, "--outdir", help="Pipeline output directory (pipeline --outdir)."),
-    resume: bool = typer.Option(False, "--resume", help="Resume cached tasks from a prior run."),
+    max_attempts: int = typer.Option(3, "--max-attempts", help="Max self-heal attempts."),
 ) -> None:
-    """Run a pipeline, capture it, verify it, and report the verdict."""
+    """Run a pipeline, self-heal recoverable failures, verify it, and report the verdict."""
     try:
         target = ExecutionTarget(
             backend=backend, container_runtime=container_runtime, work_dir=f"{runs_dir}/{run_id}/work"
@@ -82,7 +83,7 @@ def run(
 
     params = {"outdir": outdir} if outdir else None
     try:
-        record = run_pipeline(
+        record = self_heal_run(
             pipeline=pipeline,
             revision=revision,
             profiles=profiles.split(","),
@@ -92,16 +93,15 @@ def run(
             run_id=run_id,
             executor=default_executor,
             params=params,
-            resume=resume,
+            max_attempts=max_attempts,
         )
     except PipelineExecutionError as exc:
-        typer.echo(f"Run failed (Nextflow exit {exc.returncode}).", err=True)
-        if exc.record is not None:
-            typer.echo("A provenance bundle was still captured:")
-            typer.echo(render_run_report(exc.record))
+        typer.echo(f"Run failed before producing any output (Nextflow exit {exc.returncode}).", err=True)
         raise typer.Exit(code=1)
 
     typer.echo(render_run_report(record))
+    if not RunSummary.from_events(record.events).succeeded:
+        raise typer.Exit(code=1)
 
 
 @app.command()
