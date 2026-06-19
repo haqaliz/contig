@@ -112,3 +112,54 @@ def test_run_record_verdict_is_unverified_when_run_ok_but_no_qc():
 def test_run_record_verdict_is_warn_when_run_ok_and_qc_warns():
     record = _minimal_record([_qc("pass"), _qc("warn")], events=[_OK_TASK])
     assert record.verdict == "warn"
+
+
+def test_diagnosis_rejects_confidence_above_one():
+    from contig.models import Diagnosis
+
+    with pytest.raises(ValidationError):
+        Diagnosis(failure_class="oom", root_cause="x", evidence=["e"], confidence=1.5)
+
+
+def test_patch_rejects_unknown_kind():
+    from contig.models import Patch
+
+    with pytest.raises(ValidationError):
+        Patch(kind="teleport", operation={}, rationale="x", risk="safe", expected_signal="y")
+
+
+def test_repair_step_composes_diagnosis_and_patch():
+    from contig.models import Diagnosis, Patch, RepairStep
+
+    step = RepairStep(
+        attempt=1,
+        diagnosis=Diagnosis(failure_class="oom", root_cause="OOM", evidence=["exit 137"], confidence=0.9),
+        patch=Patch(
+            kind="resource",
+            operation={"set": {"memory": "8.GB"}},
+            rationale="bump memory",
+            risk="safe",
+            expected_signal="no OOM",
+        ),
+        outcome="patched_and_retried",
+    )
+    assert step.diagnosis.failure_class == "oom"
+    assert step.patch.risk == "safe"
+
+
+def test_run_record_repair_history_defaults_empty_and_accepts_steps():
+    from contig.models import RepairStep
+
+    rec = _minimal_record([], events=[_OK_TASK])
+    assert rec.repair_history == []
+    step = RepairStep(
+        attempt=1,
+        diagnosis=__import__("contig.models", fromlist=["Diagnosis"]).Diagnosis(
+            failure_class="unknown", root_cause="?", evidence=[], confidence=0.1
+        ),
+        patch=None,
+        outcome="gave_up",
+    )
+    rec2 = _minimal_record([], events=[_OK_TASK])
+    rec2.repair_history.append(step)
+    assert rec2.repair_history[0].outcome == "gave_up"

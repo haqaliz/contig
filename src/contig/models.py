@@ -11,7 +11,7 @@ import hashlib
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 def sha256_file(path: str | Path, chunk_size: int = 1 << 20) -> str:
@@ -98,6 +98,56 @@ class RunSummary(BaseModel):
         return cls(total_tasks=len(events), failed_tasks=failed, succeeded=failed == 0)
 
 
+# --- Self-healing loop (ARCHITECTURE §5) ---------------------------------------
+
+FailureClass = Literal[
+    "oom",
+    "time_limit",
+    "missing_reference",
+    "missing_index",
+    "bad_param",
+    "container_pull_failed",
+    "container_unavailable",
+    "conda_solve_failed",
+    "tool_crash",
+    "no_progress",
+    "qc_anomaly",
+    "unknown",
+]
+
+
+class Diagnosis(BaseModel):
+    """A structured root-cause hypothesis for a failed run (ARCHITECTURE §5.2)."""
+
+    failure_class: FailureClass
+    root_cause: str
+    evidence: list[str] = []
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class Patch(BaseModel):
+    """A typed, machine-applicable candidate fix (ARCHITECTURE §5.3).
+
+    Never free-text: the operation is a structured change, and `risk` gates
+    whether it auto-applies. `expected_signal` is how DETECT confirms it worked.
+    """
+
+    kind: Literal["param", "resource", "env", "reference", "retry", "code"]
+    operation: dict[str, object]
+    rationale: str
+    risk: Literal["safe", "needs_confirmation", "destructive"]
+    expected_signal: str
+
+
+class RepairStep(BaseModel):
+    """One detect→diagnose→patch→outcome transition in the repair history."""
+
+    attempt: int
+    diagnosis: Diagnosis
+    patch: Patch | None = None
+    outcome: str
+
+
 class RunRecord(BaseModel):
     """The complete, re-runnable record of a run (ARCHITECTURE §7).
 
@@ -117,6 +167,7 @@ class RunRecord(BaseModel):
     events: list[TaskEvent] = []
     qc_results: list[QCResult] = []
     output_checksums: dict[str, str] = {}
+    repair_history: list[RepairStep] = []
 
     @property
     def verdict(self) -> Verdict:
