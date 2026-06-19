@@ -23,6 +23,18 @@ from contig.models import ExecutionTarget, RunRecord
 Executor = Callable[[list[str], Path], int]
 
 
+class PipelineExecutionError(RuntimeError):
+    """Raised when the workflow manager exits nonzero (DETECT, ARCHITECTURE §5.1).
+
+    Surfacing the return code cleanly is the entry point for diagnosis/self-heal;
+    it must not be masked by a downstream missing-trace traceback.
+    """
+
+    def __init__(self, returncode: int):
+        self.returncode = returncode
+        super().__init__(f"Nextflow exited with code {returncode}")
+
+
 def default_executor(cmd: list[str], trace_path: Path) -> int:
     """Run the Nextflow command as a subprocess in the data plane."""
     return subprocess.run(cmd, cwd=trace_path.parent, check=False).returncode
@@ -76,7 +88,9 @@ def run_pipeline(
     trace_path = run_dir / "trace.txt"
 
     cmd = build_nextflow_command(pipeline, revision, profiles, str(trace_path), params)
-    executor(cmd, trace_path)
+    returncode = executor(cmd, trace_path)
+    if returncode != 0:
+        raise PipelineExecutionError(returncode)
 
     events = parse_trace_file(trace_path)
     record = RunRecord(

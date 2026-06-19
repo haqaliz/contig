@@ -1,8 +1,10 @@
 from pathlib import Path
 
+import pytest
+
 from contig.bundle import load_bundle
 from contig.models import ExecutionTarget
-from contig.runner import build_nextflow_command, run_pipeline
+from contig.runner import PipelineExecutionError, build_nextflow_command, run_pipeline
 
 TRACE_2_OK = (
     "task_id\thash\tnative_id\tname\tstatus\texit\tsubmit\tduration\trealtime\n"
@@ -122,3 +124,21 @@ def test_run_pipeline_invokes_executor_with_nextflow_command(tmp_path):
     _run(tmp_path, TRACE_2_OK, executor=capturing)
     assert seen["cmd"][:3] == ["nextflow", "run", "nf-core/rnaseq"]
     assert "-with-trace" in seen["cmd"]
+
+
+def test_run_pipeline_raises_clear_error_on_nonzero_exit(tmp_path):
+    def failing(cmd, trace_path):
+        return 1  # e.g. config parse failure — no trace written
+
+    with pytest.raises(PipelineExecutionError) as exc:
+        _run(tmp_path, TRACE_2_OK, executor=failing)
+    assert "1" in str(exc.value)
+
+
+def test_run_pipeline_error_carries_returncode(tmp_path):
+    def failing(cmd, trace_path):
+        return 137
+
+    with pytest.raises(PipelineExecutionError) as exc:
+        _run(tmp_path, TRACE_2_OK, executor=failing)
+    assert exc.value.returncode == 137
