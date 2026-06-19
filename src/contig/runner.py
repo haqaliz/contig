@@ -15,7 +15,14 @@ from typing import Callable
 
 from contig.bundle import compute_input_checksums, write_bundle
 from contig.events import parse_trace_file
-from contig.models import ExecutionTarget, RunRecord
+from contig.models import ExecutionTarget, QCResult, RunRecord
+from contig.verification.run_qc import evaluate_run_qc
+
+
+def _discover_qc(run_dir: Path) -> list[QCResult]:
+    """Find the run's MultiQC output under run_dir and evaluate it; empty if none."""
+    multiqc = next(run_dir.glob("**/multiqc_data.json"), None)
+    return evaluate_run_qc(multiqc) if multiqc is not None else []
 
 # An executor runs the Nextflow argv and is responsible for the trace file
 # existing at trace_path when it returns. The default shells out; tests inject a
@@ -109,6 +116,7 @@ def run_pipeline(
             input_checksums=compute_input_checksums(input_paths),
             parameters=params or {},
             events=parse_trace_file(trace_path),
+            qc_results=_discover_qc(run_dir),
             nextflow_version=nextflow_version,
             contig_version=_pkg_version("contig"),
         )

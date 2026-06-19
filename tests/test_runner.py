@@ -24,6 +24,20 @@ def _fake_executor(trace_text):
     return execute
 
 
+GOOD_MQC_JSON = '{"report_general_stats_data":[{"S1":{"uniquely_mapped_percent":92.0,"percent_assigned":85.0}}]}'
+LOW_MQC_JSON = '{"report_general_stats_data":[{"S2":{"uniquely_mapped_percent":30.0}}]}'
+
+
+def _executor_with_qc(trace_text, mqc_json):
+    def execute(cmd, trace_path):
+        Path(trace_path).write_text(trace_text)
+        mqc_dir = Path(trace_path).parent / "results" / "multiqc"
+        mqc_dir.mkdir(parents=True, exist_ok=True)
+        (mqc_dir / "multiqc_data.json").write_text(mqc_json)
+        return 0
+    return execute
+
+
 def _local_target(work_dir):
     return ExecutionTarget(backend="local", container_runtime="docker", work_dir=str(work_dir))
 
@@ -106,6 +120,23 @@ def test_run_pipeline_captures_events_from_the_trace(tmp_path):
     assert record.run_id == "run-001"
     assert record.pipeline == "nf-core/rnaseq"
     assert len(record.events) == 2
+
+
+def test_run_pipeline_attaches_qc_and_verdict_passes_on_good_multiqc(tmp_path):
+    record = _run(tmp_path, TRACE_2_OK, executor=_executor_with_qc(TRACE_2_OK, GOOD_MQC_JSON))
+    assert record.qc_results
+    assert record.verdict == "pass"
+
+
+def test_run_pipeline_verdict_fails_on_low_qc_even_when_run_succeeds(tmp_path):
+    record = _run(tmp_path, TRACE_2_OK, executor=_executor_with_qc(TRACE_2_OK, LOW_MQC_JSON))
+    assert record.verdict == "fail"
+
+
+def test_run_pipeline_unverified_when_run_ok_but_no_multiqc_output(tmp_path):
+    record = _run(tmp_path, TRACE_2_OK)  # default fake writes only the trace
+    assert record.qc_results == []
+    assert record.verdict == "unverified"
 
 
 def test_run_pipeline_records_input_checksums(tmp_path):
