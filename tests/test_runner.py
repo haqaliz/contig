@@ -184,3 +184,38 @@ def test_run_pipeline_error_carries_returncode(tmp_path):
     with pytest.raises(PipelineExecutionError) as exc:
         _run(tmp_path, TRACE_2_OK, executor=failing)
     assert exc.value.returncode == 137
+
+
+def test_run_pipeline_captures_bundle_even_when_run_fails(tmp_path):
+    # A partial run: the executor writes a trace (some tasks recorded) then reports
+    # failure. The failure data is the moat — it must still be captured.
+    def failing_with_trace(cmd, trace_path):
+        Path(trace_path).write_text(TRACE_1_FAIL)
+        return 1
+
+    with pytest.raises(PipelineExecutionError):
+        _run(tmp_path, TRACE_1_FAIL, executor=failing_with_trace)
+
+    record = load_bundle(tmp_path / "runs" / "run-001")
+    assert len(record.events) == 1
+    assert record.events[0].is_failure is True
+
+
+def test_run_pipeline_error_carries_captured_record(tmp_path):
+    def failing_with_trace(cmd, trace_path):
+        Path(trace_path).write_text(TRACE_1_FAIL)
+        return 1
+
+    with pytest.raises(PipelineExecutionError) as exc:
+        _run(tmp_path, TRACE_1_FAIL, executor=failing_with_trace)
+    assert exc.value.record is not None
+    assert exc.value.record.run_id == "run-001"
+
+
+def test_run_pipeline_error_has_no_record_when_no_trace_written(tmp_path):
+    def failing_no_trace(cmd, trace_path):
+        return 1  # crashed before producing any trace
+
+    with pytest.raises(PipelineExecutionError) as exc:
+        _run(tmp_path, TRACE_2_OK, executor=failing_no_trace)
+    assert exc.value.record is None

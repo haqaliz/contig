@@ -30,8 +30,9 @@ class PipelineExecutionError(RuntimeError):
     it must not be masked by a downstream missing-trace traceback.
     """
 
-    def __init__(self, returncode: int):
+    def __init__(self, returncode: int, record: "RunRecord | None" = None):
         self.returncode = returncode
+        self.record = record  # whatever was captured before/at failure, for diagnosis
         super().__init__(f"Nextflow exited with code {returncode}")
 
 
@@ -93,20 +94,26 @@ def run_pipeline(
 
     cmd = build_nextflow_command(pipeline, revision, profiles, str(trace_path), params, resume)
     returncode = executor(cmd, trace_path)
-    if returncode != 0:
-        raise PipelineExecutionError(returncode)
 
-    events = parse_trace_file(trace_path)
-    record = RunRecord(
-        run_id=run_id,
-        pipeline=pipeline,
-        pipeline_revision=revision,
-        target=target,
-        input_checksums=compute_input_checksums(input_paths),
-        parameters=params or {},
-        events=events,
-        nextflow_version=nextflow_version,
-        contig_version=_pkg_version("contig"),
-    )
-    write_bundle(record, run_dir)
+    # Capture whatever the run produced — success OR failure. The failure data
+    # (the detect/diagnose input, and the moat) must not be discarded just
+    # because the run exited nonzero. Only when no trace exists is there nothing
+    # to record.
+    record: RunRecord | None = None
+    if trace_path.exists():
+        record = RunRecord(
+            run_id=run_id,
+            pipeline=pipeline,
+            pipeline_revision=revision,
+            target=target,
+            input_checksums=compute_input_checksums(input_paths),
+            parameters=params or {},
+            events=parse_trace_file(trace_path),
+            nextflow_version=nextflow_version,
+            contig_version=_pkg_version("contig"),
+        )
+        write_bundle(record, run_dir)
+
+    if returncode != 0:
+        raise PipelineExecutionError(returncode, record)
     return record
