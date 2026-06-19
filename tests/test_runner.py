@@ -177,7 +177,20 @@ def test_run_pipeline_runs_structural_checks_on_bam_outputs(tmp_path):
     record = _run(tmp_path, TRACE_2_OK, executor=exec_with_bam)
     checks = [r.check for r in record.qc_results]
     assert any(c.startswith("output_present:S1.bam") for c in checks)
-    assert any(c.startswith("index_present:S1.bam") for c in checks)
+
+
+def test_run_pipeline_does_not_fail_unindexed_intermediate_bams(tmp_path):
+    # An intermediate BAM with no index must NOT produce a spurious index_present:fail
+    # that drags the verdict to fail.
+    def exec_with_unindexed_bam(cmd, trace_path):
+        Path(trace_path).write_text(TRACE_2_OK)
+        out = Path(trace_path).parent / "work"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "intermediate.bam").write_bytes(b"BAMDATA")  # no .bai
+        return 0
+
+    record = _run(tmp_path, TRACE_2_OK, executor=exec_with_unindexed_bam)
+    assert not any(c.check.startswith("index_present") for c in record.qc_results)
 
 
 def test_run_pipeline_unverified_when_run_ok_but_no_multiqc_output(tmp_path):
@@ -203,6 +216,7 @@ def test_run_pipeline_verdict_reflects_failed_task_via_summary(tmp_path):
     from contig.models import RunSummary
 
     assert RunSummary.from_events(record.events).succeeded is False
+    assert record.verdict == "fail"
 
 
 def test_run_pipeline_invokes_executor_with_nextflow_command(tmp_path):

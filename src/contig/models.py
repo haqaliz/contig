@@ -57,7 +57,13 @@ class QCResult(BaseModel):
 
 
 def overall_verdict(results: list[QCResult]) -> QCStatus:
-    """Reduce QC results to a single verdict; a fail dominates a warn, a warn a pass."""
+    """Reduce QC results to a single verdict; a fail dominates a warn, a warn a pass.
+
+    Refuses an empty list: "all of nothing passed" is the false-pass we must never
+    emit (PRODUCT_SPEC). Callers with no checks should report "unverified" instead.
+    """
+    if not results:
+        raise ValueError("overall_verdict requires at least one QC result; use 'unverified'")
     statuses = {r.status for r in results}
     if "fail" in statuses:
         return "fail"

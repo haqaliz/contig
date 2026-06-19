@@ -28,5 +28,15 @@ def load_bundle(dest_dir: str | Path) -> RunRecord:
 
 
 def compute_input_checksums(paths: list[str | Path]) -> dict[str, str]:
-    """Map each input file's basename to its SHA-256, for RunRecord.input_checksums."""
-    return {Path(p).name: sha256_file(p) for p in paths}
+    """Map each input file's basename to its SHA-256, for RunRecord.input_checksums.
+
+    Basenames keep the provenance portable, but two inputs sharing a basename would
+    silently clobber — corrupting the record — so a collision is a hard error.
+    """
+    checksums: dict[str, str] = {}
+    for p in paths:
+        name = Path(p).name
+        if name in checksums:
+            raise ValueError(f"duplicate input basename {name!r}; inputs must have unique names")
+        checksums[name] = sha256_file(p)
+    return checksums

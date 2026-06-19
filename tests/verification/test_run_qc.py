@@ -38,6 +38,14 @@ TWO_SAMPLE_MQC = (
 )
 
 
+def test_evaluate_run_qc_returns_empty_for_no_metrics(tmp_path):
+    # MultiQC present but with no general-stats samples -> no QC ran -> unverified,
+    # NOT a spurious min_sample_count fail.
+    f = tmp_path / "multiqc_data.json"
+    f.write_text('{"report_general_stats_data": []}')
+    assert evaluate_run_qc(f) == []
+
+
 def test_evaluate_run_qc_includes_cross_sample_checks(tmp_path):
     f = tmp_path / "multiqc_data.json"
     f.write_text(TWO_SAMPLE_MQC)

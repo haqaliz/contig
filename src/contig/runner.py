@@ -9,9 +9,18 @@ assembly is layered on once the toolchain (Nextflow/Docker) is present.
 from __future__ import annotations
 
 import subprocess
+from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import Callable
+
+
+def _contig_version() -> str | None:
+    """Contig's installed version, or None in a non-installed (raw PYTHONPATH) setup."""
+    try:
+        return _pkg_version("contig")
+    except PackageNotFoundError:
+        return None
 
 from contig.bundle import compute_input_checksums, write_bundle
 from contig.events import parse_trace_file
@@ -26,9 +35,12 @@ def _discover_qc(run_dir: Path) -> list[QCResult]:
     multiqc = next(run_dir.glob("**/multiqc_data.json"), None)
     if multiqc is not None:
         results.extend(evaluate_run_qc(multiqc))
+    # Check that BAM outputs exist and are non-empty. We do NOT blanket-check for
+    # indexes here: many BAMs are intermediates that are never indexed, and a
+    # spurious index_present:fail would wrongly drag the verdict to "fail".
     bams = sorted(run_dir.glob("**/*.bam"))
     if bams:
-        results.extend(evaluate_structural(bams, index_for=bams))
+        results.extend(evaluate_structural(bams))
     return results
 
 # An executor runs the Nextflow argv and is responsible for the trace file
@@ -140,10 +152,13 @@ def run_pipeline(
             events=parse_trace_file(trace_path),
             qc_results=_discover_qc(run_dir),
             nextflow_version=nextflow_version,
-            contig_version=_pkg_version("contig"),
+            contig_version=_contig_version(),
         )
         write_bundle(record, run_dir)
 
     if returncode != 0:
         raise PipelineExecutionError(returncode, record)
+    # A clean exit must have produced a trace (hence a record); guard the contract
+    # so a silent None can never escape as a "successful" run.
+    assert record is not None, "successful run produced no trace to capture"
     return record

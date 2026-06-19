@@ -20,6 +20,8 @@ def evaluate_run_qc(
 ) -> list[QCResult]:
     """Evaluate a run's MultiQC metrics: per-sample rule pack + cross-sample checks."""
     metrics = parse_multiqc_general_stats_file(multiqc_json_path)
+    if not metrics:
+        return []  # no samples to verify -> caller reports "unverified", not "fail"
     results = evaluate(metrics, rule_pack)
     results.extend(evaluate_cross_sample(metrics))
     return results

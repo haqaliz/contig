@@ -80,6 +80,21 @@ def test_compute_input_checksums_maps_basename_to_sha256(tmp_path):
     assert sums["a.fastq"] == sums["b.fastq"]
 
 
+def test_compute_input_checksums_rejects_duplicate_basenames(tmp_path):
+    import pytest
+
+    d1 = tmp_path / "s1"
+    d1.mkdir()
+    d2 = tmp_path / "s2"
+    d2.mkdir()
+    f1 = d1 / "reads.fastq"
+    f1.write_bytes(b"x")
+    f2 = d2 / "reads.fastq"
+    f2.write_bytes(b"y")
+    with pytest.raises(ValueError):
+        compute_input_checksums([f1, f2])
+
+
 def test_load_preserves_fail_verdict(tmp_path):
     rec = _minimal_record()
     rec.qc_results = [QCResult(check="contamination", status="fail", message="too high")]

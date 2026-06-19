@@ -65,6 +65,19 @@ def test_parse_trace_file_matches_parse_trace_text(tmp_path):
     assert parse_trace_file(trace) == parse_trace_text(text)
 
 
+def test_columns_resolved_by_header_name_not_position():
+    # A custom Nextflow trace.fields order must NOT feed garbage to the detector.
+    text = (
+        "status\tname\texit\ttask_id\n"
+        "FAILED\tNFCORE_RNASEQ:RNASEQ:STAR_ALIGN (S1)\t137\t7\n"
+    )
+    events = parse_trace_text(text)
+    assert events[0].status == "FAILED"
+    assert events[0].process == "NFCORE_RNASEQ:RNASEQ:STAR_ALIGN (S1)"
+    assert events[0].exit == 137
+    assert events[0].task_id == "7"
+
+
 def test_blank_and_trailing_lines_are_ignored():
     text = (
         "task_id\thash\tnative_id\tname\tstatus\texit\tsubmit\tduration\trealtime\n"

@@ -18,19 +18,34 @@ from contig.models import RunSummary, TaskEvent
 
 
 def parse_trace_text(text: str) -> list[TaskEvent]:
-    """Parse a Nextflow trace TSV string into terminal task events."""
+    """Parse a Nextflow trace TSV string into terminal task events.
+
+    Columns are resolved by header NAME, not position: Nextflow's `trace.fields`
+    is configurable, and the detector keys on process/exit — a positional parse
+    would silently feed it garbage under a non-default column order.
+    """
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return []
+    header = lines[0].split("\t")
+    col = {name: i for i, name in enumerate(header)}
+
+    def field(fields: list[str], name: str) -> str | None:
+        i = col.get(name)
+        return fields[i] if i is not None and i < len(fields) else None
+
     events: list[TaskEvent] = []
-    for line in text.splitlines()[1:]:
-        if not line.strip():
-            continue
+    for line in lines[1:]:
         fields = line.split("\t")
+        name = field(fields, "name")
+        exit_raw = field(fields, "exit")
         events.append(
             TaskEvent(
-                process=fields[3],
-                status=fields[4],
-                exit=None if fields[5] == "-" else int(fields[5]),
-                task_id=fields[0],
-                name=fields[3],
+                process=name or "",
+                status=field(fields, "status") or "",
+                exit=None if exit_raw in (None, "-", "") else int(exit_raw),
+                task_id=field(fields, "task_id"),
+                name=name,
             )
         )
     return events

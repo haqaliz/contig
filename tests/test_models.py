@@ -38,6 +38,11 @@ def test_overall_verdict_pass_when_all_pass():
     assert overall_verdict([_qc("pass"), _qc("pass")]) == "pass"
 
 
+def test_overall_verdict_rejects_empty_list_to_prevent_false_pass():
+    with pytest.raises(ValueError):
+        overall_verdict([])
+
+
 def test_task_event_is_failure_on_failed_status():
     assert TaskEvent(process="STAR_ALIGN", status="FAILED").is_failure is True
 
