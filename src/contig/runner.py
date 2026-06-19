@@ -17,12 +17,19 @@ from contig.bundle import compute_input_checksums, write_bundle
 from contig.events import parse_trace_file
 from contig.models import ExecutionTarget, QCResult, RunRecord
 from contig.verification.run_qc import evaluate_run_qc
+from contig.verification.structural import evaluate_structural
 
 
 def _discover_qc(run_dir: Path) -> list[QCResult]:
-    """Find the run's MultiQC output under run_dir and evaluate it; empty if none."""
+    """Verify a finished run: MultiQC metric checks + structural checks on outputs."""
+    results: list[QCResult] = []
     multiqc = next(run_dir.glob("**/multiqc_data.json"), None)
-    return evaluate_run_qc(multiqc) if multiqc is not None else []
+    if multiqc is not None:
+        results.extend(evaluate_run_qc(multiqc))
+    bams = sorted(run_dir.glob("**/*.bam"))
+    if bams:
+        results.extend(evaluate_structural(bams, index_for=bams))
+    return results
 
 # An executor runs the Nextflow argv and is responsible for the trace file
 # existing at trace_path when it returns. The default shells out; tests inject a

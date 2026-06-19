@@ -8,7 +8,11 @@ from contig.models import ExecutionTarget, RunRecord, TaskEvent
 
 runner = CliRunner()
 
-GOOD_MQC = '{"report_general_stats_data":[{"S1":{"uniquely_mapped_percent":92.0,"percent_assigned":85.0}}]}'
+GOOD_MQC = (
+    '{"report_general_stats_data":[{'
+    '"S1":{"uniquely_mapped_percent":92.0,"percent_assigned":85.0,"total_reads":1000000.0},'
+    '"S2":{"uniquely_mapped_percent":90.0,"percent_assigned":84.0,"total_reads":1100000.0}}]}'
+)
 TRACE_OK = (
     "task_id\thash\tnative_id\tname\tstatus\texit\tsubmit\tduration\trealtime\n"
     "1\tab/cd\t1\tFASTQC (S1)\tCOMPLETED\t0\t-\t-\t-\n"

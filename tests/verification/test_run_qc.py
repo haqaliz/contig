@@ -1,7 +1,11 @@
 from contig.models import ExecutionTarget, RunRecord, TaskEvent
 from contig.verification.run_qc import evaluate_run_qc
 
-GOOD_MQC = '{"report_general_stats_data":[{"S1":{"uniquely_mapped_percent":92.0,"percent_assigned":85.0}}]}'
+GOOD_MQC = (
+    '{"report_general_stats_data":[{'
+    '"S1":{"uniquely_mapped_percent":92.0,"percent_assigned":85.0,"total_reads":1000000.0},'
+    '"S2":{"uniquely_mapped_percent":90.0,"percent_assigned":84.0,"total_reads":1100000.0}}]}'
+)
 BAD_MQC = '{"report_general_stats_data":[{"S2":{"uniquely_mapped_percent":30.0}}]}'
 
 
@@ -25,6 +29,22 @@ def test_evaluate_run_qc_uses_default_rnaseq_pack(tmp_path):
     f.write_text(GOOD_MQC)
     results = evaluate_run_qc(f)
     assert any(r.check.startswith("alignment_rate") for r in results)
+
+
+TWO_SAMPLE_MQC = (
+    '{"report_general_stats_data":[{'
+    '"S1":{"uniquely_mapped_percent":90.0,"percent_assigned":85.0,"total_reads":1000000.0},'
+    '"S2":{"uniquely_mapped_percent":91.0,"percent_assigned":86.0,"total_reads":1050000.0}}]}'
+)
+
+
+def test_evaluate_run_qc_includes_cross_sample_checks(tmp_path):
+    f = tmp_path / "multiqc_data.json"
+    f.write_text(TWO_SAMPLE_MQC)
+    results = evaluate_run_qc(f)
+    checks = [r.check for r in results]
+    assert any(c.startswith("min_sample_count") for c in checks)
+    assert any(c.startswith("library_size_skew") for c in checks)
 
 
 def test_successful_run_with_good_qc_reads_pass(tmp_path):

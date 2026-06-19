@@ -24,7 +24,11 @@ def _fake_executor(trace_text):
     return execute
 
 
-GOOD_MQC_JSON = '{"report_general_stats_data":[{"S1":{"uniquely_mapped_percent":92.0,"percent_assigned":85.0}}]}'
+GOOD_MQC_JSON = (
+    '{"report_general_stats_data":[{'
+    '"S1":{"uniquely_mapped_percent":92.0,"percent_assigned":85.0,"total_reads":1000000.0},'
+    '"S2":{"uniquely_mapped_percent":90.0,"percent_assigned":84.0,"total_reads":1100000.0}}]}'
+)
 LOW_MQC_JSON = '{"report_general_stats_data":[{"S2":{"uniquely_mapped_percent":30.0}}]}'
 
 
@@ -131,6 +135,21 @@ def test_run_pipeline_attaches_qc_and_verdict_passes_on_good_multiqc(tmp_path):
 def test_run_pipeline_verdict_fails_on_low_qc_even_when_run_succeeds(tmp_path):
     record = _run(tmp_path, TRACE_2_OK, executor=_executor_with_qc(TRACE_2_OK, LOW_MQC_JSON))
     assert record.verdict == "fail"
+
+
+def test_run_pipeline_runs_structural_checks_on_bam_outputs(tmp_path):
+    def exec_with_bam(cmd, trace_path):
+        Path(trace_path).write_text(TRACE_2_OK)
+        out = Path(trace_path).parent / "results" / "star"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "S1.bam").write_bytes(b"BAMDATA")
+        (out / "S1.bam.bai").write_bytes(b"IDX")
+        return 0
+
+    record = _run(tmp_path, TRACE_2_OK, executor=exec_with_bam)
+    checks = [r.check for r in record.qc_results]
+    assert any(c.startswith("output_present:S1.bam") for c in checks)
+    assert any(c.startswith("index_present:S1.bam") for c in checks)
 
 
 def test_run_pipeline_unverified_when_run_ok_but_no_multiqc_output(tmp_path):

@@ -9,6 +9,7 @@ from __future__ import annotations
 from os import PathLike
 
 from contig.models import QCResult
+from contig.verification.cross_sample import evaluate_cross_sample
 from contig.verification.qc_ingest import parse_multiqc_general_stats_file
 from contig.verification.rule_pack import RNASEQ_RULE_PACK, evaluate
 
@@ -17,6 +18,8 @@ def evaluate_run_qc(
     multiqc_json_path: str | PathLike[str],
     rule_pack: list[dict] = RNASEQ_RULE_PACK,
 ) -> list[QCResult]:
-    """Ingest a run's MultiQC general stats and evaluate them against a rule pack."""
+    """Evaluate a run's MultiQC metrics: per-sample rule pack + cross-sample checks."""
     metrics = parse_multiqc_general_stats_file(multiqc_json_path)
-    return evaluate(metrics, rule_pack)
+    results = evaluate(metrics, rule_pack)
+    results.extend(evaluate_cross_sample(metrics))
+    return results
