@@ -126,6 +126,34 @@ def test_run_pipeline_invokes_executor_with_nextflow_command(tmp_path):
     assert "-with-trace" in seen["cmd"]
 
 
+def test_run_pipeline_passes_absolute_trace_path_even_when_runs_dir_relative(tmp_path, monkeypatch):
+    # Nextflow runs with cwd=run_dir; a relative -with-trace path would resolve
+    # against that cwd and land nested, so run_pipeline must absolutize it.
+    monkeypatch.chdir(tmp_path)
+    seen = {}
+
+    def capturing(cmd, trace_path):
+        seen["trace_path"] = Path(trace_path)
+        seen["cmd_trace"] = cmd[cmd.index("-with-trace") + 1]
+        Path(trace_path).write_text(TRACE_2_OK)
+        return 0
+
+    reads = tmp_path / "reads_R1.fastq.gz"
+    reads.write_bytes(b"x")
+    run_pipeline(
+        pipeline="nf-core/rnaseq",
+        revision="3.26.0",
+        profiles=["test", "docker"],
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_paths=[reads],
+        runs_dir="runs",  # relative on purpose
+        run_id="r1",
+        executor=capturing,
+    )
+    assert seen["trace_path"].is_absolute()
+    assert Path(seen["cmd_trace"]).is_absolute()
+
+
 def test_run_pipeline_raises_clear_error_on_nonzero_exit(tmp_path):
     def failing(cmd, trace_path):
         return 1  # e.g. config parse failure — no trace written

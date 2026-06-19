@@ -83,7 +83,7 @@ def run_pipeline(
     ingest the trace into events, assemble the provenance record, and persist a
     portable reproduce-bundle. The result is a run we can prove and re-run.
     """
-    run_dir = Path(runs_dir) / run_id
+    run_dir = (Path(runs_dir) / run_id).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
     trace_path = run_dir / "trace.txt"
 
