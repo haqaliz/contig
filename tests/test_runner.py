@@ -4,7 +4,35 @@ import pytest
 
 from contig.bundle import load_bundle
 from contig.models import ExecutionTarget
-from contig.runner import PipelineExecutionError, build_nextflow_command, run_pipeline
+from contig.runner import (
+    PipelineExecutionError,
+    build_nextflow_command,
+    default_executor,
+    read_run_log,
+    run_pipeline,
+)
+
+
+def test_default_executor_tees_stdout_and_stderr_to_run_log(tmp_path):
+    trace = tmp_path / "trace.txt"
+    rc = default_executor(["sh", "-c", "echo to_out; echo to_err >&2"], trace)
+    assert rc == 0
+    log = (tmp_path / "run.log").read_text()
+    assert "to_out" in log and "to_err" in log
+
+
+def test_default_executor_returns_nonzero_exit(tmp_path):
+    trace = tmp_path / "trace.txt"
+    assert default_executor(["sh", "-c", "exit 3"], trace) == 3
+
+
+def test_read_run_log_returns_text_when_present(tmp_path):
+    (tmp_path / "run.log").write_text("boom: out of memory")
+    assert "out of memory" in read_run_log(tmp_path)
+
+
+def test_read_run_log_returns_empty_when_absent(tmp_path):
+    assert read_run_log(tmp_path) == ""
 
 TRACE_2_OK = (
     "task_id\thash\tnative_id\tname\tstatus\texit\tsubmit\tduration\trealtime\n"

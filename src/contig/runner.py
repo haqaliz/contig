@@ -51,8 +51,23 @@ class PipelineExecutionError(RuntimeError):
 
 
 def default_executor(cmd: list[str], trace_path: Path) -> int:
-    """Run the Nextflow command as a subprocess in the data plane."""
-    return subprocess.run(cmd, cwd=trace_path.parent, check=False).returncode
+    """Run Nextflow in the data plane, teeing stdout+stderr to run.log.
+
+    The log is the detector's primary input (ARCHITECTURE §5.1): it carries the
+    failing process, command, and stderr that classification keys off.
+    """
+    log_path = trace_path.parent / "run.log"
+    with open(log_path, "wb") as log:
+        proc = subprocess.run(
+            cmd, cwd=trace_path.parent, stdout=log, stderr=subprocess.STDOUT, check=False
+        )
+    return proc.returncode
+
+
+def read_run_log(run_dir: str | Path) -> str:
+    """Return the captured run.log text for a run, or '' if none was written."""
+    log_path = Path(run_dir) / "run.log"
+    return log_path.read_text() if log_path.exists() else ""
 
 
 def build_nextflow_command(
