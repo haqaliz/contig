@@ -72,7 +72,7 @@ def test_sha256_file_matches_known_digest(tmp_path):
     assert sha256_file(f) == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
 
 
-def _minimal_record(qc_results):
+def _minimal_record(qc_results, events=None):
     return RunRecord(
         run_id="run-001",
         pipeline="nf-core/rnaseq",
@@ -81,14 +81,34 @@ def _minimal_record(qc_results):
         input_checksums={"reads_R1.fastq.gz": "abc123"},
         parameters={"aligner": "star_salmon"},
         qc_results=qc_results,
+        events=events or [],
     )
 
 
+_OK_TASK = TaskEvent(process="FASTQC", status="COMPLETED", exit=0)
+_BAD_TASK = TaskEvent(process="STAR_ALIGN", status="FAILED", exit=1)
+
+
 def test_run_record_verdict_is_fail_when_any_qc_fails():
-    record = _minimal_record([_qc("pass"), _qc("fail")])
+    record = _minimal_record([_qc("pass"), _qc("fail")], events=[_OK_TASK])
     assert record.verdict == "fail"
 
 
-def test_run_record_verdict_is_pass_when_all_qc_pass():
-    record = _minimal_record([_qc("pass"), _qc("pass")])
+def test_run_record_verdict_is_pass_when_run_ok_and_all_qc_pass():
+    record = _minimal_record([_qc("pass"), _qc("pass")], events=[_OK_TASK])
     assert record.verdict == "pass"
+
+
+def test_run_record_verdict_is_fail_when_a_task_failed_even_if_qc_passes():
+    record = _minimal_record([_qc("pass")], events=[_OK_TASK, _BAD_TASK])
+    assert record.verdict == "fail"
+
+
+def test_run_record_verdict_is_unverified_when_run_ok_but_no_qc():
+    record = _minimal_record([], events=[_OK_TASK])
+    assert record.verdict == "unverified"
+
+
+def test_run_record_verdict_is_warn_when_run_ok_and_qc_warns():
+    record = _minimal_record([_qc("pass"), _qc("warn")], events=[_OK_TASK])
+    assert record.verdict == "warn"

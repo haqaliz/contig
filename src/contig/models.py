@@ -41,6 +41,9 @@ class ExecutionTarget(BaseModel):
 
 
 QCStatus = Literal["pass", "warn", "fail"]
+# Run-level verdict adds "unverified": the run completed but no QC check covered
+# it, so we must not claim it is verified (PRODUCT_SPEC: false-pass rate ~0).
+Verdict = Literal["pass", "warn", "fail", "unverified"]
 
 
 class QCResult(BaseModel):
@@ -116,5 +119,14 @@ class RunRecord(BaseModel):
     output_checksums: dict[str, str] = {}
 
     @property
-    def verdict(self) -> QCStatus:
+    def verdict(self) -> Verdict:
+        """Conservative, honest verdict (ARCHITECTURE §6; PRODUCT_SPEC trust model).
+
+        A run that did not complete cannot be trusted regardless of QC; a run with
+        no QC coverage is "unverified", never "pass".
+        """
+        if not RunSummary.from_events(self.events).succeeded:
+            return "fail"
+        if not self.qc_results:
+            return "unverified"
         return overall_verdict(self.qc_results)
