@@ -80,6 +80,20 @@ def test_command_appends_params_as_double_dash_flags():
     assert cmd[i + 1] == "star_salmon"
 
 
+def test_command_includes_resume_flag_when_requested():
+    cmd = build_nextflow_command(
+        pipeline="nf-core/rnaseq", revision="3.26.0", profiles=["test"], trace_path="t.txt", resume=True
+    )
+    assert "-resume" in cmd
+
+
+def test_command_omits_resume_flag_by_default():
+    cmd = build_nextflow_command(
+        pipeline="nf-core/rnaseq", revision="3.26.0", profiles=["test"], trace_path="t.txt"
+    )
+    assert "-resume" not in cmd
+
+
 def test_command_with_no_params_has_no_double_dash_flags():
     cmd = build_nextflow_command(
         pipeline="nf-core/rnaseq", revision="3.14.0", profiles=["test"], trace_path="trace.txt"

@@ -46,6 +46,7 @@ def build_nextflow_command(
     profiles: list[str],
     trace_path: str,
     params: dict[str, object] | None = None,
+    resume: bool = False,
 ) -> list[str]:
     """Construct the `nextflow run` argv for a pipeline, with trace capture wired in."""
     cmd = [
@@ -59,6 +60,8 @@ def build_nextflow_command(
         "-with-trace",
         trace_path,
     ]
+    if resume:
+        cmd.append("-resume")
     for key, value in (params or {}).items():
         cmd += [f"--{key}", str(value)]
     return cmd
@@ -76,6 +79,7 @@ def run_pipeline(
     executor: Executor = default_executor,
     params: dict[str, object] | None = None,
     nextflow_version: str | None = None,
+    resume: bool = False,
 ) -> RunRecord:
     """Run a pipeline and capture it into a reproducible, bundled RunRecord.
 
@@ -87,7 +91,7 @@ def run_pipeline(
     run_dir.mkdir(parents=True, exist_ok=True)
     trace_path = run_dir / "trace.txt"
 
-    cmd = build_nextflow_command(pipeline, revision, profiles, str(trace_path), params)
+    cmd = build_nextflow_command(pipeline, revision, profiles, str(trace_path), params, resume)
     returncode = executor(cmd, trace_path)
     if returncode != 0:
         raise PipelineExecutionError(returncode)
