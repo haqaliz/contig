@@ -104,6 +104,40 @@ class RunSummary(BaseModel):
         return cls(total_tasks=len(events), failed_tasks=failed, succeeded=failed == 0)
 
 
+# --- Planning / intake (ARCHITECTURE §P4) --------------------------------------
+# A thin layer that maps a goal + data shape to a CURATED pipeline and proposes
+# params for the user to approve. The NL→assay step is a replaceable provider —
+# the moat is the curated registry + the run/verify engine, not the prompting.
+
+
+class PipelineEntry(BaseModel):
+    """One curated pipeline in the registry: which pipeline serves which assay."""
+
+    assay: str
+    pipeline: str
+    revision: str
+    description: str
+
+
+class DataShape(BaseModel):
+    """What the input data looks like, inferred from the sample sheet."""
+
+    n_samples: int
+    layout: Literal["paired", "single", "mixed"]
+    warnings: list[str] = []
+
+
+class Plan(BaseModel):
+    """A proposed, human-readable analysis plan to approve before running."""
+
+    assay: str
+    pipeline: str
+    revision: str
+    params: dict[str, object] = {}
+    rationale: str
+    warnings: list[str] = []
+
+
 # --- Self-healing loop (ARCHITECTURE §5) ---------------------------------------
 
 FailureClass = Literal[

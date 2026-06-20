@@ -152,6 +152,47 @@ def test_repair_step_composes_diagnosis_and_patch():
     assert step.patch.risk == "safe"
 
 
+def test_pipeline_entry_holds_assay_pipeline_revision():
+    from contig.models import PipelineEntry
+
+    entry = PipelineEntry(assay="rnaseq", pipeline="nf-core/rnaseq", revision="3.26.0", description="RNA-seq DE")
+    assert entry.assay == "rnaseq"
+    assert entry.pipeline == "nf-core/rnaseq"
+    assert entry.revision == "3.26.0"
+
+
+def test_data_shape_rejects_unknown_layout():
+    from contig.models import DataShape
+
+    with pytest.raises(ValidationError):
+        DataShape(n_samples=2, layout="quantum", warnings=[])
+
+
+def test_data_shape_holds_sample_count_and_warnings():
+    from contig.models import DataShape
+
+    shape = DataShape(n_samples=1, layout="single", warnings=["only 1 sample; needs replicates"])
+    assert shape.n_samples == 1
+    assert shape.layout == "single"
+    assert "replicates" in shape.warnings[0]
+
+
+def test_plan_composes_pipeline_params_and_warnings():
+    from contig.models import Plan
+
+    plan = Plan(
+        assay="rnaseq",
+        pipeline="nf-core/rnaseq",
+        revision="3.26.0",
+        params={"input": "samplesheet.csv", "genome": "GRCh38"},
+        rationale="goal 'find DE genes' → rnaseq",
+        warnings=["single-end reads detected"],
+    )
+    assert plan.pipeline == "nf-core/rnaseq"
+    assert plan.params["genome"] == "GRCh38"
+    assert plan.warnings == ["single-end reads detected"]
+
+
 def test_run_record_repair_history_defaults_empty_and_accepts_steps():
     from contig.models import RepairStep
 
