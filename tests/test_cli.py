@@ -173,26 +173,32 @@ def test_version_prints_package_version():
     assert "0.0.1" in result.output
 
 
-def test_plan_shows_default_pipeline():
-    result = runner.invoke(app, ["plan", "--work-dir", "/tmp/run"])
-    assert result.exit_code == 0
-    assert "nf-core/rnaseq" in result.output
-
-
-def test_plan_mentions_chosen_backend():
-    result = runner.invoke(app, ["plan", "--work-dir", "/tmp/run", "--backend", "slurm"])
-    assert result.exit_code == 0
-    assert "slurm" in result.output
-
-
-def test_plan_rejects_invalid_backend():
-    result = runner.invoke(app, ["plan", "--work-dir", "/tmp/run", "--backend", "bogus"])
-    assert result.exit_code != 0
-
-
-def test_plan_echoes_custom_pipeline():
+def test_plan_proposes_rnaseq_for_a_de_goal(tmp_path):
+    sheet = _make_sheet(tmp_path)
     result = runner.invoke(
-        app, ["plan", "--work-dir", "/tmp/run", "--pipeline", "nf-core/sarek"]
+        app,
+        ["plan", "--goal", "find differentially expressed genes",
+         "--input", str(sheet), "--genome", "GRCh38"],
     )
     assert result.exit_code == 0
-    assert "nf-core/sarek" in result.output
+    assert "nf-core/rnaseq" in result.output
+    assert "GRCh38" in result.output
+
+
+def test_plan_warns_about_replicates_on_single_sample(tmp_path):
+    sheet = _make_sheet(tmp_path)  # one sample
+    result = runner.invoke(
+        app,
+        ["plan", "--goal", "RNA-seq differential expression",
+         "--input", str(sheet), "--genome", "GRCh38"],
+    )
+    assert result.exit_code == 0
+    assert "replicates" in result.output
+
+
+def test_plan_rejects_an_unrecognized_goal(tmp_path):
+    sheet = _make_sheet(tmp_path)
+    result = runner.invoke(
+        app, ["plan", "--goal", "assemble a de novo bacterial genome", "--input", str(sheet)]
+    )
+    assert result.exit_code != 0

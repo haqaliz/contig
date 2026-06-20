@@ -13,6 +13,8 @@ import typer
 from pydantic import ValidationError
 
 from contig.models import ExecutionTarget, RunSummary
+from contig.planner import PlanningError
+from contig.planner import plan as build_plan
 from contig.reference import ReferenceError, resolve_reference
 from contig.report import render_run_report
 from contig.runner import PipelineExecutionError, default_executor
@@ -36,30 +38,32 @@ def version() -> None:
 
 @app.command()
 def plan(
-    work_dir: str = typer.Option(..., "--work-dir", help="Run working directory."),
-    backend: str = typer.Option("local", "--backend", help="Execution backend."),
-    container_runtime: str = typer.Option(
-        "docker", "--container-runtime", help="Container runtime."
-    ),
-    pipeline: str = typer.Option(
-        "nf-core/rnaseq", "--pipeline", help="Pipeline to run."
-    ),
+    goal: str = typer.Option(..., "--goal", help="What you want to find out, in plain language."),
+    input: str = typer.Option(..., "--input", help="Sample sheet CSV."),
+    genome: str = typer.Option(None, "--genome", help="iGenomes reference key (e.g. GRCh38)."),
+    fasta: str = typer.Option(None, "--fasta", help="Reference FASTA (with --gtf)."),
+    gtf: str = typer.Option(None, "--gtf", help="Reference GTF annotation (with --fasta)."),
 ) -> None:
-    """Construct and echo the execution plan (no run is performed)."""
+    """Propose an analysis plan (pipeline + params) from a goal + data, to approve before running."""
+    reference = None
+    if genome or fasta or gtf:
+        try:
+            reference = resolve_reference(genome=genome, fasta=fasta, gtf=gtf)
+        except ReferenceError as exc:
+            typer.echo(f"Reference error: {exc}", err=True)
+            raise typer.Exit(code=1)
     try:
-        target = ExecutionTarget(
-            backend=backend,
-            container_runtime=container_runtime,
-            work_dir=work_dir,
-        )
-    except ValidationError as exc:
-        typer.echo(f"Invalid execution target: {exc}", err=True)
+        proposed = build_plan(goal, input, reference_params=reference)
+    except PlanningError as exc:
+        typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
 
-    typer.echo(
-        f"Plan: run {pipeline} on {target.backend} "
-        f"using {target.container_runtime} (work_dir={target.work_dir})"
-    )
+    typer.echo(f"Plan: {proposed.pipeline} @ {proposed.revision}  (assay: {proposed.assay})")
+    typer.echo(f"  {proposed.rationale}")
+    params_str = ", ".join(f"{k}={v}" for k, v in proposed.params.items())
+    typer.echo(f"  params: {params_str}")
+    for warning in proposed.warnings:
+        typer.echo(f"  ⚠ {warning}")
 
 
 @app.command()
