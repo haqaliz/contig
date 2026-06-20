@@ -169,6 +169,31 @@ Each run writes `runs/<id>/run_record.json` — a portable record pinning inputs
 result, and the full repair chain. `contig show <id>` re-reads it; hand the
 bundle to a colleague (or a reviewer) to reproduce the result.
 
+### Where it runs (compute backends)
+
+The same run lands unchanged on your laptop or your cloud — Contig maps the
+target to a generated `nextflow.config` and lets Nextflow's native executors do
+the submission. Pick the backend with `--backend`:
+
+```bash
+# Local (default) — Docker on your machine
+uv run contig run --run-id local-run --input samplesheet.csv --genome GRCh38
+
+# AWS Batch — runs in your account; reads stay in your S3, not ours
+uv run contig run --run-id cloud-run \
+  --input samplesheet.csv --genome GRCh38 \
+  --backend aws_batch \
+  --work-dir s3://your-bucket/contig-work \
+  --queue your-batch-queue --region eu-west-1
+```
+
+Contig validates the backend up front — e.g. an `aws_batch` run with no `--queue`
+fails immediately with a clear message, not a half-hour in. AWS credentials are
+read from your environment by Nextflow; Contig never holds them. The generated
+config is written to `runs/<id>/nextflow.config` for inspection. (`local` and
+`aws_batch` are wired today; `slurm`/`gcp_batch`/`k8s` map through the same layer
+as they're validated.)
+
 ### Supported analyses
 
 | Goal | Pipeline | QC |
@@ -183,7 +208,9 @@ serves both.
 ### What's not built yet
 
 A web UI, an LLM-backed planner (the goal→pipeline matcher is deterministic and
-replaceable today), and more assays. See [docs/ROADMAP.md](docs/ROADMAP.md).
+replaceable today), more assays, and live-tested `slurm`/`gcp_batch`/`k8s`
+backends (the mapping layer is in place; `local` and `aws_batch` are wired). See
+[docs/ROADMAP.md](docs/ROADMAP.md).
 
 New here? Read [VISION.md](VISION.md) and [docs/RESEARCH_FINDINGS.md](docs/RESEARCH_FINDINGS.md)
 for the bet, then [docs/technical/ARCHITECTURE.md](docs/technical/ARCHITECTURE.md)

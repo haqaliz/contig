@@ -184,6 +184,35 @@ def test_run_uses_variant_qc_for_sarek_pipeline(tmp_path, monkeypatch):
     assert "ts_tv_ratio" in result.output  # variant rule pack was applied
 
 
+def test_run_on_aws_batch_generates_awsbatch_config(tmp_path, monkeypatch):
+    # P6: a user reaches the second compute backend by naming it + its queue/region.
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "aws", "--runs-dir", str(tmp_path),
+         "--backend", "aws_batch", "--work-dir", "s3://contig/work",
+         "--queue", "contig-q", "--region", "eu-west-1"],
+    )
+    assert result.exit_code == 0
+    config = (tmp_path / "aws" / "nextflow.config").read_text()
+    assert "process.executor = 'awsbatch'" in config
+    assert "process.queue = 'contig-q'" in config
+    assert "workDir = 's3://contig/work'" in config
+
+
+def test_run_aws_batch_without_queue_fails_cleanly(tmp_path, monkeypatch):
+    # Missing required backend options must be a clear error, not a traceback.
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "aws", "--runs-dir", str(tmp_path),
+         "--backend", "aws_batch", "--work-dir", "s3://contig/work"],
+    )
+    assert result.exit_code != 0
+    assert "queue" in result.output.lower()
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
 def test_run_self_heals_oom_and_shows_repair_chain(tmp_path, monkeypatch):
     state = {"n": 0}
 

@@ -184,11 +184,56 @@ def test_command_omits_resume_flag_by_default():
     assert "-resume" not in cmd
 
 
+def test_command_injects_config_file_as_core_option_before_run():
+    # `-c` is a Nextflow launcher option: it must precede the `run` subcommand.
+    cmd = build_nextflow_command(
+        pipeline="nf-core/rnaseq", revision="3.26.0", profiles=["test"],
+        trace_path="t.txt", config_path="/runs/r1/nextflow.config",
+    )
+    assert cmd[1:3] == ["-c", "/runs/r1/nextflow.config"]
+    assert cmd[3] == "run"
+
+
+def test_command_omits_config_flag_when_no_config_path():
+    cmd = build_nextflow_command(
+        pipeline="nf-core/rnaseq", revision="3.26.0", profiles=["test"], trace_path="t.txt"
+    )
+    assert "-c" not in cmd
+
+
 def test_command_with_no_params_has_no_double_dash_flags():
     cmd = build_nextflow_command(
         pipeline="nf-core/rnaseq", revision="3.14.0", profiles=["test"], trace_path="trace.txt"
     )
     assert not any(tok.startswith("--") for tok in cmd)
+
+
+def test_run_pipeline_writes_backend_config_and_passes_it_to_nextflow(tmp_path):
+    seen = {}
+
+    def spy(cmd, trace_path):
+        seen["cmd"] = cmd
+        Path(trace_path).write_text(TRACE_2_OK)
+        return 0
+
+    _run(tmp_path, TRACE_2_OK, executor=spy)
+    config = tmp_path / "runs" / "run-001" / "nextflow.config"
+    assert config.exists()
+    assert "process.executor = 'local'" in config.read_text()
+    # the generated config is handed to Nextflow via -c
+    assert "-c" in seen["cmd"]
+    assert str(config) in seen["cmd"]
+
+
+def test_run_pipeline_generates_aws_batch_config_from_target(tmp_path):
+    target = ExecutionTarget(
+        backend="aws_batch", container_runtime="docker", work_dir="s3://b/work",
+        backend_options={"queue": "contig-q", "region": "eu-west-1"},
+    )
+    _run(tmp_path, TRACE_2_OK, target=target)
+    config = (tmp_path / "runs" / "run-001" / "nextflow.config").read_text()
+    assert "process.executor = 'awsbatch'" in config
+    assert "process.queue = 'contig-q'" in config
 
 
 def test_run_pipeline_captures_events_from_the_trace(tmp_path):
@@ -306,8 +351,12 @@ def test_run_pipeline_invokes_executor_with_nextflow_command(tmp_path):
         return 0
 
     _run(tmp_path, TRACE_2_OK, executor=capturing)
-    assert seen["cmd"][:3] == ["nextflow", "run", "nf-core/rnaseq"]
-    assert "-with-trace" in seen["cmd"]
+    cmd = seen["cmd"]
+    assert cmd[0] == "nextflow"
+    # `run <pipeline>` still appears (now after the injected `-c <config>`).
+    run_i = cmd.index("run")
+    assert cmd[run_i + 1] == "nf-core/rnaseq"
+    assert "-with-trace" in cmd
 
 
 def test_run_pipeline_passes_absolute_trace_path_even_when_runs_dir_relative(tmp_path, monkeypatch):

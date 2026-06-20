@@ -25,6 +25,7 @@ def _contig_version() -> str | None:
 from contig.bundle import compute_input_checksums, write_bundle
 from contig.events import parse_trace_file
 from contig.models import ExecutionTarget, QCResult, RunRecord
+from contig.nfconfig import generate_nextflow_config
 from contig.verification.rule_pack import rule_pack_for
 from contig.verification.run_qc import evaluate_run_qc
 from contig.verification.structural import evaluate_structural
@@ -123,10 +124,18 @@ def build_nextflow_command(
     trace_path: str,
     params: dict[str, object] | None = None,
     resume: bool = False,
+    config_path: str | None = None,
 ) -> list[str]:
-    """Construct the `nextflow run` argv for a pipeline, with trace capture wired in."""
-    cmd = [
-        "nextflow",
+    """Construct the `nextflow run` argv for a pipeline, with trace capture wired in.
+
+    `config_path`, when given, is injected as the `-c` launcher option (which must
+    precede the `run` subcommand) so the generated ExecutionTarget profile selects
+    the backend/runtime for this run.
+    """
+    cmd = ["nextflow"]
+    if config_path:
+        cmd += ["-c", config_path]
+    cmd += [
         "run",
         pipeline,
         "-r",
@@ -168,7 +177,14 @@ def run_pipeline(
     run_dir.mkdir(parents=True, exist_ok=True)
     trace_path = run_dir / "trace.txt"
 
-    cmd = build_nextflow_command(pipeline, revision, profiles, str(trace_path), params, resume)
+    # Map the ExecutionTarget to a nextflow.config (the compute abstraction:
+    # local/cloud/HPC selected by generating the profile, not by branching here).
+    config_path = run_dir / "nextflow.config"
+    config_path.write_text(generate_nextflow_config(target))
+
+    cmd = build_nextflow_command(
+        pipeline, revision, profiles, str(trace_path), params, resume, str(config_path)
+    )
     returncode = executor(cmd, trace_path)
 
     # Capture whatever the run produced — success OR failure. The failure data

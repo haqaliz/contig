@@ -1,8 +1,9 @@
-"""Contig command-line interface (skeleton).
+"""Contig command-line interface.
 
-This is intentionally a thin surface: it constructs and echoes execution
-*intent* (see ARCHITECTURE §4.1) but does not yet drive Nextflow. The real
-run-and-verify engine lands once the toolchain is wired up.
+The on-ramp to the Layer-2 engine: `run` drives a real Nextflow pipeline through
+the self-heal loop, verifies it, and reports a verdict; `plan`/`show`/`list`
+round out the surface. The backend (local, aws_batch, ...) is selected by
+generating a nextflow.config from the ExecutionTarget (ARCHITECTURE §4.1).
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import typer
 from pydantic import ValidationError
 
 from contig.models import ExecutionTarget, RunSummary
+from contig.nfconfig import ConfigGenerationError
 from contig.planner import PlanningError
 from contig.planner import plan as build_plan
 from contig.reference import ReferenceError, resolve_reference
@@ -75,8 +77,11 @@ def run(
     revision: str = typer.Option("3.26.0", "--revision", help="Pipeline revision."),
     profiles: str = typer.Option(None, "--profiles", help="Comma-separated Nextflow profiles."),
     runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
-    backend: str = typer.Option("local", "--backend", help="Execution backend."),
+    backend: str = typer.Option("local", "--backend", help="Execution backend (local, aws_batch, ...)."),
     container_runtime: str = typer.Option("docker", "--container-runtime", help="Container runtime."),
+    work_dir: str = typer.Option(None, "--work-dir", help="Nextflow work dir (e.g. s3://bucket/work for aws_batch)."),
+    queue: str = typer.Option(None, "--queue", help="Batch/HPC job queue (aws_batch/slurm)."),
+    region: str = typer.Option(None, "--region", help="Cloud region (aws_batch)."),
     input: str = typer.Option(None, "--input", help="Sample sheet CSV (real-data run)."),
     genome: str = typer.Option(None, "--genome", help="iGenomes reference key (e.g. GRCh38)."),
     fasta: str = typer.Option(None, "--fasta", help="Reference FASTA (with --gtf)."),
@@ -93,9 +98,13 @@ def run(
     checksums every input into the provenance. Without --input it runs nf-core's
     bundled test profile.
     """
+    backend_options = {k: v for k, v in (("queue", queue), ("region", region)) if v}
     try:
         target = ExecutionTarget(
-            backend=backend, container_runtime=container_runtime, work_dir=f"{runs_dir}/{run_id}/work"
+            backend=backend,
+            container_runtime=container_runtime,
+            work_dir=work_dir or f"{runs_dir}/{run_id}/work",
+            backend_options=backend_options,
         )
     except ValidationError as exc:
         typer.echo(f"Invalid execution target: {exc}", err=True)
@@ -140,6 +149,9 @@ def run(
             max_attempts=max_attempts,
             assay=assay_for_pipeline(pipeline) or "rnaseq",
         )
+    except ConfigGenerationError as exc:
+        typer.echo(f"Cannot configure the '{backend}' backend: {exc}", err=True)
+        raise typer.Exit(code=1)
     except PipelineExecutionError as exc:
         typer.echo(f"Run failed before producing any output (Nextflow exit {exc.returncode}).", err=True)
         raise typer.Exit(code=1)

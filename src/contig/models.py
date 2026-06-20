@@ -38,6 +38,10 @@ class ExecutionTarget(BaseModel):
     work_dir: str
     engine: Engine = "nextflow"
     credentials_ref: str | None = None
+    # Backend-specific knobs (e.g. AWS Batch queue/region) the mapping layer
+    # needs but that don't generalize across backends. Kept generic so the
+    # agent never special-cases the backend (ARCHITECTURE §4.1).
+    backend_options: dict[str, str] = Field(default_factory=dict)
 
 
 QCStatus = Literal["pass", "warn", "fail"]
