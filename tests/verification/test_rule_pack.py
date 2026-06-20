@@ -94,6 +94,27 @@ def test_empty_rule_pack_yields_no_results():
     assert results == []
 
 
+def test_rnaseq_pack_covers_real_salmon_mapping_rate():
+    # Real nf-core MultiQC reports the pseudo-alignment rate as salmon
+    # `percent_mapped`, not the synthetic `uniquely_mapped_percent`. The pack
+    # must verify it, or real runs are only structurally checked.
+    assert "percent_mapped" in {c["metric"] for c in RNASEQ_RULE_PACK}
+
+
+def test_real_healthy_salmon_mapping_rate_passes():
+    # 80.99% pseudo-aligned (a real WT_REP1 value) is a healthy run.
+    results = evaluate({"WT_REP1": {"percent_mapped": 80.99}}, RNASEQ_RULE_PACK)
+    mapping = [r for r in results if r.value == 80.99]
+    assert mapping and all(r.status == "pass" for r in mapping)
+
+
+def test_low_salmon_mapping_rate_fails():
+    # A sample that barely pseudo-aligned is the canonical "ran but wrong".
+    results = evaluate({"BAD": {"percent_mapped": 12.0}}, RNASEQ_RULE_PACK)
+    mapping = [r for r in results if r.value == 12.0]
+    assert mapping and any(r.status == "fail" for r in mapping)
+
+
 # --- range checks (optional upper bounds) --------------------------------------
 
 

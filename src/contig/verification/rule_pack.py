@@ -28,6 +28,16 @@ RNASEQ_RULE_PACK: list[dict] = [
         "fail_below": 40.0,
         "message": "fraction of reads assigned to features",
     },
+    {
+        # Real nf-core/rnaseq MultiQC reports the pseudo-alignment rate here
+        # (Salmon general stats). This is the check that actually fires on real
+        # runs; the two above key off synthetic/legacy metric names.
+        "check": "salmon_mapping_rate",
+        "metric": "percent_mapped",
+        "warn_below": 60.0,
+        "fail_below": 40.0,
+        "message": "fraction of reads pseudo-aligned by Salmon",
+    },
 ]
 
 

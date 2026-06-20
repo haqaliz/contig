@@ -209,6 +209,22 @@ def test_run_pipeline_verdict_fails_on_low_qc_even_when_run_succeeds(tmp_path):
     assert record.verdict == "fail"
 
 
+# Real nf-core MultiQC: module-keyed dict schema + real metric key. Regression
+# for a run that crashed QC discovery (parser assumed the legacy list) and so
+# was only ever structurally verified.
+MODERN_LOW_MQC_JSON = (
+    '{"report_general_stats_data":{'
+    '"salmon":{"WT_REP1":{"percent_mapped":85.0},"WT_REP2":{"percent_mapped":11.0}}}}'
+)
+
+
+def test_run_pipeline_verifies_real_modern_multiqc_schema(tmp_path):
+    record = _run(tmp_path, TRACE_2_OK, executor=_executor_with_qc(TRACE_2_OK, MODERN_LOW_MQC_JSON))
+    mapping = [r for r in record.qc_results if r.check.startswith("salmon_mapping_rate")]
+    assert mapping  # metric QC fired on the real schema (not just structural)
+    assert record.verdict == "fail"  # the 11%-mapped sample is caught
+
+
 def test_run_pipeline_runs_structural_checks_on_bam_outputs(tmp_path):
     def exec_with_bam(cmd, trace_path):
         Path(trace_path).write_text(TRACE_2_OK)

@@ -5,6 +5,12 @@ from os import PathLike
 def parse_multiqc_general_stats(text: str) -> dict[str, dict[str, float]]:
     data = json.loads(text)
     sections = data.get("report_general_stats_data", [])
+    # Two MultiQC schemas in the wild: the legacy list `[{sample: {metric}}]`,
+    # and the modern dict keyed by module `{module: {sample: {metric}}}` that
+    # real nf-core output ships. Both reduce to a list of {sample: {metric}}
+    # sections; merging across them gives one metric table per sample.
+    if isinstance(sections, dict):
+        sections = list(sections.values())
     merged: dict[str, dict[str, float]] = {}
     for section in sections:
         for sample, metrics in section.items():
