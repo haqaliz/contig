@@ -11,7 +11,13 @@ from contig.models import DataShape
 from contig.samplesheet import SampleRow
 
 
-def inspect_data_shape(rows: list[SampleRow]) -> DataShape:
+def inspect_data_shape(rows: list[SampleRow], expects_replicates: bool = True) -> DataShape:
+    """Infer the run's input shape and surface up-front warnings.
+
+    `expects_replicates` is an assay decision the caller makes: RNA-seq DE needs
+    replicates, but single-sample germline variant calling is valid — so the
+    "needs replicates" warning is suppressed when replicates aren't expected.
+    """
     n_samples = len(rows)
     n_paired = sum(1 for r in rows if r.fastq_2 is not None)
 
@@ -23,7 +29,7 @@ def inspect_data_shape(rows: list[SampleRow]) -> DataShape:
         layout = "mixed"
 
     warnings: list[str] = []
-    if n_samples < 2:
+    if expects_replicates and n_samples < 2:
         warnings.append(
             f"only {n_samples} sample(s); differential expression needs replicates"
         )

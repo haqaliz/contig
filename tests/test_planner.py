@@ -39,6 +39,12 @@ def test_plan_warns_when_no_reference(tmp_path):
     assert any("reference" in w.lower() for w in p.warnings)
 
 
+def test_plan_no_replicate_warning_for_single_sample_variant_calling(tmp_path):
+    p = plan("call germline variants from WGS", _sheet(tmp_path, n_samples=1), reference_params={"genome": "GRCh38"})
+    assert p.assay == "variant_calling"
+    assert not any("replicates" in w for w in p.warnings)
+
+
 def test_plan_raises_when_goal_unrecognized(tmp_path):
     with pytest.raises(PlanningError):
         plan("assemble a de novo bacterial genome", _sheet(tmp_path))

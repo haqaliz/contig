@@ -169,10 +169,21 @@ Each run writes `runs/<id>/run_record.json` — a portable record pinning inputs
 result, and the full repair chain. `contig show <id>` re-reads it; hand the
 bundle to a colleague (or a reviewer) to reproduce the result.
 
+### Supported analyses
+
+| Goal | Pipeline | QC |
+|---|---|---|
+| RNA-seq differential expression | `nf-core/rnaseq` | alignment/assignment rate, library-size skew, replicate checks |
+| Germline variant calling (research) | `nf-core/sarek` | Ti/Tv & het/hom ratios, coverage |
+
+`contig plan --goal "…"` routes to the right one (and declines goals it has no
+curated pipeline for). The same run → self-heal → verify → reproduce engine
+serves both.
+
 ### What's not built yet
 
-The natural-language planning layer (you specify the pipeline today), a web UI,
-and breadth beyond RNA-seq. See [docs/ROADMAP.md](docs/ROADMAP.md).
+A web UI, an LLM-backed planner (the goal→pipeline matcher is deterministic and
+replaceable today), and more assays. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 New here? Read [VISION.md](VISION.md) and [docs/RESEARCH_FINDINGS.md](docs/RESEARCH_FINDINGS.md)
 for the bet, then [docs/technical/ARCHITECTURE.md](docs/technical/ARCHITECTURE.md)

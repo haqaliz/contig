@@ -21,6 +21,11 @@ class PlanningError(ValueError):
     """Raised when no curated plan can be proposed for the given goal."""
 
 
+# Assays whose analysis requires biological replicates (so a single sample is a
+# warning). Differential-expression RNA-seq does; germline variant calling does not.
+_REPLICATE_ASSAYS = {"rnaseq"}
+
+
 def plan(
     goal: str,
     samplesheet_path: str | PathLike[str],
@@ -34,7 +39,10 @@ def plan(
             "(Contig currently curates: RNA-seq)"
         )
     entry = select_pipeline(assay)
-    shape = inspect_data_shape(parse_samplesheet(samplesheet_path))
+    # Replicates are an RNA-seq DE requirement; single-sample germline calling is fine.
+    shape = inspect_data_shape(
+        parse_samplesheet(samplesheet_path), expects_replicates=(assay in _REPLICATE_ASSAYS)
+    )
 
     params: dict[str, object] = {"input": str(samplesheet_path), **(reference_params or {})}
     warnings = list(shape.warnings)

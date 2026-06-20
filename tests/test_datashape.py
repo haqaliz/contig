@@ -40,6 +40,13 @@ def test_one_sample_warns_replicates():
     assert any("replicates" in w for w in shape.warnings)
 
 
+def test_one_sample_no_replicate_warning_when_not_expected():
+    # single-sample germline variant calling is valid; no "needs replicates" warning
+    rows = [SampleRow(sample="s1", fastq_1="r1_1.fq.gz", fastq_2="r1_2.fq.gz")]
+    shape = inspect_data_shape(rows, expects_replicates=False)
+    assert not any("replicates" in w for w in shape.warnings)
+
+
 def test_clean_three_sample_paired_run_no_warnings():
     rows = [
         SampleRow(sample="s1", fastq_1="r1_1.fq.gz", fastq_2="r1_2.fq.gz"),
