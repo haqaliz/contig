@@ -94,10 +94,10 @@ running **Docker** daemon. The commands and the test suite work without them.
 
 | Command | What it does |
 |---|---|
+| `contig plan --goal "…" --input <sheet>` | Propose a pipeline + params from your goal and data, to approve |
 | `contig run --run-id <id>` | Run a pipeline, self-heal failures, verify, report the verdict |
 | `contig show <id>` | The verdict + provenance + repair chain of a past run |
 | `contig list` | All bundled runs |
-| `contig plan --work-dir <d>` | Preview the execution plan without running |
 | `contig version` | Installed version |
 
 ### Try it in 30 seconds (no real data)
@@ -118,7 +118,23 @@ CTRL_REP1,reads/ctrl1_R1.fastq.gz,reads/ctrl1_R2.fastq.gz,auto
 TREAT_REP1,reads/treat1_R1.fastq.gz,reads/treat1_R2.fastq.gz,auto
 ```
 
-**2. Run it**, pointing at a reference — an iGenomes key **or** your own FASTA+GTF:
+**2. (Optional) Plan first.** Describe your goal in plain language and let Contig
+propose a pipeline + params to approve — it flags problems (no replicates,
+single-end, missing reference) *before* you run, and declines goals it has no
+curated pipeline for rather than inventing a workflow:
+
+```bash
+uv run contig plan --goal "find differentially expressed genes" \
+  --input samplesheet.csv --genome GRCh38
+# → Plan: nf-core/rnaseq @ 3.26.0  (assay: rnaseq) … + any warnings
+```
+
+The goal→pipeline matching is deterministic and **replaceable** — a better model
+can be swapped in behind it. Contig's value is the curated registry and the
+run/verify/reproduce engine, not generating workflows from English (that's a
+commodity it consumes — see [VISION.md](VISION.md)).
+
+**3. Run it**, pointing at a reference — an iGenomes key **or** your own FASTA+GTF:
 
 ```bash
 uv run contig run --run-id my-analysis \
