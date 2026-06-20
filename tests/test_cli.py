@@ -136,6 +136,20 @@ def test_run_rejects_malformed_samplesheet_without_launching(tmp_path, monkeypat
     assert launched["n"] == 0  # pre-flight rejected it; the pipeline never launched
 
 
+def test_run_passes_resource_caps_to_params(tmp_path, monkeypatch):
+    sheet = _make_sheet(tmp_path)
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(
+        app,
+        ["run", "--run-id", "rc", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--genome", "GRCh38",
+         "--max-memory", "6.GB", "--max-cpus", "2"],
+    )
+    rec = load_bundle(tmp_path / "runs" / "rc")
+    assert rec.parameters.get("max_memory") == "6.GB"
+    assert str(rec.parameters.get("max_cpus")) == "2"
+
+
 def test_run_rejects_conflicting_reference(tmp_path):
     sheet = _make_sheet(tmp_path)
     result = runner.invoke(

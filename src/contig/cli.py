@@ -81,6 +81,8 @@ def run(
     fasta: str = typer.Option(None, "--fasta", help="Reference FASTA (with --gtf)."),
     gtf: str = typer.Option(None, "--gtf", help="Reference GTF annotation (with --fasta)."),
     outdir: str = typer.Option(None, "--outdir", help="Pipeline output directory (pipeline --outdir)."),
+    max_memory: str = typer.Option(None, "--max-memory", help="Cap per-process memory (e.g. '6.GB') — needed to fit nf-core on a laptop."),
+    max_cpus: int = typer.Option(None, "--max-cpus", help="Cap per-process CPUs."),
     max_attempts: int = typer.Option(3, "--max-attempts", help="Max self-heal attempts."),
 ) -> None:
     """Run a pipeline, self-heal recoverable failures, verify it, and report the verdict.
@@ -117,6 +119,10 @@ def run(
     selected_profiles = profiles or ("docker" if input else "test,docker")
     if outdir:
         params["outdir"] = outdir
+    if max_memory:
+        params["max_memory"] = max_memory
+    if max_cpus:
+        params["max_cpus"] = max_cpus
     try:
         record = self_heal_run(
             pipeline=pipeline,
