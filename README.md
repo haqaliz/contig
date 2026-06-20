@@ -86,33 +86,77 @@ uv sync                 # create the venv and install deps
 uv run pytest           # run the full test suite
 ```
 
-### The CLI
+To run a real pipeline you also need **Nextflow** (`brew install nextflow`), a
+**Java runtime** (`JAVA_HOME` set to a JDK, e.g. Homebrew's `openjdk`), and a
+running **Docker** daemon. The commands and the test suite work without them.
+
+### Commands
+
+| Command | What it does |
+|---|---|
+| `contig run --run-id <id>` | Run a pipeline, self-heal failures, verify, report the verdict |
+| `contig show <id>` | The verdict + provenance + repair chain of a past run |
+| `contig list` | All bundled runs |
+| `contig plan --work-dir <d>` | Preview the execution plan without running |
+| `contig version` | Installed version |
+
+### Try it in 30 seconds (no real data)
 
 ```bash
-uv run contig --help                     # version | plan | run | show | list
-uv run contig run --run-id my-run        # run nf-core/rnaseq, self-heal, verify, report
-uv run contig show my-run                # the verdict + provenance + repair chain of a past run
-uv run contig list                       # all bundled runs
+uv run contig run --run-id smoke      # runs nf-core/rnaseq's bundled test profile
+uv run contig show smoke              # see the verdict + repair chain
 ```
 
-A real `contig run` executes `nf-core/rnaseq` via Nextflow on Docker, so it needs
-**Nextflow** (`brew install nextflow`), a **Java runtime**, and a running
-**Docker** daemon. Set `JAVA_HOME` to a JDK (e.g. Homebrew's `openjdk`).
+### Run on your own data
 
-### What works today (MVP)
+**1. Write a sample sheet** (`samplesheet.csv`, nf-core/rnaseq format). Paths may
+be relative to the sheet:
 
-The end-to-end **run → capture → self-heal → verify → reproduce** loop:
+```csv
+sample,fastq_1,fastq_2,strandedness
+CTRL_REP1,reads/ctrl1_R1.fastq.gz,reads/ctrl1_R2.fastq.gz,auto
+TREAT_REP1,reads/treat1_R1.fastq.gz,reads/treat1_R2.fastq.gz,auto
+```
 
-- runs a real pipeline on your compute and captures every task;
-- on a recoverable failure (OOM, time limit, transient container error) it
-  **diagnoses, applies a safe fix, and re-runs** — bounded and fully logged;
-- **verifies** the result with layered QC (structural, per-sample rule pack,
-  cross-sample) and emits an **honest verdict** (`pass`/`warn`/`fail`/`unverified`);
-- writes a **reproducible bundle** (`run_record.json`) pinning inputs, versions,
-  parameters, QC, and the full repair chain.
+**2. Run it**, pointing at a reference — an iGenomes key **or** your own FASTA+GTF:
 
-Not yet built: the natural-language planning layer (you specify the pipeline),
-a web UI, and breadth beyond RNA-seq. See [docs/ROADMAP.md](docs/ROADMAP.md).
+```bash
+uv run contig run --run-id my-analysis \
+  --input samplesheet.csv \
+  --genome GRCh38                       # or: --fasta ref.fa --gtf genes.gtf
+```
+
+Contig first **validates the sample sheet** (missing files, duplicate samples,
+bad columns) and refuses to launch if it's broken — catching the error before it
+costs you a multi-hour run. Then it runs the pipeline, **self-heals** recoverable
+failures, **verifies** the output, and writes a reproducible bundle. Your reads
+never leave your machine — only file hashes are recorded.
+
+### Reading the result
+
+Every run ends in an honest verdict:
+
+| Verdict | Meaning |
+|---|---|
+| `PASS` | Ran to completion and every QC check passed |
+| `WARN` | Completed, but a QC check is borderline — look before you trust it |
+| `FAIL` | A task failed, or a QC check failed — do not trust the output |
+| `UNVERIFIED` | Completed but nothing checked it — we won't claim it's correct |
+
+If a step broke and Contig recovered, the report shows the **repair chain**
+(e.g. `attempt 1: oom → resource patch → patched_and_retried`).
+
+### Reproduce / share
+
+Each run writes `runs/<id>/run_record.json` — a portable record pinning inputs
+(checksums), pipeline + revision, parameters, container/tool versions, every QC
+result, and the full repair chain. `contig show <id>` re-reads it; hand the
+bundle to a colleague (or a reviewer) to reproduce the result.
+
+### What's not built yet
+
+The natural-language planning layer (you specify the pipeline today), a web UI,
+and breadth beyond RNA-seq. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 New here? Read [VISION.md](VISION.md) and [docs/RESEARCH_FINDINGS.md](docs/RESEARCH_FINDINGS.md)
 for the bet, then [docs/technical/ARCHITECTURE.md](docs/technical/ARCHITECTURE.md)
