@@ -68,6 +68,7 @@ def self_heal_run(
     params: dict[str, object] | None = None,
     nextflow_version: str | None = None,
     max_attempts: int = 3,
+    assay: str = "rnaseq",
 ) -> RunRecord:
     """Run a pipeline and auto-recover from recoverable failures, logging the chain."""
     run_dir = (Path(runs_dir) / run_id).resolve()
@@ -89,6 +90,7 @@ def self_heal_run(
                 params=current_params or None,
                 nextflow_version=nextflow_version,
                 resume=attempt > 1,
+                assay=assay,
             )
             return _finalize(record, repair_history, run_dir)
         except PipelineExecutionError as exc:

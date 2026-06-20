@@ -25,16 +25,25 @@ def _contig_version() -> str | None:
 from contig.bundle import compute_input_checksums, write_bundle
 from contig.events import parse_trace_file
 from contig.models import ExecutionTarget, QCResult, RunRecord
+from contig.verification.rule_pack import rule_pack_for
 from contig.verification.run_qc import evaluate_run_qc
 from contig.verification.structural import evaluate_structural
 
 
-def _discover_qc(run_dir: Path) -> list[QCResult]:
-    """Verify a finished run: MultiQC metric checks + structural checks on outputs."""
+def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
+    """Verify a finished run: MultiQC metric checks (assay-specific rule pack) +
+    structural checks on outputs."""
     results: list[QCResult] = []
     multiqc = next(run_dir.glob("**/multiqc_data.json"), None)
     if multiqc is not None:
-        results.extend(evaluate_run_qc(multiqc))
+        try:
+            pack = rule_pack_for(assay)
+        except ValueError:
+            pack = None  # no rule pack for this assay -> skip metric QC (stay honest)
+        if pack is not None:
+            results.extend(
+                evaluate_run_qc(multiqc, rule_pack=pack, cross_sample=(assay == "rnaseq"))
+            )
     # Check that BAM outputs exist and are non-empty. We do NOT blanket-check for
     # indexes here: many BAMs are intermediates that are never indexed, and a
     # spurious index_present:fail would wrongly drag the verdict to "fail".
@@ -122,6 +131,7 @@ def run_pipeline(
     params: dict[str, object] | None = None,
     nextflow_version: str | None = None,
     resume: bool = False,
+    assay: str = "rnaseq",
 ) -> RunRecord:
     """Run a pipeline and capture it into a reproducible, bundled RunRecord.
 
@@ -150,7 +160,7 @@ def run_pipeline(
             input_checksums=compute_input_checksums(input_paths),
             parameters=params or {},
             events=parse_trace_file(trace_path),
-            qc_results=_discover_qc(run_dir),
+            qc_results=_discover_qc(run_dir, assay),
             nextflow_version=nextflow_version,
             contig_version=_contig_version(),
         )

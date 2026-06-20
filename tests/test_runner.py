@@ -193,6 +193,24 @@ def test_run_pipeline_does_not_fail_unindexed_intermediate_bams(tmp_path):
     assert not any(c.check.startswith("index_present") for c in record.qc_results)
 
 
+VARIANT_MQC = '{"report_general_stats_data":[{"S1":{"ts_tv":2.05,"het_hom":1.6,"mean_coverage":35.0}}]}'
+
+
+def test_run_pipeline_uses_variant_rule_pack_for_variant_assay(tmp_path):
+    def execute(cmd, trace_path):
+        Path(trace_path).write_text(TRACE_2_OK)
+        d = Path(trace_path).parent / "results" / "multiqc"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "multiqc_data.json").write_text(VARIANT_MQC)
+        return 0
+
+    record = _run(tmp_path, TRACE_2_OK, executor=execute, assay="variant_calling")
+    checks = [r.check for r in record.qc_results]
+    assert any(c.startswith("ts_tv_ratio") for c in checks)
+    # an in-range Ti/Tv (2.05) passes; the run verifies clean
+    assert record.verdict == "pass"
+
+
 def test_run_pipeline_unverified_when_run_ok_but_no_multiqc_output(tmp_path):
     record = _run(tmp_path, TRACE_2_OK)  # default fake writes only the trace
     assert record.qc_results == []

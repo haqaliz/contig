@@ -16,6 +16,7 @@ from contig.models import ExecutionTarget, RunSummary
 from contig.planner import PlanningError
 from contig.planner import plan as build_plan
 from contig.reference import ReferenceError, resolve_reference
+from contig.registry import assay_for_pipeline
 from contig.report import render_run_report
 from contig.runner import PipelineExecutionError, default_executor
 from contig.samplesheet import fastq_paths, validate_samplesheet
@@ -128,6 +129,7 @@ def run(
             executor=default_executor,
             params=params or None,
             max_attempts=max_attempts,
+            assay=assay_for_pipeline(pipeline) or "rnaseq",
         )
     except PipelineExecutionError as exc:
         typer.echo(f"Run failed before producing any output (Nextflow exit {exc.returncode}).", err=True)

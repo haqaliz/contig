@@ -146,6 +146,20 @@ def test_run_rejects_conflicting_reference(tmp_path):
     assert result.exit_code != 0
 
 
+VARIANT_MQC = '{"report_general_stats_data":[{"S1":{"ts_tv":2.05,"het_hom":1.6,"mean_coverage":35.0}}]}'
+
+
+def test_run_uses_variant_qc_for_sarek_pipeline(tmp_path, monkeypatch):
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, VARIANT_MQC))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "v", "--runs-dir", str(tmp_path),
+         "--pipeline", "nf-core/sarek", "--revision", "3.5.1"],
+    )
+    assert result.exit_code == 0
+    assert "ts_tv_ratio" in result.output  # variant rule pack was applied
+
+
 def test_run_self_heals_oom_and_shows_repair_chain(tmp_path, monkeypatch):
     state = {"n": 0}
 
