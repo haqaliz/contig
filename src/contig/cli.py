@@ -13,8 +13,10 @@ import typer
 from pydantic import ValidationError
 
 from contig.models import ExecutionTarget, RunSummary
+from contig.reference import ReferenceError, resolve_reference
 from contig.report import render_run_report
 from contig.runner import PipelineExecutionError, default_executor
+from contig.samplesheet import fastq_paths, validate_samplesheet
 from contig.self_heal import self_heal_run
 from contig.workspace import RunNotFoundError, list_run_ids, load_run
 
@@ -65,14 +67,24 @@ def run(
     run_id: str = typer.Option(..., "--run-id", help="Identifier for this run."),
     pipeline: str = typer.Option("nf-core/rnaseq", "--pipeline", help="Pipeline to run."),
     revision: str = typer.Option("3.26.0", "--revision", help="Pipeline revision."),
-    profiles: str = typer.Option("test,docker", "--profiles", help="Comma-separated Nextflow profiles."),
+    profiles: str = typer.Option(None, "--profiles", help="Comma-separated Nextflow profiles."),
     runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
     backend: str = typer.Option("local", "--backend", help="Execution backend."),
     container_runtime: str = typer.Option("docker", "--container-runtime", help="Container runtime."),
+    input: str = typer.Option(None, "--input", help="Sample sheet CSV (real-data run)."),
+    genome: str = typer.Option(None, "--genome", help="iGenomes reference key (e.g. GRCh38)."),
+    fasta: str = typer.Option(None, "--fasta", help="Reference FASTA (with --gtf)."),
+    gtf: str = typer.Option(None, "--gtf", help="Reference GTF annotation (with --fasta)."),
     outdir: str = typer.Option(None, "--outdir", help="Pipeline output directory (pipeline --outdir)."),
     max_attempts: int = typer.Option(3, "--max-attempts", help="Max self-heal attempts."),
 ) -> None:
-    """Run a pipeline, self-heal recoverable failures, verify it, and report the verdict."""
+    """Run a pipeline, self-heal recoverable failures, verify it, and report the verdict.
+
+    With --input (a sample sheet) Contig runs on your real data: it pre-flight
+    validates the sheet, requires a reference (--genome OR --fasta/--gtf), and
+    checksums every input into the provenance. Without --input it runs nf-core's
+    bundled test profile.
+    """
     try:
         target = ExecutionTarget(
             backend=backend, container_runtime=container_runtime, work_dir=f"{runs_dir}/{run_id}/work"
@@ -81,18 +93,36 @@ def run(
         typer.echo(f"Invalid execution target: {exc}", err=True)
         raise typer.Exit(code=1)
 
-    params = {"outdir": outdir} if outdir else None
+    params: dict[str, object] = {}
+    input_paths: list = []
+    if input:
+        issues = validate_samplesheet(input)
+        if issues:
+            typer.echo("Sample sheet is invalid:", err=True)
+            for issue in issues:
+                typer.echo(f"  - {issue}", err=True)
+            raise typer.Exit(code=1)
+        try:
+            params.update(resolve_reference(genome=genome, fasta=fasta, gtf=gtf))
+        except ReferenceError as exc:
+            typer.echo(f"Reference error: {exc}", err=True)
+            raise typer.Exit(code=1)
+        params["input"] = input
+        input_paths = [input, *fastq_paths(input)]
+    selected_profiles = profiles or ("docker" if input else "test,docker")
+    if outdir:
+        params["outdir"] = outdir
     try:
         record = self_heal_run(
             pipeline=pipeline,
             revision=revision,
-            profiles=profiles.split(","),
+            profiles=selected_profiles.split(","),
             target=target,
-            input_paths=[],
+            input_paths=input_paths,
             runs_dir=runs_dir,
             run_id=run_id,
             executor=default_executor,
-            params=params,
+            params=params or None,
             max_attempts=max_attempts,
         )
     except PipelineExecutionError as exc:

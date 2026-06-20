@@ -2,9 +2,18 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from contig.bundle import write_bundle
+from contig.bundle import load_bundle, write_bundle
 from contig.cli import app
 from contig.models import ExecutionTarget, RunRecord, TaskEvent
+
+
+def _make_sheet(tmp_path, *, valid=True):
+    (tmp_path / "s1_R1.fastq.gz").write_bytes(b"\x1f\x8bR1")
+    (tmp_path / "s1_R2.fastq.gz").write_bytes(b"\x1f\x8bR2")
+    sheet = tmp_path / "samplesheet.csv"
+    r1 = "s1_R1.fastq.gz" if valid else "missing_R1.fastq.gz"
+    sheet.write_text(f"sample,fastq_1,fastq_2,strandedness\nS1,{r1},s1_R2.fastq.gz,auto\n")
+    return sheet
 
 runner = CliRunner()
 
@@ -88,6 +97,53 @@ def test_run_reports_failure_but_still_captures_bundle(tmp_path, monkeypatch):
     assert "FAIL" in result.output
     # the bundle was still written despite the failure
     assert (tmp_path / "rf" / "run_record.json").exists()
+
+
+def test_run_with_samplesheet_checksums_real_inputs(tmp_path, monkeypatch):
+    sheet = _make_sheet(tmp_path)
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "real", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--genome", "GRCh38"],
+    )
+    assert result.exit_code == 0
+    rec = load_bundle(tmp_path / "runs" / "real")
+    assert "samplesheet.csv" in rec.input_checksums
+    assert "s1_R1.fastq.gz" in rec.input_checksums
+    assert "s1_R2.fastq.gz" in rec.input_checksums
+    assert rec.parameters.get("genome") == "GRCh38"
+    assert rec.parameters.get("input")
+
+
+def test_run_rejects_malformed_samplesheet_without_launching(tmp_path, monkeypatch):
+    sheet = _make_sheet(tmp_path, valid=False)  # references a non-existent FASTQ
+    launched = {"n": 0}
+
+    def exec_spy(cmd, trace_path):
+        launched["n"] += 1
+        Path(trace_path).write_text(TRACE_RUN_OK)
+        return 0
+
+    monkeypatch.setattr("contig.cli.default_executor", exec_spy)
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "bad", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--genome", "GRCh38"],
+    )
+    assert result.exit_code != 0
+    assert "not found" in result.output.lower()
+    assert launched["n"] == 0  # pre-flight rejected it; the pipeline never launched
+
+
+def test_run_rejects_conflicting_reference(tmp_path):
+    sheet = _make_sheet(tmp_path)
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "r", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--genome", "GRCh38", "--fasta", "x.fa", "--gtf", "x.gtf"],
+    )
+    assert result.exit_code != 0
 
 
 def test_run_self_heals_oom_and_shows_repair_chain(tmp_path, monkeypatch):
