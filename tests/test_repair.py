@@ -99,3 +99,11 @@ def test_has_safe_patch_distinguishes_auto_apply_classes() -> None:
     assert has_safe_patch(diag("oom")) is True
     assert has_safe_patch(diag("missing_index")) is False
     assert has_safe_patch(diag("unknown")) is False
+
+
+def test_platform_unsupported_proposes_needs_confirmation_not_safe() -> None:
+    d = diag("platform_unsupported")
+    patches = propose_patches(d)
+    assert patches and patches[0].risk == "needs_confirmation"
+    # retrying on the same machine won't help, so it must NOT auto-apply
+    assert has_safe_patch(d) is False

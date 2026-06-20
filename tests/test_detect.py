@@ -112,3 +112,28 @@ def test_confidence_always_within_unit_interval() -> None:
     for events, log in cases:
         d = diagnose_failure(events, log_text=log)
         assert 0.0 <= d.confidence <= 1.0
+
+
+def test_platform_mismatch_with_killed_task_is_platform_unsupported() -> None:
+    # Apple Silicon (arm64) running amd64-only containers under emulation: a step
+    # is KILLED (no exit code) and the platform-mismatch warning is present.
+    events = [TaskEvent(process="MAKE_TRANSCRIPTS_FASTA", status="FAILED", exit=None)]
+    log = (
+        "WARNING: The requested image's platform (linux/amd64) does not match the "
+        "detected host platform (linux/arm64/v8) and no specific platform was requested\n"
+        "Execution cancelled -- Finishing pending tasks before exit"
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "platform_unsupported"
+
+
+def test_failed_task_with_real_exit_code_is_not_platform_unsupported() -> None:
+    # The platform warning appears on EVERY task; a real non-zero exit is a genuine
+    # tool error, not the emulation killing the binary.
+    events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=1)]
+    log = (
+        "WARNING: The requested image's platform (linux/amd64) does not match the "
+        "detected host platform (linux/arm64/v8)\nsome tool error"
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class != "platform_unsupported"

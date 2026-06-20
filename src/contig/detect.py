@@ -149,6 +149,29 @@ def diagnose_failure(events: list[TaskEvent], log_text: str) -> Diagnosis:
             confidence=0.85,
         )
 
+    # Apple-Silicon-style architecture mismatch: nf-core's amd64-only containers
+    # run under emulation, and a step gets KILLED (no exit code). The platform
+    # warning alone is noise — it appears on healthy tasks too — so we require it
+    # together with a killed (exit-less) failure.
+    platform_lines = _matching_lines(
+        log_text,
+        (
+            "does not match the detected host platform",
+            "requested image's platform",
+            "no matching manifest for",
+        ),
+    )
+    if platform_lines and any(e.is_failure and e.exit is None for e in events):
+        return Diagnosis(
+            failure_class="platform_unsupported",
+            root_cause=(
+                "A pipeline step's container has no image for this host's CPU "
+                "architecture; it ran under emulation and was killed."
+            ),
+            evidence=platform_lines,
+            confidence=0.7,
+        )
+
     # No specific signal matched. If a task did fail, the tool itself crashed
     # for a reason we could not classify; otherwise we have nothing to go on.
     if any(e.is_failure for e in events):

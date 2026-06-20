@@ -149,6 +149,7 @@ FailureClass = Literal[
     "container_pull_failed",
     "container_unavailable",
     "conda_solve_failed",
+    "platform_unsupported",
     "tool_crash",
     "no_progress",
     "qc_anomaly",

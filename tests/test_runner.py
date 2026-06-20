@@ -34,6 +34,25 @@ def test_read_run_log_returns_text_when_present(tmp_path):
 def test_read_run_log_returns_empty_when_absent(tmp_path):
     assert read_run_log(tmp_path) == ""
 
+
+def test_read_task_errors_collects_command_err_from_work_dirs(tmp_path):
+    from contig.runner import read_task_errors
+
+    wd = tmp_path / "work" / "dd" / "66f5fc"
+    wd.mkdir(parents=True)
+    (wd / ".command.err").write_text(
+        "WARNING: The requested image's platform (linux/amd64) does not match the "
+        "detected host platform (linux/arm64/v8)"
+    )
+    text = read_task_errors(tmp_path)
+    assert "does not match the detected host platform" in text
+
+
+def test_read_task_errors_empty_when_no_work_dirs(tmp_path):
+    from contig.runner import read_task_errors
+
+    assert read_task_errors(tmp_path) == ""
+
 TRACE_2_OK = (
     "task_id\thash\tnative_id\tname\tstatus\texit\tsubmit\tduration\trealtime\n"
     "1\tab/cd\t101\tNFCORE_RNASEQ:FASTQC (S1)\tCOMPLETED\t0\t-\t-\t-\n"

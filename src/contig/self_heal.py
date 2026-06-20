@@ -23,6 +23,7 @@ from contig.runner import (
     PipelineExecutionError,
     default_executor,
     read_run_log,
+    read_task_errors,
     run_pipeline,
 )
 
@@ -95,7 +96,8 @@ def self_heal_run(
             return _finalize(record, repair_history, run_dir)
         except PipelineExecutionError as exc:
             events = exc.record.events if exc.record else []
-            diagnosis = diagnose_failure(events, read_run_log(run_dir))
+            log_text = read_run_log(run_dir) + "\n" + read_task_errors(run_dir)
+            diagnosis = diagnose_failure(events, log_text)
             patches = propose_patches(diagnosis)
             safe = _safe_patch(patches)
 

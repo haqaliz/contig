@@ -83,6 +83,20 @@ def propose_patches(diagnosis: Diagnosis) -> list[Patch]:
                 expected_signal="parameter accepted",
             )
         ]
+    if diagnosis.failure_class == "platform_unsupported":
+        return [
+            Patch(
+                kind="env",
+                operation={"use_native_arch_backend": True},
+                rationale=(
+                    "A step's container has no image for this host's CPU architecture "
+                    "(e.g. nf-core amd64 images on Apple Silicon). Re-running here won't "
+                    "help — run on an x86_64 host or a cloud backend."
+                ),
+                risk="needs_confirmation",
+                expected_signal="step runs on a native-architecture host",
+            )
+        ]
     if diagnosis.failure_class == "conda_solve_failed":
         return [
             Patch(

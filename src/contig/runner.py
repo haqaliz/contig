@@ -91,6 +91,25 @@ def read_run_log(run_dir: str | Path) -> str:
     return log_path.read_text() if log_path.exists() else ""
 
 
+def read_task_errors(run_dir: str | Path, max_tasks: int = 10, tail_lines: int = 40) -> str:
+    """Collect the per-task `.command.err` output from the Nextflow work dirs.
+
+    The main run.log only says which process failed; the real error (a tool's
+    stderr, a container/platform warning) lives in the failing task's
+    `.command.err`. The detector needs it (ARCHITECTURE §5.2).
+    """
+    work = Path(run_dir) / "work"
+    if not work.is_dir():
+        return ""
+    chunks: list[str] = []
+    for err in sorted(work.glob("**/.command.err"))[:max_tasks]:
+        text = err.read_text(errors="replace").strip()
+        if text:
+            tail = "\n".join(text.splitlines()[-tail_lines:])
+            chunks.append(f"# {err.parent.name}\n{tail}")
+    return "\n".join(chunks)
+
+
 def build_nextflow_command(
     pipeline: str,
     revision: str,
