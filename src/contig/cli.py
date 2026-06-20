@@ -7,6 +7,7 @@ run-and-verify engine lands once the toolchain is wired up.
 
 from __future__ import annotations
 
+from pathlib import Path
 from importlib.metadata import version as _pkg_version
 
 import typer
@@ -117,8 +118,10 @@ def run(
         params["input"] = input
         input_paths = [input, *fastq_paths(input)]
     selected_profiles = profiles or ("docker" if input else "test,docker")
-    if outdir:
-        params["outdir"] = outdir
+    # nf-core always requires --outdir; default it under the run dir. Absolute so
+    # Nextflow (which runs in the run dir) writes to the right place.
+    outdir_path = Path(outdir) if outdir else Path(runs_dir) / run_id / "results"
+    params["outdir"] = str(outdir_path.resolve())
     if max_memory:
         params["max_memory"] = max_memory
     if max_cpus:

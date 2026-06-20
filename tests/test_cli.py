@@ -136,6 +136,16 @@ def test_run_rejects_malformed_samplesheet_without_launching(tmp_path, monkeypat
     assert launched["n"] == 0  # pre-flight rejected it; the pipeline never launched
 
 
+def test_run_defaults_outdir_under_run_dir(tmp_path, monkeypatch):
+    # nf-core always requires --outdir; Contig must default it so a bare run works.
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(app, ["run", "--run-id", "od", "--runs-dir", str(tmp_path / "runs")])
+    rec = load_bundle(tmp_path / "runs" / "od")
+    outdir = rec.parameters.get("outdir")
+    assert outdir and "od" in outdir and outdir.endswith("results")
+    assert outdir.startswith("/")  # absolute (Nextflow runs in the run dir)
+
+
 def test_run_passes_resource_caps_to_params(tmp_path, monkeypatch):
     sheet = _make_sheet(tmp_path)
     monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
