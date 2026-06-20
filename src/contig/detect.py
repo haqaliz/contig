@@ -104,15 +104,14 @@ def diagnose_failure(events: list[TaskEvent], log_text: str) -> Diagnosis:
     notfound_lines = _matching_lines(
         log_text, ("not found", "missing", "no such file")
     )
+    # Require the index/.fai to appear ON a "not found"/"missing"/"no such file"
+    # line. A bare .fai mention is noise — e.g. `samtools faidx` naming its own
+    # successful output genome.fasta.fai — and must not trigger missing_index.
     index_lines = [
         line
         for line in notfound_lines
         if ("index" in line.lower() or _has_any(line, (".fai", ".bai", ".tbi", ".csi")))
     ]
-    # A bare missing index file (no not-found phrasing on the same line) still counts.
-    index_lines = index_lines or _matching_lines(
-        log_text, (".fai", ".bai", ".tbi", ".csi")
-    )
     if index_lines:
         return Diagnosis(
             failure_class="missing_index",

@@ -103,6 +103,12 @@ def read_task_errors(run_dir: str | Path, max_tasks: int = 10, tail_lines: int =
         return ""
     chunks: list[str] = []
     for err in sorted(work.glob("**/.command.err"))[:max_tasks]:
+        # Only failed/killed tasks: a successful task's stderr is noise that can
+        # trigger the wrong diagnosis. exitcode "0" -> skip; non-zero or absent
+        # (killed before writing one) -> include.
+        exitcode = err.parent / ".exitcode"
+        if exitcode.exists() and exitcode.read_text().strip() == "0":
+            continue
         text = err.read_text(errors="replace").strip()
         if text:
             tail = "\n".join(text.splitlines()[-tail_lines:])

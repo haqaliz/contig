@@ -53,6 +53,31 @@ def test_read_task_errors_empty_when_no_work_dirs(tmp_path):
 
     assert read_task_errors(tmp_path) == ""
 
+
+def test_read_task_errors_skips_successful_tasks(tmp_path):
+    from contig.runner import read_task_errors
+
+    ok = tmp_path / "work" / "aa" / "1"
+    ok.mkdir(parents=True)
+    (ok / ".command.err").write_text("index built fine")
+    (ok / ".exitcode").write_text("0")
+    bad = tmp_path / "work" / "bb" / "2"
+    bad.mkdir(parents=True)
+    (bad / ".command.err").write_text("platform does not match the detected host")
+    (bad / ".exitcode").write_text("1")
+    text = read_task_errors(tmp_path)
+    assert "platform does not match" in text
+    assert "index built fine" not in text  # a successful task's stderr is noise — exclude it
+
+
+def test_read_task_errors_includes_killed_task_without_exitcode(tmp_path):
+    from contig.runner import read_task_errors
+
+    bad = tmp_path / "work" / "cc" / "3"
+    bad.mkdir(parents=True)
+    (bad / ".command.err").write_text("killed under emulation")  # no .exitcode (killed)
+    assert "killed under emulation" in read_task_errors(tmp_path)
+
 TRACE_2_OK = (
     "task_id\thash\tnative_id\tname\tstatus\texit\tsubmit\tduration\trealtime\n"
     "1\tab/cd\t101\tNFCORE_RNASEQ:FASTQC (S1)\tCOMPLETED\t0\t-\t-\t-\n"
