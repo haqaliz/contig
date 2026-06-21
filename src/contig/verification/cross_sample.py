@@ -12,7 +12,16 @@ not clinical or biological claims.
 
 from __future__ import annotations
 
+import re
+
 from contig.models import QCResult
+
+_FASTQC_READ_SUFFIX = re.compile(r"\s+Read\s+\d+$", re.IGNORECASE)
+
+
+def _biological_samples(metrics: dict[str, dict[str, float]]) -> set[str]:
+    """Distinct biological samples, collapsing FastQC per-read rows ('S Read 1' -> 'S')."""
+    return {_FASTQC_READ_SUFFIX.sub("", s) for s in metrics}
 
 
 def _median(values: list[float]) -> float:
@@ -53,7 +62,7 @@ def check_min_sample_count(
     metrics: dict[str, dict[str, float]],
     min_samples: int = 2,
 ) -> QCResult:
-    count = len(metrics)
+    count = len(_biological_samples(metrics))
     status = "fail" if count < min_samples else "pass"
     return QCResult(
         check="min_sample_count",

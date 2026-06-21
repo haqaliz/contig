@@ -73,6 +73,31 @@ def test_min_sample_count_at_threshold_passes() -> None:
     assert result.value == 2.0
 
 
+def test_min_sample_count_collapses_fastqc_per_read_rows():
+    # One biological sample with its two FastQC per-read rows must count as ONE,
+    # so a single-sample run correctly fails the >=2 replicate gate.
+    from contig.verification.cross_sample import check_min_sample_count
+    metrics = {
+        "WT_REP1": {"uniquely_mapped_percent": 90.0},
+        "WT_REP1 Read 1": {"percent_gc": 48.0},
+        "WT_REP1 Read 2": {"percent_gc": 47.0},
+    }
+    result = check_min_sample_count(metrics, min_samples=2)
+    assert result.value == 1.0
+    assert result.status == "fail"
+
+
+def test_min_sample_count_counts_distinct_samples_not_read_rows():
+    from contig.verification.cross_sample import check_min_sample_count
+    metrics = {
+        "WT_REP1": {"x": 1.0}, "WT_REP1 Read 1": {"x": 1.0}, "WT_REP1 Read 2": {"x": 1.0},
+        "WT_REP2": {"x": 1.0}, "WT_REP2 Read 1": {"x": 1.0},
+    }
+    result = check_min_sample_count(metrics, min_samples=2)
+    assert result.value == 2.0
+    assert result.status == "pass"
+
+
 def test_metric_outliers_flags_clear_outlier() -> None:
     # S4 sits far from a tight cluster -> flagged as a warn naming the sample.
     metrics = {
