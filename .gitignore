@@ -2,9 +2,9 @@ __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
-work/
+/work/
 .nextflow*
 *.egg-info/
 dist/
-runs/
-_realdata/
+/runs/
+/_realdata/
