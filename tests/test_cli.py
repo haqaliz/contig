@@ -279,6 +279,17 @@ def test_eval_detector_reports_a_miss_for_a_mislabeled_case(tmp_path):
     assert "bogus" in result.output and "tool_crash" in result.output
 
 
+def test_eval_detector_json_emits_machine_readable_report(tmp_path):
+    # The dashboard consumes this instead of re-implementing the detector.
+    import json
+
+    result = runner.invoke(app, ["eval-detector", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert "accuracy" in data and "per_class" in data and "mismatches" in data
+    assert data["total"] >= 10
+
+
 def test_version_prints_package_version():
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0

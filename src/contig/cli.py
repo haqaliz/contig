@@ -198,6 +198,7 @@ def list_runs(
 @app.command(name="eval-detector")
 def eval_detector(
     corpus: str = typer.Option(None, "--corpus", help="Failure-corpus JSONL (defaults to the shipped seed)."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the report as JSON (for the dashboard)."),
 ) -> None:
     """Score the failure detector against a labeled corpus (moat #2).
 
@@ -212,6 +213,9 @@ def eval_detector(
         typer.echo(f"Corpus not found: {path}", err=True)
         raise typer.Exit(code=1)
     report = evaluate_detector(cases)
+    if json_out:
+        typer.echo(report.model_dump_json())
+        return
     typer.echo(f"Detector eval: {report.correct}/{report.total} correct (accuracy {report.accuracy:.1%})")
     for cls, s in sorted(report.per_class.items()):
         typer.echo(f"  {cls}: precision {s.precision:.2f}  recall {s.recall:.2f}  (support {s.support})")
