@@ -1,18 +1,21 @@
 "use client";
 
 // Two labeled selects for choosing the run ids to compare, plus a Compare button
-// that navigates to /runs/compare?a=<id>&b=<id>. Kept deliberately simple and
-// accessible: native selects (so keyboard and screen reader behavior is free) and
-// a disabled Compare until both ids are chosen. The run id list is passed in from
-// the server page so this component never touches the data layer.
+// that navigates to /runs/compare?a=<id>&b=<id>. Uses the shadcn Select. Compare
+// stays disabled until both ids are chosen. The run id list is passed in from the
+// server page, so this component never touches the data layer.
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { GitCompareArrows } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-
-const SELECT_CLASS =
-  "h-9 w-full rounded-lg border border-input bg-background px-2.5 text-sm text-foreground shadow-xs transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 export function RunPicker({
   runIds,
@@ -45,46 +48,41 @@ export function RunPicker({
   }
 
   return (
-    <form
-      onSubmit={onSubmit}
-      className="flex flex-col gap-4 sm:flex-row sm:items-end"
-    >
+    <form onSubmit={onSubmit} className="flex flex-col gap-4 sm:flex-row sm:items-end">
       <div className="flex-1 space-y-1.5">
-        <label htmlFor="compare-a" className="text-sm font-medium text-foreground">
+        <label id="compare-a-label" className="text-sm font-medium text-foreground">
           Run A (baseline)
         </label>
-        <select
-          id="compare-a"
-          value={a}
-          onChange={(e) => setA(e.target.value)}
-          className={SELECT_CLASS}
-        >
-          <option value="">Select a run</option>
-          {runIds.map((id) => (
-            <option key={id} value={id}>
-              {id}
-            </option>
-          ))}
-        </select>
+        <Select value={a} onValueChange={(v) => setA(v as string)}>
+          <SelectTrigger aria-labelledby="compare-a-label" className="w-full">
+            <SelectValue placeholder="Select a run" />
+          </SelectTrigger>
+          <SelectContent>
+            {runIds.map((id) => (
+              <SelectItem key={id} value={id}>
+                {id}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       <div className="flex-1 space-y-1.5">
-        <label htmlFor="compare-b" className="text-sm font-medium text-foreground">
+        <label id="compare-b-label" className="text-sm font-medium text-foreground">
           Run B (comparison)
         </label>
-        <select
-          id="compare-b"
-          value={b}
-          onChange={(e) => setB(e.target.value)}
-          className={SELECT_CLASS}
-        >
-          <option value="">Select a run</option>
-          {runIds.map((id) => (
-            <option key={id} value={id}>
-              {id}
-            </option>
-          ))}
-        </select>
+        <Select value={b} onValueChange={(v) => setB(v as string)}>
+          <SelectTrigger aria-labelledby="compare-b-label" className="w-full">
+            <SelectValue placeholder="Select a run" />
+          </SelectTrigger>
+          <SelectContent>
+            {runIds.map((id) => (
+              <SelectItem key={id} value={id}>
+                {id}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       <Button type="submit" size="lg" disabled={!canCompare} className="gap-2 sm:self-end">
