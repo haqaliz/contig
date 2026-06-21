@@ -363,6 +363,21 @@ def test_plan_proposes_rnaseq_for_a_de_goal(tmp_path):
     assert "GRCh38" in result.output
 
 
+def test_plan_json_emits_machine_readable_plan(tmp_path):
+    import json
+
+    sheet = _make_sheet(tmp_path)
+    result = runner.invoke(
+        app,
+        ["plan", "--goal", "find differentially expressed genes",
+         "--input", str(sheet), "--genome", "GRCh38", "--json"],
+    )
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["pipeline"] == "nf-core/rnaseq"
+    assert "params" in data and "warnings" in data and "revision" in data
+
+
 def test_plan_warns_about_replicates_on_single_sample(tmp_path):
     sheet = _make_sheet(tmp_path)  # one sample
     result = runner.invoke(

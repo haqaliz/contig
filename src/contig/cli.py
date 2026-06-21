@@ -8,6 +8,7 @@ generating a nextflow.config from the ExecutionTarget (ARCHITECTURE §4.1).
 
 from __future__ import annotations
 
+import json as _json
 from pathlib import Path
 from importlib.metadata import version as _pkg_version
 
@@ -53,6 +54,7 @@ def plan(
     genome: str = typer.Option(None, "--genome", help="iGenomes reference key (e.g. GRCh38)."),
     fasta: str = typer.Option(None, "--fasta", help="Reference FASTA (with --gtf)."),
     gtf: str = typer.Option(None, "--gtf", help="Reference GTF annotation (with --fasta)."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the plan as JSON (for the dashboard)."),
 ) -> None:
     """Propose an analysis plan (pipeline + params) from a goal + data, to approve before running."""
     reference = None
@@ -60,13 +62,23 @@ def plan(
         try:
             reference = resolve_reference(genome=genome, fasta=fasta, gtf=gtf)
         except ReferenceError as exc:
+            if json_out:
+                typer.echo(_json.dumps({"error": str(exc)}))
+                raise typer.Exit(code=1)
             typer.echo(f"Reference error: {exc}", err=True)
             raise typer.Exit(code=1)
     try:
         proposed = build_plan(goal, input, reference_params=reference)
     except PlanningError as exc:
+        if json_out:
+            typer.echo(_json.dumps({"error": str(exc)}))
+            raise typer.Exit(code=1)
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
+
+    if json_out:
+        typer.echo(proposed.model_dump_json())
+        return
 
     typer.echo(f"Plan: {proposed.pipeline} @ {proposed.revision}  (assay: {proposed.assay})")
     typer.echo(f"  {proposed.rationale}")
