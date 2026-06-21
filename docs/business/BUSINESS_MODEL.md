@@ -1,10 +1,10 @@
-# Contig - Business Model, Fundraising & Exit
+# Contig: Business Model, Fundraising & Exit
 
 > **What Contig is.** An agentic bioinformatics analyst. It ingests raw sequencing data, selects and runs the right pipeline on the user's own compute, debugs and self-heals when things break, and returns a *verified, reproducible* result.
 >
-> **Where the company lives.** Not in Layer 1 (natural-language → script generation - crowded, commoditizing). In **Layer 2: run / debug / self-heal / verify / reproduce, end to end.** That layer is unsolved, and the moat is execution + verification + reproducibility infrastructure plus accumulated workflow-evaluation data - *not* prompting.
+> **Where the company lives.** Not in Layer 1 (natural-language → script generation, which is crowded and commoditizing). In **Layer 2: run / debug / self-heal / verify / reproduce, end to end.** That layer is unsolved, and the moat is execution + verification + reproducibility infrastructure plus accumulated workflow-evaluation data, *not* prompting.
 >
-> **Why now / why fundable.** "AI agents for science" is a live, hot investment thesis. The hard part is engineering - which is exactly the founder's unfair advantage - and the technical bar is high enough to deter most non-technical founders. A working agent that closes the gap from roughly **17% open-answer accuracy** (Claude 3.5 Sonnet on the original BixBench computational-biology benchmark) to something operationally useful on real pipelines is a credible, defensible company.
+> **Why now / why fundable.** "AI agents for science" is a live, hot investment thesis. The hard part is engineering (which is exactly the founder's unfair advantage), and the technical bar is high enough to deter most non-technical founders. A working agent that closes the gap from roughly **17% open-answer accuracy** (Claude 3.5 Sonnet on the original BixBench computational-biology benchmark) to something operationally useful on real pipelines is a credible, defensible company.
 
 *Companion docs: detailed go-to-market in `docs/business/GTM.md`. This document covers revenue model, unit economics, segments, fundraising, exit, defensibility, and risks.*
 
@@ -14,8 +14,8 @@
 
 Contig earns money two ways, deliberately bundled:
 
-1. **Per-seat SaaS** - recurring access to the agent (the "analyst").
-2. **Usage-based managed compute** - an optional, marked-up layer when Contig provisions and runs pipelines on cloud compute on the customer's behalf (vs. running on the customer's own infrastructure / cloud account, which carries no compute margin but still pays a seat).
+1. **Per-seat SaaS**: recurring access to the agent (the "analyst").
+2. **Usage-based managed compute**: an optional, marked-up layer when Contig provisions and runs pipelines on cloud compute on the customer's behalf (vs. running on the customer's own infrastructure / cloud account, which carries no compute margin but still pays a seat).
 
 This split matters: the **seat captures the value of the intelligence/verification**, and the **compute line captures operational value** for users who don't want to manage their own infrastructure. Customers who bring their own compute (BYOC) still pay full seat price, preserving margin even when we earn nothing on compute.
 
@@ -33,17 +33,17 @@ This split matters: the **seat captures the value of the intelligence/verificati
 
 ### 1.2 The compute-usage component
 
-- **BYOC (bring your own cloud):** Contig orchestrates runs inside the customer's AWS/GCP/Azure account or HPC cluster. We charge **only the seat**; the customer pays their cloud provider directly. Zero compute COGS, zero compute margin, but maximum trust (data never leaves their environment - critical for pharma).
-- **Managed compute (metered):** Contig provisions compute, runs the pipeline, and bills the customer a **marked-up rate** over our underlying cloud cost. Analogous to how AWS HealthOmics charges per private-workflow run (compute by instance-hour + run-storage per GB-hour) and fixed-price Ready2Run workflows ([aws.amazon.com/healthomics/pricing](https://aws.amazon.com/healthomics/pricing/)), and how Seqera/Latch meter compute per core-hour/credit. **Competitive caveat:** Terra.bio passes Google Cloud cost through with *zero markup* ([support.terra.bio](https://support.terra.bio/hc/en-us/articles/6123082826651-Overview-Costs-and-billing-in-Terra-GCP)) - so Contig cannot justify a compute markup on raw cycles alone. Our markup is earned by *self-healing* (failed runs the agent fixes and re-runs without human intervention) and *verification* (the customer pays for a result they can trust, not just compute time). Where that value isn't credible, default to BYOC and earn on the seat.
+- **BYOC (bring your own cloud):** Contig orchestrates runs inside the customer's AWS/GCP/Azure account or HPC cluster. We charge **only the seat**; the customer pays their cloud provider directly. Zero compute COGS, zero compute margin, but maximum trust (data never leaves their environment, critical for pharma).
+- **Managed compute (metered):** Contig provisions compute, runs the pipeline, and bills the customer a **marked-up rate** over our underlying cloud cost. Analogous to how AWS HealthOmics charges per private-workflow run (compute by instance-hour + run-storage per GB-hour) and fixed-price Ready2Run workflows ([aws.amazon.com/healthomics/pricing](https://aws.amazon.com/healthomics/pricing/)), and how Seqera/Latch meter compute per core-hour/credit. **Competitive caveat:** Terra.bio passes Google Cloud cost through with *zero markup* ([support.terra.bio](https://support.terra.bio/hc/en-us/articles/6123082826651-Overview-Costs-and-billing-in-Terra-GCP)). So Contig cannot justify a compute markup on raw cycles alone. Our markup is earned by *self-healing* (failed runs the agent fixes and re-runs without human intervention) and *verification* (the customer pays for a result they can trust, not just compute time). Where that value isn't credible, default to BYOC and earn on the seat.
 
 **Pricing principle:** never let the compute line cannibalize the seat. Compute is a convenience/margin add-on; the intelligence is the product.
 
 ### 1.3 Free tier & academic strategy
 
-- **Goal of free/academic is not revenue - it's the data flywheel and distribution.** Every run (success or failure, on real data) feeds the workflow-eval corpus that *is* the moat.
+- **Goal of free/academic is not revenue: it's the data flywheel and distribution.** Every run (success or failure, on real data) feeds the workflow-eval corpus that *is* the moat.
 - Generous free tier for individual academics on BYOC, capped by number of runs/month and gated behind .edu / ORCID verification.
 - Paid academic lab plans priced to fit grant budgets (low hundreds/month), matching the Pluto Bio academia band.
-- Publish reproducibility records as a feature academics *want to cite* (a Contig run = a shareable, re-runnable methods artifact) - turns users into a citation/marketing channel.
+- Publish reproducibility records as a feature academics *want to cite* (a Contig run = a shareable, re-runnable methods artifact). This turns users into a citation/marketing channel.
 
 ---
 
@@ -53,15 +53,15 @@ This split matters: the **seat captures the value of the intelligence/verificati
 
 | Cost driver | Notes |
 |-------------|-------|
-| **LLM tokens** | Agent loops (plan → run → read errors → fix → re-run → verify) are token-heavy. Self-healing multiplies token spend per task - this is the #1 variable cost on the SaaS line. Mitigate with caching, smaller models for routine steps, and reserving frontier models for hard reasoning. |
-| **Managed compute** | Only on the metered tier. Pass-through cloud cost (CPU/GPU/memory + run storage). Failed-and-retried runs add cost - but self-healing is the value, so price it in. |
+| **LLM tokens** | Agent loops (plan → run → read errors → fix → re-run → verify) are token-heavy. Self-healing multiplies token spend per task: this is the #1 variable cost on the SaaS line. Mitigate with caching, smaller models for routine steps, and reserving frontier models for hard reasoning. |
+| **Managed compute** | Only on the metered tier. Pass-through cloud cost (CPU/GPU/memory + run storage). Failed-and-retried runs add cost, but self-healing is the value, so price it in. |
 | **Storage / data egress** | Intermediate files, run artifacts, repro records. Minimal on BYOC; real on managed. |
-| **Verification overhead** | Re-running / cross-checking results consumes both tokens and compute - a deliberate cost we monetize as trust. |
+| **Verification overhead** | Re-running / cross-checking results consumes both tokens and compute (a deliberate cost we monetize as trust). |
 
 ### 2.2 What drives revenue
 
 - **Predictable:** per-seat MRR (high gross margin, ~80-90% software-like once token cost per active seat is controlled).
-- **Variable:** managed-compute markup (lower gross margin - bounded by cloud cost - but scales with usage and lands expansion revenue).
+- **Variable:** managed-compute markup (lower gross margin, bounded by cloud cost, but scales with usage and lands expansion revenue).
 
 ### 2.3 Gross-margin considerations of bundling compute
 
@@ -70,7 +70,7 @@ This split matters: the **seat captures the value of the intelligence/verificati
 | Seat-only (BYOC) | High (software-like, minus LLM tokens) | Best margin; pursue with technical ICPs and pharma (who insist on BYOC anyway). |
 | Seat + managed compute | Blended down by pass-through compute COGS | Lower % margin but larger absolute dollars + stickiness; great for non-technical/wet-lab users who won't run their own infra. |
 
-> **Key tension:** bundling managed compute inflates revenue but dilutes gross margin and can spook margin-focused investors. **Recommendation:** report seat ARR and compute revenue *separately*; lead investor conversations with high-margin seat ARR, treat compute as expansion. Keep the blended gross margin honestly modeled. The biggest controllable risk to margin is **LLM token spend per active seat** - instrument it from day one.
+> **Key tension:** bundling managed compute inflates revenue but dilutes gross margin and can spook margin-focused investors. **Recommendation:** report seat ARR and compute revenue *separately*; lead investor conversations with high-margin seat ARR, treat compute as expansion. Keep the blended gross margin honestly modeled. The biggest controllable risk to margin is **LLM token spend per active seat**: instrument it from day one.
 
 ---
 
@@ -87,9 +87,9 @@ This split matters: the **seat captures the value of the intelligence/verificati
 ### Recommended sequencing (land → expand)
 
 1. **Land first: lone computational biologist (self-serve) + free academics.** Fastest path to real usage on real pipelines, lowest CAC, and it builds the eval-data moat. This is where the wedge proves itself and where the product earns word-of-mouth among the people who *evaluate tools for everyone else*.
-2. **Then: wet-lab scientists who can't code** (within the same labs) - highest "magic moment," expands seats inside accounts you already touched.
-3. **Then: labs and core facilities** - turn happy individuals into team/facility contracts (PI as buyer). Core facilities are the multiplier.
-4. **Finally: biotech/pharma enterprise** - pursue once reproducibility, security, and BYOC private deployment are hardened and you have logos/case studies. This is the venture-scale, long-cycle prize - don't start here.
+2. **Then: wet-lab scientists who can't code** (within the same labs): highest "magic moment," expands seats inside accounts you already touched.
+3. **Then: labs and core facilities**: turn happy individuals into team/facility contracts (PI as buyer). Core facilities are the multiplier.
+4. **Finally: biotech/pharma enterprise**: pursue once reproducibility, security, and BYOC private deployment are hardened and you have logos/case studies. This is the venture-scale, long-cycle prize. Don't start here.
 
 > Rationale: academic = low ACV but grant-funded and ideal for validation; biotech/pharma = high ACV but long cycles. Start where signal is cheap and fast, accumulate proof + data, then climb the ACV ladder. GTM specifics live in `docs/business/GTM.md`.
 
@@ -126,27 +126,27 @@ Net: **land bottoms-up, expand into enterprise.** Detailed channel/positioning/f
 
 ### 5.3 What an "AI agents for science" investor wants to see
 
-1. **A real, hard technical moat** - execution/verification/reproducibility infra + accumulated workflow-eval data, *not* a wrapper prompt. (This is the explicit thesis of the wedge.)
-2. **Founder-market fit on the *engineering*** - the bar deters non-technical founders; lean into that as the unfair advantage.
+1. **A real, hard technical moat**: execution/verification/reproducibility infra + accumulated workflow-eval data, *not* a wrapper prompt. (This is the explicit thesis of the wedge.)
+2. **Founder-market fit on the *engineering***: the bar deters non-technical founders; lean into that as the unfair advantage.
 3. **Evidence of closing the accuracy gap** on *real* pipelines (the 17% → useful story), with an eval methodology you own.
 4. **A data flywheel** that gets better with every run (defensibility over time).
-5. **Many credible exit doors** (Section 6) - de-risks the venture bet.
-6. **Honest unit economics** - high-margin seat ARR led, compute as expansion.
+5. **Many credible exit doors** (Section 6): de-risks the venture bet.
+6. **Honest unit economics**: high-margin seat ARR led, compute as expansion.
 
 ### 5.4 Comparable funded startups (real figures)
 
-**Closest comps - bioinformatics platforms & agentic tools (the Contig category):**
+**Closest comps: bioinformatics platforms & agentic tools (the Contig category):**
 
 | Company | What they do | Funding (most recent / total) | Source |
 |---------|--------------|-------------------------------|--------|
-| **Tamarind Bio** (YC) | No-code AI/simulation platform (AlphaFold, RFdiffusion, 200+ models) - closest "agentic, accessible bio" comp | **$13.6M Series A**, Feb 2026; ~$14M total | [GEN](https://www.genengnews.com/topics/artificial-intelligence/tamarind-bio-secures-13-6m-series-a-to-make-ai-more-accessible-for-biology/) |
+| **Tamarind Bio** (YC) | No-code AI/simulation platform (AlphaFold, RFdiffusion, 200+ models): closest "agentic, accessible bio" comp | **$13.6M Series A**, Feb 2026; ~$14M total | [GEN](https://www.genengnews.com/topics/artificial-intelligence/tamarind-bio-secures-13-6m-series-a-to-make-ai-more-accessible-for-biology/) |
 | **LatchBio** (YC) | Code-free bioinformatics data + pipeline platform ("AWS×GitHub for biocomputing") | **$28M Series A**, June 2022, co-led by Coatue + Lux; ~$33M total | [latch.bio blog](https://blog.latch.bio/p/announcing-our-series-a-building), [VentureBeat](https://venturebeat.com/data-infrastructure/latchbio-raises-28m-to-corral-bio-data) |
 | **Seqera Labs** | Commercial Nextflow / nf-core pipeline orchestration | **$26M Series B**, May 2025 (Addition); prior €22M Series A (2022), $5.5M seed; ~$50-55M total | [seqera.io Series B](https://seqera.io/blog/seqera-raises-26m-series-b/), [pricing](https://seqera.io/pricing/) |
 | **Pluto Bio** | Multi-omics analysis platform | **$3.6M** (May 2025, Kickstart, labeled seed); ~$8.3M total | [BusinessWire](https://www.businesswire.com/news/home/20250513706622/en/Pluto-Bio-Raises-%243.6M-to-Expand-AI-Powered-Multi-Omics-Analysis-Platform-for-Pharma), [pricing](https://pluto.bio/pricing) |
 | **Lamin Labs** (YC S22) | Data lineage / lineage DB for bio (LaminDB); clearest published seat pricing in the set | ~$500K pre-seed/seed **[to verify]** | [lamin.ai/pricing](https://lamin.ai/pricing) |
 | **FutureHouse → Edison Scientific** | Nonprofit "AI Scientist" (authors of BixBench) + commercial spinout (Kosmos "AI co-scientist") | Nonprofit: Schmidt/OpenPhil/NSF-funded (~$20M est. spend by end-2024). Spinout **Edison: $70M seed @ ~$250M val** (Dec 2025, Spark + Triatomic) | [futurehouse.org/about](https://www.futurehouse.org/about), [Endpoints](https://endpoints.news/ai-startup-edison-raises-70m-seed-for-research-software/) |
 
-**Adjacent - "AI for science" / AI-bio model companies (thesis validation, frontier round sizes):**
+**Adjacent: "AI for science" / AI-bio model companies (thesis validation, frontier round sizes):**
 
 | Company | What they do | Funding (most recent) | Source |
 |---------|--------------|-----------------------|--------|
@@ -155,20 +155,20 @@ Net: **land bottoms-up, expand into enterprise.** Detailed channel/positioning/f
 | **Chai Discovery** | Molecular-structure AI | **$130M Series B** @ $1.3B val, Dec 2025 | [Built In SF](https://www.builtinsf.com/articles/chai-discovery-raises-130m-series-b-20251217) |
 | **Cradle** | AI protein design | **$73M Series B**, Nov 2024 (IVP); ~$97M total | [TechCrunch](https://techcrunch.com/2024/11/26/cradle-builds-out-its-protein-design-ai-platform-and-wet-lab-with-73m-in-new-funding/) |
 
-**Acquirer-class comps (large platforms - see Section 6):**
+**Acquirer-class comps (large platforms, see Section 6):**
 
 | Company | What they do | Funding / valuation | Source |
 |---------|--------------|---------------------|--------|
 | **Benchling** | Life-sciences R&D cloud / ELN | **$100M Series F @ $6.1B val** (Nov 2021); ~$412M total; ~$210M ARR (2024) **[to verify]** | [Bloomberg](https://www.bloomberg.com/news/articles/2021-11-18/biotech-platform-benchling-valued-at-6-1-billion-in-new-funding), [Sacra](https://sacra.com/c/benchling/) |
 | **DNAnexus** | Genomics cloud platform | **$200M Series I** @ ~$600M val (Mar 2022, Blackstone Growth); ~$473M total | [DNAnexus press](https://www.dnanexus.com/press/dnanexus-secures-200-million-funding) |
 
-> **Takeaway for the deck:** the *bioinformatics platform* layer funds Series-A/B rounds in the **$13-28M** range (Tamarind, Latch, Seqera) - a realistic early target for Contig. The broader **"AI for science" thesis is red-hot** ($142M-$300M *seeds* for EvolutionaryScale, Periodic Labs; Edison's $70M seed @ $250M for a science-agent spinout) - validating that investors will pay up for agentic-science teams with a real technical moat. The acquirer tier (Benchling $6.1B, DNAnexus ~$473M raised) shows the eventual buyers have the balance sheets. FutureHouse conveniently *defines the benchmark Contig beats* and then spun out a $250M company on the thesis.
+> **Takeaway for the deck:** the *bioinformatics platform* layer funds Series-A/B rounds in the **$13-28M** range (Tamarind, Latch, Seqera), a realistic early target for Contig. The broader **"AI for science" thesis is red-hot** ($142M-$300M *seeds* for EvolutionaryScale, Periodic Labs; Edison's $70M seed @ $250M for a science-agent spinout), validating that investors will pay up for agentic-science teams with a real technical moat. The acquirer tier (Benchling $6.1B, DNAnexus ~$473M raised) shows the eventual buyers have the balance sheets. FutureHouse conveniently *defines the benchmark Contig beats* and then spun out a $250M company on the thesis.
 
 ---
 
 ## 6. Acquisition thesis
 
-**This is the strongest exit of the ideas considered - many doors.** Contig is a natural tuck-in for anyone who owns either (a) an installed base of scientists or (b) a genomics-compute platform that lacks an intelligent execution/verification layer.
+**This is the strongest exit of the ideas considered: many doors.** Contig is a natural tuck-in for anyone who owns either (a) an installed base of scientists or (b) a genomics-compute platform that lacks an intelligent execution/verification layer.
 
 | Acquirer class | Specific acquirers | Why they buy Contig |
 |----------------|--------------------|--------------------|
@@ -181,10 +181,10 @@ Net: **land bottoms-up, expand into enterprise.** Detailed channel/positioning/f
 **What makes Contig an attractive tuck-in:** an *installed base of scientists* (distribution) **plus** an *execution/verification layer* (capability the acquirer can't easily build because it requires the same deterring engineering bar). The accumulated workflow-eval data is non-replicable.
 
 **Build to maximize multiple doors (and the multiple):**
-- **Cloud-neutral BYOC** - run on AWS, GCP, Azure, and HPC, so no single hyperscaler is the only viable buyer (preserves competitive tension).
-- **Pipeline-engine-neutral** - interoperate with Nextflow/nf-core, Snakemake, WDL/Terra so platform acquirers see immediate fit.
-- **Reproducibility records as a portable standard** - an asset that travels into any acquirer's product.
-- **Logos across academia → core facility → biotech** - proves the installed base every acquirer wants.
+- **Cloud-neutral BYOC**: run on AWS, GCP, Azure, and HPC, so no single hyperscaler is the only viable buyer (preserves competitive tension).
+- **Pipeline-engine-neutral**: interoperate with Nextflow/nf-core, Snakemake, WDL/Terra so platform acquirers see immediate fit.
+- **Reproducibility records as a portable standard**: an asset that travels into any acquirer's product.
+- **Logos across academia → core facility → biotech**: proves the installed base every acquirer wants.
 
 ---
 
@@ -192,10 +192,10 @@ Net: **land bottoms-up, expand into enterprise.** Detailed channel/positioning/f
 
 The moat is **not** the prompt. It compounds:
 
-1. **Workflow-eval data flywheel** - every run (success *and* failure, on real data) teaches the system which pipelines, parameters, and fixes work. This is the asset competitors and foundation-model vendors can't buy. More runs → better self-healing → better results → more runs.
-2. **Reproducibility records** - an accumulating corpus of verified, re-runnable analyses becomes both a product feature (citable methods artifacts) and a switching cost.
-3. **Execution/verification infrastructure** - the hard, unglamorous engineering of running, debugging, and *proving* results across heterogeneous compute. High to build, high to deter.
-4. **Integrations** - connectors to clouds, HPC, pipeline engines, and data sources create distribution + stickiness; each integration is a small moat brick.
+1. **Workflow-eval data flywheel**: every run (success *and* failure, on real data) teaches the system which pipelines, parameters, and fixes work. This is the asset competitors and foundation-model vendors can't buy. More runs → better self-healing → better results → more runs.
+2. **Reproducibility records**: an accumulating corpus of verified, re-runnable analyses becomes both a product feature (citable methods artifacts) and a switching cost.
+3. **Execution/verification infrastructure**: the hard, unglamorous engineering of running, debugging, and *proving* results across heterogeneous compute. High to build, high to deter.
+4. **Integrations**: connectors to clouds, HPC, pipeline engines, and data sources create distribution + stickiness; each integration is a small moat brick.
 
 Over time, the defensibility shifts from "we have a clever agent" (copyable) to "we have the largest verified-run dataset and the deepest execution integrations in bioinformatics" (not copyable).
 
@@ -215,19 +215,19 @@ Over time, the defensibility shifts from "we have a clever agent" (copyable) to 
 
 ---
 
-### Appendix - key external anchors
+### Appendix: key external anchors
 
 **Benchmark (the gap Contig exists to close):**
 - **BixBench** (FutureHouse): original open-answer accuracy ~**17%** (Claude 3.5 Sonnet), ~9% (GPT-4o); on multiple-choice with opt-out, frontier models scored *below random chance*. [arxiv.org/abs/2503.00096](https://arxiv.org/abs/2503.00096), [futurehouse.org/research-announcements/bixbench](https://www.futurehouse.org/research-announcements/bixbench)
 
 **Managed-compute pricing models (for the metered tier markup reference):**
-- **AWS HealthOmics** - pay-as-you-go: private workflows billed by instance-hour (e.g. `omics.m.xlarge` ~$0.2592/hr, `omics.r.8xlarge` ~$2.72/hr); run storage static $0.0001918/GB-hr or dynamic $0.000411/GB-hr; Ready2Run workflows flat per-run (e.g. GATK germline ~$10/run); sequence stores per gigabase-month. [aws.amazon.com/healthomics/pricing](https://aws.amazon.com/healthomics/pricing/)
-- **Terra.bio** - platform is *free*; users pay **Google Cloud costs pass-through with no markup**. Important competitive signal: Contig's metered markup must be *justified by self-healing + verification*, since a major incumbent charges zero platform margin on compute. [support.terra.bio](https://support.terra.bio/hc/en-us/articles/6123082826651-Overview-Costs-and-billing-in-Terra-GCP)
-- **Seqera Compute** - usage-based: CPU $0.10/CPU-hr, mem $0.025/GiB-hr, storage $0.025/GB/mo. **LatchBio** - credit-based ($1 = 1 credit), compute metered per core-second. [seqera.io/pricing](https://seqera.io/pricing/), [latch.bio/pricing](https://latch.bio/pricing)
+- **AWS HealthOmics**: pay-as-you-go. Private workflows billed by instance-hour (e.g. `omics.m.xlarge` ~$0.2592/hr, `omics.r.8xlarge` ~$2.72/hr); run storage static $0.0001918/GB-hr or dynamic $0.000411/GB-hr; Ready2Run workflows flat per-run (e.g. GATK germline ~$10/run); sequence stores per gigabase-month. [aws.amazon.com/healthomics/pricing](https://aws.amazon.com/healthomics/pricing/)
+- **Terra.bio**: platform is *free*; users pay **Google Cloud costs pass-through with no markup**. Important competitive signal: Contig's metered markup must be *justified by self-healing + verification*, since a major incumbent charges zero platform margin on compute. [support.terra.bio](https://support.terra.bio/hc/en-us/articles/6123082826651-Overview-Costs-and-billing-in-Terra-GCP)
+- **Seqera Compute**: usage-based: CPU $0.10/CPU-hr, mem $0.025/GiB-hr, storage $0.025/GB/mo. **LatchBio**: credit-based ($1 = 1 credit), compute metered per core-second. [seqera.io/pricing](https://seqera.io/pricing/), [latch.bio/pricing](https://latch.bio/pricing)
 
 **Seat-pricing benchmarks:**
-- **Pluto Bio** - academia/lab plans $400-899/mo. [pluto.bio/pricing](https://pluto.bio/pricing)
-- **Lamin** - Free (OSS) / **Pro $30/mo** / **Team from $640/mo** / Enterprise - clearest published bio-data seat ladder. [lamin.ai/pricing](https://lamin.ai/pricing)
-- **Bioinformatician salary** (the human Contig augments): US avg ~**$110k/yr** (~$53/hr). [salary.com](https://www.salary.com/research/salary/listing/bioinformatician-salary) - frames willingness-to-pay: a $50-200/mo seat is trivial against a six-figure salary it makes more productive.
+- **Pluto Bio**: academia/lab plans $400-899/mo. [pluto.bio/pricing](https://pluto.bio/pricing)
+- **Lamin**: Free (OSS) / **Pro $30/mo** / **Team from $640/mo** / Enterprise, the clearest published bio-data seat ladder. [lamin.ai/pricing](https://lamin.ai/pricing)
+- **Bioinformatician salary** (the human Contig augments): US avg ~**$110k/yr** (~$53/hr). [salary.com](https://www.salary.com/research/salary/listing/bioinformatician-salary). This frames willingness-to-pay: a $50-200/mo seat is trivial against a six-figure salary it makes more productive.
 
 > All dollar pricing tiers in this doc are **hypotheses to validate** with design partners; figures marked **[to verify]** are unconfirmed.

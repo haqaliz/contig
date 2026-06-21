@@ -1,4 +1,4 @@
-"""The self-healing loop - Contig's core IP (ARCHITECTURE §5).
+"""The self-healing loop: Contig's core IP (ARCHITECTURE §5).
 
 Wrap a run in a bounded, observable, fully-logged control loop:
 
@@ -48,7 +48,7 @@ def apply_patch(target: ExecutionTarget, patch: Patch) -> ExecutionTarget:
     """Return a new target with the patch's resource bump applied to resourceLimits.
 
     Resource bumps ride in Nextflow's `process.resourceLimits` (what modern
-    nf-core honors - the old `--max_memory` params are ignored); a retry/other
+    nf-core honors; the old `--max_memory` params are ignored); a retry/other
     patch changes nothing (the re-run itself is the fix).
     """
     if patch.kind != "resource":

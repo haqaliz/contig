@@ -26,12 +26,12 @@ from contig.samplesheet import fastq_paths, validate_samplesheet
 from contig.self_heal import self_heal_run
 from contig.workspace import RunNotFoundError, list_run_ids, load_run
 
-app = typer.Typer(help="Contig - agentic bioinformatics analyst.")
+app = typer.Typer(help="Contig: agentic bioinformatics analyst.")
 
 
 @app.callback()
 def main() -> None:
-    """Contig - agentic bioinformatics analyst."""
+    """Contig: agentic bioinformatics analyst."""
 
 
 @app.command()
@@ -87,7 +87,7 @@ def run(
     fasta: str = typer.Option(None, "--fasta", help="Reference FASTA (with --gtf)."),
     gtf: str = typer.Option(None, "--gtf", help="Reference GTF annotation (with --fasta)."),
     outdir: str = typer.Option(None, "--outdir", help="Pipeline output directory (pipeline --outdir)."),
-    max_memory: str = typer.Option(None, "--max-memory", help="Cap per-process memory (e.g. '6.GB') - needed to fit nf-core on a laptop."),
+    max_memory: str = typer.Option(None, "--max-memory", help="Cap per-process memory (e.g. '6.GB'), needed to fit nf-core on a laptop."),
     max_cpus: int = typer.Option(None, "--max-cpus", help="Cap per-process CPUs."),
     max_attempts: int = typer.Option(3, "--max-attempts", help="Max self-heal attempts."),
 ) -> None:
@@ -99,7 +99,7 @@ def run(
     bundled test profile.
     """
     backend_options = {k: v for k, v in (("queue", queue), ("region", region)) if v}
-    # Caps ride in the generated config as process.resourceLimits - nf-core
+    # Caps ride in the generated config as process.resourceLimits; nf-core
     # ignores the old --max_memory/--max_cpus params.
     resource_limits = {}
     if max_memory:

@@ -31,7 +31,7 @@ def compute_input_checksums(paths: list[str | Path]) -> dict[str, str]:
     """Map each input file's basename to its SHA-256, for RunRecord.input_checksums.
 
     Basenames keep the provenance portable, but two inputs sharing a basename would
-    silently clobber - corrupting the record - so a collision is a hard error.
+    silently clobber (corrupting the record), so a collision is a hard error.
     """
     checksums: dict[str, str] = {}
     for p in paths:

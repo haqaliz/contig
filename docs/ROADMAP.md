@@ -1,4 +1,4 @@
-# Contig - Product Roadmap
+# Contig: Product Roadmap
 
 > **Contig** is an agentic bioinformatics analyst. It ingests raw sequencing data, runs the right pipeline on the user's own compute, debugs and self-heals when steps fail, and returns a **verified, reproducible** result.
 
@@ -6,11 +6,11 @@
 
 ## Why this roadmap looks the way it does
 
-**The wedge.** Layer 1 (natural language → script) is crowded and commoditizing - we avoid it. Layer 2 - actually *running* the pipeline end-to-end, debugging it, self-healing the failures, verifying the output, and making the whole thing reproducible - is unsolved. That is the company.
+**The wedge.** Layer 1 (natural language → script) is crowded and commoditizing, so we avoid it. Layer 2, actually *running* the pipeline end-to-end, debugging it, self-healing the failures, verifying the output, and making the whole thing reproducible, is unsolved. That is the company.
 
 **The evidence we're building on:**
 - The problem is real with high confidence. Roughly **74% of wet-lab scientists can't program**, and practitioners routinely scavenge solutions from Biostars threads and paper "Methods" sections rather than building robust pipelines [arxiv.org/html/2507.20122v1; nature.com/articles/s41598-025-25919-z].
-- Current AI systems **fail on medium/complex analysis** - roughly **17% accuracy on real analytical tasks** on the BixBench benchmark [arxiv.org/abs/2503.00096]. Generation is easy; *getting a correct, runnable result* is the hard, valuable part.
+- Current AI systems **fail on medium/complex analysis**: roughly **17% accuracy on real analytical tasks** on the BixBench benchmark [arxiv.org/abs/2503.00096]. Generation is easy; *getting a correct, runnable result* is the hard, valuable part.
 
 ---
 
@@ -28,16 +28,16 @@
 
 | Phase | Theme | Duration | Exit Gate |
 |-------|-------|----------|-----------|
-| **0** | Validation - narrowest possible agent, one pipeline, 5 real users | ~90 days | ≥3/5 design partners reach for a credit card |
+| **0** | Validation: narrowest possible agent, one pipeline, 5 real users | ~90 days | ≥3/5 design partners reach for a credit card |
 | **1** | MVP hardening + first paying design partners | ~Months 4-7 | ≥3 paying partners, self-heal rate target met |
 | **2** | Expand to 2-3 pipelines + reproducibility/provenance + team plans | ~Months 7-12 | Multi-pipeline retention + team-plan revenue |
 | **3** | Platform, scale, data flywheel, enterprise/biotech | ~Months 12+ | Repeatable enterprise motion + improving accuracy from data |
 
 ---
 
-## Phase 0 - Validation (90 Days)
+## Phase 0: Validation (90 Days)
 
-**Objective:** Prove that real bioinformaticians will pay for an agent that runs ONE pipeline end-to-end and self-heals the common failures - on their own data.
+**Objective:** Prove that real bioinformaticians will pay for an agent that runs ONE pipeline end-to-end and self-heals the common failures, on their own data.
 
 **Decision philosophy:** This phase is an experiment, not a product launch. Optimize for *learning whether to continue*, not for code quality or coverage.
 
@@ -46,7 +46,7 @@ Choose **ONE** of:
 - **RNA-seq differential expression** (high-volume, extremely well-documented, painful at the stats/QC stages), or
 - **Germline variant calling** (high-volume, GATK best-practices well-defined, painful in reference/format wrangling).
 
-Recommendation: **RNA-seq differential expression** unless early discovery (Week 1-2) skews toward variant calling. RNA-seq DE has the largest population of non-programmer wet-lab users - the exact ICP where "can't code" pain is highest [nature.com/articles/s41598-025-25919-z].
+Recommendation: **RNA-seq differential expression** unless early discovery (Week 1-2) skews toward variant calling. RNA-seq DE has the largest population of non-programmer wet-lab users, the exact ICP where "can't code" pain is highest [nature.com/articles/s41598-025-25919-z].
 
 ### Milestones
 
@@ -70,11 +70,11 @@ Recommendation: **RNA-seq differential expression** unless early discovery (Week
 
 ### 🚦 Phase 0 → Phase 1 Gate
 - **PROCEED** if **≥3/5 design partners reach for a credit card** (give a card, sign a paid pilot, or give an unambiguous "yes, I/my lab would pay $X from [named budget]").
-- **PIVOT** if fewer than 3. Re-examine: wrong pipeline? wrong ICP? value not in verify/reproduce? willingness exists but budget owner is elsewhere? Use discovery notes to choose the next experiment - do **not** add features and hope.
+- **PIVOT** if fewer than 3. Re-examine: wrong pipeline? wrong ICP? value not in verify/reproduce? willingness exists but budget owner is elsewhere? Use discovery notes to choose the next experiment. Do **not** add features and hope.
 
 ---
 
-## Phase 1 - MVP Hardening + First Paying Partners
+## Phase 1: MVP Hardening + First Paying Partners
 
 **Objective:** Turn the validation prototype into something the first paying design partners run on their real workflows repeatedly, without it embarrassing us.
 
@@ -94,7 +94,7 @@ Recommendation: **RNA-seq differential expression** unless early discovery (Week
 | Verification | Hardened output verification (sanity checks, QC thresholds, biological plausibility checks appropriate to the pipeline) |
 | Reproducibility | Run manifest + one-click re-run; exportable methods summary suitable for a paper's Methods section |
 | Onboarding | A non-programmer wet-lab scientist can go from raw data → result with no CLI use |
-| Billing | Minimal paid mechanism (Stripe, usage- or seat-based - see GTM) |
+| Billing | Minimal paid mechanism (Stripe, usage- or seat-based; see GTM) |
 | Observability | Internal telemetry on runs, interventions, failures (to measure the metrics below) |
 
 ### Success Metrics
@@ -111,9 +111,9 @@ Recommendation: **RNA-seq differential expression** unless early discovery (Week
 
 ---
 
-## Phase 2 - Expand Pipelines + Reproducibility/Provenance + Team Plans
+## Phase 2: Expand Pipelines + Reproducibility/Provenance + Team Plans
 
-**Objective:** Prove the Layer-2 engine generalizes beyond one pipeline, and that the reproducibility/provenance layer is a paid differentiator - not a nicety.
+**Objective:** Prove the Layer-2 engine generalizes beyond one pipeline, and that the reproducibility/provenance layer is a paid differentiator, not a nicety.
 
 ### Goals
 - Add **2-3 more pipelines**, chosen by partner demand-pull from Phase 1 (likely candidates: the *other* of RNA-seq DE / variant calling, plus single-cell RNA-seq or 16S/metagenomics).
@@ -145,12 +145,12 @@ Recommendation: **RNA-seq differential expression** unless early discovery (Week
 
 ---
 
-## Phase 3 - Platform, Scale, Data Flywheel, Enterprise/Biotech
+## Phase 3: Platform, Scale, Data Flywheel, Enterprise/Biotech
 
 **Objective:** Become the default Layer-2 execution/verification platform; compound a data advantage; land enterprise/biotech.
 
 ### Goals
-- **Data flywheel:** every run (failures, fixes, verifications) - with consent and privacy controls - improves self-heal and verification. This is where our BixBench-style accuracy advantage compounds: our edge is *learned from real failures*, not from a static model [arxiv.org/abs/2503.00096].
+- **Data flywheel:** every run (failures, fixes, verifications), with consent and privacy controls, improves self-heal and verification. This is where our BixBench-style accuracy advantage compounds: our edge is *learned from real failures*, not from a static model [arxiv.org/abs/2503.00096].
 - **Enterprise/biotech motion:** SSO, on-prem/VPC deployment, compliance (audit, data residency), SLAs.
 - **Platform:** stable interfaces for partners/core facilities to register their own pipelines and validation rules.
 
@@ -176,16 +176,16 @@ Recommendation: **RNA-seq differential expression** unless early discovery (Week
 
 | # | Risk / Assumption | Tied to | Likelihood | Impact | Mitigation / Test |
 |---|-------------------|---------|-----------|--------|-------------------|
-| R1 | **WTP doesn't exist** - people want it free, won't pay or it's no one's budget | Phase 0 gate | Med | Fatal | The whole Phase 0 WTP script; pivot rule baked into the gate |
-| R2 | **Wrong pipeline chosen** - low pain or low volume | Wk1 pipeline lock | Med | High | Validate pipeline choice with ≥1 practitioner Wk1; pick highest non-programmer pain (RNA-seq DE) |
-| R3 | **Self-heal is harder than the top-5** - real data breaks in long-tail ways | Wk4-6; Phase 1 | High | High | Catalog failures empirically from real runs; expand catalog continuously; measure unattended-completion rate |
-| R4 | **Verification gives false confidence** - agent says "verified" but result is wrong | Phase 0 verify layer onward | Med | Fatal (trust) | Conservative checks; surface uncertainty; never claim verified beyond what checks cover; expert spot-checks in Phase 0/1 |
+| R1 | **WTP doesn't exist**: people want it free, won't pay or it's no one's budget | Phase 0 gate | Med | Fatal | The whole Phase 0 WTP script; pivot rule baked into the gate |
+| R2 | **Wrong pipeline chosen**: low pain or low volume | Wk1 pipeline lock | Med | High | Validate pipeline choice with ≥1 practitioner Wk1; pick highest non-programmer pain (RNA-seq DE) |
+| R3 | **Self-heal is harder than the top-5**: real data breaks in long-tail ways | Wk4-6; Phase 1 | High | High | Catalog failures empirically from real runs; expand catalog continuously; measure unattended-completion rate |
+| R4 | **Verification gives false confidence**: agent says "verified" but result is wrong | Phase 0 verify layer onward | Med | Fatal (trust) | Conservative checks; surface uncertainty; never claim verified beyond what checks cover; expert spot-checks in Phase 0/1 |
 | R5 | **Reproducibility not valued enough to pay for** | Phase 1/2 | Med | High | Measure methods-export & provenance usage; if unused, re-test value prop before investing further |
 | R6 | **Can't recruit 5 real bioinformaticians** | Wk6-7 | Med | High | Start outreach Wk1 in parallel; multiple channels (Biostars, r/bioinformatics, X bio, nf-core Slack, core facilities) |
-| R7 | **Engine doesn't generalize** - each pipeline is a rewrite | Phase 2 gate | Med | High | Build pipeline-onboarding framework; lean on nf-core; gate Phase 2 on demonstrated reuse |
+| R7 | **Engine doesn't generalize**: each pipeline is a rewrite | Phase 2 gate | Med | High | Build pipeline-onboarding framework; lean on nf-core; gate Phase 2 on demonstrated reuse |
 | R8 | **Running on customer compute is too brittle/varied** (HPC vs cloud vs laptop) | Phase 1 compute | High | Med | Start with ONE compute target per partner; expand deliberately; abstract late |
 | R9 | **Layer 1 vendors move into Layer 2** | All phases | Med | High | Move fast on the verify/reproduce moat + data flywheel; community trust as a defensive moat |
-| R10 | **Founder lacks wet-lab/clinical credentials** - trust gap, esp. clinical | GTM + Phase 3 | Med | Med | Avoid clinical/diagnostic claims early; recruit advisory bioinformaticians; let verified runs + community reputation speak |
+| R10 | **Founder lacks wet-lab/clinical credentials**: trust gap, esp. clinical | GTM + Phase 3 | Med | Med | Avoid clinical/diagnostic claims early; recruit advisory bioinformaticians; let verified runs + community reputation speak |
 | R11 | **Data governance blocks biotech** | Phase 3 enterprise | Med | High | "Runs on your compute / your data never leaves" as core architecture from day 1; VPC/on-prem in Phase 3 |
 | R12 | **Flywheel needs consent that customers won't give** | Phase 3 | Med | Med | Opt-in, privacy-preserving (share failure patterns/metadata, not raw data); make value of contributing obvious |
 

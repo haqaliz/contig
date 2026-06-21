@@ -187,7 +187,7 @@ def run_pipeline(
     )
     returncode = executor(cmd, trace_path)
 
-    # Capture whatever the run produced - success OR failure. The failure data
+    # Capture whatever the run produced (success OR failure). The failure data
     # (the detect/diagnose input, and the moat) must not be discarded just
     # because the run exited nonzero. Only when no trace exists is there nothing
     # to record.

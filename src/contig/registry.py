@@ -2,7 +2,7 @@
 
 We map an assay to an ALREADY-VALIDATED pipeline; we do NOT generate workflows
 (that is Layer 1, which we consume, not build). `match_assay` is a deterministic,
-rule-based intent provider - a replaceable component, not the moat.
+rule-based intent provider, a replaceable component, not the moat.
 """
 
 from __future__ import annotations
@@ -82,7 +82,7 @@ _ASSAY_KEYWORDS: dict[str, tuple[str, ...]] = {
 def match_assay(goal: str) -> str | None:
     """Map a free-text goal to a registered assay key, or None if nothing matches.
 
-    Case-insensitive substring matching - a deterministic, replaceable intent
+    Case-insensitive substring matching, a deterministic, replaceable intent
     provider, not an LLM and not the moat.
     """
     text = goal.lower()

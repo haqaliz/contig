@@ -140,7 +140,7 @@ def test_failed_task_with_real_exit_code_is_not_platform_unsupported() -> None:
 
 
 def test_benign_fai_mention_is_not_missing_index() -> None:
-    # "samtools faidx genome.fasta" creates genome.fasta.fai - a SUCCESSFUL op.
+    # "samtools faidx genome.fasta" creates genome.fasta.fai, a SUCCESSFUL op.
     # A bare .fai mention (no "not found" context) must not trigger missing_index.
     events = [TaskEvent(process="STAR_GENOMEGENERATE", status="FAILED", exit=1)]
     log = "Running: samtools faidx genome.fasta\nCreated genome.fasta.fai\nunrelated tool error"

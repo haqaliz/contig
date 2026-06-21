@@ -3,7 +3,7 @@
 A reference is given ONE of two mutually-exclusive ways:
 
 - ``genome``: an iGenomes key (e.g. ``"GRCh38"``) that nf-core resolves and
-  downloads itself - no local files required.
+  downloads itself, no local files required.
 - ``fasta`` + ``gtf``: explicit local paths to a reference FASTA and its GTF
   annotation.
 

@@ -21,7 +21,7 @@ def parse_trace_text(text: str) -> list[TaskEvent]:
     """Parse a Nextflow trace TSV string into terminal task events.
 
     Columns are resolved by header NAME, not position: Nextflow's `trace.fields`
-    is configurable, and the detector keys on process/exit - a positional parse
+    is configurable, and the detector keys on process/exit; a positional parse
     would silently feed it garbage under a non-default column order.
     """
     lines = [line for line in text.splitlines() if line.strip()]

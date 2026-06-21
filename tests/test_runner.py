@@ -67,7 +67,7 @@ def test_read_task_errors_skips_successful_tasks(tmp_path):
     (bad / ".exitcode").write_text("1")
     text = read_task_errors(tmp_path)
     assert "platform does not match" in text
-    assert "index built fine" not in text  # a successful task's stderr is noise - exclude it
+    assert "index built fine" not in text  # a successful task's stderr is noise, so exclude it
 
 
 def test_read_task_errors_includes_killed_task_without_exitcode(tmp_path):
@@ -389,7 +389,7 @@ def test_run_pipeline_passes_absolute_trace_path_even_when_runs_dir_relative(tmp
 
 def test_run_pipeline_raises_clear_error_on_nonzero_exit(tmp_path):
     def failing(cmd, trace_path):
-        return 1  # e.g. config parse failure - no trace written
+        return 1  # e.g. config parse failure, no trace written
 
     with pytest.raises(PipelineExecutionError) as exc:
         _run(tmp_path, TRACE_2_OK, executor=failing)
@@ -407,7 +407,7 @@ def test_run_pipeline_error_carries_returncode(tmp_path):
 
 def test_run_pipeline_captures_bundle_even_when_run_fails(tmp_path):
     # A partial run: the executor writes a trace (some tasks recorded) then reports
-    # failure. The failure data is the moat - it must still be captured.
+    # failure. The failure data is the moat, so it must still be captured.
     def failing_with_trace(cmd, trace_path):
         Path(trace_path).write_text(TRACE_1_FAIL)
         return 1
