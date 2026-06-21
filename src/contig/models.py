@@ -233,6 +233,42 @@ class RunRecord(BaseModel):
         return overall_verdict(self.qc_results)
 
 
+# --- Reproduce manifest (one-click reproduce; PRD contract A) -------------------
+# The launch sidecar that makes every run reproducible: it captures the full
+# `contig run` invocation BEFORE the run starts, so it exists during the run and
+# on early failure. Reproduce rebuilds the argv from this with a fresh run_id and
+# a re-defaulted outdir/work_dir (so those are deliberately NOT stored here).
+
+
+class LaunchManifest(BaseModel):
+    """The captured `contig run` invocation, serialized to runs/<id>/launch.json.
+
+    `is_test_profile` is derived (input is None means the bundled test profile
+    ran). outdir/work_dir are intentionally absent: reproduce re-defaults them
+    under the new run dir.
+    """
+
+    run_id: str
+    pipeline: str
+    revision: str
+    profiles: list[str]
+    backend: str
+    container_runtime: str
+    input: str | None = None
+    genome: str | None = None
+    fasta: str | None = None
+    gtf: str | None = None
+    max_memory: str | None = None
+    max_cpus: int | None = None
+    max_attempts: int = 3
+    created_at: str
+
+    @computed_field  # serialized so the dashboard reads it without re-deriving
+    @property
+    def is_test_profile(self) -> bool:
+        return self.input is None
+
+
 # --- Failure corpus + detector eval (moat #2: accumulated evaluation data) ------
 # A labeled record of a real (or synthetic) failure, carrying exactly what the
 # detector consumes, so the eval can replay diagnose_failure over it and score

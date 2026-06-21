@@ -8,7 +8,78 @@ from __future__ import annotations
 
 from html import escape
 
-from contig.models import RunRecord, RunSummary
+from pydantic import BaseModel
+
+from contig.models import QCResult, RunRecord, RunSummary, overall_verdict
+
+
+class VerdictExplanation(BaseModel):
+    """Why a run earned its recorded verdict (PRD contract E).
+
+    Presentation only: it explains the verdict models.py already computed, never
+    re-derives trust. `deciding_checks` are the QC checks whose status equals the
+    overall verdict (empty for a fail forced by an incomplete run).
+    """
+
+    verdict: str
+    reason: str
+    deciding_checks: list[QCResult] = []
+
+
+def explain_verdict(record: RunRecord) -> VerdictExplanation:
+    """Explain a run's recorded verdict, mirroring models.py exactly.
+
+    A run that did not complete is a fail regardless of QC; a completed run with
+    no QC is unverified; otherwise the QC verdict (fail over warn over pass) holds
+    and the deciding checks are those sharing that status.
+    """
+    summary = RunSummary.from_events(record.events)
+    if not summary.succeeded:
+        return VerdictExplanation(
+            verdict="fail",
+            reason=f"Run did not complete: {summary.failed_tasks} task(s) failed",
+            deciding_checks=[],
+        )
+    if not record.qc_results:
+        return VerdictExplanation(
+            verdict="unverified",
+            reason="No QC check covered this run",
+            deciding_checks=[],
+        )
+    overall = overall_verdict(record.qc_results)
+    deciding = [qc for qc in record.qc_results if qc.status == overall]
+    return VerdictExplanation(
+        verdict=overall,
+        reason=_explain_reason(overall, deciding, len(record.qc_results)),
+        deciding_checks=deciding,
+    )
+
+
+def _explain_reason(overall: str, deciding: list[QCResult], total: int) -> str:
+    """A one-line reason naming the lowest-valued deciding check and its threshold."""
+    headline = f"{overall.upper()}: {len(deciding)} of {total} checks flagged"
+    valued = [qc for qc in deciding if qc.value is not None]
+    if not valued:
+        return headline
+    lowest = min(valued, key=lambda qc: qc.value)
+    threshold = f" vs {lowest.expected_range}" if lowest.expected_range else ""
+    return f"{headline} (lowest: {lowest.check} {lowest.value}{threshold})"
+
+
+def render_explain(record: RunRecord) -> str:
+    """Render the verdict explanation as a terminal-friendly block."""
+    explanation = explain_verdict(record)
+    lines = [
+        f"VERDICT: {explanation.verdict.upper()}",
+        explanation.reason,
+    ]
+    if explanation.deciding_checks:
+        lines.append("Decided by:")
+        for qc in explanation.deciding_checks:
+            value = "" if qc.value is None else str(qc.value)
+            threshold = f" (expected {qc.expected_range})" if qc.expected_range else ""
+            lines.append(f"  - {qc.check}: {qc.status.upper()} {value}{threshold}")
+    return "\n".join(lines)
 
 
 def render_run_report(record: RunRecord) -> str:

@@ -90,6 +90,29 @@ def test_show_html_writes_to_output_file(tmp_path):
     assert "<html" not in result.output.lower()
 
 
+def test_show_explain_names_the_deciding_check(tmp_path):
+    from contig.models import QCResult
+
+    record = RunRecord(
+        run_id="ex",
+        pipeline="nf-core/rnaseq",
+        pipeline_revision="3.26.0",
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_checksums={},
+        events=[TaskEvent(process="X", status="COMPLETED", exit=0)],
+        qc_results=[
+            QCResult(check="salmon_mapping_rate", status="warn", message="low",
+                     value=58.1, expected_range=">= 60.0"),
+        ],
+    )
+    write_bundle(record, Path(tmp_path) / "ex")
+    result = runner.invoke(app, ["show", "ex", "--runs-dir", str(tmp_path), "--explain"])
+    assert result.exit_code == 0
+    assert "WARN" in result.output
+    assert "salmon_mapping_rate" in result.output
+    assert ">= 60.0" in result.output
+
+
 def test_show_errors_on_missing_run(tmp_path):
     result = runner.invoke(app, ["show", "nope", "--runs-dir", str(tmp_path)])
     assert result.exit_code != 0
@@ -274,6 +297,179 @@ def test_run_self_heals_oom_and_shows_repair_chain(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert "oom" in result.output.lower()
     assert "patched_and_retried" in result.output
+
+
+def test_run_writes_launch_manifest_for_test_profile(tmp_path, monkeypatch):
+    # The reproduce sidecar must capture a test-profile invocation (no input).
+    import json
+
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_OK, GOOD_MQC))
+    runner.invoke(app, ["run", "--run-id", "lm", "--runs-dir", str(tmp_path)])
+    manifest = json.loads((tmp_path / "lm" / "launch.json").read_text())
+    assert manifest["run_id"] == "lm"
+    assert manifest["pipeline"] == "nf-core/rnaseq"
+    assert manifest["input"] is None
+    assert manifest["is_test_profile"] is True
+    assert manifest["max_attempts"] == 3
+    assert manifest["created_at"]
+    # outdir/work_dir are re-defaulted on reproduce, never stored
+    assert "outdir" not in manifest and "work_dir" not in manifest
+
+
+def test_run_writes_launch_manifest_for_real_data(tmp_path, monkeypatch):
+    import json
+
+    sheet = _make_sheet(tmp_path)
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(
+        app,
+        ["run", "--run-id", "lmr", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--genome", "GRCh38",
+         "--max-memory", "6.GB", "--max-cpus", "2"],
+    )
+    manifest = json.loads((tmp_path / "runs" / "lmr" / "launch.json").read_text())
+    assert manifest["input"] == str(sheet.resolve())
+    assert manifest["genome"] == "GRCh38"
+    assert manifest["max_memory"] == "6.GB"
+    assert manifest["max_cpus"] == 2
+    assert manifest["is_test_profile"] is False
+
+
+def test_run_writes_launch_manifest_even_when_run_fails_early(tmp_path, monkeypatch):
+    # The manifest is written BEFORE self_heal_run, so a failing run is still
+    # reproducible.
+    import json
+
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_FAIL))
+    runner.invoke(app, ["run", "--run-id", "lmf", "--runs-dir", str(tmp_path)])
+    assert (tmp_path / "lmf" / "launch.json").exists()
+    manifest = json.loads((tmp_path / "lmf" / "launch.json").read_text())
+    assert manifest["run_id"] == "lmf"
+
+
+def test_rerun_dispatches_identical_run_with_new_id(tmp_path, monkeypatch):
+    # rerun reads launch.json from the original run and dispatches an identical
+    # run under a fresh run id (matching pipeline/revision/profiles/caps).
+    import json
+
+    sheet = _make_sheet(tmp_path)
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(
+        app,
+        ["run", "--run-id", "orig", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--genome", "GRCh38", "--max-cpus", "2"],
+    )
+    result = runner.invoke(
+        app,
+        ["rerun", "orig", "--runs-dir", str(tmp_path / "runs"), "--new-run-id", "copy"],
+    )
+    assert result.exit_code == 0
+    assert "copy" in result.output
+    new_manifest = json.loads((tmp_path / "runs" / "copy" / "launch.json").read_text())
+    assert new_manifest["run_id"] == "copy"
+    assert new_manifest["pipeline"] == "nf-core/rnaseq"
+    assert new_manifest["genome"] == "GRCh38"
+    assert new_manifest["max_cpus"] == 2
+    assert new_manifest["input"] == str(sheet.resolve())
+    # the new run produced its own bundle under its own id
+    assert (tmp_path / "runs" / "copy" / "run_record.json").exists()
+
+
+def test_rerun_generates_a_run_id_when_none_given(tmp_path, monkeypatch):
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_OK, GOOD_MQC))
+    runner.invoke(app, ["run", "--run-id", "orig2", "--runs-dir", str(tmp_path / "runs")])
+    result = runner.invoke(app, ["rerun", "orig2", "--runs-dir", str(tmp_path / "runs")])
+    assert result.exit_code == 0
+    new_ids = [p.name for p in (tmp_path / "runs").iterdir() if p.is_dir() and p.name != "orig2"]
+    assert len(new_ids) == 1
+    assert new_ids[0] in result.output
+
+
+def test_rerun_errors_when_launch_manifest_missing(tmp_path):
+    result = runner.invoke(app, ["rerun", "ghost", "--runs-dir", str(tmp_path)])
+    assert result.exit_code != 0
+    assert "ghost" in result.output
+
+
+def test_rerun_rejects_manifest_input_that_no_longer_exists(tmp_path, monkeypatch):
+    # The manifest is not trusted blindly: if the recorded input path is gone,
+    # rerun must refuse rather than launch against a missing sheet.
+    sheet = _make_sheet(tmp_path)
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(
+        app,
+        ["run", "--run-id", "gone", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--genome", "GRCh38"],
+    )
+    sheet.unlink()
+    result = runner.invoke(app, ["rerun", "gone", "--runs-dir", str(tmp_path / "runs")])
+    assert result.exit_code != 0
+
+
+def _write_progress_dir(runs_dir, run_id, state, trace, repair=None):
+    import json
+
+    d = Path(runs_dir) / run_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "status.json").write_text(
+        json.dumps({"run_id": run_id, "state": state,
+                    "started_at": "2026-06-22T00:00:00+00:00",
+                    "finished_at": None if state == "running" else "2026-06-22T00:00:30+00:00"})
+    )
+    (d / "trace.txt").write_text(trace)
+    if repair is not None:
+        (d / "repair_progress.jsonl").write_text(repair)
+    return d
+
+
+TRACE_MIXED = (
+    "task_id\thash\tnative_id\tname\tstatus\texit\tsubmit\tduration\trealtime\n"
+    "1\tab/cd\t1\tFASTQC (S1)\tCOMPLETED\t0\t-\t-\t-\n"
+    "2\tef/gh\t2\tSTAR_ALIGN (S1)\tRUNNING\t-\t-\t-\t-\n"
+)
+
+
+def test_status_prints_completed_and_running_counts(tmp_path):
+    _write_progress_dir(tmp_path, "s1", "running", TRACE_MIXED)
+    result = runner.invoke(app, ["status", "s1", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "running" in result.output.lower()
+    assert "1" in result.output  # one completed
+    assert "STAR_ALIGN (S1)" in result.output
+
+
+def test_status_json_emits_machine_readable_snapshot(tmp_path):
+    import json
+
+    repair = json.dumps({
+        "attempt": 1,
+        "diagnosis": {"failure_class": "oom", "root_cause": "x", "evidence": [], "confidence": 0.9},
+        "patch": None,
+        "outcome": "patched_and_retried",
+    }) + "\n"
+    _write_progress_dir(tmp_path, "s2", "running", TRACE_MIXED, repair=repair)
+    result = runner.invoke(app, ["status", "s2", "--runs-dir", str(tmp_path), "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["state"] == "running"
+    assert data["tasks_completed"] == 1
+    assert len(data["tasks_running"]) == 1
+    assert data["repairs"][0]["failure_class"] == "oom"
+
+
+def test_status_reports_missing_run_clearly(tmp_path):
+    result = runner.invoke(app, ["status", "ghost", "--runs-dir", str(tmp_path)])
+    assert result.exit_code != 0
+    assert "missing" in result.output.lower() or "ghost" in result.output
+
+
+def test_watch_returns_once_run_is_no_longer_running(tmp_path):
+    # watch must exit promptly when the run has already finished (no sleeping on a
+    # terminal state).
+    _write_progress_dir(tmp_path, "w1", "finished", TRACE_MIXED)
+    result = runner.invoke(app, ["watch", "w1", "--runs-dir", str(tmp_path), "--interval", "0"])
+    assert result.exit_code == 0
+    assert "finished" in result.output.lower()
 
 
 def test_eval_detector_scores_the_shipped_corpus(tmp_path):

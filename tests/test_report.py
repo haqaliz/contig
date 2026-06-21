@@ -254,3 +254,114 @@ def test_html_report_escapes_user_text() -> None:
     # the raw injected markup must not appear verbatim
     assert "<script>x</script>" not in html
     assert "&lt;script&gt;" in html
+
+
+def _completed_events(n=1):
+    return [TaskEvent(process=f"OK_{i}", status="COMPLETED", exit=0) for i in range(n)]
+
+
+def test_explain_verdict_fail_when_a_task_failed():
+    from contig.report import explain_verdict
+
+    record = RunRecord(
+        run_id="r1",
+        pipeline="rnaseq",
+        pipeline_revision="3.14.0",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="ALIGN", status="FAILED", exit=1)],
+        qc_results=[QCResult(check="mapping_rate", status="pass", message="ok", value=0.95)],
+    )
+    explanation = explain_verdict(record)
+    assert explanation.verdict == "fail"
+    assert "did not complete" in explanation.reason.lower()
+    assert explanation.deciding_checks == []
+
+
+def test_explain_verdict_unverified_when_no_qc():
+    from contig.report import explain_verdict
+
+    record = RunRecord(
+        run_id="r1",
+        pipeline="rnaseq",
+        pipeline_revision="3.14.0",
+        target=_target(),
+        input_checksums={},
+        events=_completed_events(),
+    )
+    explanation = explain_verdict(record)
+    assert explanation.verdict == "unverified"
+    assert "no qc" in explanation.reason.lower()
+
+
+def test_explain_verdict_warn_names_the_deciding_warn_checks():
+    from contig.report import explain_verdict
+
+    record = RunRecord(
+        run_id="r1",
+        pipeline="rnaseq",
+        pipeline_revision="3.14.0",
+        target=_target(),
+        input_checksums={},
+        events=_completed_events(),
+        qc_results=[
+            QCResult(check="a", status="pass", message="ok", value=99.0),
+            QCResult(check="salmon_mapping_rate", status="warn", message="low",
+                     value=58.1, expected_range=">= 60.0"),
+            QCResult(check="c", status="warn", message="low", value=70.0, expected_range=">= 80.0"),
+        ],
+    )
+    explanation = explain_verdict(record)
+    assert explanation.verdict == "warn"
+    deciding = {c.check for c in explanation.deciding_checks}
+    assert deciding == {"salmon_mapping_rate", "c"}
+    # the lowest deciding check drives the headline reason
+    assert "salmon_mapping_rate" in explanation.reason
+    assert "58.1" in explanation.reason
+    assert ">= 60.0" in explanation.reason
+    assert "2 of 3" in explanation.reason
+
+
+def test_explain_verdict_fail_lists_only_failing_checks_when_run_completed():
+    from contig.report import explain_verdict
+
+    record = RunRecord(
+        run_id="r1",
+        pipeline="rnaseq",
+        pipeline_revision="3.14.0",
+        target=_target(),
+        input_checksums={},
+        events=_completed_events(),
+        qc_results=[
+            QCResult(check="ok_check", status="pass", message="ok", value=99.0),
+            QCResult(check="dup_rate", status="fail", message="too high",
+                     value=80.0, expected_range="<= 50.0"),
+            QCResult(check="ok_check_2", status="warn", message="meh", value=70.0),
+        ],
+    )
+    explanation = explain_verdict(record)
+    assert explanation.verdict == "fail"
+    deciding = {c.check for c in explanation.deciding_checks}
+    assert deciding == {"dup_rate"}
+
+
+def test_render_explain_includes_verdict_reason_and_deciding_checks():
+    from contig.report import render_explain
+
+    record = RunRecord(
+        run_id="r1",
+        pipeline="rnaseq",
+        pipeline_revision="3.14.0",
+        target=_target(),
+        input_checksums={},
+        events=_completed_events(),
+        qc_results=[
+            QCResult(check="salmon_mapping_rate", status="warn", message="low",
+                     value=58.1, expected_range=">= 60.0"),
+        ],
+    )
+    text = render_explain(record)
+    assert "WARN" in text
+    assert "salmon_mapping_rate" in text
+    assert "58.1" in text
+    assert ">= 60.0" in text

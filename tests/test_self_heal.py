@@ -161,6 +161,55 @@ def test_self_heal_stops_for_confirmation_on_needs_confirmation(tmp_path):
     assert record.repair_history[0].outcome == "stopped_for_confirmation"
 
 
+def test_self_heal_appends_repair_progress_line_per_attempt(tmp_path):
+    # Each resolved self-heal attempt is appended to repair_progress.jsonl the
+    # moment it resolves, so a live view can show attempts as they happen.
+    from contig.models import RepairStep
+
+    state = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, TRACE_OOM, "out of memory exit 137")
+            return 1
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor)
+    progress = (tmp_path / "runs" / "r" / "repair_progress.jsonl").read_text().splitlines()
+    assert len(progress) == 1
+    step = RepairStep.model_validate_json(progress[0])
+    assert step.attempt == 1
+    assert step.diagnosis.failure_class == "oom"
+    assert step.outcome == "patched_and_retried"
+    # the live lines mirror the final repair_history exactly
+    assert [s.model_dump() for s in record.repair_history] == [step.model_dump()]
+
+
+def test_self_heal_repair_progress_records_each_attempt_in_order(tmp_path):
+    from contig.models import RepairStep
+
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_OOM, "out of memory exit 137")
+        return 1
+
+    _heal(tmp_path, executor, max_attempts=3)
+    lines = (tmp_path / "runs" / "r" / "repair_progress.jsonl").read_text().splitlines()
+    attempts = [RepairStep.model_validate_json(line).attempt for line in lines]
+    assert attempts == sorted(attempts)
+    assert attempts == [1, 2, 3]
+
+
+def test_self_heal_writes_no_repair_progress_on_clean_run(tmp_path):
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    _heal(tmp_path, executor)
+    assert not (tmp_path / "runs" / "r" / "repair_progress.jsonl").exists()
+
+
 def test_self_heal_respects_max_attempts(tmp_path):
     attempts = {"n": 0}
 

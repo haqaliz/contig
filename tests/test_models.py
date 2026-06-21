@@ -203,6 +203,63 @@ def test_plan_composes_pipeline_params_and_warnings():
     assert plan.warnings == ["single-end reads detected"]
 
 
+def test_launch_manifest_derives_is_test_profile_from_missing_input():
+    from contig.models import LaunchManifest
+
+    manifest = LaunchManifest(
+        run_id="run-1",
+        pipeline="nf-core/rnaseq",
+        revision="3.26.0",
+        profiles=["test", "docker"],
+        backend="local",
+        container_runtime="docker",
+        input=None,
+        max_attempts=3,
+        created_at="2026-06-22T00:00:00+00:00",
+    )
+    assert manifest.is_test_profile is True
+
+
+def test_launch_manifest_is_not_test_profile_when_input_present():
+    from contig.models import LaunchManifest
+
+    manifest = LaunchManifest(
+        run_id="run-1",
+        pipeline="nf-core/rnaseq",
+        revision="3.26.0",
+        profiles=["docker"],
+        backend="local",
+        container_runtime="docker",
+        input="/abs/sheet.csv",
+        genome="GRCh38",
+        max_attempts=3,
+        created_at="2026-06-22T00:00:00+00:00",
+    )
+    assert manifest.is_test_profile is False
+
+
+def test_launch_manifest_serializes_is_test_profile_into_json():
+    import json
+
+    from contig.models import LaunchManifest
+
+    manifest = LaunchManifest(
+        run_id="run-1",
+        pipeline="nf-core/rnaseq",
+        revision="3.26.0",
+        profiles=["test", "docker"],
+        backend="local",
+        container_runtime="docker",
+        input=None,
+        max_attempts=3,
+        created_at="2026-06-22T00:00:00+00:00",
+    )
+    data = json.loads(manifest.model_dump_json())
+    assert data["is_test_profile"] is True
+    assert data["input"] is None
+    assert "outdir" not in data and "work_dir" not in data
+
+
 def test_run_record_repair_history_defaults_empty_and_accepts_steps():
     from contig.models import RepairStep
 

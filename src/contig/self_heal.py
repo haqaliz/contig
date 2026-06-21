@@ -66,6 +66,22 @@ def _write_status(run_dir: Path, state: str) -> None:
     )
 
 
+def _record_attempt(
+    run_dir: Path, repair_history: list[RepairStep], step: RepairStep
+) -> None:
+    """Append a resolved attempt to repair_history and to repair_progress.jsonl.
+
+    The jsonl line is written the moment the attempt resolves so a live view can
+    show attempts as they happen; it mirrors what later lands in repair_history
+    (PRD contract B). The file stays absent until the first failure.
+    """
+    repair_history.append(step)
+    run_dir = Path(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    with open(run_dir / "repair_progress.jsonl", "a") as fh:
+        fh.write(step.model_dump_json() + "\n")
+
+
 def _safe_patch(patches: list[Patch]) -> Patch | None:
     return next((p for p in patches if p.risk == "safe"), None)
 
@@ -171,20 +187,26 @@ def self_heal_run(
                 # No automatic fix: pause for a human if there's a gated patch,
                 # otherwise we have nothing left to try.
                 outcome = "stopped_for_confirmation" if patches else "gave_up"
-                repair_history.append(
-                    RepairStep(attempt=attempt, diagnosis=diagnosis, patch=patches[0] if patches else None, outcome=outcome)
+                _record_attempt(
+                    run_dir,
+                    repair_history,
+                    RepairStep(attempt=attempt, diagnosis=diagnosis, patch=patches[0] if patches else None, outcome=outcome),
                 )
                 return _finalize(exc.record, repair_history, run_dir)
 
             if attempt >= max_attempts:
-                repair_history.append(
-                    RepairStep(attempt=attempt, diagnosis=diagnosis, patch=safe, outcome="gave_up")
+                _record_attempt(
+                    run_dir,
+                    repair_history,
+                    RepairStep(attempt=attempt, diagnosis=diagnosis, patch=safe, outcome="gave_up"),
                 )
                 return _finalize(exc.record, repair_history, run_dir)
 
             current_target = apply_patch(current_target, safe)
-            repair_history.append(
-                RepairStep(attempt=attempt, diagnosis=diagnosis, patch=safe, outcome="patched_and_retried")
+            _record_attempt(
+                run_dir,
+                repair_history,
+                RepairStep(attempt=attempt, diagnosis=diagnosis, patch=safe, outcome="patched_and_retried"),
             )
             attempt += 1
 

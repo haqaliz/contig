@@ -9,6 +9,9 @@ generating a nextflow.config from the ExecutionTarget (ARCHITECTURE §4.1).
 from __future__ import annotations
 
 import json as _json
+import re as _re
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from importlib.metadata import version as _pkg_version
 
@@ -21,19 +24,33 @@ from contig.corpus import (
     load_corpus,
     promote_pending_case,
 )
-from contig.models import ExecutionTarget, RunSummary
+from contig.models import ExecutionTarget, LaunchManifest, RunSummary
 from contig.nfconfig import ConfigGenerationError
 from contig.planner import PlanningError
 from contig.planner import plan as build_plan
+from contig.progress import read_progress, render_progress
 from contig.reference import ReferenceError, resolve_reference
 from contig.registry import assay_for_pipeline
-from contig.report import render_run_report, render_run_report_html
+from contig.report import render_explain, render_run_report, render_run_report_html
 from contig.runner import PipelineExecutionError, default_executor
 from contig.samplesheet import fastq_paths, validate_samplesheet
 from contig.self_heal import self_heal_run
 from contig.workspace import RunNotFoundError, list_run_ids, load_run
 
 app = typer.Typer(help="Contig: agentic bioinformatics analyst.")
+
+
+_SAFE_RUN_ID = _re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+
+
+def _is_safe_run_id(run_id: str) -> bool:
+    """A run id must be filesystem-safe and never read as a CLI option (no leading dash)."""
+    return bool(_SAFE_RUN_ID.match(run_id))
+
+
+def _generate_run_id() -> str:
+    """A fresh, sortable run id from the current UTC instant (PRD: run-<iso>)."""
+    return "run-" + datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%fZ")
 
 
 @app.callback()
@@ -116,6 +133,54 @@ def run(
     checksums every input into the provenance. Without --input it runs nf-core's
     bundled test profile.
     """
+    _dispatch_run(
+        run_id=run_id,
+        pipeline=pipeline,
+        revision=revision,
+        profiles=profiles,
+        runs_dir=runs_dir,
+        backend=backend,
+        container_runtime=container_runtime,
+        work_dir=work_dir,
+        queue=queue,
+        region=region,
+        input=input,
+        genome=genome,
+        fasta=fasta,
+        gtf=gtf,
+        outdir=outdir,
+        max_memory=max_memory,
+        max_cpus=max_cpus,
+        max_attempts=max_attempts,
+    )
+
+
+def _dispatch_run(
+    *,
+    run_id: str,
+    pipeline: str,
+    revision: str,
+    profiles: str | None,
+    runs_dir: str,
+    backend: str,
+    container_runtime: str,
+    work_dir: str | None,
+    queue: str | None,
+    region: str | None,
+    input: str | None,
+    genome: str | None,
+    fasta: str | None,
+    gtf: str | None,
+    outdir: str | None,
+    max_memory: str | None,
+    max_cpus: int | None,
+    max_attempts: int,
+) -> None:
+    """Validate, write the reproduce sidecar, run through self-heal, and report.
+
+    Shared by `run` (fresh invocation) and `rerun` (replayed from a manifest), so
+    both paths apply the same validation and write the same launch.json.
+    """
     backend_options = {k: v for k, v in (("queue", queue), ("region", region)) if v}
     # Caps ride in the generated config as process.resourceLimits; nf-core
     # ignores the old --max_memory/--max_cpus params.
@@ -159,6 +224,30 @@ def run(
     # Nextflow (which runs in the run dir) writes to the right place.
     outdir_path = Path(outdir) if outdir else Path(runs_dir) / run_id / "results"
     params["outdir"] = str(outdir_path.resolve())
+
+    # Write the reproduce sidecar BEFORE the run, so it exists during the run and
+    # on early failure. outdir/work_dir are deliberately not captured: reproduce
+    # re-defaults them under the new run dir (PRD contract A).
+    manifest = LaunchManifest(
+        run_id=run_id,
+        pipeline=pipeline,
+        revision=revision,
+        profiles=selected_profiles.split(","),
+        backend=backend,
+        container_runtime=container_runtime,
+        input=params.get("input") if input else None,
+        genome=genome,
+        fasta=fasta,
+        gtf=gtf,
+        max_memory=max_memory,
+        max_cpus=max_cpus,
+        max_attempts=max_attempts,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    manifest_dir = Path(runs_dir) / run_id
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    (manifest_dir / "launch.json").write_text(manifest.model_dump_json(indent=2))
+
     try:
         record = self_heal_run(
             pipeline=pipeline,
@@ -186,29 +275,134 @@ def run(
 
 
 @app.command()
+def rerun(
+    run_id: str = typer.Argument(..., help="The run to reproduce (reads its launch.json)."),
+    runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+    new_run_id: str = typer.Option(None, "--new-run-id", help="Identifier for the reproduced run (generated if omitted)."),
+) -> None:
+    """Reproduce a past run from its launch.json under a fresh run id.
+
+    Reads the reproduce sidecar, re-validates the recorded input path (the
+    manifest is never trusted blindly), and dispatches an identical run via the
+    same path `run` uses, with a re-defaulted outdir/work_dir. Prints the new id.
+    """
+    manifest_path = Path(runs_dir) / run_id / "launch.json"
+    if not manifest_path.exists():
+        typer.echo(f"No launch manifest for run {run_id!r} in {runs_dir}.", err=True)
+        raise typer.Exit(code=1)
+    try:
+        manifest = LaunchManifest.model_validate_json(manifest_path.read_text())
+    except ValidationError as exc:
+        typer.echo(f"Launch manifest for {run_id!r} is malformed: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    # Do not trust the manifest: a recorded input path may have moved or been
+    # deleted since the original run. Refuse rather than launch against nothing.
+    if manifest.input is not None and not Path(manifest.input).exists():
+        typer.echo(f"Recorded input no longer exists: {manifest.input}", err=True)
+        raise typer.Exit(code=1)
+
+    target_run_id = new_run_id or _generate_run_id()
+    if not _is_safe_run_id(target_run_id):
+        typer.echo(f"Invalid run id: {target_run_id!r}", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Reproducing {run_id} as {target_run_id}")
+    _dispatch_run(
+        run_id=target_run_id,
+        pipeline=manifest.pipeline,
+        revision=manifest.revision,
+        profiles=",".join(manifest.profiles),
+        runs_dir=runs_dir,
+        backend=manifest.backend,
+        container_runtime=manifest.container_runtime,
+        work_dir=None,  # re-defaulted under the new run dir
+        queue=None,
+        region=None,
+        input=manifest.input,
+        genome=manifest.genome,
+        fasta=manifest.fasta,
+        gtf=manifest.gtf,
+        outdir=None,  # re-defaulted under the new run dir
+        max_memory=manifest.max_memory,
+        max_cpus=manifest.max_cpus,
+        max_attempts=manifest.max_attempts,
+    )
+
+
+@app.command()
 def show(
     run_id: str = typer.Argument(..., help="The run to inspect."),
     runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
     html: bool = typer.Option(False, "--html", help="Render a self-contained HTML report instead of text."),
+    explain: bool = typer.Option(False, "--explain", help="Explain the verdict: the deciding checks and a one-line reason."),
     output: str = typer.Option(None, "--output", help="Write the report to this file instead of stdout."),
 ) -> None:
     """Show the verdict and provenance of a past run.
 
-    With --html, render a single self-contained HTML file (the shareable report a
-    PI or reviewer can trust: verdict, QC, repair chain, pinned provenance). With
-    --output, write the report to that path instead of printing it to stdout.
+    With --explain, print just the verdict, the deciding QC checks (value vs
+    expected range), and a one-line reason. With --html, render a single
+    self-contained HTML file (the shareable report a PI or reviewer can trust:
+    verdict, QC, repair chain, pinned provenance). With --output, write the report
+    to that path instead of printing it to stdout.
     """
     try:
         record = load_run(runs_dir, run_id)
     except RunNotFoundError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
-    rendered = render_run_report_html(record) if html else render_run_report(record)
+    if explain:
+        rendered = render_explain(record)
+    elif html:
+        rendered = render_run_report_html(record)
+    else:
+        rendered = render_run_report(record)
     if output:
         Path(output).write_text(rendered)
         typer.echo(f"Wrote report to {output}")
         return
     typer.echo(rendered)
+
+
+@app.command()
+def status(
+    run_id: str = typer.Argument(..., help="The run to inspect."),
+    runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the snapshot as JSON (for the dashboard)."),
+) -> None:
+    """Show a one-shot live snapshot of a run: state, elapsed, task progress, last repair."""
+    snapshot = read_progress(runs_dir, run_id)
+    if snapshot.state == "missing":
+        if json_out:
+            typer.echo(snapshot.model_dump_json())
+            raise typer.Exit(code=1)
+        typer.echo(f"No run {run_id!r} found in {runs_dir} (state: missing).", err=True)
+        raise typer.Exit(code=1)
+    if json_out:
+        typer.echo(snapshot.model_dump_json())
+        return
+    typer.echo(render_progress(snapshot))
+
+
+@app.command()
+def watch(
+    run_id: str = typer.Argument(..., help="The run to follow."),
+    runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+    interval: float = typer.Option(2.0, "--interval", help="Seconds between redraws while running."),
+) -> None:
+    """Redraw a run's live snapshot until it is no longer running.
+
+    Polls the same progress files `status` reads; stops as soon as the state
+    leaves "running" (finished, error, interrupted, or missing).
+    """
+    while True:
+        snapshot = read_progress(runs_dir, run_id)
+        typer.echo(render_progress(snapshot))
+        if snapshot.state != "running":
+            if snapshot.state == "missing":
+                raise typer.Exit(code=1)
+            return
+        time.sleep(interval)
 
 
 @app.command(name="list")
