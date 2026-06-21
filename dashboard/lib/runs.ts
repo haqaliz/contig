@@ -95,13 +95,16 @@ export async function listRunningRuns(): Promise<
 export async function promotePendingCase(caseId: string, label?: string): Promise<void> {
   const override = process.env.CONTIG_CMD;
   const cmd = override ?? "uv";
+  // Options first, then "--" so caseId is always parsed as a positional argument
+  // and can never be smuggled in as a CLI flag, even if a caller skips validation.
   const args = (override ? [] : ["run", "contig"]).concat([
     "corpus-promote",
-    caseId,
     "--pending",
     path.join(runsDir(), "pending_corpus.jsonl"),
+    ...(label ? ["--label", label] : []),
+    "--",
+    caseId,
   ]);
-  if (label) args.push("--label", label);
   await pexec(cmd, args, { cwd: repoRoot(), timeout: 30_000 });
 }
 

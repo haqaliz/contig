@@ -15,6 +15,11 @@ export async function POST(req: Request) {
   if (!caseId) {
     return NextResponse.json({ error: "case_id is required." }, { status: 400 });
   }
+  // Constrain to a safe id (no leading dash) so it cannot be smuggled in as a
+  // CLI flag (argument injection). case ids are alphanumerics, dot, dash, underscore.
+  if (caseId.startsWith("-") || !/^[A-Za-z0-9._-]+$/.test(caseId)) {
+    return NextResponse.json({ error: "Invalid case id." }, { status: 400 });
+  }
   let label: string | undefined;
   if (typeof body.label === "string" && body.label) {
     if (!(FAILURE_CLASSES as readonly string[]).includes(body.label)) {
