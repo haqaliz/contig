@@ -256,6 +256,29 @@ def test_run_self_heals_oom_and_shows_repair_chain(tmp_path, monkeypatch):
     assert "patched_and_retried" in result.output
 
 
+def test_eval_detector_scores_the_shipped_corpus(tmp_path):
+    result = runner.invoke(app, ["eval-detector"])
+    assert result.exit_code == 0
+    assert "accuracy" in result.output.lower()
+    assert "bad_param" in result.output  # per-class breakdown shown
+
+
+def test_eval_detector_reports_a_miss_for_a_mislabeled_case(tmp_path):
+    from contig.corpus import save_corpus
+    from contig.models import FailureCase, TaskEvent
+
+    corpus = tmp_path / "c.jsonl"
+    save_corpus(
+        [FailureCase(case_id="bogus", description="d", source="t",
+                     events=[TaskEvent(process="X", status="FAILED", exit=1)],
+                     log_text="Segmentation fault", expected_class="oom")],
+        corpus,
+    )
+    result = runner.invoke(app, ["eval-detector", "--corpus", str(corpus)])
+    assert result.exit_code == 0
+    assert "bogus" in result.output and "tool_crash" in result.output
+
+
 def test_version_prints_package_version():
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0

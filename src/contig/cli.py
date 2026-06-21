@@ -14,6 +14,7 @@ from importlib.metadata import version as _pkg_version
 import typer
 from pydantic import ValidationError
 
+from contig.corpus import default_corpus_path, evaluate_detector, load_corpus
 from contig.models import ExecutionTarget, RunSummary
 from contig.nfconfig import ConfigGenerationError
 from contig.planner import PlanningError
@@ -192,3 +193,27 @@ def list_runs(
         return
     for run_id in ids:
         typer.echo(run_id)
+
+
+@app.command(name="eval-detector")
+def eval_detector(
+    corpus: str = typer.Option(None, "--corpus", help="Failure-corpus JSONL (defaults to the shipped seed)."),
+) -> None:
+    """Score the failure detector against a labeled corpus (moat #2).
+
+    Replays diagnose_failure over every labeled failure and reports accuracy,
+    per-class precision/recall, and each miss. A drop in accuracy means the
+    detector regressed or a real case exposed a gap worth a new rule.
+    """
+    path = Path(corpus) if corpus else default_corpus_path()
+    try:
+        cases = load_corpus(path)
+    except FileNotFoundError:
+        typer.echo(f"Corpus not found: {path}", err=True)
+        raise typer.Exit(code=1)
+    report = evaluate_detector(cases)
+    typer.echo(f"Detector eval: {report.correct}/{report.total} correct (accuracy {report.accuracy:.1%})")
+    for cls, s in sorted(report.per_class.items()):
+        typer.echo(f"  {cls}: precision {s.precision:.2f}  recall {s.recall:.2f}  (support {s.support})")
+    for m in report.mismatches:
+        typer.echo(f"  MISS {m.case_id}: expected {m.expected}, predicted {m.predicted}")

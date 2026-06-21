@@ -81,6 +81,19 @@ def test_unknown_option_is_bad_param() -> None:
     assert any("--foo" in e for e in d.evidence)
 
 
+def test_nfcore_schema_validation_failure_is_bad_param() -> None:
+    # Real failure from a live run: nf-core's param schema rejected the inputs.
+    # This is a parameter problem, not an unclassified tool crash.
+    events = [TaskEvent(process="NFCORE_RNASEQ", status="FAILED", exit=1)]
+    log = (
+        "ERROR ~ Validation of pipeline parameters failed!\n"
+        "The following invalid input values have been detected:\n"
+        "* --input (sheet.csv): the file or directory 'sheet.csv' does not exist"
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "bad_param"
+
+
 def test_generic_failed_task_is_tool_crash() -> None:
     events = [TaskEvent(process="CALL", status="FAILED", exit=1)]
     log = "Segmentation fault (core dumped) while processing sample"

@@ -230,3 +230,48 @@ class RunRecord(BaseModel):
         if not self.qc_results:
             return "unverified"
         return overall_verdict(self.qc_results)
+
+
+# --- Failure corpus + detector eval (moat #2: accumulated evaluation data) ------
+# A labeled record of a real (or synthetic) failure, carrying exactly what the
+# detector consumes, so the eval can replay diagnose_failure over it and score
+# the detector. The corpus compounds as real runs accrue.
+
+
+class FailureCase(BaseModel):
+    """One labeled failure: detector inputs (events + log) plus the true class."""
+
+    case_id: str
+    description: str
+    source: str  # provenance: a run id, or "synthetic"
+    events: list[TaskEvent] = []
+    log_text: str = ""
+    expected_class: FailureClass
+
+
+class DetectorMismatch(BaseModel):
+    """A case the detector got wrong: what it should have said vs what it did."""
+
+    case_id: str
+    expected: FailureClass
+    predicted: FailureClass
+
+
+class ClassScore(BaseModel):
+    """Per-class precision/recall over the corpus."""
+
+    support: int  # cases whose true class is this
+    predicted: int  # cases the detector assigned this class
+    correct: int  # true positives
+    precision: float
+    recall: float
+
+
+class DetectorEvalReport(BaseModel):
+    """The result of replaying the detector over a failure corpus."""
+
+    total: int
+    correct: int
+    accuracy: float
+    mismatches: list[DetectorMismatch] = []
+    per_class: dict[str, ClassScore] = {}

@@ -138,6 +138,11 @@ def diagnose_failure(events: list[TaskEvent], log_text: str) -> Diagnosis:
             "unrecognized arguments",
             "unexpected argument",
             "is not a valid parameter",
+            # nf-core's parameter-schema validation banner (seen on real runs):
+            # an invalid/missing --param value is a parameter problem, not a crash.
+            "validation of pipeline parameters failed",
+            "invalid input values have been detected",
+            "schemavalidationexception",
         ),
     )
     if param_lines:

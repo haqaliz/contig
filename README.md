@@ -98,6 +98,7 @@ running **Docker** daemon. The commands and the test suite work without them.
 | `contig run --run-id <id>` | Run a pipeline, self-heal failures, verify, report the verdict |
 | `contig show <id>` | The verdict + provenance + repair chain of a past run |
 | `contig list` | All bundled runs |
+| `contig eval-detector` | Score the failure detector against the labeled failure corpus |
 | `contig version` | Installed version |
 
 ### Try it in 30 seconds (no real data)
@@ -168,6 +169,24 @@ Each run writes `runs/<id>/run_record.json`, a portable record pinning inputs
 (checksums), pipeline + revision, parameters, container/tool versions, every QC
 result, and the full repair chain. `contig show <id>` re-reads it; hand the
 bundle to a colleague (or a reviewer) to reproduce the result.
+
+### How the detector improves (failure corpus)
+
+Every recoverable failure Contig recovers from is a labeled data point. Those
+accumulate into a versioned failure corpus (`failure -> diagnosis -> fix ->
+outcome`), and `contig eval-detector` replays the detector over it to report
+accuracy plus per-class precision/recall:
+
+```bash
+uv run contig eval-detector
+# Detector eval: 11/11 correct (accuracy 100.0%)
+#   bad_param: precision 1.00  recall 1.00  (support 2)
+#   ...
+```
+
+A drop in accuracy means either the detector regressed or a real run exposed a
+gap worth a new rule. This is the compounding asset: the engine gets better as
+runs accrue, independent of any single model.
 
 ### Where it runs (compute backends)
 
