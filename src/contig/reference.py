@@ -36,4 +36,6 @@ def resolve_reference(genome=None, fasta=None, gtf=None):
     for label, path in (("--fasta", fasta), ("--gtf", gtf)):
         if not Path(path).exists():
             raise ReferenceError(f"{label} file not found: {path}")
-    return {"fasta": fasta, "gtf": gtf}
+    # Absolutize: Nextflow runs with cwd=run_dir, so a relative path handed to
+    # nf-core would fail its "file does not exist" validation.
+    return {"fasta": str(Path(fasta).resolve()), "gtf": str(Path(gtf).resolve())}

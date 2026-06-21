@@ -27,6 +27,21 @@ def test_explicit_mode_returns_fasta_and_gtf_paths(tmp_path):
     }
 
 
+def test_explicit_mode_returns_absolute_paths(tmp_path, monkeypatch):
+    # Nextflow runs with cwd=run_dir, so relative --fasta/--gtf would not resolve.
+    # The resolver must hand back absolute paths.
+    fasta = tmp_path / "genome.fa"
+    gtf = tmp_path / "genes.gtf"
+    fasta.write_text(">chr1\nACGT\n")
+    gtf.write_text("chr1\tsource\tgene\t1\t4\t.\t+\t.\n")
+    monkeypatch.chdir(tmp_path)
+
+    resolved = resolve_reference(fasta="genome.fa", gtf="genes.gtf")
+    assert resolved["fasta"] == str(fasta.resolve())
+    assert resolved["gtf"] == str(gtf.resolve())
+    assert resolved["fasta"].startswith("/")
+
+
 def test_neither_genome_nor_fasta_raises():
     with pytest.raises(ReferenceError, match="reference is required"):
         resolve_reference()

@@ -40,6 +40,28 @@ def test_work_dir_is_set_from_target():
     assert "workDir = '/runs/abc/work'" in cfg
 
 
+# --- resource limits (modern nf-core ignores --max_memory; uses resourceLimits) -
+def _rl_target(limits):
+    return ExecutionTarget(
+        backend="local", container_runtime="docker", work_dir="/w", resource_limits=limits
+    )
+
+
+def test_no_resource_limits_emits_no_resourcelimits_line():
+    cfg = generate_nextflow_config(_rl_target({}))
+    assert "resourceLimits" not in cfg
+
+
+def test_resource_limits_emit_process_resourcelimits():
+    cfg = generate_nextflow_config(_rl_target({"memory": "6.GB", "cpus": "2", "time": "24.h"}))
+    assert "process.resourceLimits = [ memory: 6.GB, cpus: 2, time: 24.h ]" in cfg
+
+
+def test_partial_resource_limits_emit_only_given_keys():
+    cfg = generate_nextflow_config(_rl_target({"memory": "3.GB"}))
+    assert "process.resourceLimits = [ memory: 3.GB ]" in cfg
+
+
 # --- AWS Batch (P6: the second compute backend) ---------------------------
 def _aws_target(**overrides):
     opts = {"queue": "contig-q", "region": "eu-west-1"}

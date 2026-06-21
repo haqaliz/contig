@@ -116,6 +116,23 @@ def test_run_with_samplesheet_checksums_real_inputs(tmp_path, monkeypatch):
     assert rec.parameters.get("input")
 
 
+def test_run_absolutizes_relative_input_path(tmp_path, monkeypatch):
+    # Given a relative --input, the stored param must be absolute (Nextflow runs
+    # with cwd=run_dir, so a relative sheet path would fail nf-core validation).
+    _make_sheet(tmp_path)
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "rel", "--runs-dir", "runs",
+         "--input", "samplesheet.csv", "--genome", "GRCh38"],
+    )
+    assert result.exit_code == 0
+    rec = load_bundle(tmp_path / "runs" / "rel")
+    stored = rec.parameters.get("input")
+    assert stored.startswith("/") and stored.endswith("samplesheet.csv")
+
+
 def test_run_rejects_malformed_samplesheet_without_launching(tmp_path, monkeypatch):
     sheet = _make_sheet(tmp_path, valid=False)  # references a non-existent FASTQ
     launched = {"n": 0}
@@ -146,7 +163,9 @@ def test_run_defaults_outdir_under_run_dir(tmp_path, monkeypatch):
     assert outdir.startswith("/")  # absolute (Nextflow runs in the run dir)
 
 
-def test_run_passes_resource_caps_to_params(tmp_path, monkeypatch):
+def test_run_caps_emit_resourcelimits_not_ignored_params(tmp_path, monkeypatch):
+    # Modern nf-core ignores --max_memory/--max_cpus params; caps must ride in
+    # the generated config as process.resourceLimits.
     sheet = _make_sheet(tmp_path)
     monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
     runner.invoke(
@@ -155,9 +174,12 @@ def test_run_passes_resource_caps_to_params(tmp_path, monkeypatch):
          "--input", str(sheet), "--genome", "GRCh38",
          "--max-memory", "6.GB", "--max-cpus", "2"],
     )
+    config = (tmp_path / "runs" / "rc" / "nextflow.config").read_text()
+    assert "process.resourceLimits = [ memory: 6.GB, cpus: 2 ]" in config
+    # the ignored params must NOT be passed
     rec = load_bundle(tmp_path / "runs" / "rc")
-    assert rec.parameters.get("max_memory") == "6.GB"
-    assert str(rec.parameters.get("max_cpus")) == "2"
+    assert "max_memory" not in rec.parameters
+    assert "max_cpus" not in rec.parameters
 
 
 def test_run_rejects_conflicting_reference(tmp_path):

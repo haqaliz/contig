@@ -42,6 +42,10 @@ class ExecutionTarget(BaseModel):
     # needs but that don't generalize across backends. Kept generic so the
     # agent never special-cases the backend (ARCHITECTURE §4.1).
     backend_options: dict[str, str] = Field(default_factory=dict)
+    # Per-process resource ceilings (memory/cpus/time) emitted as Nextflow's
+    # `process.resourceLimits`. This is the modern knob: nf-core dropped the old
+    # `--max_memory`/`--max_cpus` params, so caps must ride in the config.
+    resource_limits: dict[str, str] = Field(default_factory=dict)
 
 
 QCStatus = Literal["pass", "warn", "fail"]

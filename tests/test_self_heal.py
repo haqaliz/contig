@@ -61,6 +61,25 @@ def test_self_heal_recovers_from_oom_and_logs_repair(tmp_path):
     assert step.outcome == "patched_and_retried"
 
 
+def test_self_heal_oom_bump_emits_bumped_resourcelimits(tmp_path):
+    # The OOM fix must ride in the generated config's resourceLimits (what modern
+    # nf-core honors) — not the ignored --max_memory param. Default 8GB -> 16GB.
+    state = {"n": 0, "retry_cfg": None}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, TRACE_OOM, "out of memory exit 137")
+            return 1
+        state["retry_cfg"] = (Path(trace_path).parent / "nextflow.config").read_text()
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor)
+    assert RunSummary.from_events(record.events).succeeded is True
+    assert "process.resourceLimits = [ memory: 16.GB ]" in state["retry_cfg"]
+
+
 def test_self_heal_gives_up_on_unrecoverable_tool_crash(tmp_path):
     def executor(cmd, trace_path):
         _write(trace_path, TRACE_TOOL, "Segmentation fault in some_tool")

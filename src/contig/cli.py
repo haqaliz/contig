@@ -99,12 +99,20 @@ def run(
     bundled test profile.
     """
     backend_options = {k: v for k, v in (("queue", queue), ("region", region)) if v}
+    # Caps ride in the generated config as process.resourceLimits — nf-core
+    # ignores the old --max_memory/--max_cpus params.
+    resource_limits = {}
+    if max_memory:
+        resource_limits["memory"] = max_memory
+    if max_cpus:
+        resource_limits["cpus"] = str(max_cpus)
     try:
         target = ExecutionTarget(
             backend=backend,
             container_runtime=container_runtime,
             work_dir=work_dir or f"{runs_dir}/{run_id}/work",
             backend_options=backend_options,
+            resource_limits=resource_limits,
         )
     except ValidationError as exc:
         typer.echo(f"Invalid execution target: {exc}", err=True)
@@ -124,17 +132,15 @@ def run(
         except ReferenceError as exc:
             typer.echo(f"Reference error: {exc}", err=True)
             raise typer.Exit(code=1)
-        params["input"] = input
+        # Absolutize the sheet: Nextflow runs with cwd=run_dir, so a relative
+        # --input would fail nf-core's "file does not exist" validation.
+        params["input"] = str(Path(input).resolve())
         input_paths = [input, *fastq_paths(input)]
     selected_profiles = profiles or ("docker" if input else "test,docker")
     # nf-core always requires --outdir; default it under the run dir. Absolute so
     # Nextflow (which runs in the run dir) writes to the right place.
     outdir_path = Path(outdir) if outdir else Path(runs_dir) / run_id / "results"
     params["outdir"] = str(outdir_path.resolve())
-    if max_memory:
-        params["max_memory"] = max_memory
-    if max_cpus:
-        params["max_cpus"] = max_cpus
     try:
         record = self_heal_run(
             pipeline=pipeline,

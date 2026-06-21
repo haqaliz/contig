@@ -44,6 +44,17 @@ def generate_nextflow_config(target: ExecutionTarget) -> str:
     lines: list[str] = [_RUNTIME_LINE[target.container_runtime]]
     lines.append(f"process.executor = '{_EXECUTOR[target.backend]}'")
 
+    # Resource ceilings via Nextflow's native resourceLimits (memory/cpus/time
+    # as Nextflow literals, e.g. 6.GB / 2 / 24.h). This is what modern nf-core
+    # honors; the legacy --max_memory params are ignored.
+    if target.resource_limits:
+        parts = [
+            f"{key}: {target.resource_limits[key]}"
+            for key in ("memory", "cpus", "time")
+            if key in target.resource_limits
+        ]
+        lines.append(f"process.resourceLimits = [ {', '.join(parts)} ]")
+
     if target.backend == "aws_batch":
         opts = target.backend_options
         queue = opts.get("queue")

@@ -12,6 +12,7 @@ is bounded by `max_attempts`.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from contig.bundle import write_bundle
@@ -35,25 +36,32 @@ def _safe_patch(patches: list[Patch]) -> Patch | None:
     return next((p for p in patches if p.risk == "safe"), None)
 
 
-def apply_patch(params: dict[str, object], patch: Patch) -> dict[str, object]:
-    """Return a new params dict with the patch applied (nf-core resource params).
+def _lead_number(value: object, default: int) -> float:
+    """Leading numeric part of a Nextflow resource literal ('16.GB' -> 16.0)."""
+    if value is None:
+        return float(default)
+    match = re.match(r"[\d.]+", str(value).strip())
+    return float(match.group()) if match else float(default)
 
-    Resource bumps map to nf-core's real `--max_memory` / `--max_time` knobs;
-    a retry changes nothing (the re-run itself is the fix).
+
+def apply_patch(target: ExecutionTarget, patch: Patch) -> ExecutionTarget:
+    """Return a new target with the patch's resource bump applied to resourceLimits.
+
+    Resource bumps ride in Nextflow's `process.resourceLimits` (what modern
+    nf-core honors — the old `--max_memory` params are ignored); a retry/other
+    patch changes nothing (the re-run itself is the fix).
     """
-    new = dict(params)
-    mult = patch.operation.get("multiply", {}) if patch.kind == "resource" else {}
+    if patch.kind != "resource":
+        return target
+    mult = patch.operation.get("multiply", {})
+    limits = dict(target.resource_limits)
     if "memory" in mult:
-        current = int(new.get("_memory_gb", _DEFAULT_MEMORY_GB))
-        bumped = current * int(mult["memory"])
-        new["_memory_gb"] = bumped
-        new["max_memory"] = f"{bumped}.GB"
+        bumped = int(_lead_number(limits.get("memory"), _DEFAULT_MEMORY_GB) * int(mult["memory"]))
+        limits["memory"] = f"{bumped}.GB"
     if "time" in mult:
-        current = int(new.get("_time_h", _DEFAULT_TIME_HOURS))
-        bumped = current * int(mult["time"])
-        new["_time_h"] = bumped
-        new["max_time"] = f"{bumped}.h"
-    return new
+        bumped = int(_lead_number(limits.get("time"), _DEFAULT_TIME_HOURS) * int(mult["time"]))
+        limits["time"] = f"{bumped}.h"
+    return target.model_copy(update={"resource_limits": limits})
 
 
 def self_heal_run(
@@ -74,6 +82,7 @@ def self_heal_run(
     """Run a pipeline and auto-recover from recoverable failures, logging the chain."""
     run_dir = (Path(runs_dir) / run_id).resolve()
     current_params = dict(params or {})
+    current_target = target
     repair_history: list[RepairStep] = []
     attempt = 1
 
@@ -83,7 +92,7 @@ def self_heal_run(
                 pipeline=pipeline,
                 revision=revision,
                 profiles=profiles,
-                target=target,
+                target=current_target,
                 input_paths=input_paths,
                 runs_dir=runs_dir,
                 run_id=run_id,
@@ -116,7 +125,7 @@ def self_heal_run(
                 )
                 return _finalize(exc.record, repair_history, run_dir)
 
-            current_params = apply_patch(current_params, safe)
+            current_target = apply_patch(current_target, safe)
             repair_history.append(
                 RepairStep(attempt=attempt, diagnosis=diagnosis, patch=safe, outcome="patched_and_retried")
             )
