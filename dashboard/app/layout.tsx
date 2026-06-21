@@ -25,8 +25,13 @@ export default function RootLayout({
             aria-label="Primary"
             className="mx-auto flex max-w-6xl items-center gap-6 px-6 py-3"
           >
-            <Link href="/runs" className="font-semibold tracking-tight">
-              Contig
+            <Link
+              href="/runs"
+              className="flex items-center gap-2 font-semibold tracking-tight"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/logo.svg" alt="" aria-hidden="true" className="h-6 w-auto" />
+              <span>Contig</span>
             </Link>
             <div className="flex items-center gap-4 text-sm text-muted-foreground">
               <Link href="/runs" className="hover:text-foreground">

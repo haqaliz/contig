@@ -1,3 +1,5 @@
+<img src="public/logo.svg" alt="Contig" width="80" />
+
 # Contig Dashboard
 
 A Next.js (App Router, TypeScript) dashboard for inspecting Contig runs. It reads

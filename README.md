@@ -1,3 +1,5 @@
+<img src="assets/contig-logo.svg" alt="Contig" width="96" />
+
 # Contig
 
 **An agentic bioinformatics analyst.**
