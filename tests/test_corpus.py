@@ -108,3 +108,52 @@ def test_evaluate_detector_reports_per_class_precision_and_recall():
     assert oom.recall == 0.5
     # the wrong prediction shows up as a low-precision tool_crash row
     assert report.per_class["tool_crash"].precision == 0.0
+
+
+def test_failure_case_from_run_keeps_only_failing_events_and_labels_it():
+    from contig.corpus import failure_case_from_run, evaluate_detector
+    from contig.models import RunRecord, ExecutionTarget, TaskEvent
+    record = RunRecord(
+        run_id="r1", pipeline="nf-core/rnaseq", pipeline_revision="3.26.0",
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_checksums={},
+        events=[
+            TaskEvent(process="FASTQC", status="COMPLETED", exit=0),
+            TaskEvent(process="STAR_ALIGN", status="FAILED", exit=137),
+        ],
+    )
+    case = failure_case_from_run(record, log_text="out of memory exit 137", expected_class="oom")
+    # only the failing event is retained
+    assert len(case.events) == 1 and case.events[0].process == "STAR_ALIGN"
+    assert case.log_text == "out of memory exit 137"
+    assert case.expected_class == "oom"
+    assert "r1" in case.source and "r1" in case.case_id
+    # the captured case is faithful: the detector reproduces the label
+    report = evaluate_detector([case])
+    assert report.accuracy == 1.0
+
+
+def test_failure_case_from_run_allows_overriding_id_and_source():
+    from contig.corpus import failure_case_from_run
+    from contig.models import RunRecord, ExecutionTarget, TaskEvent
+    record = RunRecord(
+        run_id="r2", pipeline="p", pipeline_revision="1",
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_checksums={}, events=[TaskEvent(process="X", status="FAILED", exit=1)],
+    )
+    case = failure_case_from_run(record, log_text="boom", expected_class="tool_crash",
+                                 case_id="custom-1", source="manual")
+    assert case.case_id == "custom-1" and case.source == "manual"
+
+
+def test_append_case_adds_one_line_to_corpus(tmp_path):
+    from contig.corpus import append_case, load_corpus
+    from contig.models import FailureCase, TaskEvent
+    path = tmp_path / "c.jsonl"
+    c1 = FailureCase(case_id="a", description="d", source="s",
+                     events=[TaskEvent(process="X", status="FAILED", exit=1)],
+                     log_text="boom", expected_class="tool_crash")
+    append_case(c1, path)
+    append_case(c1, path)
+    loaded = load_corpus(path)
+    assert len(loaded) == 2

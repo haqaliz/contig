@@ -17,6 +17,8 @@ from contig.models import (
     DetectorEvalReport,
     DetectorMismatch,
     FailureCase,
+    FailureClass,
+    RunRecord,
 )
 
 
@@ -90,3 +92,36 @@ def evaluate_detector(cases: list[FailureCase]) -> DetectorEvalReport:
         mismatches=mismatches,
         per_class=per_class,
     )
+
+
+def failure_case_from_run(
+    record: RunRecord,
+    log_text: str,
+    expected_class: FailureClass,
+    *,
+    case_id: str | None = None,
+    source: str | None = None,
+) -> FailureCase:
+    """Build a corpus FailureCase from a failed run.
+
+    Keep only the failing events (what the detector keys on), bundle the
+    captured log, and attach the label. This is the loop that turns a real
+    failed run into labeled corpus data instead of hand-authoring cases.
+    """
+    failing = [event for event in record.events if event.is_failure]
+    return FailureCase(
+        case_id=case_id or f"run:{record.run_id}",
+        description=f"captured from run {record.run_id} ({record.pipeline})",
+        source=source or f"run:{record.run_id}",
+        events=failing,
+        log_text=log_text,
+        expected_class=expected_class,
+    )
+
+
+def append_case(case: FailureCase, path: str | PathLike[str]) -> None:
+    """Append one FailureCase as a JSONL line (creates the file/dirs if needed)."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "a") as fh:
+        fh.write(case.model_dump_json() + "\n")
