@@ -94,6 +94,17 @@ export interface DetectorEvalReport {
   per_class: Record<string, ClassScore>;
 }
 
+// A proposed analysis plan (mirror of Plan in src/contig/models.py), produced by
+// `contig plan --json` and shown for approval before a run is launched.
+export interface Plan {
+  assay: string;
+  pipeline: string;
+  revision: string;
+  params: Record<string, unknown>;
+  rationale: string;
+  warnings: string[];
+}
+
 // Run lifecycle marker (runs/<id>/status.json), written by the engine so a run
 // is observable while in flight (run_record.json only appears at the end).
 export interface RunStatus {

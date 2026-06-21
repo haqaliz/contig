@@ -2,7 +2,7 @@
 // and hands the records to the client table for sorting and filtering. The fetch
 // stays on the server; only the interactive table opts into the client.
 import Link from "next/link";
-import { GitCompareArrows, Loader2 } from "lucide-react";
+import { GitCompareArrows, Loader2, Plus } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
 import { RunTestProfileButton } from "@/components/run-test-profile-button";
@@ -24,6 +24,14 @@ export default async function RunsPage() {
         description="Every pipeline run that produced a bundle, with its verdict, task outcomes, and whether the self-heal loop had to repair it."
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <Button
+              render={<Link href="/runs/new" />}
+              size="sm"
+              className="gap-2"
+            >
+              <Plus className="size-4" aria-hidden="true" />
+              New run
+            </Button>
             <Button
               render={<Link href="/runs/compare" />}
               variant="outline"

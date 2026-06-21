@@ -14,6 +14,7 @@ import { promisify } from "util";
 import type {
   DetectorEvalReport,
   FailureCase,
+  Plan,
   RunRecord,
   RunStatus,
 } from "./types";
@@ -114,6 +115,167 @@ export class DispatchBusyError extends Error {
     super(`A run is already in progress: ${runningId}`);
     this.name = "DispatchBusyError";
   }
+}
+
+/** Raised when a launch request is invalid (bad path, key, or caps). */
+export class LaunchValidationError extends Error {}
+
+/** A short key (iGenomes name, pipeline) with no leading dash and a safe charset. */
+function isSafeKey(value: string): boolean {
+  return /^[A-Za-z0-9._/-]+$/.test(value) && !value.startsWith("-");
+}
+
+async function assertFile(value: string, label: string): Promise<string> {
+  if (typeof value !== "string" || value.length === 0 || value.startsWith("-")) {
+    throw new LaunchValidationError(`${label} is required and must be a real path.`);
+  }
+  const abs = path.resolve(value);
+  try {
+    if (!(await fs.stat(abs)).isFile()) throw new Error();
+  } catch {
+    throw new LaunchValidationError(`${label} not found: ${value}`);
+  }
+  return abs;
+}
+
+// Reference is exactly one of: an iGenomes key, or a fasta + gtf pair.
+async function resolveReferenceArgs(req: {
+  genome?: string;
+  fasta?: string;
+  gtf?: string;
+}): Promise<string[]> {
+  const hasGenome = !!req.genome;
+  const hasExplicit = !!req.fasta || !!req.gtf;
+  if (hasGenome && hasExplicit) {
+    throw new LaunchValidationError("Provide either a genome key or fasta + gtf, not both.");
+  }
+  if (hasGenome) {
+    if (!isSafeKey(req.genome as string)) {
+      throw new LaunchValidationError("Invalid genome key.");
+    }
+    return [`--genome=${req.genome}`];
+  }
+  if (req.fasta && req.gtf) {
+    const fasta = await assertFile(req.fasta, "FASTA");
+    const gtf = await assertFile(req.gtf, "GTF");
+    return [`--fasta=${fasta}`, `--gtf=${gtf}`];
+  }
+  throw new LaunchValidationError("A reference is required: a genome key, or both fasta and gtf.");
+}
+
+const KNOWN_PIPELINES = new Set(["nf-core/rnaseq", "nf-core/sarek"]);
+
+/**
+ * Produce an approvable plan for a goal + data by shelling out to `contig plan
+ * --json`. Returns the plan, or an error string the form can show. All user
+ * values pass as `--opt=value` (bound to their option, no flag smuggling).
+ */
+export async function planRun(req: {
+  goal: string;
+  input: string;
+  genome?: string;
+  fasta?: string;
+  gtf?: string;
+}): Promise<{ plan?: Plan; error?: string }> {
+  let refArgs: string[];
+  let input: string;
+  try {
+    if (typeof req.goal !== "string" || req.goal.trim().length === 0) {
+      return { error: "A goal is required." };
+    }
+    input = await assertFile(req.input, "Sample sheet");
+    refArgs = await resolveReferenceArgs(req);
+  } catch (err) {
+    return { error: err instanceof LaunchValidationError ? err.message : "Invalid request." };
+  }
+
+  const override = process.env.CONTIG_CMD;
+  const cmd = override ?? "uv";
+  const args = (override ? [] : ["run", "contig"]).concat([
+    "plan",
+    "--json",
+    `--goal=${req.goal}`,
+    `--input=${input}`,
+    ...refArgs,
+  ]);
+  try {
+    const { stdout } = await pexec(cmd, args, { cwd: repoRoot(), timeout: 30_000 });
+    const data = JSON.parse(stdout) as Plan & { error?: string };
+    if (data.error) return { error: data.error };
+    return { plan: data };
+  } catch (err) {
+    const out = (err as { stdout?: string })?.stdout;
+    if (typeof out === "string") {
+      try {
+        const d = JSON.parse(out) as { error?: string };
+        if (d.error) return { error: d.error };
+      } catch {
+        /* fall through */
+      }
+    }
+    return { error: "Could not produce a plan." };
+  }
+}
+
+/**
+ * Launch a real-data run: validate inputs, then spawn `contig run` detached with
+ * the resolved arguments. One at a time. The run id is generated server-side and
+ * every user value is passed as `--opt=value`, so there is no flag-smuggling
+ * surface. Throws LaunchValidationError on bad input, DispatchBusyError if busy.
+ */
+export async function dispatchRealRun(req: {
+  input: string;
+  pipeline?: string;
+  genome?: string;
+  fasta?: string;
+  gtf?: string;
+  maxMemory?: string;
+  maxCpus?: string;
+}): Promise<{ run_id: string }> {
+  const running = await listRunningRuns();
+  if (running.length > 0) throw new DispatchBusyError(running[0].run_id);
+
+  const input = await assertFile(req.input, "Sample sheet");
+  const refArgs = await resolveReferenceArgs(req);
+  const extra: string[] = [];
+  if (req.pipeline) {
+    if (!KNOWN_PIPELINES.has(req.pipeline)) {
+      throw new LaunchValidationError("Unknown pipeline.");
+    }
+    extra.push(`--pipeline=${req.pipeline}`);
+  }
+  if (req.maxMemory) {
+    if (!/^[0-9][0-9.]*\.?[A-Za-z]{1,3}$/.test(req.maxMemory)) {
+      throw new LaunchValidationError("Invalid memory cap (e.g. 6.GB).");
+    }
+    extra.push(`--max-memory=${req.maxMemory}`);
+  }
+  if (req.maxCpus) {
+    if (!/^[0-9]+$/.test(req.maxCpus)) {
+      throw new LaunchValidationError("Invalid cpu cap.");
+    }
+    extra.push(`--max-cpus=${req.maxCpus}`);
+  }
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const runId = `run-${stamp}`;
+  const base = (process.env.CONTIG_DISPATCH_CMD ?? "uv run contig").split(" ");
+  const args = [
+    ...base.slice(1),
+    "run",
+    `--run-id=${runId}`,
+    `--runs-dir=${runsDir()}`,
+    `--input=${input}`,
+    ...refArgs,
+    ...extra,
+  ];
+  const child = spawn(base[0], args, {
+    cwd: repoRoot(),
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
+  return { run_id: runId };
 }
 
 /**
