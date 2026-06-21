@@ -8,10 +8,15 @@ import "server-only";
 
 import { promises as fs } from "fs";
 import path from "path";
-import { execFile } from "child_process";
+import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 
-import type { DetectorEvalReport, FailureCase, RunRecord } from "./types";
+import type {
+  DetectorEvalReport,
+  FailureCase,
+  RunRecord,
+  RunStatus,
+} from "./types";
 
 const pexec = promisify(execFile);
 
@@ -51,6 +56,74 @@ export async function listRuns(): Promise<RunRecord[]> {
 /** One run bundle by id, or null if absent. */
 export async function getRun(id: string): Promise<RunRecord | null> {
   return readRecord(id);
+}
+
+/** The lifecycle marker for a run (running/finished/error), or null if none. */
+export async function getRunStatus(id: string): Promise<RunStatus | null> {
+  const p = path.join(runsDir(), id, "status.json");
+  try {
+    return JSON.parse(await fs.readFile(p, "utf8")) as RunStatus;
+  } catch {
+    return null;
+  }
+}
+
+/** Runs that are in flight: a "running" status marker and no bundle yet. */
+export async function listRunningRuns(): Promise<
+  { run_id: string; started_at: string }[]
+> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(runsDir());
+  } catch {
+    return [];
+  }
+  const out: { run_id: string; started_at: string }[] = [];
+  for (const name of entries) {
+    if (await readRecord(name)) continue; // already finished
+    const st = await getRunStatus(name);
+    if (st?.state === "running") out.push({ run_id: name, started_at: st.started_at });
+  }
+  return out;
+}
+
+/** Raised when a run is already in flight (v1 allows one at a time). */
+export class DispatchBusyError extends Error {
+  constructor(public readonly runningId: string) {
+    super(`A run is already in progress: ${runningId}`);
+    this.name = "DispatchBusyError";
+  }
+}
+
+/**
+ * Launch a test-profile run (no inputs) by spawning the existing CLI detached.
+ * One at a time: refuses if a run is already in flight. argv array, never a
+ * shell string, so there is no injection surface. The engine writes status.json
+ * and, at the end, run_record.json; the dashboard observes the run dir.
+ */
+export async function dispatchTestProfileRun(): Promise<{ run_id: string }> {
+  const running = await listRunningRuns();
+  if (running.length > 0) throw new DispatchBusyError(running[0].run_id);
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const runId = `test-${stamp}`;
+  // Default: `uv run contig`. Override with CONTIG_DISPATCH_CMD (space separated).
+  const base = (process.env.CONTIG_DISPATCH_CMD ?? "uv run contig").split(" ");
+  const args = [
+    ...base.slice(1),
+    "run",
+    "--run-id",
+    runId,
+    "--runs-dir",
+    runsDir(),
+  ];
+  const child = spawn(base[0], args, {
+    cwd: repoRoot(),
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
+  return { run_id: runId };
 }
 
 /**

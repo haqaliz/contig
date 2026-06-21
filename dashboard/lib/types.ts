@@ -94,6 +94,16 @@ export interface DetectorEvalReport {
   per_class: Record<string, ClassScore>;
 }
 
+// Run lifecycle marker (runs/<id>/status.json), written by the engine so a run
+// is observable while in flight (run_record.json only appears at the end).
+export interface RunStatus {
+  run_id: string;
+  state: "running" | "finished" | "error";
+  started_at: string;
+  finished_at: string | null;
+  pid?: number;
+}
+
 export interface FailureCase {
   case_id: string;
   description: string;

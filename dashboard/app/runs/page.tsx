@@ -2,18 +2,19 @@
 // and hands the records to the client table for sorting and filtering. The fetch
 // stays on the server; only the interactive table opts into the client.
 import Link from "next/link";
-import { GitCompareArrows } from "lucide-react";
+import { GitCompareArrows, Loader2 } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
+import { RunTestProfileButton } from "@/components/run-test-profile-button";
 import { Button } from "@/components/ui/button";
-import { listRuns } from "@/lib/runs";
+import { listRuns, listRunningRuns } from "@/lib/runs";
 import { RunsTable } from "./runs-table";
 
 // Read fresh on every request so the list reflects the current runs on disk.
 export const dynamic = "force-dynamic";
 
 export default async function RunsPage() {
-  const runs = await listRuns();
+  const [runs, running] = await Promise.all([listRuns(), listRunningRuns()]);
 
   return (
     <div className="space-y-6">
@@ -22,17 +23,42 @@ export default async function RunsPage() {
         count={runs.length}
         description="Every pipeline run that produced a bundle, with its verdict, task outcomes, and whether the self-heal loop had to repair it."
         actions={
-          <Button
-            render={<Link href="/runs/compare" />}
-            variant="outline"
-            size="sm"
-            className="gap-2"
-          >
-            <GitCompareArrows className="size-4" aria-hidden="true" />
-            Compare runs
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              render={<Link href="/runs/compare" />}
+              variant="outline"
+              size="sm"
+              className="gap-2"
+            >
+              <GitCompareArrows className="size-4" aria-hidden="true" />
+              Compare runs
+            </Button>
+            <RunTestProfileButton />
+          </div>
         }
       />
+
+      {running.length > 0 ? (
+        <div className="rounded-xl border bg-card p-4">
+          <h2 className="mb-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+            In progress
+          </h2>
+          <ul className="space-y-1.5">
+            {running.map((r) => (
+              <li key={r.run_id} className="flex items-center gap-2 text-sm">
+                <Loader2 className="size-4 animate-spin text-brand" aria-hidden="true" />
+                <Link
+                  href={`/runs/${r.run_id}`}
+                  className="font-mono font-medium underline-offset-4 hover:underline"
+                >
+                  {r.run_id}
+                </Link>
+                <span className="text-muted-foreground">running</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {runs.length === 0 ? (
         <div className="rounded-xl border border-dashed p-10 text-center">
