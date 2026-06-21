@@ -118,12 +118,12 @@ export function RunsTable({ runs }: { runs: RunRecord[] }) {
             <ChevronDown className="size-4 opacity-60" aria-hidden="true" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-44">
-            <DropdownMenuLabel>Filter by verdict</DropdownMenuLabel>
-            <DropdownMenuSeparator />
             <DropdownMenuRadioGroup
               value={verdict}
               onValueChange={(v) => setVerdict(v as Verdict | "all")}
             >
+              <DropdownMenuLabel>Filter by verdict</DropdownMenuLabel>
+              <DropdownMenuSeparator />
               {VERDICT_FILTERS.map((f) => (
                 <DropdownMenuRadioItem key={f.key} value={f.key}>
                   {f.label}
