@@ -119,6 +119,16 @@ def test_run_record_verdict_is_warn_when_run_ok_and_qc_warns():
     assert record.verdict == "warn"
 
 
+def test_run_record_serializes_verdict_into_json():
+    # The dashboard reads run_record.json directly, so the trust verdict must be
+    # in the serialized record, not only a computed Python property (no TS reimpl).
+    import json
+
+    record = _minimal_record([_qc("pass")], events=[_OK_TASK])
+    data = json.loads(record.model_dump_json())
+    assert data["verdict"] == "pass"
+
+
 def test_diagnosis_rejects_confidence_above_one():
     from contig.models import Diagnosis
 

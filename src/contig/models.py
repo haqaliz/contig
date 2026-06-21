@@ -11,7 +11,7 @@ import hashlib
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 def sha256_file(path: str | Path, chunk_size: int = 1 << 20) -> str:
@@ -218,6 +218,7 @@ class RunRecord(BaseModel):
     output_checksums: dict[str, str] = {}
     repair_history: list[RepairStep] = []
 
+    @computed_field  # serialized into run_record.json so the dashboard reads it directly
     @property
     def verdict(self) -> Verdict:
         """Conservative, honest verdict (ARCHITECTURE §6; PRODUCT_SPEC trust model).
