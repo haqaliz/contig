@@ -70,6 +70,26 @@ def test_show_prints_verdict_for_existing_run(tmp_path):
     assert "VERDICT" in result.output
 
 
+def test_show_html_prints_html_document(tmp_path):
+    _write_run(tmp_path, "r1", [TaskEvent(process="X", status="COMPLETED", exit=0)])
+    result = runner.invoke(app, ["show", "r1", "--runs-dir", str(tmp_path), "--html"])
+    assert result.exit_code == 0
+    assert "<html" in result.output.lower()
+
+
+def test_show_html_writes_to_output_file(tmp_path):
+    _write_run(tmp_path, "r1", [TaskEvent(process="X", status="COMPLETED", exit=0)])
+    out = tmp_path / "report.html"
+    result = runner.invoke(
+        app,
+        ["show", "r1", "--runs-dir", str(tmp_path), "--html", "--output", str(out)],
+    )
+    assert result.exit_code == 0
+    assert "<html" in out.read_text().lower()
+    # the whole document is not dumped to stdout when written to a file
+    assert "<html" not in result.output.lower()
+
+
 def test_show_errors_on_missing_run(tmp_path):
     result = runner.invoke(app, ["show", "nope", "--runs-dir", str(tmp_path)])
     assert result.exit_code != 0

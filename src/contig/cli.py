@@ -21,7 +21,7 @@ from contig.planner import PlanningError
 from contig.planner import plan as build_plan
 from contig.reference import ReferenceError, resolve_reference
 from contig.registry import assay_for_pipeline
-from contig.report import render_run_report
+from contig.report import render_run_report, render_run_report_html
 from contig.runner import PipelineExecutionError, default_executor
 from contig.samplesheet import fastq_paths, validate_samplesheet
 from contig.self_heal import self_heal_run
@@ -172,14 +172,26 @@ def run(
 def show(
     run_id: str = typer.Argument(..., help="The run to inspect."),
     runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+    html: bool = typer.Option(False, "--html", help="Render a self-contained HTML report instead of text."),
+    output: str = typer.Option(None, "--output", help="Write the report to this file instead of stdout."),
 ) -> None:
-    """Show the verdict and provenance of a past run."""
+    """Show the verdict and provenance of a past run.
+
+    With --html, render a single self-contained HTML file (the shareable report a
+    PI or reviewer can trust: verdict, QC, repair chain, pinned provenance). With
+    --output, write the report to that path instead of printing it to stdout.
+    """
     try:
         record = load_run(runs_dir, run_id)
     except RunNotFoundError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
-    typer.echo(render_run_report(record))
+    rendered = render_run_report_html(record) if html else render_run_report(record)
+    if output:
+        Path(output).write_text(rendered)
+        typer.echo(f"Wrote report to {output}")
+        return
+    typer.echo(rendered)
 
 
 @app.command(name="list")
