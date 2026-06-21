@@ -12,7 +12,10 @@ is bounded by `max_attempts`.
 
 from __future__ import annotations
 
+import json
+import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 from contig.bundle import write_bundle
@@ -31,6 +34,36 @@ from contig.runner import (
 
 _DEFAULT_MEMORY_GB = 8
 _DEFAULT_TIME_HOURS = 4
+
+
+def _write_status(run_dir: Path, state: str) -> None:
+    """Write runs/<id>/status.json so a run is observable while in flight.
+
+    run_record.json only appears at the end, so the dashboard reads this marker
+    to tell "running" from "finished"/"error". started_at is preserved across
+    updates; finished_at is set once the run leaves the running state.
+    """
+    run_dir = Path(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    path = run_dir / "status.json"
+    now = datetime.now(timezone.utc).isoformat()
+    started_at = now
+    if path.exists():
+        try:
+            started_at = json.loads(path.read_text()).get("started_at", now)
+        except (ValueError, OSError):
+            started_at = now
+    path.write_text(
+        json.dumps(
+            {
+                "run_id": run_dir.name,
+                "state": state,
+                "pid": os.getpid(),
+                "started_at": started_at,
+                "finished_at": None if state == "running" else now,
+            }
+        )
+    )
 
 
 def _safe_patch(patches: list[Patch]) -> Patch | None:
@@ -89,6 +122,7 @@ def self_heal_run(
     runs. These are separate from the golden corpus until a human confirms them.
     """
     run_dir = (Path(runs_dir) / run_id).resolve()
+    _write_status(run_dir, "running")
     pending_path = Path(pending_corpus) if pending_corpus else Path(runs_dir) / "pending_corpus.jsonl"
     current_params = dict(params or {})
     current_target = target
@@ -159,7 +193,9 @@ def _finalize(record: RunRecord | None, repair_history: list[RepairStep], run_di
     """Attach the repair history to the final record and persist the bundle."""
     if record is None:
         # The run failed before producing any trace; nothing was captured.
+        _write_status(run_dir, "error")
         raise PipelineExecutionError(1, None)
     record.repair_history = repair_history
     write_bundle(record, run_dir)
+    _write_status(run_dir, "finished")
     return record

@@ -1,7 +1,11 @@
+import json
 from pathlib import Path
+
+import pytest
 
 from contig.corpus import load_corpus
 from contig.models import ExecutionTarget, RunSummary
+from contig.runner import PipelineExecutionError
 from contig.self_heal import self_heal_run
 
 
@@ -79,6 +83,35 @@ def test_self_heal_oom_bump_emits_bumped_resourcelimits(tmp_path):
     record = _heal(tmp_path, executor)
     assert RunSummary.from_events(record.events).succeeded is True
     assert "process.resourceLimits = [ memory: 16.GB ]" in state["retry_cfg"]
+
+
+def test_self_heal_writes_status_running_then_finished(tmp_path):
+    # The dashboard reads status.json to know a run is in flight (run_record.json
+    # only appears at the end). It must say "running" during, "finished" after.
+    seen = {}
+
+    def executor(cmd, trace_path):
+        sp = Path(trace_path).parent / "status.json"
+        seen["during"] = json.loads(sp.read_text())["state"] if sp.exists() else None
+        _write(trace_path, TRACE_OK, "ok")
+        return 0
+
+    _heal(tmp_path, executor)
+    final = json.loads((tmp_path / "runs" / "r" / "status.json").read_text())
+    assert seen["during"] == "running"
+    assert final["state"] == "finished"
+
+
+def test_self_heal_writes_status_error_when_no_record(tmp_path):
+    # A run that produced no trace at all (engine could not even start) is "error",
+    # not a stuck "running".
+    def executor(cmd, trace_path):
+        return 1  # nonzero, no trace written -> no record
+
+    with pytest.raises(PipelineExecutionError):
+        _heal(tmp_path, executor)
+    final = json.loads((tmp_path / "runs" / "r" / "status.json").read_text())
+    assert final["state"] == "error"
 
 
 def test_self_heal_gives_up_on_unrecoverable_tool_crash(tmp_path):
