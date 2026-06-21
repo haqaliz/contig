@@ -15,7 +15,7 @@ def inspect_data_shape(rows: list[SampleRow], expects_replicates: bool = True) -
     """Infer the run's input shape and surface up-front warnings.
 
     `expects_replicates` is an assay decision the caller makes: RNA-seq DE needs
-    replicates, but single-sample germline variant calling is valid — so the
+    replicates, but single-sample germline variant calling is valid - so the
     "needs replicates" warning is suppressed when replicates aren't expected.
     """
     n_samples = len(rows)

@@ -91,7 +91,7 @@ def propose_patches(diagnosis: Diagnosis) -> list[Patch]:
                 rationale=(
                     "A step's container has no image for this host's CPU architecture "
                     "(e.g. nf-core amd64 images on Apple Silicon). Re-running here won't "
-                    "help — run on an x86_64 host or a cloud backend."
+                    "help - run on an x86_64 host or a cloud backend."
                 ),
                 risk="needs_confirmation",
                 expected_signal="step runs on a native-architecture host",

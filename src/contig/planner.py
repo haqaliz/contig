@@ -2,7 +2,7 @@
 
 Map a free-text goal + the data shape to a CURATED pipeline and propose params,
 producing a human-readable Plan the user approves before running. The NL→assay
-step is a deterministic, replaceable provider (contig.registry.match_assay) — the
+step is a deterministic, replaceable provider (contig.registry.match_assay) - the
 moat is the curated registry + the run/verify engine, not the prompting. Contig
 does not author workflows; it selects validated ones.
 """

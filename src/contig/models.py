@@ -114,7 +114,7 @@ class RunSummary(BaseModel):
 
 # --- Planning / intake (ARCHITECTURE §P4) --------------------------------------
 # A thin layer that maps a goal + data shape to a CURATED pipeline and proposes
-# params for the user to approve. The NL→assay step is a replaceable provider —
+# params for the user to approve. The NL→assay step is a replaceable provider -
 # the moat is the curated registry + the run/verify engine, not the prompting.
 
 

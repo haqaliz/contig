@@ -63,7 +63,7 @@ def test_self_heal_recovers_from_oom_and_logs_repair(tmp_path):
 
 def test_self_heal_oom_bump_emits_bumped_resourcelimits(tmp_path):
     # The OOM fix must ride in the generated config's resourceLimits (what modern
-    # nf-core honors) — not the ignored --max_memory param. Default 8GB -> 16GB.
+    # nf-core honors) - not the ignored --max_memory param. Default 8GB -> 16GB.
     state = {"n": 0, "retry_cfg": None}
 
     def executor(cmd, trace_path):

@@ -98,7 +98,7 @@ def test_parse_file_matches_text_parser(tmp_path):
 
 # --- Modern MultiQC schema -------------------------------------------------
 # Real nf-core/rnaseq output ships `report_general_stats_data` as a dict keyed by
-# MODULE (salmon, samtools, rseqc, ...), each holding {sample: {metric: value}} —
+# MODULE (salmon, samtools, rseqc, ...), each holding {sample: {metric: value}} -
 # not the legacy list. The parser must read both, merging a sample's metrics
 # across modules. Shape and keys below are taken verbatim from a real run.
 def test_modern_module_keyed_schema_merges_metrics_per_sample():

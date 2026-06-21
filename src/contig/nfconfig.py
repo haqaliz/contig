@@ -38,7 +38,7 @@ def generate_nextflow_config(target: ExecutionTarget) -> str:
     """Render the nextflow.config text for an ExecutionTarget.
 
     Raises ConfigGenerationError when a backend's required options are absent
-    (e.g. AWS Batch with no queue) — failing loudly beats submitting a job that
+    (e.g. AWS Batch with no queue) - failing loudly beats submitting a job that
     Nextflow would reject deep in execution.
     """
     lines: list[str] = [_RUNTIME_LINE[target.container_runtime]]

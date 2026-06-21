@@ -105,8 +105,8 @@ def diagnose_failure(events: list[TaskEvent], log_text: str) -> Diagnosis:
         log_text, ("not found", "missing", "no such file")
     )
     # Require the index/.fai to appear ON a "not found"/"missing"/"no such file"
-    # line. A bare .fai mention is noise — e.g. `samtools faidx` naming its own
-    # successful output genome.fasta.fai — and must not trigger missing_index.
+    # line. A bare .fai mention is noise - e.g. `samtools faidx` naming its own
+    # successful output genome.fasta.fai - and must not trigger missing_index.
     index_lines = [
         line
         for line in notfound_lines
@@ -150,7 +150,7 @@ def diagnose_failure(events: list[TaskEvent], log_text: str) -> Diagnosis:
 
     # Apple-Silicon-style architecture mismatch: nf-core's amd64-only containers
     # run under emulation, and a step gets KILLED (no exit code). The platform
-    # warning alone is noise — it appears on healthy tasks too — so we require it
+    # warning alone is noise - it appears on healthy tasks too - so we require it
     # together with a killed (exit-less) failure.
     platform_lines = _matching_lines(
         log_text,

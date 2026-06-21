@@ -1,4 +1,4 @@
-# Contig — Technical Architecture
+# Contig - Technical Architecture
 
 > **Contig** is an agentic bioinformatics analyst. A researcher hands it raw sequencing data; Contig selects and runs the right pipeline on *their* compute, debugs and self-heals failures, verifies the output, and returns a reproducible result.
 
@@ -6,16 +6,16 @@
 
 ## 0. The thesis behind this architecture
 
-Layer 1 of the bioinformatics-agent stack — *natural language → workflow script* — is crowded and increasingly solved. LLMs already generate technically accurate Galaxy/Nextflow workflows from NL descriptions, and small models + RAG over tool docs reach expert level on the *conceptual* layer with no heavy compute [arxiv.org/html/2507.20122v1; nature.com/articles/s41598-025-25919-z].
+Layer 1 of the bioinformatics-agent stack - *natural language → workflow script* - is crowded and increasingly solved. LLMs already generate technically accurate Galaxy/Nextflow workflows from NL descriptions, and small models + RAG over tool docs reach expert level on the *conceptual* layer with no heavy compute [arxiv.org/html/2507.20122v1; nature.com/articles/s41598-025-25919-z].
 
-Layer 2 — actually **RUN / DEBUG / SELF-HEAL / VERIFY / REPRODUCE** end-to-end on the user's real data and compute — is not solved. Benchmarks show systems fall apart on medium/complex workflows and reach only ~17% accuracy on real analysis tasks [BixBench, arxiv 2503.00096].
+Layer 2 - actually **RUN / DEBUG / SELF-HEAL / VERIFY / REPRODUCE** end-to-end on the user's real data and compute - is not solved. Benchmarks show systems fall apart on medium/complex workflows and reach only ~17% accuracy on real analysis tasks [BixBench, arxiv 2503.00096].
 
 **Architectural consequence, and the single idea everything below follows from:**
 
-> The moat is the **execution + verification + reproducibility infrastructure** and the **accumulated workflow-evaluation data** — *not* the prompt and *not* the model. Build the part that gets **better as foundation models improve**, and treat the model itself as a hot-swappable component.
+> The moat is the **execution + verification + reproducibility infrastructure** and the **accumulated workflow-evaluation data** - *not* the prompt and *not* the model. Build the part that gets **better as foundation models improve**, and treat the model itself as a hot-swappable component.
 
 ```
-   Crowded, ~solved                        Unsolved — Contig's focus
+   Crowded, ~solved                        Unsolved - Contig's focus
  ┌────────────────────┐   ┌──────────────────────────────────────────────────────┐
  │  Layer 1            │   │  Layer 2                                               │
  │  NL → workflow      │ → │  RUN → OBSERVE → DIAGNOSE → REPAIR → VERIFY → REPRODUCE│
@@ -32,8 +32,8 @@ Layer 2 — actually **RUN / DEBUG / SELF-HEAL / VERIFY / REPRODUCE** end-to-end
 2. **The execution + verification infra is the moat.** Every engineering hour goes preferentially into the parts that compound: the sandboxed runner, the failure taxonomy, the QC checks, and the provenance store. These improve with accumulated runs regardless of which model is plugged in.
 3. **Reproducibility-first, not reproducibility-eventually.** A run is not "done" until it is *re-runnable by a stranger*. Every run captures pinned container digests, parameters, input checksums, tool versions, and the random seeds. If we cannot reproduce it, we did not finish it.
 4. **The user's data and compute are respected.** Genomic data is sensitive and large. Contig runs *on the user's compute* (their laptop, their cloud account, their HPC) by default. Data egress is opt-in, minimized, and auditable. The control plane never needs to see the reads.
-5. **Lean on the ecosystem; never reinvent pipelines.** nf-core, Galaxy, Bioconda, and Biocontainers represent thousands of expert-years of validated work. Contig *orchestrates and verifies* them — it does not write pipelines from scratch.
-6. **Everything the agent does is data we keep.** Every failure, diagnosis, patch, and QC result is logged in a structured form that becomes the workflow-evaluation dataset — the second moat.
+5. **Lean on the ecosystem; never reinvent pipelines.** nf-core, Galaxy, Bioconda, and Biocontainers represent thousands of expert-years of validated work. Contig *orchestrates and verifies* them - it does not write pipelines from scratch.
+6. **Everything the agent does is data we keep.** Every failure, diagnosis, patch, and QC result is logged in a structured form that becomes the workflow-evaluation dataset - the second moat.
 
 ---
 
@@ -46,7 +46,7 @@ Layer 2 — actually **RUN / DEBUG / SELF-HEAL / VERIFY / REPRODUCE** end-to-end
                         └───────────────────────┬──────────────────────┘
                                                  │  HTTPS / WS
 ┌────────────────────────────────────────────────────────────────────────────────────┐
-│  CONTROL PLANE  (Contig-managed — small, stateless, never touches reads)             │
+│  CONTROL PLANE  (Contig-managed - small, stateless, never touches reads)             │
 │                                                                                      │
 │  (1) Conversational / Planning Agent Layer                                           │
 │      ├─ AgentProvider  (model-agnostic; default claude-opus-4-8, adaptive thinking)  │
@@ -60,7 +60,7 @@ Layer 2 — actually **RUN / DEBUG / SELF-HEAL / VERIFY / REPRODUCE** end-to-end
 │      └─ Pipeline registry (curated, versioned: which pipeline for which assay)       │
 │                                                                                      │
 │  (5) Observability + Failure-Detection Loop                                          │
-│  (6) Self-Healing / Repair Loop      (the core IP — see §5)                          │
+│  (6) Self-Healing / Repair Loop      (the core IP - see §5)                          │
 │  (7) Verification / QC Layer                                                         │
 │  (8) Provenance / Reproducibility Store  ── Postgres + object store                  │
 │                                                                                      │
@@ -68,7 +68,7 @@ Layer 2 — actually **RUN / DEBUG / SELF-HEAL / VERIFY / REPRODUCE** end-to-end
                 │ signed job spec (no data)                      │ logs/metrics/QC (no reads)
                 ▼                                                ▲
 ┌────────────────────────────────────────────────────────────────────────────────────┐
-│  DATA PLANE  (the USER's compute — local / their cloud / Contig-managed sandbox)     │
+│  DATA PLANE  (the USER's compute - local / their cloud / Contig-managed sandbox)     │
 │                                                                                      │
 │  (4) Compute Abstraction                                                             │
 │      ├─ Executor backends: Local | AWS Batch | GCP Batch | Slurm/HPC | K8s          │
@@ -80,7 +80,7 @@ Layer 2 — actually **RUN / DEBUG / SELF-HEAL / VERIFY / REPRODUCE** end-to-end
 └────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The hard split between **control plane** (small, Contig-hosted, reasoning + bookkeeping) and **data plane** (user-owned, where bytes and compute live) is the structural expression of principle #4. Everything the agent needs to reason — logs, exit codes, QC metrics, file manifests — is small and shippable; the reads are not, and stay put.
+The hard split between **control plane** (small, Contig-hosted, reasoning + bookkeeping) and **data plane** (user-owned, where bytes and compute live) is the structural expression of principle #4. Everything the agent needs to reason - logs, exit codes, QC metrics, file manifests - is small and shippable; the reads are not, and stay put.
 
 ### 2.1 Component responsibilities
 
@@ -105,16 +105,16 @@ Choices optimize for **speed of building, breadth of ecosystem leverage, and one
 | Concern | Choice | Why for a solo founder |
 |--------|--------|------------------------|
 | **Backend / orchestration** | **Python 3.12 + FastAPI** | One language across ML, agent code, and API. FastAPI is async-native (long-running runs, WS log streaming), Pydantic gives typed job specs for free. |
-| **Workflow execution** | **Nextflow + nf-core** (primary); **Snakemake** (secondary); **WDL/Cromwell** (read/import only at MVP) | nf-core ships ~100 peer-reviewed, containerized, portable pipelines. This is the single biggest "buy" decision — it replaces years of pipeline authoring. Nextflow's native executors (local/AWS/GCP/Slurm/K8s) *are* the compute abstraction. |
+| **Workflow execution** | **Nextflow + nf-core** (primary); **Snakemake** (secondary); **WDL/Cromwell** (read/import only at MVP) | nf-core ships ~100 peer-reviewed, containerized, portable pipelines. This is the single biggest "buy" decision - it replaces years of pipeline authoring. Nextflow's native executors (local/AWS/GCP/Slurm/K8s) *are* the compute abstraction. |
 | **Containerization** | **Docker** (cloud) + **Singularity/Apptainer** (HPC) + **Conda/Bioconda** fallback | Biocontainers + Bioconda give a pinned, reproducible binary for essentially every tool. Singularity is mandatory for HPC (no root). Nextflow already abstracts the three. |
-| **LLM orchestration** | **Anthropic SDK directly**, behind a thin `AgentProvider` interface. Default `claude-opus-4-8` with `thinking: {type: "adaptive"}` and the SDK **tool runner** for the agent loop. | Avoid heavyweight framework lock-in (the agent must stay replaceable — principle #1). A custom manual/tool-runner loop gives the fine-grained control the self-healing loop needs (gating, logging, conditional re-run). Adaptive thinking lets the model spend reasoning where diagnosis is hard without a fixed budget to tune. |
-| **RAG / vector DB** | **pgvector** (start) → Qdrant (if scale demands) | pgvector means *one* datastore (Postgres) for metadata, provenance, *and* embeddings — minimal ops surface for one person. Migrate only if recall/latency forces it. |
+| **LLM orchestration** | **Anthropic SDK directly**, behind a thin `AgentProvider` interface. Default `claude-opus-4-8` with `thinking: {type: "adaptive"}` and the SDK **tool runner** for the agent loop. | Avoid heavyweight framework lock-in (the agent must stay replaceable - principle #1). A custom manual/tool-runner loop gives the fine-grained control the self-healing loop needs (gating, logging, conditional re-run). Adaptive thinking lets the model spend reasoning where diagnosis is hard without a fixed budget to tune. |
+| **RAG / vector DB** | **pgvector** (start) → Qdrant (if scale demands) | pgvector means *one* datastore (Postgres) for metadata, provenance, *and* embeddings - minimal ops surface for one person. Migrate only if recall/latency forces it. |
 | **Relational store** | **PostgreSQL** | Provenance, run state, registry, embeddings (pgvector), job queue (via `SELECT … FOR UPDATE SKIP LOCKED` or a light broker). One database to back up. |
 | **Object store** | **S3 / GCS / DO Spaces** for *artifacts and metadata only* (QC reports, manifests, logs). Reads stay in the data plane. | Cheap, durable, presigned-URL friendly. |
 | **Job/queue + workers** | **FastAPI + a worker pool** (RQ/Celery/arq, or Postgres-backed). Runs are long-lived; the worker babysits Nextflow and streams events back. | Keeps the API responsive; one worker type to reason about. |
 | **Frontend** | **Vue 3 + TypeScript + Vite + Tailwind** | Founder's existing strength (per repo conventions). Two surfaces: a chat pane and a **run dashboard** (DAG view, live logs, QC verdicts, "reproduce" button). |
 | **CLI** | **Typer (Python)** | Power users and HPC users live in the terminal; the CLI is the local-compute on-ramp and shares the backend's Python models. |
-| **Agent runtime in the data plane** | A small **Contig runner daemon** (Python, shipped as a container or pip package) the user installs on their compute. Polls the control plane for signed job specs; executes Nextflow locally; streams logs/QC back. | This is what makes "your data, your compute" real. Outbound-only connection — no inbound ports on the user's machine. |
+| **Agent runtime in the data plane** | A small **Contig runner daemon** (Python, shipped as a container or pip package) the user installs on their compute. Polls the control plane for signed job specs; executes Nextflow locally; streams logs/QC back. | This is what makes "your data, your compute" real. Outbound-only connection - no inbound ports on the user's machine. |
 
 **Deliberate non-choices at MVP:** no Kubernetes of our own (Nextflow handles cluster submission), no microservices (a modular monolith is faster for one person), no custom workflow language (use Nextflow's), no LangChain-style framework (keeps the agent swappable).
 
@@ -136,13 +136,13 @@ class ExecutionTarget(BaseModel):
     credentials_ref: str | None    # name of a user-held secret; never the secret itself
 ```
 
-Because Nextflow already speaks all five backends and all three runtimes, the abstraction is mostly a *mapping layer* (Contig's `ExecutionTarget` → a generated `nextflow.config` profile) plus a uniform event stream — not a re-implementation. This is principle #5 applied to compute.
+Because Nextflow already speaks all five backends and all three runtimes, the abstraction is mostly a *mapping layer* (Contig's `ExecutionTarget` → a generated `nextflow.config` profile) plus a uniform event stream - not a re-implementation. This is principle #5 applied to compute.
 
 ### 4.2 Execution engine (component 3)
 
 - The chosen workflow (nf-core pipeline + params, or a generated Snakemake/Nextflow script) runs **inside the sandbox in the data plane**.
 - Isolation: each run executes in a container with a scoped work dir, no ambient cloud credentials beyond the user's scoped role, network egress restricted by default.
-- Contig captures the workflow manager's structured events (Nextflow's `trace`, `report`, `timeline`, and `-with-weblog` JSON) rather than scraping stdout — these are machine-readable and feed components 5–8 directly.
+- Contig captures the workflow manager's structured events (Nextflow's `trace`, `report`, `timeline`, and `-with-weblog` JSON) rather than scraping stdout - these are machine-readable and feed components 5-8 directly.
 
 ### 4.3 Three compute modes
 
@@ -194,14 +194,14 @@ This is the part competitors don't have and the part that improves as both the m
 Classify the run's terminal (or stuck) state from machine-readable signals, **before** invoking the model:
 
 - Exit code + workflow-manager error block (Nextflow names the failing process and command).
-- A **failure taxonomy** — the heart of the detector. Examples:
+- A **failure taxonomy** - the heart of the detector. Examples:
   - `OOM` / `time_limit` (resource) → often auto-fixable by raising `resource_hints`.
   - `missing_reference` / `index_not_found` (data/config).
   - `bad_param` / `incompatible_flag` (config).
   - `container_pull_failed` / `conda_solve_failed` (environment).
-  - `tool_crash` (genuine tool error — parse stderr).
+  - `tool_crash` (genuine tool error - parse stderr).
   - `no_progress` (heartbeat watchdog: no new tasks for N minutes).
-  - `qc_anomaly` (the run finished but output failed verification — §6).
+  - `qc_anomaly` (the run finished but output failed verification - §6).
 
 Pattern-matchers (regex/rules over logs) handle the common, unambiguous cases deterministically and cheaply; the model is only invoked for the residue. This keeps cost down and makes the easy 80% reproducible.
 
@@ -217,9 +217,9 @@ class Diagnosis(BaseModel):
     confidence: float
 ```
 
-### 5.3 Repair: propose → patch (component 6, steps b–c)
+### 5.3 Repair: propose → patch (component 6, steps b-c)
 
-The model proposes **ranked, typed, machine-applicable** candidate fixes — never free-text "try changing the config":
+The model proposes **ranked, typed, machine-applicable** candidate fixes - never free-text "try changing the config":
 
 ```python
 class Patch(BaseModel):
@@ -230,15 +230,15 @@ class Patch(BaseModel):
     expected_signal: str   # what we'll check to know it worked
 ```
 
-Patches are applied to a **new immutable run revision** (the original is never mutated — reproducibility-first). `risk` drives gating: `safe` patches (bump memory, switch a flag the docs endorse) auto-apply; `needs_confirmation`/`destructive` pause for the user. `expected_signal` lets DETECT confirm the fix actually changed the outcome rather than masking it.
+Patches are applied to a **new immutable run revision** (the original is never mutated - reproducibility-first). `risk` drives gating: `safe` patches (bump memory, switch a flag the docs endorse) auto-apply; `needs_confirmation`/`destructive` pause for the user. `expected_signal` lets DETECT confirm the fix actually changed the outcome rather than masking it.
 
 ### 5.4 Re-run and converge
 
-Re-execute (ideally resuming from the last good checkpoint — Nextflow `-resume` — so we don't redo successful work). Loop back to DETECT. Bounded by `max_attempts`, a cost/time budget, and the no-progress detector. **Every detect/diagnose/patch/outcome tuple is persisted** — this is the workflow-evaluation dataset that is moat #2 and the eval set for swapping models.
+Re-execute (ideally resuming from the last good checkpoint - Nextflow `-resume` - so we don't redo successful work). Loop back to DETECT. Bounded by `max_attempts`, a cost/time budget, and the no-progress detector. **Every detect/diagnose/patch/outcome tuple is persisted** - this is the workflow-evaluation dataset that is moat #2 and the eval set for swapping models.
 
 ### 5.5 Why this gets better as models improve
 
-The *loop, taxonomy, gating, and corpus* are fixed infrastructure. A stronger model plugged into the `AgentProvider` immediately produces better diagnoses and patches **measured against our existing corpus of labeled failures** — so we can quantify the upgrade before shipping it. We benefit from frontier progress without rebuilding anything.
+The *loop, taxonomy, gating, and corpus* are fixed infrastructure. A stronger model plugged into the `AgentProvider` immediately produces better diagnoses and patches **measured against our existing corpus of labeled failures** - so we can quantify the upgrade before shipping it. We benefit from frontier progress without rebuilding anything.
 
 ---
 
@@ -255,13 +255,13 @@ Layered checks, cheapest first:
    - *Variant calling:* Ti/Tv ratio in the expected range, het/hom and dbSNP-overlap sanity, coverage uniformity, contamination estimate.
 4. **Cross-sample consistency:** sample-swap / sex-check / relatedness flags where applicable.
 
-Each check yields a typed `QCResult{check, status: pass|warn|fail, value, expected_range, message}`. A `fail` is fed back into the self-healing loop as a `qc_anomaly` failure signal — closing the loop between "verify" and "repair." Thresholds live in versioned, per-assay rule packs (data, not code) so they can be tuned and audited without redeploys.
+Each check yields a typed `QCResult{check, status: pass|warn|fail, value, expected_range, message}`. A `fail` is fed back into the self-healing loop as a `qc_anomaly` failure signal - closing the loop between "verify" and "repair." Thresholds live in versioned, per-assay rule packs (data, not code) so they can be tuned and audited without redeploys.
 
 ---
 
 ## 7. Reproducibility & provenance (component 8)
 
-**A run is re-runnable iff a stranger, given only its provenance record, can reproduce the result byte-for-similar.** That record is captured automatically, continuously — not reconstructed after the fact.
+**A run is re-runnable iff a stranger, given only its provenance record, can reproduce the result byte-for-similar.** That record is captured automatically, continuously - not reconstructed after the fact.
 
 A `RunRecord` pins:
 
@@ -274,7 +274,7 @@ A `RunRecord` pins:
 - **Verification:** all `QCResult`s and the overall verdict.
 - **Outputs:** manifest + checksums of result files (stored as metadata; artifacts optionally in object store).
 
-What makes it **shareable**: the record serializes to a portable bundle (params JSON + pinned `nextflow.config` + container digests + input checksums + a manifest). Handing that bundle (plus access to the same inputs) to another Contig instance — or a bare Nextflow install — reproduces the run. The "Reproduce" button in the UI does exactly this. Provenance is exportable toward RO-Crate / WDL-style conventions so it interoperates beyond Contig.
+What makes it **shareable**: the record serializes to a portable bundle (params JSON + pinned `nextflow.config` + container digests + input checksums + a manifest). Handing that bundle (plus access to the same inputs) to another Contig instance - or a bare Nextflow install - reproduces the run. The "Reproduce" button in the UI does exactly this. Provenance is exportable toward RO-Crate / WDL-style conventions so it interoperates beyond Contig.
 
 ---
 
@@ -282,9 +282,9 @@ What makes it **shareable**: the record serializes to a portable bundle (params 
 
 Genomic data is sensitive even when not clinical (it is identifying, familial, and often consented for a narrow purpose). Trust is a product feature.
 
-- **Data never crosses the plane boundary by default.** Reads, references, and intermediates live in the user's `work_dir`. The control plane sees logs, exit codes, QC metrics, file *names and checksums* — never sequence content. Any export is explicit, scoped, and logged.
+- **Data never crosses the plane boundary by default.** Reads, references, and intermediates live in the user's `work_dir`. The control plane sees logs, exit codes, QC metrics, file *names and checksums* - never sequence content. Any export is explicit, scoped, and logged.
 - **Outbound-only runner.** The data-plane daemon polls the control plane; nothing opens an inbound port on the user's machine or cloud.
-- **Least-privilege compute creds.** In user-cloud mode, Contig assumes a scoped role the user grants (specific buckets, Batch queue) — we never hold long-lived keys to their account.
+- **Least-privilege compute creds.** In user-cloud mode, Contig assumes a scoped role the user grants (specific buckets, Batch queue) - we never hold long-lived keys to their account.
 - **Secrets management.** API keys and cloud creds are referenced by name (`credentials_ref`), held in the user's environment or a secrets manager, never persisted in the control plane or in provenance.
 - **Log scrubbing.** Before any log line is shipped to the control plane (for diagnosis) it passes a redactor that strips paths/identifiers that could leak PHI-adjacent info; raw logs stay in the data plane.
 - **Sandboxed execution.** Runs execute in containers with restricted egress and no ambient credentials beyond the scoped role; the agent's generated patches are typed operations, not arbitrary shell, reducing the blast radius of a bad model output.
@@ -299,37 +299,37 @@ Genomic data is sensitive even when not clinical (it is identifying, familial, a
 
 | Capability | Decision | Rationale |
 |-----------|----------|-----------|
-| Pipelines (RNA-seq, variant calling, …) | **Buy** — nf-core | Peer-reviewed, containerized, maintained. Reinventing them is the classic trap. |
-| Tool binaries & environments | **Buy** — Bioconda / Biocontainers | Pinned, reproducible, comprehensive. |
-| Workflow execution + multi-backend submission | **Buy** — Nextflow | Already abstracts local/cloud/HPC/K8s. |
-| Aggregated QC | **Buy + wrap** — FastQC/Picard/MultiQC; **build** the rule packs + verdict logic | Tools exist; the *assay-specific expectation logic* is ours. |
+| Pipelines (RNA-seq, variant calling, …) | **Buy** - nf-core | Peer-reviewed, containerized, maintained. Reinventing them is the classic trap. |
+| Tool binaries & environments | **Buy** - Bioconda / Biocontainers | Pinned, reproducible, comprehensive. |
+| Workflow execution + multi-backend submission | **Buy** - Nextflow | Already abstracts local/cloud/HPC/K8s. |
+| Aggregated QC | **Buy + wrap** - FastQC/Picard/MultiQC; **build** the rule packs + verdict logic | Tools exist; the *assay-specific expectation logic* is ours. |
 | Self-healing loop, failure taxonomy, gating | **Build** | This is the unsolved problem and the moat. |
 | Provenance / reproducibility store | **Build** (lean on RO-Crate conventions) | Differentiator; must integrate tightly with the loop. |
 | Evaluation corpus | **Build (accumulate)** | Compounds; gates model upgrades; moat #2. |
 
 **Scaling stages:**
 1. **MVP:** modular monolith (FastAPI) + Postgres(+pgvector) + a worker; local + single-cloud execution. One person can run it.
-2. **Growth:** split the worker pool, move embeddings to Qdrant if recall/latency demand, add more nf-core pipelines and rule packs. Horizontal scale is just more workers — runs are independent.
-3. **Scale:** because compute is the *user's*, Contig's own infra stays small; the control plane scales with *number of runs*, not size of data. This is a structurally cheap thing to scale — a key advantage of the plane split.
+2. **Growth:** split the worker pool, move embeddings to Qdrant if recall/latency demand, add more nf-core pipelines and rule packs. Horizontal scale is just more workers - runs are independent.
+3. **Scale:** because compute is the *user's*, Contig's own infra stays small; the control plane scales with *number of runs*, not size of data. This is a structurally cheap thing to scale - a key advantage of the plane split.
 
 ---
 
 ## 10. Phased build order (MVP = one pipeline, end-to-end)
 
-Pick **one** assay to do *completely* before breadth. Recommended: **bulk RNA-seq differential expression** (`nf-core/rnaseq`) — high demand, well-bounded inputs, rich and well-understood QC expectations. (Variant calling via `nf-core/sarek` is the equally valid alternative; the architecture is identical.)
+Pick **one** assay to do *completely* before breadth. Recommended: **bulk RNA-seq differential expression** (`nf-core/rnaseq`) - high demand, well-bounded inputs, rich and well-understood QC expectations. (Variant calling via `nf-core/sarek` is the equally valid alternative; the architecture is identical.)
 
 | Phase | Goal | Ships |
 |------|------|-------|
-| **P0 — Run a pipeline at all** | Execute `nf-core/rnaseq` on a fixed sample sheet, local backend, Docker, via the runner daemon. Capture Nextflow events. | Compute abstraction (local only), execution engine, event ingestion. *No agent yet.* |
-| **P1 — Provenance + reproduce** | Capture the full `RunRecord` and prove the "reproduce from bundle" path works. | Provenance store, container-digest pinning, the Reproduce button. |
-| **P2 — Verification** | Wire MultiQC/FastQC/samtools ingestion + RNA-seq rule pack → pass/warn/fail verdict. | QC layer + first rule pack. |
-| **P3 — Observability + detection** | Classify run outcomes against the failure taxonomy; rules handle the deterministic cases. | Detector, failure taxonomy v1, log redactor. |
-| **P4 — Planning agent + RAG** | NL intake → data triage → confirm `nf-core/rnaseq` + propose params, grounded in RAG over nf-core docs. Model behind `AgentProvider`. | Agent layer, RAG layer, pipeline registry. |
-| **P5 — Self-healing loop** | Close detect→diagnose→propose→patch→re-run, starting with `safe` auto-fixes (OOM, missing index, bad flag); gate the rest. Persist every transition. | The core IP, end-to-end, on one pipeline. |
-| **P6 — Second compute backend** | Add user-cloud (AWS Batch) via Nextflow profile generation; scoped-role auth. | Compute abstraction (cloud), security boundary hardening. |
-| **P7 — Breadth** | Add variant calling (`nf-core/sarek`) + rule pack; generalize the registry. Begin systematic harvest of the eval corpus. | Second assay; corpus pipeline; model-swap eval harness. |
+| **P0 - Run a pipeline at all** | Execute `nf-core/rnaseq` on a fixed sample sheet, local backend, Docker, via the runner daemon. Capture Nextflow events. | Compute abstraction (local only), execution engine, event ingestion. *No agent yet.* |
+| **P1 - Provenance + reproduce** | Capture the full `RunRecord` and prove the "reproduce from bundle" path works. | Provenance store, container-digest pinning, the Reproduce button. |
+| **P2 - Verification** | Wire MultiQC/FastQC/samtools ingestion + RNA-seq rule pack → pass/warn/fail verdict. | QC layer + first rule pack. |
+| **P3 - Observability + detection** | Classify run outcomes against the failure taxonomy; rules handle the deterministic cases. | Detector, failure taxonomy v1, log redactor. |
+| **P4 - Planning agent + RAG** | NL intake → data triage → confirm `nf-core/rnaseq` + propose params, grounded in RAG over nf-core docs. Model behind `AgentProvider`. | Agent layer, RAG layer, pipeline registry. |
+| **P5 - Self-healing loop** | Close detect→diagnose→propose→patch→re-run, starting with `safe` auto-fixes (OOM, missing index, bad flag); gate the rest. Persist every transition. | The core IP, end-to-end, on one pipeline. |
+| **P6 - Second compute backend** | Add user-cloud (AWS Batch) via Nextflow profile generation; scoped-role auth. | Compute abstraction (cloud), security boundary hardening. |
+| **P7 - Breadth** | Add variant calling (`nf-core/sarek`) + rule pack; generalize the registry. Begin systematic harvest of the eval corpus. | Second assay; corpus pipeline; model-swap eval harness. |
 
-**Definition of done for the MVP (end of P5):** a researcher drops RNA-seq FASTQs, Contig runs `nf-core/rnaseq` on their compute, auto-recovers from at least the common failure classes, verifies the count matrix against RNA-seq expectations, and emits a reproducible, shareable run bundle — with the whole detect/diagnose/repair chain logged.
+**Definition of done for the MVP (end of P5):** a researcher drops RNA-seq FASTQs, Contig runs `nf-core/rnaseq` on their compute, auto-recovers from at least the common failure classes, verifies the count matrix against RNA-seq expectations, and emits a reproducible, shareable run bundle - with the whole detect/diagnose/repair chain logged.
 
 ---
 
@@ -351,7 +351,7 @@ Pick **one** assay to do *completely* before breadth. Recommended: **bulk RNA-se
 
 ### Appendix: the two moats, restated
 
-1. **Execution + verification + reproducibility infrastructure** — the loop, the taxonomy, the QC rule packs, the provenance store. Hard to build, compounds with every run, model-independent.
-2. **Accumulated workflow-evaluation data** — every labeled detect→diagnose→patch→outcome. It both trains/grounds the system *and* is the harness that lets Contig adopt each new frontier model the day it ships, with measured confidence.
+1. **Execution + verification + reproducibility infrastructure** - the loop, the taxonomy, the QC rule packs, the provenance store. Hard to build, compounds with every run, model-independent.
+2. **Accumulated workflow-evaluation data** - every labeled detect→diagnose→patch→outcome. It both trains/grounds the system *and* is the harness that lets Contig adopt each new frontier model the day it ships, with measured confidence.
 
 Both grow as foundation models improve. Neither is a prompt. That is the architecture.
