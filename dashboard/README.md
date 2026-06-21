@@ -1,36 +1,48 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Contig Dashboard
 
-## Getting Started
+A Next.js (App Router, TypeScript) dashboard for inspecting Contig runs. It reads
+the run bundles (`run_record.json`) and the failure corpus directly from disk, so
+it needs no separate backend. Tailwind v4 + shadcn/ui.
 
-First, run the development server:
+This is the Phase 1 "Run Inspector" from [FEATURES.md](../FEATURES.md): a
+read-only surface over finished runs.
+
+## What it shows
+
+- **Runs** (`/runs`): every run bundle with its honest verdict (pass, warn, fail,
+  unverified), pipeline and revision, task counts, and whether self-heal kicked
+  in. Filter by verdict, search, and sort.
+- **Run detail** (`/runs/<id>`): the verdict explained in plain language, the QC
+  results (with per-sample and cross-sample drill-down), the detect to diagnose
+  to patch to outcome repair timeline, and the pinned provenance.
+- **Detector** (`/eval`): the failure detector scored against the labeled corpus
+  (accuracy, per-class precision/recall, current misses). This shells out to
+  `contig eval-detector --json`, so the detector stays in Python (the moat).
+
+## Run it
+
+From `dashboard/`:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install      # first time only
+npm run dev      # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+By default it reads `../runs` (the repo's runs directory). Point it elsewhere
+with an environment variable:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+CONTIG_RUNS_DIR=/path/to/runs npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+The detector page invokes `uv run contig eval-detector --json` from the repo
+root. If the CLI is not available the page degrades gracefully. Override the
+command with `CONTIG_CMD` (for example `CONTIG_CMD=contig`).
 
-## Learn More
+## Layout
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `lib/types.ts`: TypeScript mirror of the engine's serialized models.
+- `lib/runs.ts`: server-only disk access (run bundles, corpus, detector eval).
+- `lib/derive.ts`: pure, client-safe helpers over a run record.
+- `components/status-badge.tsx`: the accessible verdict/QC pill.
+- `app/runs`, `app/runs/[id]`, `app/eval`: the three views.
