@@ -5,7 +5,7 @@
 // engine produces and the user approves), then launches a real run on their
 // compute. Launch is gated on a fresh, successful plan preview so a user can
 // never launch a stale plan: editing any field clears the stored plan.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown, ChevronRight, Loader2, Play, Sparkles } from "lucide-react";
 
@@ -18,11 +18,11 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import type { Plan } from "@/lib/types";
+import type { LaunchManifest, Plan } from "@/lib/types";
 
 type ReferenceMode = "genome" | "files";
 
-export function LaunchForm() {
+export function LaunchForm({ from }: { from?: string }) {
   const router = useRouter();
 
   // Form state.
@@ -35,6 +35,10 @@ export function LaunchForm() {
   const [maxMemory, setMaxMemory] = useState("");
   const [maxCpus, setMaxCpus] = useState("");
   const [capsOpen, setCapsOpen] = useState(false);
+  // When opened as "Edit and relaunch" (?from=<id>), we load that run's launch
+  // manifest and pre-fill the inputs. The goal stays empty (it is not stored,
+  // Layer-1 NL is not our product) so the user still previews a fresh plan.
+  const [prefillNote, setPrefillNote] = useState<string | null>(null);
 
   // Plan + request state. `plan` is the approved-pending plan: when it is set
   // (and matches the current inputs, which we guarantee by clearing it on every
@@ -44,6 +48,51 @@ export function LaunchForm() {
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [launching, setLaunching] = useState(false);
+
+  // Load and apply the source run's manifest once, when from=<id> is present.
+  useEffect(() => {
+    if (!from) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/runs/${encodeURIComponent(from)}/manifest`,
+          { cache: "no-store" },
+        );
+        if (!res.ok) {
+          if (!cancelled) {
+            setPrefillNote(`Could not load settings from ${from}.`);
+          }
+          return;
+        }
+        const data = (await res.json()) as { manifest?: LaunchManifest };
+        const m = data.manifest;
+        if (!m || cancelled) return;
+        if (m.input) setInput(m.input);
+        if (m.genome) {
+          setReferenceMode("genome");
+          setGenome(m.genome);
+        } else if (m.fasta || m.gtf) {
+          setReferenceMode("files");
+          if (m.fasta) setFasta(m.fasta);
+          if (m.gtf) setGtf(m.gtf);
+        }
+        if (m.max_memory) setMaxMemory(m.max_memory);
+        if (m.max_cpus !== null && m.max_cpus !== undefined) {
+          setMaxCpus(String(m.max_cpus));
+        }
+        if (m.max_memory || m.max_cpus) setCapsOpen(true);
+        setPrefillNote(
+          `Pre-filled from ${from}. Add a goal and preview a plan to relaunch.`,
+        );
+      } catch {
+        if (!cancelled) setPrefillNote(`Could not load settings from ${from}.`);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [from]);
 
   const busy = previewing || launching;
 
@@ -126,6 +175,14 @@ export function LaunchForm() {
 
   return (
     <div className="space-y-6">
+      {prefillNote ? (
+        <p
+          role="status"
+          className="rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm text-muted-foreground"
+        >
+          {prefillNote}
+        </p>
+      ) : null}
       <form
         onSubmit={(e) => {
           e.preventDefault();

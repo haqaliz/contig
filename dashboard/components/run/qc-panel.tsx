@@ -67,6 +67,11 @@ function formatValue(value: number | null): string {
 }
 
 function QcRows({ rows }: { rows: QCResult[] }) {
+  // Fail/warn checks float to the top so a reviewer sees the flagged ones first;
+  // ties keep their original order (a stable sort by status rank).
+  const sorted = [...rows].sort(
+    (a, b) => STATUS_RANK[a.status] - STATUS_RANK[b.status],
+  );
   return (
     <Table>
       <TableHeader>
@@ -81,7 +86,7 @@ function QcRows({ rows }: { rows: QCResult[] }) {
         </TableRow>
       </TableHeader>
       <TableBody>
-        {rows.map((q) => (
+        {sorted.map((q) => (
           <TableRow key={q.check}>
             <TableCell className="font-mono text-xs whitespace-normal">
               {q.check}

@@ -11,10 +11,11 @@ import { InterruptedView } from "@/components/run/interrupted-view";
 import { QcPanel } from "@/components/run/qc-panel";
 import { ProvenancePanel } from "@/components/run/provenance-panel";
 import { RepairTimeline } from "@/components/run/repair-timeline";
+import { ReproduceActions } from "@/components/run/reproduce-actions";
 import { RunningView } from "@/components/run/running-view";
 import { VerdictCard } from "@/components/run/verdict-card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { getRun, getRunState, getRunStatus } from "@/lib/runs";
+import { getLaunchManifest, getRun, getRunState, getRunStatus } from "@/lib/runs";
 
 // A running run has no bundle yet, so always read fresh.
 export const dynamic = "force-dynamic";
@@ -50,7 +51,7 @@ export default async function RunDetailPage({
       const status = await getRunStatus(id);
       return (
         <RunShell id={id}>
-          <RunningView startedAt={status?.started_at} />
+          <RunningView id={id} startedAt={status?.started_at} />
         </RunShell>
       );
     }
@@ -66,6 +67,9 @@ export default async function RunDetailPage({
 
   const qcCount = record.qc_results.length;
   const repairCount = record.repair_history.length;
+  // Reproduce is offered only when the run wrote a launch manifest (older runs
+  // predate it). It rebuilds the exact run, or opens a pre-filled launch form.
+  const manifest = await getLaunchManifest(id);
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6">
@@ -88,6 +92,8 @@ export default async function RunDetailPage({
       />
 
       <VerdictCard record={record} />
+
+      {manifest ? <ReproduceActions id={record.run_id} /> : null}
 
       <Tabs defaultValue="qc" className="gap-4">
         <TabsList className="w-full justify-start sm:w-fit">

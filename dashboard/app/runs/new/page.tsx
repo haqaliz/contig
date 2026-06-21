@@ -8,7 +8,14 @@ import { ArrowLeft } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { LaunchForm } from "./launch-form";
 
-export default function NewRunPage() {
+// Next 16: searchParams is a Promise and must be awaited.
+export default async function NewRunPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ from?: string }>;
+}) {
+  const { from } = await searchParams;
+
   return (
     <div className="mx-auto w-full max-w-3xl space-y-6">
       <Link
@@ -24,7 +31,7 @@ export default function NewRunPage() {
         description="Describe the goal and point at your data. Contig builds a plan (pipeline, parameters, warnings) that you approve before it runs on your compute."
       />
 
-      <LaunchForm />
+      <LaunchForm from={from} />
     </div>
   );
 }

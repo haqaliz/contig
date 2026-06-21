@@ -14,7 +14,10 @@ import { promisify } from "util";
 import type {
   DetectorEvalReport,
   FailureCase,
+  LaunchManifest,
   Plan,
+  RepairStepLite,
+  RunProgress,
   RunRecord,
   RunStatus,
 } from "./types";
@@ -117,6 +120,134 @@ export async function listRunningRuns(): Promise<
     if (isLive(st)) out.push({ run_id: name, started_at: st!.started_at });
   }
   return out;
+}
+
+// --- Live progress (PRD contract C) -------------------------------------------
+// Derived server-side from status.json, trace.txt, and repair_progress.jsonl.
+// The view stays honest: it reports completed and running counts but never
+// invents a percentage, because the total task count is not known up front.
+
+/** Strip ANSI escape sequences so the log tail renders as plain text. */
+const ANSI = /\[[0-9;]*[A-Za-z]/g;
+
+/**
+ * Parse Nextflow's trace.txt (a TSV with a header row). The columns vary by
+ * config, so we find `status`, `name`, and `process` BY HEADER NAME and never
+ * hard-code indices. Returns the completed count and the running rows.
+ */
+function parseTrace(text: string): {
+  tasksCompleted: number;
+  tasksRunning: { process: string; name: string | null }[];
+  submitted: number;
+} {
+  const lines = text.split("\n").filter((l) => l.trim().length > 0);
+  if (lines.length === 0) {
+    return { tasksCompleted: 0, tasksRunning: [], submitted: 0 };
+  }
+  const header = lines[0].split("\t").map((h) => h.trim().toLowerCase());
+  const statusIdx = header.indexOf("status");
+  const nameIdx = header.indexOf("name");
+  const processIdx = header.indexOf("process");
+  let tasksCompleted = 0;
+  const tasksRunning: { process: string; name: string | null }[] = [];
+  const rows = lines.slice(1);
+  for (const row of rows) {
+    const cols = row.split("\t");
+    const status = (statusIdx >= 0 ? cols[statusIdx] : "").trim().toUpperCase();
+    if (status === "COMPLETED") {
+      tasksCompleted += 1;
+    } else if (status === "RUNNING") {
+      const name = nameIdx >= 0 ? (cols[nameIdx] ?? "").trim() : "";
+      const process = processIdx >= 0 ? (cols[processIdx] ?? "").trim() : "";
+      tasksRunning.push({
+        process: process || name || "task",
+        name: name.length > 0 ? name : null,
+      });
+    }
+  }
+  return { tasksCompleted, tasksRunning, submitted: rows.length };
+}
+
+/** Parse repair_progress.jsonl: one RepairStep per line, skip malformed lines. */
+function parseRepairProgress(text: string): RepairStepLite[] {
+  const out: RepairStepLite[] = [];
+  for (const line of text.split("\n")) {
+    if (line.trim().length === 0) continue;
+    try {
+      out.push(JSON.parse(line) as RepairStepLite);
+    } catch {
+      // A half-written final line (the engine appends concurrently) is ignored.
+    }
+  }
+  return out;
+}
+
+/**
+ * A live snapshot of a run, derived from status.json, trace.txt, and
+ * repair_progress.jsonl. Mirrors PRD contract C. Missing files degrade to empty
+ * (no trace yet means zero tasks, not an error).
+ */
+export async function getRunProgress(id: string): Promise<RunProgress> {
+  const dir = path.join(runsDir(), id);
+  const state = await getRunState(id);
+  const status = await getRunStatus(id);
+  const startedAt = status?.started_at ?? null;
+
+  let elapsedSec: number | null = null;
+  if (startedAt) {
+    const start = Date.parse(startedAt);
+    if (!Number.isNaN(start)) {
+      const end =
+        status?.finished_at && !Number.isNaN(Date.parse(status.finished_at))
+          ? Date.parse(status.finished_at)
+          : Date.now();
+      elapsedSec = Math.max(0, Math.round((end - start) / 1000));
+    }
+  }
+
+  let trace = { tasksCompleted: 0, tasksRunning: [] as { process: string; name: string | null }[], submitted: 0 };
+  try {
+    trace = parseTrace(await fs.readFile(path.join(dir, "trace.txt"), "utf8"));
+  } catch {
+    // No trace yet (early in the run, or this run never wrote one).
+  }
+
+  let repairs: RepairStepLite[] = [];
+  try {
+    repairs = parseRepairProgress(
+      await fs.readFile(path.join(dir, "repair_progress.jsonl"), "utf8"),
+    );
+  } catch {
+    // No repairs yet (no failure has resolved).
+  }
+
+  return {
+    state,
+    startedAt,
+    elapsedSec,
+    tasksCompleted: trace.tasksCompleted,
+    tasksRunning: trace.tasksRunning,
+    submitted: trace.submitted > 0 ? trace.submitted : null,
+    repairs,
+  };
+}
+
+/**
+ * The last N lines of run.log with ANSI stripped, for the collapsible log tail.
+ * Returns an empty string if there is no log yet (the run just started).
+ */
+export async function getRunLogTail(id: string, lines = 200): Promise<string> {
+  const p = path.join(runsDir(), id, "run.log");
+  let text: string;
+  try {
+    text = await fs.readFile(p, "utf8");
+  } catch {
+    return "";
+  }
+  const all = text.replace(ANSI, "").split("\n");
+  // Drop a trailing empty line so the tail does not render a blank final row.
+  if (all.length > 0 && all[all.length - 1] === "") all.pop();
+  return all.slice(Math.max(0, all.length - lines)).join("\n");
 }
 
 /**
@@ -330,6 +461,106 @@ export async function dispatchTestProfileRun(): Promise<{ run_id: string }> {
     runId,
     "--runs-dir",
     runsDir(),
+  ];
+  const child = spawn(base[0], args, {
+    cwd: repoRoot(),
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
+  return { run_id: runId };
+}
+
+// --- Reproduce (PRD contract A + F) -------------------------------------------
+// A run writes launch.json before self_heal_run, so every run is reproducible.
+// Reproduce reads that manifest, re-validates the inputs (we never trust the
+// manifest blindly), and dispatches an identical run with a FRESH run id.
+
+/** The launch manifest a run wrote (runs/<id>/launch.json), or null if absent. */
+export async function getLaunchManifest(id: string): Promise<LaunchManifest | null> {
+  const p = path.join(runsDir(), id, "launch.json");
+  try {
+    return JSON.parse(await fs.readFile(p, "utf8")) as LaunchManifest;
+  } catch {
+    return null;
+  }
+}
+
+/** Raised when a run cannot be reproduced (no manifest to rebuild it from). */
+export class NoManifestError extends Error {}
+
+/**
+ * Reproduce a run exactly: read its launch.json, re-validate the inputs as
+ * dispatchRealRun does (paths exist, safe keys, valid caps), then dispatch an
+ * identical run with a fresh server-generated run id. Test-profile runs (no
+ * input) re-dispatch via the test path. Every user-derived value passes as
+ * --opt=value and positionals are guarded by a -- terminator, so there is no
+ * flag-smuggling surface even though the values originate from a sidecar file.
+ */
+export async function dispatchReproduce(id: string): Promise<{ run_id: string }> {
+  const manifest = await getLaunchManifest(id);
+  if (!manifest) throw new NoManifestError(`No launch manifest for run ${id}.`);
+
+  const running = await listRunningRuns();
+  if (running.length > 0) throw new DispatchBusyError(running[0].run_id);
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const runId = `run-${stamp}`;
+  const base = (process.env.CONTIG_DISPATCH_CMD ?? "uv run contig").split(" ");
+
+  // A test-profile run has no input: re-dispatch it as a test run so the same
+  // path runs again. Nothing user-derived needs validation here.
+  if (manifest.is_test_profile || manifest.input === null) {
+    const args = [
+      ...base.slice(1),
+      "run",
+      `--run-id=${runId}`,
+      `--runs-dir=${runsDir()}`,
+    ];
+    const child = spawn(base[0], args, {
+      cwd: repoRoot(),
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+    return { run_id: runId };
+  }
+
+  // Real run: re-validate every input from the manifest before we trust it.
+  const input = await assertFile(manifest.input, "Sample sheet");
+  const refArgs = await resolveReferenceArgs({
+    genome: manifest.genome ?? undefined,
+    fasta: manifest.fasta ?? undefined,
+    gtf: manifest.gtf ?? undefined,
+  });
+  const extra: string[] = [];
+  if (manifest.pipeline) {
+    if (!KNOWN_PIPELINES.has(manifest.pipeline)) {
+      throw new LaunchValidationError("Unknown pipeline.");
+    }
+    extra.push(`--pipeline=${manifest.pipeline}`);
+  }
+  if (manifest.max_memory) {
+    if (!/^[0-9][0-9.]*\.?[A-Za-z]{1,3}$/.test(manifest.max_memory)) {
+      throw new LaunchValidationError("Invalid memory cap (e.g. 6.GB).");
+    }
+    extra.push(`--max-memory=${manifest.max_memory}`);
+  }
+  if (manifest.max_cpus !== null && manifest.max_cpus !== undefined) {
+    if (!Number.isInteger(manifest.max_cpus) || manifest.max_cpus <= 0) {
+      throw new LaunchValidationError("Invalid cpu cap.");
+    }
+    extra.push(`--max-cpus=${manifest.max_cpus}`);
+  }
+
+  const args = [
+    ...base.slice(1),
+    "run",
+    `--run-id=${runId}`,
+    `--runs-dir=${runsDir()}`,
+    `--input=${input}`,
+    ...refArgs,
+    ...extra,
   ];
   const child = spawn(base[0], args, {
     cwd: repoRoot(),

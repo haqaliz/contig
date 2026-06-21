@@ -123,3 +123,51 @@ export interface FailureCase {
   log_text: string;
   expected_class: string;
 }
+
+// A self-heal attempt as the live view consumes it: one parsed line of
+// repair_progress.jsonl (a RepairStep the engine appends as each attempt
+// resolves). The shape is the RepairStep above, narrowed to what the live
+// summary renders.
+export interface RepairStepLite {
+  attempt: number;
+  diagnosis: Diagnosis;
+  patch: Patch | null;
+  outcome: string;
+}
+
+// A live snapshot of an in-flight (or just finished) run, derived server-side
+// from status.json, trace.txt, and repair_progress.jsonl (PRD contract C).
+export interface RunProgress {
+  state: "running" | "finished" | "interrupted" | "missing";
+  startedAt: string | null;
+  // Seconds from startedAt to finishedAt (if finished) or now (if running).
+  elapsedSec: number | null;
+  // trace rows whose status is COMPLETED.
+  tasksCompleted: number;
+  // trace rows whose status is RUNNING, with the process and (optional) name.
+  tasksRunning: { process: string; name: string | null }[];
+  // Total trace rows seen so far (optional honesty signal, not a denominator).
+  submitted: number | null;
+  // Self-heal attempts parsed from repair_progress.jsonl, in order.
+  repairs: RepairStepLite[];
+}
+
+// The launch manifest a run writes before self_heal_run (PRD contract A). The
+// reproduce path reads this to rebuild an identical run with a fresh id.
+export interface LaunchManifest {
+  run_id: string;
+  pipeline: string;
+  revision: string;
+  profiles: string[];
+  backend: string;
+  container_runtime: string;
+  input: string | null;
+  genome: string | null;
+  fasta: string | null;
+  gtf: string | null;
+  max_memory: string | null;
+  max_cpus: number | null;
+  max_attempts: number;
+  is_test_profile: boolean;
+  created_at: string;
+}

@@ -10,7 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { taskCounts } from "@/lib/derive";
+import { explainVerdict, taskCounts } from "@/lib/derive";
 import type { RunRecord, Verdict } from "@/lib/types";
 
 const VERDICT_HEADLINE: Record<Verdict, string> = {
@@ -26,6 +26,10 @@ export function VerdictCard({ record }: { record: RunRecord }) {
   const qcFailed = record.qc_results.filter((q) => q.status === "fail").length;
   const qcWarned = record.qc_results.filter((q) => q.status === "warn").length;
   const qcTotal = record.qc_results.length;
+
+  // Explain the recorded verdict: the one-line reason plus the deciding checks
+  // (the checks whose status drove the verdict). This never re-derives trust.
+  const explanation = explainVerdict(record);
 
   // Build the "what drove this verdict" reasons in plain language.
   const drivers: string[] = [];
@@ -84,6 +88,30 @@ export function VerdictCard({ record }: { record: RunRecord }) {
             </ul>
           </div>
         )}
+        <div>
+          <h3 className="mb-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+            Decided by
+          </h3>
+          <p className="text-sm">{explanation.reason}</p>
+          {explanation.decidingChecks.length > 0 ? (
+            <ul className="mt-2 space-y-1">
+              {explanation.decidingChecks.map((c) => (
+                <li
+                  key={c.check}
+                  className="flex flex-wrap items-center gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm"
+                >
+                  <StatusBadge status={c.status} />
+                  <span className="font-mono text-xs break-all">{c.check}</span>
+                  <span className="font-mono text-xs tabular-nums text-muted-foreground">
+                    {c.value === null ? "n/a" : c.value}
+                    {c.expected_range ? ` vs ${c.expected_range}` : ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+
         <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <div className="rounded-lg bg-muted/50 px-3 py-2.5">
             <dt className="text-xs text-muted-foreground">Tasks (failed / total)</dt>
