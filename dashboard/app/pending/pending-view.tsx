@@ -1,11 +1,12 @@
-// The pending-review view (Server Component, no interactivity). It renders the
-// auto-captured failure cases that the detector stashed with a PROVISIONAL label.
-// These are NOT in the golden corpus yet: a human still has to confirm or correct
-// each label before promotion, so the eval is never graded against the detector's
-// own guesses. Read-only for now; confirm/correct actions come later.
+// The pending-review view. It renders the auto-captured failure cases that the
+// detector stashed with a PROVISIONAL label. These are NOT in the golden corpus
+// yet: a human confirms or corrects each label, then promotes it (the per-case
+// actions are a client component), so the eval is never graded against the
+// detector's own guesses.
 import { FlaskConical, Inbox } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
+import { PendingCaseActions } from "@/components/pending/pending-case-actions";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -108,6 +109,17 @@ function PendingCard({ pendingCase }: { pendingCase: FailureCase }) {
             <p className="text-sm text-muted-foreground">No log text was captured.</p>
           )}
         </div>
+
+        <Separator />
+        <div className="flex flex-col gap-2">
+          <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+            Review
+          </span>
+          <PendingCaseActions
+            caseId={pendingCase.case_id}
+            provisional={pendingCase.expected_class}
+          />
+        </div>
       </CardContent>
     </Card>
   );
@@ -154,8 +166,9 @@ export function PendingView({ cases }: { cases: FailureCase[] }) {
       <Separator />
 
       <footer className="text-sm text-muted-foreground">
-        This view is read-only for now. Confirm and correct actions (to promote a
-        case into the golden corpus, or fix its label first) are coming next.
+        Confirm a label to promote the case into the golden corpus, or correct it
+        first. Promoted cases are scored by the detector eval, so the corpus (and
+        the detector) compound from real runs.
       </footer>
     </div>
   );

@@ -87,6 +87,24 @@ export async function listRunningRuns(): Promise<
   return out;
 }
 
+/**
+ * Promote a reviewed pending case into the golden corpus by shelling out to the
+ * CLI (the corpus write logic stays in Python, the moat). label, when given,
+ * corrects the provisional class. Throws if the CLI fails (e.g. unknown case).
+ */
+export async function promotePendingCase(caseId: string, label?: string): Promise<void> {
+  const override = process.env.CONTIG_CMD;
+  const cmd = override ?? "uv";
+  const args = (override ? [] : ["run", "contig"]).concat([
+    "corpus-promote",
+    caseId,
+    "--pending",
+    path.join(runsDir(), "pending_corpus.jsonl"),
+  ]);
+  if (label) args.push("--label", label);
+  await pexec(cmd, args, { cwd: repoRoot(), timeout: 30_000 });
+}
+
 /** Raised when a run is already in flight (v1 allows one at a time). */
 export class DispatchBusyError extends Error {
   constructor(public readonly runningId: string) {

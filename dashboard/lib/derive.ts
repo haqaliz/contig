@@ -23,3 +23,21 @@ export const VERDICT_ORDER: Record<Verdict, number> = {
   unverified: 2,
   pass: 3,
 };
+
+// The detector's failure classes (mirror of FailureClass in src/contig/models.py).
+// Used by the curation UI to correct a provisional label, and to validate input.
+export const FAILURE_CLASSES = [
+  "oom",
+  "time_limit",
+  "missing_reference",
+  "missing_index",
+  "bad_param",
+  "container_pull_failed",
+  "container_unavailable",
+  "conda_solve_failed",
+  "platform_unsupported",
+  "tool_crash",
+  "no_progress",
+  "qc_anomaly",
+  "unknown",
+] as const;
