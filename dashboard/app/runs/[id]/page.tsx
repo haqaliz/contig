@@ -6,7 +6,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
-import { StatusBadge } from "@/components/status-badge";
+import { PageHeader } from "@/components/page-header";
 import { QcPanel } from "@/components/run/qc-panel";
 import { ProvenancePanel } from "@/components/run/provenance-panel";
 import { RepairTimeline } from "@/components/run/repair-timeline";
@@ -29,31 +29,29 @@ export default async function RunDetailPage({
   const repairCount = record.repair_history.length;
 
   return (
-    <main className="mx-auto w-full max-w-5xl space-y-6 px-4 py-8">
+    <div className="mx-auto w-full max-w-5xl space-y-6">
       <Link
         href="/runs"
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        className="inline-flex items-center gap-1 rounded-sm text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
       >
         <ArrowLeft className="size-4" aria-hidden="true" />
         All runs
       </Link>
 
-      <header className="space-y-2">
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="font-mono text-2xl font-semibold break-all">
-            {record.run_id}
-          </h1>
-          <StatusBadge status={record.verdict} size="lg" />
-        </div>
-        <p className="font-mono text-sm text-muted-foreground break-all">
-          {record.pipeline} @ {record.pipeline_revision}
-        </p>
-      </header>
+      <PageHeader
+        title={record.run_id}
+        titleClassName="font-mono break-all"
+        description={
+          <span className="font-mono break-all">
+            {record.pipeline} @ {record.pipeline_revision}
+          </span>
+        }
+      />
 
       <VerdictCard record={record} />
 
-      <Tabs defaultValue="qc">
-        <TabsList>
+      <Tabs defaultValue="qc" className="gap-4">
+        <TabsList className="w-full justify-start sm:w-fit">
           <TabsTrigger value="qc">QC ({qcCount})</TabsTrigger>
           <TabsTrigger value="self-heal">Self-heal ({repairCount})</TabsTrigger>
           <TabsTrigger value="provenance">Provenance</TabsTrigger>
@@ -68,6 +66,6 @@ export default async function RunDetailPage({
           <ProvenancePanel record={record} />
         </TabsContent>
       </Tabs>
-    </main>
+    </div>
   );
 }

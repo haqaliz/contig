@@ -56,23 +56,25 @@ export function VerdictCard({ record }: { record: RunRecord }) {
   }
 
   return (
-    <Card aria-labelledby="verdict-title">
-      <CardHeader>
+    <Card aria-labelledby="verdict-title" className="gap-0">
+      <CardHeader className="gap-3 border-b pb-4">
         <CardTitle
           id="verdict-title"
-          className="flex items-center gap-3 text-lg"
+          className="flex flex-wrap items-center gap-3 text-lg"
         >
           <StatusBadge status={record.verdict} size="lg" />
-          <span>Verdict</span>
+          <span className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+            Verdict
+          </span>
         </CardTitle>
-        <CardDescription className="text-base text-foreground">
+        <CardDescription className="text-base leading-relaxed text-foreground">
           {VERDICT_HEADLINE[record.verdict]}
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-5 pt-5">
         {drivers.length > 0 && (
           <div>
-            <h3 className="mb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+            <h3 className="mb-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
               What drove this verdict
             </h3>
             <ul className="list-disc space-y-0.5 pl-5 text-sm">
@@ -82,25 +84,25 @@ export function VerdictCard({ record }: { record: RunRecord }) {
             </ul>
           </div>
         )}
-        <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-          <div>
+        <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <div className="rounded-lg bg-muted/50 px-3 py-2.5">
             <dt className="text-xs text-muted-foreground">Tasks (failed / total)</dt>
-            <dd className="font-mono text-sm">
+            <dd className="mt-0.5 font-mono text-sm tabular-nums">
               <span className={failed > 0 ? "text-red-600 dark:text-red-400" : ""}>
                 {failed}
               </span>{" "}
               / {total}
             </dd>
           </div>
-          <div>
+          <div className="rounded-lg bg-muted/50 px-3 py-2.5">
             <dt className="text-xs text-muted-foreground">QC failed / warn</dt>
-            <dd className="font-mono text-sm">
+            <dd className="mt-0.5 font-mono text-sm tabular-nums">
               {qcTotal > 0 ? `${qcFailed} / ${qcWarned}` : "none ran"}
             </dd>
           </div>
-          <div>
+          <div className="rounded-lg bg-muted/50 px-3 py-2.5">
             <dt className="text-xs text-muted-foreground">QC checks total</dt>
-            <dd className="font-mono text-sm">{qcTotal}</dd>
+            <dd className="mt-0.5 font-mono text-sm tabular-nums">{qcTotal}</dd>
           </div>
         </dl>
       </CardContent>

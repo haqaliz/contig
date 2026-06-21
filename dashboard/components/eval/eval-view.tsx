@@ -2,14 +2,15 @@
 // it shows how Contig's failure detector scores against the labeled corpus, and
 // frames that score as "how Contig is learning" from real runs. Server Component
 // (no interactivity); it receives an already-fetched report as a prop.
-import { CheckCircle2, AlertTriangle, TrendingUp } from "lucide-react";
+import { CheckCircle2, AlertTriangle } from "lucide-react";
 
+import { PageHeader } from "@/components/page-header";
+import { StatusBadge } from "@/components/status-badge";
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
-  CardDescription,
 } from "@/components/ui/card";
 import {
   Table,
@@ -39,38 +40,32 @@ export function EvalView({ report }: { report: DetectorEvalReport }) {
     ([a], [b]) => a.localeCompare(b),
   );
   const hasMisses = report.mismatches.length > 0;
+  // Frame the headline accuracy as a status: a clean sweep reads as a pass, any
+  // remaining miss reads as a warn. This drives the StatusBadge next to the stat.
+  const accuracyStatus = hasMisses ? "warn" : "pass";
 
   return (
     <div className="flex flex-col gap-8">
-      <header className="flex flex-col gap-1">
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">
-          Detector eval
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          How Contig is learning: the failure detector scored against the labeled
-          corpus of known failures.
-        </p>
-      </header>
+      <PageHeader
+        title="Detector eval"
+        description="How Contig is learning: the failure detector scored against the labeled corpus of known failures."
+      />
 
-      {/* Headline: accuracy as the trust signal. */}
+      {/* Headline: accuracy as the trust signal. The big percentage is the hero. */}
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <TrendingUp className="size-4 text-muted-foreground" aria-hidden="true" />
-            Accuracy
+        <CardHeader className="border-b pb-4">
+          <CardTitle className="flex items-center justify-between gap-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+            <span>Detector accuracy</span>
+            <StatusBadge status={accuracyStatus} />
           </CardTitle>
-          <CardDescription>
-            The detector correctly classified {report.correct} of {report.total} known
-            failures.
-          </CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="flex items-baseline gap-3">
-            <span className="font-heading text-5xl font-semibold tracking-tight tabular-nums">
+        <CardContent className="pt-5">
+          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+            <span className="font-heading text-6xl leading-none font-semibold tracking-tight tabular-nums">
               {pct(report.accuracy)}
             </span>
             <span className="text-sm text-muted-foreground tabular-nums">
-              {report.correct} / {report.total} cases correct
+              {report.correct} / {report.total} known failures classified correctly
             </span>
           </div>
         </CardContent>

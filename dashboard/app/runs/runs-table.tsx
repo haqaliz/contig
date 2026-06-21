@@ -102,11 +102,11 @@ export function RunsTable({ runs }: { runs: RunRecord[] }) {
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Filter by run id or pipeline"
           aria-label="Filter runs by run id or pipeline"
-          className="sm:max-w-xs"
+          className="h-9 sm:max-w-xs"
         />
         <DropdownMenu>
           <DropdownMenuTrigger
-            render={<Button type="button" variant="outline" size="sm" className="gap-2" />}
+            render={<Button type="button" variant="outline" size="sm" className="h-9 gap-2" />}
           >
             <ListFilter className="size-4" aria-hidden="true" />
             <span>
@@ -134,18 +134,19 @@ export function RunsTable({ runs }: { runs: RunRecord[] }) {
         </DropdownMenu>
       </div>
 
+      <div className="overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10">
       <Table>
         <TableHeader>
           <TableRow>
             <TableHead scope="col">Run id</TableHead>
             <TableHead scope="col">Verdict</TableHead>
             <TableHead scope="col">Pipeline</TableHead>
-            <TableHead scope="col" aria-sort={taskAriaSort}>
+            <TableHead scope="col" aria-sort={taskAriaSort} className="text-right">
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="-ml-2"
+                className="-mr-2 ml-auto text-xs font-medium tracking-wide text-muted-foreground uppercase"
                 onClick={cycleTaskSort}
                 aria-label={`Tasks, ${taskSortLabel}. Activate to change sorting.`}
               >
@@ -173,7 +174,7 @@ export function RunsTable({ runs }: { runs: RunRecord[] }) {
                   <TableCell>
                     <Link
                       href={`/runs/${r.run_id}`}
-                      className="font-mono text-sm underline-offset-4 hover:underline"
+                      className="rounded-sm font-mono text-sm font-medium text-foreground underline-offset-4 hover:text-brand hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
                     >
                       {r.run_id}
                     </Link>
@@ -181,10 +182,11 @@ export function RunsTable({ runs }: { runs: RunRecord[] }) {
                   <TableCell>
                     <StatusBadge status={r.verdict} />
                   </TableCell>
-                  <TableCell className="text-sm">
-                    {r.pipeline} @ {r.pipeline_revision}
+                  <TableCell className="text-sm text-muted-foreground">
+                    <span className="text-foreground">{r.pipeline}</span>
+                    <span className="text-muted-foreground"> @ {r.pipeline_revision}</span>
                   </TableCell>
-                  <TableCell className="font-mono text-sm tabular-nums">
+                  <TableCell className="text-right font-mono text-sm tabular-nums">
                     <span className={counts.failed > 0 ? "text-red-600 dark:text-red-400" : undefined}>
                       {counts.failed}
                     </span>
@@ -206,6 +208,7 @@ export function RunsTable({ runs }: { runs: RunRecord[] }) {
           )}
         </TableBody>
       </Table>
+      </div>
     </div>
   );
 }

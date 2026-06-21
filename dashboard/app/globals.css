@@ -24,6 +24,8 @@
   --color-chart-2: var(--chart-2);
   --color-chart-1: var(--chart-1);
   --color-ring: var(--ring);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
@@ -66,7 +68,11 @@
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  /* Restrained indigo accent. The brand stays neutral grey; this is used only
+     for focus, active, and selected states (never as a fill or loud surface). */
+  --brand: oklch(0.55 0.16 268);
+  --brand-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.55 0.16 268);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
@@ -101,7 +107,10 @@
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  /* Lifted indigo for dark surfaces so the accent keeps contrast without shouting. */
+  --brand: oklch(0.68 0.15 268);
+  --brand-foreground: oklch(0.205 0 0);
+  --ring: oklch(0.68 0.15 268);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);

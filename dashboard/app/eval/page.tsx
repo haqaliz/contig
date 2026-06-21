@@ -11,6 +11,7 @@ import {
   CardTitle,
   CardDescription,
 } from "@/components/ui/card";
+import { PageHeader } from "@/components/page-header";
 import { EvalView } from "@/components/eval/eval-view";
 import { getDetectorEval } from "@/lib/runs";
 
@@ -23,15 +24,10 @@ export default async function EvalPage() {
   if (!report) {
     return (
       <div className="flex flex-col gap-6">
-        <header className="flex flex-col gap-1">
-          <h1 className="font-heading text-2xl font-semibold tracking-tight">
-            Detector eval
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            How Contig is learning: the failure detector scored against the labeled
-            corpus of known failures.
-          </p>
-        </header>
+        <PageHeader
+          title="Detector eval"
+          description="How Contig is learning: the failure detector scored against the labeled corpus of known failures."
+        />
 
         <Card>
           <CardHeader>
