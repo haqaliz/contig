@@ -6,13 +6,70 @@ replays `diagnose_failure` over the corpus and scores it, turning "the detector
 seems good" into a number that improves as real runs accrue.
 """
 
+import pytest
+
 from contig.corpus import (
     default_corpus_path,
     evaluate_detector,
     load_corpus,
+    promote_pending_case,
     save_corpus,
 )
 from contig.models import FailureCase, TaskEvent
+
+
+def _pending(case_id, expected_class, source="pending:run-x"):
+    return FailureCase(
+        case_id=case_id,
+        description="captured failure",
+        source=source,
+        events=[TaskEvent(process="STAR", status="FAILED", exit=1)],
+        log_text="boom",
+        expected_class=expected_class,
+    )
+
+
+def test_promote_moves_case_from_pending_to_golden(tmp_path):
+    pending = tmp_path / "pending.jsonl"
+    golden = tmp_path / "golden.jsonl"
+    save_corpus([_pending("a-1", "tool_crash"), _pending("b-2", "oom")], pending)
+    save_corpus([], golden)
+
+    promoted = promote_pending_case("a-1", pending_path=pending, golden_path=golden)
+
+    assert promoted.expected_class == "tool_crash"
+    assert promoted.source.startswith("confirmed")  # marked human-verified
+    golden_ids = {c.case_id for c in load_corpus(golden)}
+    pending_ids = {c.case_id for c in load_corpus(pending)}
+    assert golden_ids == {"a-1"}  # added to golden
+    assert pending_ids == {"b-2"}  # removed from pending
+
+
+def test_promote_can_correct_the_label(tmp_path):
+    pending = tmp_path / "pending.jsonl"
+    golden = tmp_path / "golden.jsonl"
+    save_corpus([_pending("a-1", "tool_crash")], pending)
+    save_corpus([], golden)
+
+    promote_pending_case("a-1", pending_path=pending, golden_path=golden, corrected_class="oom")
+
+    assert load_corpus(golden)[0].expected_class == "oom"
+
+
+def test_promote_unknown_case_raises(tmp_path):
+    pending = tmp_path / "pending.jsonl"
+    save_corpus([_pending("a-1", "oom")], pending)
+    with pytest.raises(ValueError, match="no pending case"):
+        promote_pending_case("nope", pending_path=pending, golden_path=tmp_path / "g.jsonl")
+
+
+def test_promote_refuses_a_duplicate(tmp_path):
+    pending = tmp_path / "pending.jsonl"
+    golden = tmp_path / "golden.jsonl"
+    save_corpus([_pending("a-1", "oom")], pending)
+    save_corpus([_pending("a-1", "oom", source="confirmed:run-x")], golden)
+    with pytest.raises(ValueError, match="already"):
+        promote_pending_case("a-1", pending_path=pending, golden_path=golden)
 
 
 def _oom_case():

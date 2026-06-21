@@ -125,3 +125,47 @@ def append_case(case: FailureCase, path: str | PathLike[str]) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "a") as fh:
         fh.write(case.model_dump_json() + "\n")
+
+
+def promote_pending_case(
+    case_id: str,
+    *,
+    pending_path: str | PathLike[str],
+    golden_path: str | PathLike[str] | None = None,
+    corrected_class: FailureClass | None = None,
+) -> FailureCase:
+    """Promote a human-reviewed pending case into the golden corpus (moat #2).
+
+    The reviewer confirms the detector's provisional label or corrects it; the
+    case then moves from the pending file into the golden corpus, where the eval
+    counts it. This is the step that makes the corpus (and the detector) compound
+    from real runs. A case is promoted at most once (deduped by case_id).
+    """
+    golden = Path(golden_path) if golden_path is not None else default_corpus_path()
+    pending = list(load_corpus(pending_path))
+
+    case = next((c for c in pending if c.case_id == case_id), None)
+    if case is None:
+        raise ValueError(f"no pending case with id {case_id!r}")
+
+    golden_cases = load_corpus(golden) if Path(golden).exists() else []
+    if any(c.case_id == case_id for c in golden_cases):
+        raise ValueError(f"case {case_id!r} is already in the golden corpus")
+
+    # Mark it human-confirmed and apply any label correction.
+    source = case.source
+    confirmed_source = (
+        "confirmed:" + source[len("pending:") :]
+        if source.startswith("pending:")
+        else "confirmed"
+    )
+    promoted = case.model_copy(
+        update={
+            "expected_class": corrected_class or case.expected_class,
+            "source": confirmed_source,
+        }
+    )
+
+    append_case(promoted, golden)
+    save_corpus([c for c in pending if c.case_id != case_id], pending_path)
+    return promoted

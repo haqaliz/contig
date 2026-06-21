@@ -310,6 +310,41 @@ def test_eval_detector_json_emits_machine_readable_report(tmp_path):
     assert data["total"] >= 10
 
 
+def test_corpus_promote_moves_case_into_golden(tmp_path):
+    from contig.corpus import load_corpus, save_corpus
+    from contig.models import FailureCase, TaskEvent
+
+    pending = tmp_path / "pending.jsonl"
+    golden = tmp_path / "golden.jsonl"
+    save_corpus(
+        [FailureCase(case_id="r-1", description="d", source="pending:r",
+                     events=[TaskEvent(process="X", status="FAILED", exit=1)],
+                     log_text="boom", expected_class="tool_crash")],
+        pending,
+    )
+    save_corpus([], golden)
+    result = runner.invoke(
+        app,
+        ["corpus-promote", "r-1", "--pending", str(pending), "--golden", str(golden),
+         "--label", "oom"],
+    )
+    assert result.exit_code == 0
+    promoted = load_corpus(golden)
+    assert len(promoted) == 1 and promoted[0].expected_class == "oom"
+    assert load_corpus(pending) == []  # removed from pending
+
+
+def test_corpus_promote_unknown_case_errors(tmp_path):
+    from contig.corpus import save_corpus
+
+    pending = tmp_path / "pending.jsonl"
+    save_corpus([], pending)
+    result = runner.invoke(
+        app, ["corpus-promote", "nope", "--pending", str(pending), "--golden", str(tmp_path / "g.jsonl")]
+    )
+    assert result.exit_code != 0
+
+
 def test_version_prints_package_version():
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0

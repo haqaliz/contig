@@ -14,7 +14,12 @@ from importlib.metadata import version as _pkg_version
 import typer
 from pydantic import ValidationError
 
-from contig.corpus import default_corpus_path, evaluate_detector, load_corpus
+from contig.corpus import (
+    default_corpus_path,
+    evaluate_detector,
+    load_corpus,
+    promote_pending_case,
+)
 from contig.models import ExecutionTarget, RunSummary
 from contig.nfconfig import ConfigGenerationError
 from contig.planner import PlanningError
@@ -205,6 +210,32 @@ def list_runs(
         return
     for run_id in ids:
         typer.echo(run_id)
+
+
+@app.command(name="corpus-promote")
+def corpus_promote(
+    case_id: str = typer.Argument(..., help="The pending case id to promote."),
+    pending: str = typer.Option("runs/pending_corpus.jsonl", "--pending", help="Pending corpus JSONL."),
+    label: str = typer.Option(None, "--label", help="Correct the failure class (default: keep the provisional one)."),
+    golden: str = typer.Option(None, "--golden", help="Golden corpus JSONL (default: the shipped seed)."),
+) -> None:
+    """Promote a reviewed pending failure case into the golden corpus (moat #2).
+
+    The human confirms the detector's provisional label or corrects it with
+    --label; the case then moves from pending into the golden corpus that the
+    eval scores against. This is how the corpus compounds from real runs.
+    """
+    try:
+        promoted = promote_pending_case(
+            case_id,
+            pending_path=pending,
+            golden_path=golden,
+            corrected_class=label,
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        typer.echo(f"Could not promote {case_id}: {exc}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"Promoted {promoted.case_id} ({promoted.expected_class}) into the golden corpus.")
 
 
 @app.command(name="eval-detector")
