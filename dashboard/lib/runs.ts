@@ -69,7 +69,38 @@ export async function getRunStatus(id: string): Promise<RunStatus | null> {
   }
 }
 
-/** Runs that are in flight: a "running" status marker and no bundle yet. */
+/** Whether a process id is still alive (used to detect interrupted runs). */
+function isProcessAlive(pid?: number): boolean {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM means the process exists but we cannot signal it (still alive).
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** A run is genuinely in flight only if its marker says running AND its pid is alive. */
+function isLive(status: RunStatus | null): boolean {
+  return status?.state === "running" && isProcessAlive(status.pid);
+}
+
+export type RunState = "finished" | "running" | "interrupted" | "missing";
+
+/**
+ * Resolve a run's state. A "running" marker whose process has died (no bundle)
+ * is "interrupted", not a stuck "running": a crashed or cancelled run must not
+ * block new dispatches or poll forever.
+ */
+export async function getRunState(id: string): Promise<RunState> {
+  if (await readRecord(id)) return "finished";
+  const status = await getRunStatus(id);
+  if (!status) return "missing";
+  return isLive(status) ? "running" : "interrupted";
+}
+
+/** Runs that are genuinely in flight: a live "running" process and no bundle yet. */
 export async function listRunningRuns(): Promise<
   { run_id: string; started_at: string }[]
 > {
@@ -83,7 +114,7 @@ export async function listRunningRuns(): Promise<
   for (const name of entries) {
     if (await readRecord(name)) continue; // already finished
     const st = await getRunStatus(name);
-    if (st?.state === "running") out.push({ run_id: name, started_at: st.started_at });
+    if (isLive(st)) out.push({ run_id: name, started_at: st!.started_at });
   }
   return out;
 }

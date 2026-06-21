@@ -7,16 +7,33 @@ import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
+import { InterruptedView } from "@/components/run/interrupted-view";
 import { QcPanel } from "@/components/run/qc-panel";
 import { ProvenancePanel } from "@/components/run/provenance-panel";
 import { RepairTimeline } from "@/components/run/repair-timeline";
 import { RunningView } from "@/components/run/running-view";
 import { VerdictCard } from "@/components/run/verdict-card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { getRun, getRunStatus } from "@/lib/runs";
+import { getRun, getRunState, getRunStatus } from "@/lib/runs";
 
 // A running run has no bundle yet, so always read fresh.
 export const dynamic = "force-dynamic";
+
+function RunShell({ id, children }: { id: string; children: React.ReactNode }) {
+  return (
+    <div className="mx-auto w-full max-w-5xl space-y-6">
+      <Link
+        href="/runs"
+        className="inline-flex items-center gap-1 rounded-sm text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+      >
+        <ArrowLeft className="size-4" aria-hidden="true" />
+        All runs
+      </Link>
+      <PageHeader title={id} titleClassName="font-mono break-all" />
+      {children}
+    </div>
+  );
+}
 
 export default async function RunDetailPage({
   params,
@@ -26,22 +43,22 @@ export default async function RunDetailPage({
   const { id } = await params;
   const record = await getRun(id);
   if (!record) {
-    // No bundle yet: a run in flight shows the in-progress view (and polls);
-    // anything else is genuinely not found.
-    const status = await getRunStatus(id);
-    if (status?.state === "running") {
+    // No bundle yet: a live run shows the polling in-progress view; a run whose
+    // process has died (no verdict) is interrupted, not stuck; otherwise 404.
+    const state = await getRunState(id);
+    if (state === "running") {
+      const status = await getRunStatus(id);
       return (
-        <div className="mx-auto w-full max-w-5xl space-y-6">
-          <Link
-            href="/runs"
-            className="inline-flex items-center gap-1 rounded-sm text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-          >
-            <ArrowLeft className="size-4" aria-hidden="true" />
-            All runs
-          </Link>
-          <PageHeader title={id} titleClassName="font-mono break-all" />
-          <RunningView startedAt={status.started_at} />
-        </div>
+        <RunShell id={id}>
+          <RunningView startedAt={status?.started_at} />
+        </RunShell>
+      );
+    }
+    if (state === "interrupted") {
+      return (
+        <RunShell id={id}>
+          <InterruptedView />
+        </RunShell>
       );
     }
     notFound();
