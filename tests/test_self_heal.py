@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from contig.corpus import load_corpus
 from contig.models import ExecutionTarget, RunSummary
 from contig.self_heal import self_heal_run
 
@@ -89,6 +90,32 @@ def test_self_heal_gives_up_on_unrecoverable_tool_crash(tmp_path):
     assert RunSummary.from_events(record.events).succeeded is False
     assert record.verdict == "fail"
     assert record.repair_history[-1].outcome == "gave_up"
+
+
+def test_self_heal_stashes_failure_as_pending_corpus_case(tmp_path):
+    # Every failure is captured for the corpus with a PROVISIONAL label (the
+    # detector's own guess) so a human can confirm it before it enters the
+    # golden corpus. Stored separately, marked pending, so the eval never grades
+    # the detector on its own guesses.
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_TOOL, "Segmentation fault in some_tool")
+        return 1
+
+    _heal(tmp_path, executor)
+    pending = load_corpus(tmp_path / "runs" / "pending_corpus.jsonl")
+    assert len(pending) == 1
+    assert pending[0].expected_class == "tool_crash"  # provisional = detector guess
+    assert pending[0].source.startswith("pending:")
+    assert pending[0].log_text  # the captured log travels with the case
+
+
+def test_self_heal_does_not_stash_on_success(tmp_path):
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    _heal(tmp_path, executor)
+    assert not (tmp_path / "runs" / "pending_corpus.jsonl").exists()
 
 
 def test_self_heal_stops_for_confirmation_on_needs_confirmation(tmp_path):

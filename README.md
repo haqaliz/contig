@@ -188,6 +188,11 @@ A drop in accuracy means either the detector regressed or a real run exposed a
 gap worth a new rule. This is the compounding asset: the engine gets better as
 runs accrue, independent of any single model.
 
+Capture is automatic: every failed run stashes a case to
+`<runs-dir>/pending_corpus.jsonl` with the detector's diagnosis as a provisional
+label. A human confirms or corrects the label before promoting it into the
+golden corpus, so the eval never grades the detector on its own guesses.
+
 ### Where it runs (compute backends)
 
 The same run lands unchanged on your laptop or your cloud: Contig maps the

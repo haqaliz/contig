@@ -16,6 +16,7 @@ import re
 from pathlib import Path
 
 from contig.bundle import write_bundle
+from contig.corpus import append_case, failure_case_from_run
 from contig.detect import diagnose_failure
 from contig.models import ExecutionTarget, Patch, RepairStep, RunRecord
 from contig.repair import propose_patches
@@ -78,9 +79,17 @@ def self_heal_run(
     nextflow_version: str | None = None,
     max_attempts: int = 3,
     assay: str = "rnaseq",
+    pending_corpus: str | Path | None = None,
 ) -> RunRecord:
-    """Run a pipeline and auto-recover from recoverable failures, logging the chain."""
+    """Run a pipeline and auto-recover from recoverable failures, logging the chain.
+
+    Every failed attempt is also stashed to a pending-review failure corpus
+    (`pending_corpus`, default `<runs_dir>/pending_corpus.jsonl`) with the
+    detector's diagnosis as a PROVISIONAL label, so the corpus grows from real
+    runs. These are separate from the golden corpus until a human confirms them.
+    """
     run_dir = (Path(runs_dir) / run_id).resolve()
+    pending_path = Path(pending_corpus) if pending_corpus else Path(runs_dir) / "pending_corpus.jsonl"
     current_params = dict(params or {})
     current_target = target
     repair_history: list[RepairStep] = []
@@ -107,6 +116,20 @@ def self_heal_run(
             events = exc.record.events if exc.record else []
             log_text = read_run_log(run_dir) + "\n" + read_task_errors(run_dir)
             diagnosis = diagnose_failure(events, log_text)
+            # Stash this failure for the corpus with the detector's diagnosis as a
+            # provisional label (pending human confirmation). Capture needs a
+            # record (events) to be faithful; a trace-less failure has nothing.
+            if exc.record is not None:
+                append_case(
+                    failure_case_from_run(
+                        exc.record,
+                        log_text,
+                        diagnosis.failure_class,
+                        case_id=f"{run_id}-attempt{attempt}",
+                        source=f"pending:{run_id}",
+                    ),
+                    pending_path,
+                )
             patches = propose_patches(diagnosis)
             safe = _safe_patch(patches)
 
