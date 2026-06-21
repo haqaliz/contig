@@ -95,7 +95,7 @@ strongest, most defensible first release.
 | Feature | What it does | Engine | Effort |
 |---|---|---|---|
 | Verdict card, plain language | Renders PASS/WARN/FAIL/UNVERIFIED in jargon-free words, color plus icon plus text | Built (verdict, report) | S |
-| Honest-verdict explainer | Explains the reduction and names the exact check(s) that drove it; never reads UNVERIFIED as pass | Built (overall_verdict) | S |
+| Honest-verdict explainer | Explains the reduction and names the exact check(s) that drove it; never reads UNVERIFIED as pass | Shipped 2026-06-22 (explain_verdict, contig show --explain, Decided by section in the verdict card) | S |
 
 ### QC surface
 
@@ -167,7 +167,7 @@ path or modest engine work (flagged NEW).
 
 | Feature | What it does | Engine | Effort |
 |---|---|---|---|
-| One-click re-run from a bundle | Re-execute the same revision, params, and pinned environment, open beside the original | NEW: re-run entrypoint | L |
+| One-click re-run from a bundle | Re-execute the same revision, params, and pinned environment, open beside the original | Shipped 2026-06-22 (launch.json manifest, contig rerun, Reproduce exactly plus Edit and relaunch) | L |
 | Diff two runs | Side by side on params, revision, digests, QC value deltas, output checksums | Built data; new diff helper | M |
 | Export a verified report (HTML/PDF) | Self-contained report (verdict, plan, QC, repair chain, provenance), hashes only, never reads | NEW: HTML/PDF renderer | M |
 | Shareable read-only run page | Static export of one run for someone without the dashboard, metadata only | NEW: static export | M |
@@ -200,8 +200,8 @@ needs real engine work, so it follows once the read and launch surfaces are soli
 
 | Feature | What it does | Engine | Effort |
 |---|---|---|---|
-| Live run progress | Tasks submitted/running/succeeded/failed and the current step, updating in real time | NEW: status stream (weblog or incremental trace) | L |
-| Self-heal activity feed (live) | The detect-to-patch-to-rerun chain as it happens, with an interactive confirm gate for risky patches | NEW: status stream plus approval callback | L |
+| Live run progress | Tasks submitted/running/succeeded/failed and the current step, updating in real time | Shipped 2026-06-22 (progress.py snapshot from status.json plus trace.txt; contig status/watch; polling dashboard view with a collapsible log tail) | L |
+| Self-heal activity feed (live) | The detect-to-patch-to-rerun chain as it happens, with an interactive confirm gate for risky patches | Shipped 2026-06-22 (repair_progress.jsonl appended per attempt, surfaced live); interactive confirm gate for risky patches still pending | L |
 | In-run controls: cancel and resume | Stop a runaway job, resume from the last good checkpoint | resume mostly wired; NEW cancel/kill hook | M |
 | Completion and escalation notifications | In-app first, then email/webhook, on finish, failure, or a decision needing confirmation | NEW: event emission | M |
 
