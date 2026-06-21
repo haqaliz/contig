@@ -339,6 +339,27 @@ export default async function CompareRunsPage({
   const recordA = a ? await getRun(a) : null;
   const recordB = b ? await getRun(b) : null;
 
+  // The picker stays on screen in both states (empty and showing a comparison)
+  // so the user can swap either run without first navigating away. It is always
+  // pre-filled with the current selection.
+  const runs = await listRuns();
+  const runIds = runs.map((r) => r.run_id).sort();
+
+  const pickerCard = (
+    <Card>
+      <CardHeader>
+        <CardTitle>Choose two runs</CardTitle>
+        <CardDescription>
+          Select a baseline and a comparison run, then compare. A run picked on
+          one side is removed from the other.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <RunPicker runIds={runIds} initialA={a} initialB={b} />
+      </CardContent>
+    </Card>
+  );
+
   const header = (
     <>
       <Link
@@ -358,8 +379,6 @@ export default async function CompareRunsPage({
   // Missing or not-found ids fall back to the pickers. We surface a hint when an
   // id was supplied but no bundle was found on disk.
   if (!recordA || !recordB) {
-    const runs = await listRuns();
-    const runIds = runs.map((r) => r.run_id).sort();
     const notFound: string[] = [];
     if (a && !recordA) notFound.push(a);
     if (b && !recordB) notFound.push(b);
@@ -367,24 +386,14 @@ export default async function CompareRunsPage({
     return (
       <div className="mx-auto w-full max-w-5xl space-y-6">
         {header}
-        <Card>
-          <CardHeader>
-            <CardTitle>Choose two runs</CardTitle>
-            <CardDescription>
-              Select a baseline and a comparison run, then compare.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {notFound.length > 0 ? (
-              <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
-                No run bundle found for: {notFound.map((id) => (
-                  <code key={id} className="mx-1 font-mono">{id}</code>
-                ))}
-              </p>
-            ) : null}
-            <RunPicker runIds={runIds} initialA={a} initialB={b} />
-          </CardContent>
-        </Card>
+        {pickerCard}
+        {notFound.length > 0 ? (
+          <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+            No run bundle found for: {notFound.map((id) => (
+              <code key={id} className="mx-1 font-mono">{id}</code>
+            ))}
+          </p>
+        ) : null}
       </div>
     );
   }
@@ -394,6 +403,8 @@ export default async function CompareRunsPage({
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6">
       {header}
+
+      {pickerCard}
 
       <p className="text-sm text-muted-foreground">
         Comparing{" "}

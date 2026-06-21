@@ -32,6 +32,12 @@ export function RunPicker({
 
   const canCompare = a.length > 0 && b.length > 0;
 
+  // A run can never be compared against itself, so the id picked on one side is
+  // removed from the other side's options. The current selection is always kept
+  // in its own list so the trigger can still display it.
+  const optionsForA = runIds.filter((id) => id !== b);
+  const optionsForB = runIds.filter((id) => id !== a);
+
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!canCompare) return;
@@ -58,7 +64,7 @@ export function RunPicker({
             <SelectValue placeholder="Select a run" />
           </SelectTrigger>
           <SelectContent>
-            {runIds.map((id) => (
+            {optionsForA.map((id) => (
               <SelectItem key={id} value={id}>
                 {id}
               </SelectItem>
@@ -76,7 +82,7 @@ export function RunPicker({
             <SelectValue placeholder="Select a run" />
           </SelectTrigger>
           <SelectContent>
-            {runIds.map((id) => (
+            {optionsForB.map((id) => (
               <SelectItem key={id} value={id}>
                 {id}
               </SelectItem>

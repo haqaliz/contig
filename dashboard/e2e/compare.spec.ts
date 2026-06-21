@@ -34,3 +34,27 @@ test("compare view shows the picker when no params are given", async ({ page }) 
   await expect(page.getByLabel("Run B (comparison)")).toBeVisible();
   await expect(page.getByRole("button", { name: "Compare" })).toBeVisible();
 });
+
+test("compare view keeps the picker visible alongside the results", async ({ page }) => {
+  await page.goto("/runs/compare?a=testpass2&b=variant-bad");
+
+  // The comparison renders...
+  await expect(page.getByText("Did not reproduce")).toBeVisible();
+  // ...and the picker is still on screen so either run can be swapped in place.
+  await expect(page.getByText("Choose two runs")).toBeVisible();
+  await expect(page.getByLabel("Run A (baseline)")).toBeVisible();
+  await expect(page.getByLabel("Run B (comparison)")).toBeVisible();
+});
+
+test("the run chosen on one side is removed from the other side's options", async ({
+  page,
+}) => {
+  await page.goto("/runs/compare?a=testpass2&b=variant-bad");
+
+  // Open Run B's select; the id already chosen for A must not be offered.
+  await page.getByLabel("Run B (comparison)").click();
+  const listbox = page.getByRole("listbox");
+  await expect(listbox).toBeVisible();
+  await expect(listbox.getByRole("option", { name: "variant-bad" })).toBeVisible();
+  await expect(listbox.getByRole("option", { name: "testpass2" })).toHaveCount(0);
+});
