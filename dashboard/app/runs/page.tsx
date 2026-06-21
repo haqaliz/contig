@@ -2,8 +2,10 @@
 // and hands the records to the client table for sorting and filtering. The fetch
 // stays on the server; only the interactive table opts into the client.
 import Link from "next/link";
+import { GitCompareArrows } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
+import { Button } from "@/components/ui/button";
 import { listRuns } from "@/lib/runs";
 import { RunsTable } from "./runs-table";
 
@@ -19,6 +21,17 @@ export default async function RunsPage() {
         title="Runs"
         count={runs.length}
         description="Every pipeline run that produced a bundle, with its verdict, task outcomes, and whether the self-heal loop had to repair it."
+        actions={
+          <Button
+            render={<Link href="/runs/compare" />}
+            variant="outline"
+            size="sm"
+            className="gap-2"
+          >
+            <GitCompareArrows className="size-4" aria-hidden="true" />
+            Compare runs
+          </Button>
+        }
       />
 
       {runs.length === 0 ? (
