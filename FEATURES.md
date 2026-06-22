@@ -201,8 +201,8 @@ needs real engine work, so it follows once the read and launch surfaces are soli
 | Feature | What it does | Engine | Effort |
 |---|---|---|---|
 | Live run progress | Tasks submitted/running/succeeded/failed and the current step, updating in real time | Shipped 2026-06-22 (progress.py snapshot from status.json plus trace.txt; contig status/watch; polling dashboard view with a collapsible log tail) | L |
-| Self-heal activity feed (live) | The detect-to-patch-to-rerun chain as it happens, with an interactive confirm gate for risky patches | Shipped 2026-06-22 (repair_progress.jsonl appended per attempt, surfaced live); interactive confirm gate for risky patches still pending | L |
-| In-run controls: cancel and resume | Stop a runaway job, resume from the last good checkpoint | resume mostly wired; NEW cancel/kill hook | M |
+| Self-heal activity feed (live) | The detect-to-patch-to-rerun chain as it happens, with an interactive confirm gate for risky patches | Shipped 2026-06-22 (repair_progress.jsonl appended per attempt, surfaced live; confirm gate: needs_confirmation and destructive patches pause for human approve/reject via pending_approval.json with a 30 minute timeout; contig approve, dashboard Approve/Reject with a destructive double-confirm) | L |
+| In-run controls: cancel and resume | Stop a runaway job, resume from the last good checkpoint | Shipped 2026-06-22 (contig cancel kills the process group and writes status cancelled; contig resume re-runs the same id with Nextflow -resume from cached tasks; dashboard Cancel and Resume controls) | M |
 | Completion and escalation notifications | In-app first, then email/webhook, on finish, failure, or a decision needing confirmation | NEW: event emission | M |
 
 ### Corpus curation (the moat compounding)
@@ -219,7 +219,7 @@ needs real engine work, so it follows once the read and launch surfaces are soli
 
 | Feature | What it does | Engine | Effort |
 |---|---|---|---|
-| Detector-improvement trend | Accuracy and per-class scores across successive corpus versions | NEW: persisted eval-history | L |
+| Detector-improvement trend | Accuracy and per-class scores across successive corpus versions | Shipped 2026-06-22 (EvalSnapshot persisted to eval_history.jsonl by contig eval-detector --snapshot and auto on corpus-promote; contig eval-detector --history; accuracy-over-time trend plus per-class deltas on /eval) | L |
 | Model-swap comparison harness | Two diagnosers/models over the same frozen corpus, per-class deltas, newly fixed vs newly broken | NEW: pluggable detector provider plus versioned eval | L |
 | Cross-run verification benchmarking (DIFFERENTIATOR) | Show a pipeline's output matches a validated reference output for that assay | NEW: reference-output validation | L |
 
