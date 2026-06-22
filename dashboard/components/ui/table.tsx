@@ -73,8 +73,12 @@ function TableHead({ className, ...props }: React.ComponentProps<"th">) {
         // Column headers (the default) read as a refined, tracked, muted label
         // row. Row headers (scope="row") opt out of the label styling and inherit
         // normal body styling instead, since callers style them per cell.
-        "px-3 py-3 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0",
-        "not-[[scope=row]]:h-9 not-[[scope=row]]:py-0 not-[[scope=row]]:text-left not-[[scope=row]]:text-xs not-[[scope=row]]:font-medium not-[[scope=row]]:tracking-wide not-[[scope=row]]:text-muted-foreground not-[[scope=row]]:uppercase",
+        // text-left is a plain default (not variant-wrapped) so a caller's
+        // text-right or text-center on a numeric column wins via tailwind-merge; a
+        // variant-prefixed default would not dedupe and would leave the header
+        // misaligned with its right-aligned cells.
+        "px-3 py-3 align-middle whitespace-nowrap text-left [&:has([role=checkbox])]:pr-0",
+        "not-[[scope=row]]:h-9 not-[[scope=row]]:py-0 not-[[scope=row]]:text-xs not-[[scope=row]]:font-medium not-[[scope=row]]:tracking-wide not-[[scope=row]]:text-muted-foreground not-[[scope=row]]:uppercase",
         className
       )}
       {...props}
