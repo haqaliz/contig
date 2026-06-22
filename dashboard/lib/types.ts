@@ -109,10 +109,35 @@ export interface Plan {
 // is observable while in flight (run_record.json only appears at the end).
 export interface RunStatus {
   run_id: string;
-  state: "running" | "finished" | "error";
+  state: "running" | "finished" | "error" | "cancelled" | "awaiting_approval";
   started_at: string;
   finished_at: string | null;
   pid?: number;
+}
+
+// A pending self-heal approval (runs/<id>/pending_approval.json, PRD contract C).
+// Written by the engine when the loop pauses on a gated patch; the dashboard reads
+// it to render the proposed patch with Approve and Reject. Absent when no patch is
+// awaiting a decision.
+export interface PendingApproval {
+  run_id: string;
+  attempt: number;
+  requested_at: string;
+  timeout_sec: number;
+  diagnosis: Diagnosis;
+  patch: Patch;
+}
+
+// One eval snapshot (src/contig/data/eval_history.jsonl, PRD contract D). The
+// engine appends one per line on `eval-detector --snapshot` and on corpus-promote;
+// the /eval trend reads them to plot accuracy over time and per-class deltas.
+export interface EvalSnapshot {
+  timestamp: string;
+  corpus_size: number;
+  corpus_sha: string;
+  accuracy: number;
+  per_class: Record<string, ClassScore>;
+  contig_version: string | null;
 }
 
 export interface FailureCase {
@@ -138,7 +163,13 @@ export interface RepairStepLite {
 // A live snapshot of an in-flight (or just finished) run, derived server-side
 // from status.json, trace.txt, and repair_progress.jsonl (PRD contract C).
 export interface RunProgress {
-  state: "running" | "finished" | "interrupted" | "missing";
+  state:
+    | "running"
+    | "awaiting_approval"
+    | "cancelled"
+    | "finished"
+    | "interrupted"
+    | "missing";
   startedAt: string | null;
   // Seconds from startedAt to finishedAt (if finished) or now (if running).
   elapsedSec: number | null;

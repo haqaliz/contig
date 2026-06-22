@@ -20,7 +20,9 @@ import {
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import type { RunProgress } from "@/lib/types";
+import { ApprovalGate } from "@/components/run/approval-gate";
+import { CancelButton } from "@/components/run/cancel-button";
+import type { PendingApproval, RunProgress } from "@/lib/types";
 
 // Friendly labels for the engine's machine failure classes (mirrors the repair
 // timeline so the live view and the final record read the same).
@@ -62,6 +64,7 @@ function formatElapsed(sec: number | null): string {
 interface ProgressResponse {
   progress: RunProgress;
   logTail: string;
+  pendingApproval: PendingApproval | null;
 }
 
 export function RunningView({
@@ -74,6 +77,7 @@ export function RunningView({
   const router = useRouter();
   const [progress, setProgress] = useState<RunProgress | null>(null);
   const [logTail, setLogTail] = useState("");
+  const [pending, setPending] = useState<PendingApproval | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const refreshed = useRef(false);
 
@@ -86,9 +90,14 @@ export function RunningView({
       const data = (await res.json()) as ProgressResponse;
       setProgress(data.progress);
       setLogTail(data.logTail);
-      // The run finished (or its process died): the bundle has landed or the
-      // run is interrupted, so re-render the server page once to swap views.
-      if (data.progress.state !== "running" && !refreshed.current) {
+      setPending(data.pendingApproval);
+      // A paused run (awaiting_approval) is still in flight: stay on this view so
+      // the approval gate shows. Only a truly terminal or dead state (finished,
+      // cancelled, interrupted, missing) swaps views via a one-time refresh.
+      const stillLive =
+        data.progress.state === "running" ||
+        data.progress.state === "awaiting_approval";
+      if (!stillLive && !refreshed.current) {
         refreshed.current = true;
         router.refresh();
       }
@@ -116,19 +125,31 @@ export function RunningView({
   const running = progress?.tasksRunning ?? [];
   const completed = progress?.tasksCompleted ?? 0;
   const repairs = progress?.repairs ?? [];
+  // The run is paused on a gated patch when the polled state says so and a pending
+  // approval has landed. While paused we lead with the gate, not the spinner.
+  const awaiting = progress?.state === "awaiting_approval";
 
   return (
     <div className="space-y-4" aria-live="polite">
+      {awaiting && pending ? <ApprovalGate id={id} pending={pending} /> : null}
+
       <Card>
         <CardContent className="space-y-5 py-6">
           <div className="flex flex-wrap items-center gap-3">
             <Loader2 className="size-5 animate-spin text-brand" aria-hidden="true" />
-            <p className="text-base font-medium">This run is in progress</p>
+            <p className="text-base font-medium">
+              {awaiting
+                ? "This run is paused, awaiting your approval"
+                : "This run is in progress"}
+            </p>
           </div>
           <p className="text-sm text-muted-foreground">
-            Contig is running the pipeline and will self-heal and verify it. The
-            verdict appears here automatically when it finishes.
+            {awaiting
+              ? "Contig has paused the self-heal loop on a repair that needs your decision. Approve or reject it above; the run continues automatically."
+              : "Contig is running the pipeline and will self-heal and verify it. The verdict appears here automatically when it finishes."}
           </p>
+
+          <CancelButton id={id} />
 
           <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <div className="rounded-lg bg-muted/50 px-3 py-2.5">

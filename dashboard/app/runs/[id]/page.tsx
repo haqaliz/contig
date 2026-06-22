@@ -7,6 +7,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
+import { CancelledView } from "@/components/run/cancelled-view";
 import { InterruptedView } from "@/components/run/interrupted-view";
 import { QcPanel } from "@/components/run/qc-panel";
 import { ProvenancePanel } from "@/components/run/provenance-panel";
@@ -44,10 +45,12 @@ export default async function RunDetailPage({
   const { id } = await params;
   const record = await getRun(id);
   if (!record) {
-    // No bundle yet: a live run shows the polling in-progress view; a run whose
-    // process has died (no verdict) is interrupted, not stuck; otherwise 404.
+    // No bundle yet: a live or paused run shows the polling in-progress view (the
+    // view itself surfaces the approval gate when paused); a cancelled run offers
+    // resume; a run whose process has died (no verdict) is interrupted, not
+    // stuck; otherwise 404.
     const state = await getRunState(id);
-    if (state === "running") {
+    if (state === "running" || state === "awaiting_approval") {
       const status = await getRunStatus(id);
       return (
         <RunShell id={id}>
@@ -55,10 +58,17 @@ export default async function RunDetailPage({
         </RunShell>
       );
     }
+    if (state === "cancelled") {
+      return (
+        <RunShell id={id}>
+          <CancelledView id={id} />
+        </RunShell>
+      );
+    }
     if (state === "interrupted") {
       return (
         <RunShell id={id}>
-          <InterruptedView />
+          <InterruptedView id={id} />
         </RunShell>
       );
     }

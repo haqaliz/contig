@@ -13,8 +13,10 @@ import { promisify } from "util";
 
 import type {
   DetectorEvalReport,
+  EvalSnapshot,
   FailureCase,
   LaunchManifest,
+  PendingApproval,
   Plan,
   RepairStepLite,
   RunProgress,
@@ -89,17 +91,42 @@ function isLive(status: RunStatus | null): boolean {
   return status?.state === "running" && isProcessAlive(status.pid);
 }
 
-export type RunState = "finished" | "running" | "interrupted" | "missing";
+/**
+ * A run is active (occupies the single run slot) when it is running OR paused
+ * awaiting approval AND its pid is alive. A paused run still holds the slot, so a
+ * new dispatch must wait for it to finish, cancel, or be resolved.
+ */
+function isActive(status: RunStatus | null): boolean {
+  return (
+    (status?.state === "running" || status?.state === "awaiting_approval") &&
+    isProcessAlive(status.pid)
+  );
+}
+
+export type RunState =
+  | "finished"
+  | "running"
+  | "awaiting_approval"
+  | "cancelled"
+  | "interrupted"
+  | "missing";
 
 /**
- * Resolve a run's state. A "running" marker whose process has died (no bundle)
- * is "interrupted", not a stuck "running": a crashed or cancelled run must not
- * block new dispatches or poll forever.
+ * Resolve a run's state. A "running" or "awaiting_approval" marker whose process
+ * has died (no bundle) is "interrupted", not a stuck active run: a crashed or
+ * cancelled run must not block new dispatches or poll forever. "cancelled" is a
+ * terminal state the engine writes, so it is honored regardless of pid liveness.
  */
 export async function getRunState(id: string): Promise<RunState> {
   if (await readRecord(id)) return "finished";
   const status = await getRunStatus(id);
   if (!status) return "missing";
+  if (status.state === "cancelled") return "cancelled";
+  // A paused run waits with a live pid (it polls for approval.json). If that pid
+  // is dead the run was interrupted while paused, so fall through like running.
+  if (status.state === "awaiting_approval") {
+    return isProcessAlive(status.pid) ? "awaiting_approval" : "interrupted";
+  }
   return isLive(status) ? "running" : "interrupted";
 }
 
@@ -117,7 +144,9 @@ export async function listRunningRuns(): Promise<
   for (const name of entries) {
     if (await readRecord(name)) continue; // already finished
     const st = await getRunStatus(name);
-    if (isLive(st)) out.push({ run_id: name, started_at: st!.started_at });
+    // A paused (awaiting_approval) run still occupies the single run slot, so it
+    // counts as active and blocks a fresh dispatch until it resolves.
+    if (isActive(st)) out.push({ run_id: name, started_at: st!.started_at });
   }
   return out;
 }
@@ -602,5 +631,149 @@ export async function getPendingCorpus(): Promise<FailureCase[]> {
   } catch {
     return [];
   }
+}
+
+// --- In-run controls + confirm gate (PRD contracts A, B, C, E) ----------------
+// The dashboard never controls a process directly: cancel, resume, and approve
+// all shell out to the Python CLI (CONTIG_DISPATCH_CMD), exactly like dispatch.
+// The run id is validated (charset, no leading dash) and passed as a positional
+// after a "--" terminator, so it can never be smuggled in as a flag.
+
+/** Raised when a run id fails validation (bad charset or a leading dash). */
+export class InvalidRunIdError extends Error {}
+
+/** Raised when a control action (cancel/resume/approve) fails at the CLI. */
+export class RunControlError extends Error {}
+
+/**
+ * A run id is a safe filesystem token: letters, digits, dot, underscore, and
+ * dash, with no leading dash. This is the same guard the corpus-promote path
+ * uses, and it keeps the value from ever being parsed as a CLI option.
+ */
+function isSafeRunId(value: string): boolean {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    /^[A-Za-z0-9._-]+$/.test(value) &&
+    !value.startsWith("-")
+  );
+}
+
+/**
+ * Run a `contig` subcommand for a single run id, shelling out via the same
+ * CONTIG_DISPATCH_CMD base the dispatch routes use. The run id is validated and
+ * passed as a positional after "--"; extra flags (already trusted, e.g.
+ * --reject) are passed before the terminator. Throws InvalidRunIdError on a bad
+ * id and RunControlError if the CLI exits non-zero.
+ */
+async function runControlCommand(
+  subcommand: string,
+  id: string,
+  flags: string[] = [],
+): Promise<void> {
+  if (!isSafeRunId(id)) {
+    throw new InvalidRunIdError(`Invalid run id: ${id}`);
+  }
+  const base = (process.env.CONTIG_DISPATCH_CMD ?? "uv run contig").split(" ");
+  const args = [
+    ...base.slice(1),
+    subcommand,
+    `--runs-dir=${runsDir()}`,
+    ...flags,
+    "--",
+    id,
+  ];
+  try {
+    await pexec(base[0], args, { cwd: repoRoot(), timeout: 30_000 });
+  } catch (err) {
+    const stderr = (err as { stderr?: string })?.stderr;
+    throw new RunControlError(
+      typeof stderr === "string" && stderr.trim().length > 0
+        ? stderr.trim()
+        : `contig ${subcommand} failed for ${id}.`,
+    );
+  }
+}
+
+/**
+ * Cancel an active run: shell `contig cancel <id>`, which sends SIGTERM to the
+ * run's process group and writes status.json state "cancelled". Throws if the id
+ * is invalid or the run is not active (the CLI exits non-zero).
+ */
+export async function cancelRun(id: string): Promise<void> {
+  await runControlCommand("cancel", id);
+}
+
+/**
+ * Resume a cancelled or interrupted run: shell `contig resume <id>`, which
+ * re-runs the SAME run id in the SAME run dir with Nextflow -resume so cached
+ * tasks are reused. Throws if the id is invalid or the run cannot be resumed.
+ */
+export async function resumeRun(id: string): Promise<void> {
+  await runControlCommand("resume", id);
+}
+
+/**
+ * Approve or reject the patch a paused run is waiting on: shell `contig approve
+ * <id>` (with --reject for a rejection), which writes runs/<id>/approval.json so
+ * the engine's poll unblocks. Throws if the id is invalid or the CLI fails.
+ */
+export async function decideApproval(
+  id: string,
+  decision: "approve" | "reject",
+): Promise<void> {
+  await runControlCommand("approve", id, decision === "reject" ? ["--reject"] : []);
+}
+
+/**
+ * The patch a paused run is waiting on (runs/<id>/pending_approval.json), or null
+ * if nothing is pending. The awaiting_approval view reads this to render the
+ * proposed patch with Approve and Reject.
+ */
+export async function getPendingApproval(
+  id: string,
+): Promise<PendingApproval | null> {
+  const p = path.join(runsDir(), id, "pending_approval.json");
+  try {
+    return JSON.parse(await fs.readFile(p, "utf8")) as PendingApproval;
+  } catch {
+    return null;
+  }
+}
+
+// --- Eval history (PRD contract D) --------------------------------------------
+// The engine appends one EvalSnapshot per line to src/contig/data/eval_history.jsonl
+// on `eval-detector --snapshot` and on corpus-promote. The /eval trend reads the
+// whole file to plot accuracy over time and per-class deltas.
+
+/** Absolute path to the committed eval-history file (CONTIG_EVAL_HISTORY override). */
+function evalHistoryPath(): string {
+  return process.env.CONTIG_EVAL_HISTORY
+    ? path.resolve(process.env.CONTIG_EVAL_HISTORY)
+    : path.resolve(repoRoot(), "src", "contig", "data", "eval_history.jsonl");
+}
+
+/**
+ * Every eval snapshot on disk, in file order (oldest first). Malformed lines are
+ * skipped (a half-written final line never breaks the trend). Returns an empty
+ * array when the history file is absent, so the page degrades gracefully.
+ */
+export async function getEvalHistory(): Promise<EvalSnapshot[]> {
+  let txt: string;
+  try {
+    txt = await fs.readFile(evalHistoryPath(), "utf8");
+  } catch {
+    return [];
+  }
+  const out: EvalSnapshot[] = [];
+  for (const line of txt.split("\n")) {
+    if (line.trim().length === 0) continue;
+    try {
+      out.push(JSON.parse(line) as EvalSnapshot);
+    } catch {
+      // Skip a malformed or half-written line; the rest of the history is valid.
+    }
+  }
+  return out;
 }
 
