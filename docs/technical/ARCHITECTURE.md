@@ -304,19 +304,30 @@ engine. What is implemented now:
   and reports drift (the strongest reproducibility claim), surfaced as a dashboard
   badge.
 - **Pluggable detector and the eval flywheel.** The detector is a swappable
-  interface (`rules`, `rules-strict` today; an LLM-backed detector plugs in behind
-  the same interface). `contig eval-detector --detector <name>` scores any detector
-  against the labeled failure corpus; `--snapshot`/`--history` persist an
-  accuracy-over-time trend (moat #2), shown on the dashboard `/eval` page. This is
-  how "gets better as models improve" (§5.5) is measured rather than asserted.
+  interface (`rules`, `rules-strict`, and an optional provider-agnostic `llm`
+  detector via Claude or OpenAI, enabled only when an env key is present).
+  `contig eval-detector --detector <name>` scores any detector against the labeled
+  failure corpus; `--snapshot`/`--history` persist an accuracy-over-time trend
+  (moat #2), shown on the dashboard `/eval` page. This is how "gets better as
+  models improve" (§5.5) is measured rather than asserted.
 - **Curated assays.** RNA-seq (`nf-core/rnaseq`), single-cell RNA-seq
-  (`nf-core/scrnaseq`), and germline variant calling (`nf-core/sarek`), each with
-  its own QC rule pack via the single `rule_pack_for(assay)` mapping point. The
-  goal-to-assay router is deterministic and replaceable (Layer 1, consumed not
-  built).
+  (`nf-core/scrnaseq`), germline variant calling (`nf-core/sarek`), methylation
+  (`nf-core/methylseq`), 16S amplicon (`nf-core/ampliseq`), and shotgun
+  metagenomics (`nf-core/mag`), each with its own QC rule pack via the single
+  `rule_pack_for(assay)` mapping point. Adding an assay is a registry entry plus a
+  rule pack (see ADD_AN_ASSAY.md), not an engine rewrite. The goal-to-assay router
+  is deterministic and replaceable (Layer 1, consumed not built).
+- **Resource actuals and cost.** Each run records per-task duration, peak memory,
+  and cpu from the trace (`RunRecord.resource_usage`); `contig cost` prices a run
+  at configurable cpu-hour and memory-GB-hour rates (default 0 for local), shown on
+  the run page. This is the basis for the managed-compute usage line.
 - **Compute backends.** `local` (Docker) and `aws_batch` map through one config
   generator; `contig run --backend aws_batch` refuses up front (a preflight) if the
   queue, region, S3 work dir, or credentials are missing. See the AWS Batch runbook.
+- **Access control.** The dashboard integrates Auth0 for authentication and
+  role-based authorization (writer/admin gates the action routes; read views are
+  open to any authenticated user), configured entirely from env so Contig stays
+  open source with no tenant baked in, and a documented bypass for local use.
 
 ---
 

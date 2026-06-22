@@ -185,8 +185,8 @@ path or modest engine work (flagged NEW).
 
 | Feature | What it does | Engine | Effort |
 |---|---|---|---|
-| Resource actuals from the trace | Per-task duration, realtime, peak memory | NEW: keep timings in parse_trace, request mem fields | M |
-| Run cost estimate and actuals | Pre-run estimate from samples plus backend plus caps; post-run actuals for the managed tier | NEW: cost model (depends on actuals) | L |
+| Resource actuals from the trace | Per-task duration, realtime, peak memory | Shipped 2026-06-23 (RunRecord.resource_usage parsed from the trace; per-task duration, peak RSS, and cpu on the run page) | M |
+| Run cost estimate and actuals | Pre-run estimate from samples plus backend plus caps; post-run actuals for the managed tier | Shipped 2026-06-23 (contig cost: per-task and total cost at configurable cpu-hour and mem-GB-hour rates, default 0 for local; dashboard resources-and-cost card) | L |
 
 ---
 
@@ -220,7 +220,7 @@ needs real engine work, so it follows once the read and launch surfaces are soli
 | Feature | What it does | Engine | Effort |
 |---|---|---|---|
 | Detector-improvement trend | Accuracy and per-class scores across successive corpus versions | Shipped 2026-06-22 (EvalSnapshot persisted to eval_history.jsonl by contig eval-detector --snapshot and auto on corpus-promote; contig eval-detector --history; accuracy-over-time trend plus per-class deltas on /eval) | L |
-| Model-swap comparison harness | Two diagnosers/models over the same frozen corpus, per-class deltas, newly fixed vs newly broken | Shipped 2026-06-22 (pluggable Detector interface + registry, rules and rules-strict detectors, contig eval-detector --detector scores any over the corpus, dashboard /eval detector selector; an LLM detector plugs in behind the same interface later) | L |
+| Model-swap comparison harness | Two diagnosers/models over the same frozen corpus, per-class deltas, newly fixed vs newly broken | Shipped 2026-06-22, extended 2026-06-23 (pluggable Detector interface + registry: rules, rules-strict, and an optional provider-agnostic llm detector (Claude or OpenAI via env); contig eval-detector --detector scores any over the corpus; dashboard /eval detector selector) | L |
 | Cross-run verification benchmarking (DIFFERENTIATOR) | Show a pipeline's output matches a validated reference output for that assay | NEW: reference-output validation | L |
 
 ### Advanced provenance and guidance

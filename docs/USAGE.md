@@ -44,10 +44,11 @@ The CLI and the test suite work **without** Nextflow/Java/Docker; only live runs
 | `contig resume <id>` | Re-run a cancelled or interrupted run from its cached tasks (Nextflow `-resume`) |
 | `contig rerun <id>` | Reproduce a past run from its launch manifest under a fresh run id |
 | `contig verify <id>` | Re-hash a finished run's outputs against the record and report any drift |
+| `contig cost <id>` | Per-task duration and peak memory from the run, costed at configurable `--rate-cpu-hour` / `--rate-mem-gb-hour` |
 | `contig approve <id>` | Approve (or `--reject`) the patch a paused self-heal run is waiting on |
 | `contig list` | All bundled runs |
 | `contig corpus-promote` | Promote a confirmed pending failure case into the golden corpus |
-| `contig eval-detector` | Score the failure detector against the labeled failure corpus (`--detector rules-strict` to score a different detector, `--snapshot` to record a point in the history, `--history` to show the trend) |
+| `contig eval-detector` | Score the failure detector against the labeled failure corpus (`--detector rules-strict` or `--detector llm` to score a different detector, `--snapshot` to record a point in the history, `--history` to show the trend) |
 | `contig version` | Installed version |
 
 Run `uv run contig <command> --help` for the full flag list of any command.
@@ -191,10 +192,14 @@ as they're validated.)
 | RNA-seq differential expression | `nf-core/rnaseq` | alignment/assignment rate, library-size skew, replicate checks |
 | Single-cell RNA-seq | `nf-core/scrnaseq` | estimated cells, median genes per cell, reads in cells, mito fraction |
 | Germline variant calling (research) | `nf-core/sarek` | Ti/Tv & het/hom ratios, coverage |
+| Methylation (bisulfite) | `nf-core/methylseq` | bisulfite conversion rate, mapping efficiency, duplication |
+| 16S amplicon (microbiome) | `nf-core/ampliseq` | DADA2 read retention, ASV count, sample read depth |
+| Shotgun metagenomics | `nf-core/mag` | assembly N50, bin completeness, contamination |
 
 `contig plan --goal "…"` routes to the right one (and declines goals it has no
 curated pipeline for). The same run → self-heal → verify → reproduce engine
-serves all three.
+serves all of them. Adding an assay is a registry entry plus a QC rule pack: see
+[ADD_AN_ASSAY.md](technical/ADD_AN_ASSAY.md).
 
 ---
 
@@ -215,6 +220,15 @@ uv run contig eval-detector
 A drop in accuracy means either the detector regressed or a real run exposed a
 gap worth a new rule. This is the compounding asset: the engine gets better as
 runs accrue, independent of any single model.
+
+The detector is pluggable. `--detector rules` (the default) and `--detector
+rules-strict` are deterministic; `--detector llm` is an optional model-backed
+detector that scores the same corpus, enabled by setting `CONTIG_LLM_PROVIDER`
+(`claude` or `openai`) and the matching `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
+With no provider configured the llm detector is simply unavailable, so the corpus
+eval and the test suite never need a key or the network. This is how "gets better
+as models improve" is measured rather than asserted: score a new detector against
+the frozen corpus and read the delta on the trend.
 
 Capture is automatic: every failed run stashes a case to
 `<runs-dir>/pending_corpus.jsonl` with the detector's diagnosis as a provisional
