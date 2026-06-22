@@ -43,10 +43,11 @@ The CLI and the test suite work **without** Nextflow/Java/Docker; only live runs
 | `contig cancel <id>` | Stop an active run (signals its process group) and mark it cancelled |
 | `contig resume <id>` | Re-run a cancelled or interrupted run from its cached tasks (Nextflow `-resume`) |
 | `contig rerun <id>` | Reproduce a past run from its launch manifest under a fresh run id |
+| `contig verify <id>` | Re-hash a finished run's outputs against the record and report any drift |
 | `contig approve <id>` | Approve (or `--reject`) the patch a paused self-heal run is waiting on |
 | `contig list` | All bundled runs |
 | `contig corpus-promote` | Promote a confirmed pending failure case into the golden corpus |
-| `contig eval-detector` | Score the failure detector against the labeled failure corpus (`--snapshot` to record a point in the history, `--history` to show the trend) |
+| `contig eval-detector` | Score the failure detector against the labeled failure corpus (`--detector rules-strict` to score a different detector, `--snapshot` to record a point in the history, `--history` to show the trend) |
 | `contig version` | Installed version |
 
 Run `uv run contig <command> --help` for the full flag list of any command.
@@ -59,6 +60,18 @@ or `destructive` patch pauses the run (state `awaiting_approval`) until you
 (`contig run --approval-timeout`, default 1800 seconds) so it never hangs forever.
 Pass `contig run --auto-approve` to apply risky patches without waiting (for
 non-interactive runs).
+
+A run can also reach you when it finishes, fails, is cancelled, or starts waiting
+for your approval: every such event is appended to `<runs-dir>/notifications.jsonl`
+(the dashboard activity bell reads it). `contig run --notify <https-url>` POSTs each
+event to a webhook (Slack, Discord, your own endpoint), and if the `CONTIG_SMTP_HOST`,
+`CONTIG_SMTP_PORT`, `CONTIG_SMTP_USER`, `CONTIG_SMTP_PASSWORD`, `CONTIG_SMTP_FROM`,
+and `CONTIG_SMTP_TO` environment variables are set, the same event is emailed.
+Notifications are best-effort: a failing webhook or email never fails the run.
+
+To run on AWS Batch, see the step-by-step [AWS Batch runbook](technical/AWS_BATCH_RUNBOOK.md);
+`contig run --backend aws_batch` refuses up front if the queue, region, S3 work dir,
+or AWS credentials are missing.
 
 ---
 
@@ -176,11 +189,12 @@ as they're validated.)
 | Goal | Pipeline | QC |
 |---|---|---|
 | RNA-seq differential expression | `nf-core/rnaseq` | alignment/assignment rate, library-size skew, replicate checks |
+| Single-cell RNA-seq | `nf-core/scrnaseq` | estimated cells, median genes per cell, reads in cells, mito fraction |
 | Germline variant calling (research) | `nf-core/sarek` | Ti/Tv & het/hom ratios, coverage |
 
 `contig plan --goal "…"` routes to the right one (and declines goals it has no
 curated pipeline for). The same run → self-heal → verify → reproduce engine
-serves both.
+serves all three.
 
 ---
 

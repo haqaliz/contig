@@ -160,7 +160,7 @@ path or modest engine work (flagged NEW).
 
 | Feature | What it does | Engine | Effort |
 |---|---|---|---|
-| Backend selection plus caps | Local vs AWS Batch (queue, region, S3 work dir), memory/CPU/time ceilings, config preview | Built (nfconfig) | M |
+| Backend selection plus caps | Local vs AWS Batch (queue, region, S3 work dir), memory/CPU/time ceilings, config preview | Built (nfconfig); AWS Batch preflight refuses a misconfigured launch and a runbook lands the live PASS (2026-06-22) | M |
 | Backend pre-flight validation | Refuses a misconfigured backend up front with the exact missing-option error | Built (ConfigGenerationError) | S |
 
 ### Reproduce, diff, and share
@@ -172,7 +172,7 @@ path or modest engine work (flagged NEW).
 | Export a verified report (HTML/PDF) | Self-contained report (verdict, plan, QC, repair chain, provenance), hashes only, never reads | NEW: HTML/PDF renderer | M |
 | Shareable read-only run page | Static export of one run for someone without the dashboard, metadata only | NEW: static export | M |
 | Reproducibility badge | Compact embeddable status (verified, repaired, fully pinned) for a README or slide | Built | S |
-| Output-integrity re-verification | Re-hash outputs still on disk against output_checksums to prove no drift | Built (sha256_file); needs output_checksums captured | S |
+| Output-integrity re-verification | Re-hash outputs still on disk against output_checksums to prove no drift | Shipped 2026-06-22 (output_checksums captured at finalize; contig verify re-hashes and exits non-zero on drift; dashboard output-integrity badge) | S |
 
 ### QC depth
 
@@ -203,7 +203,7 @@ needs real engine work, so it follows once the read and launch surfaces are soli
 | Live run progress | Tasks submitted/running/succeeded/failed and the current step, updating in real time | Shipped 2026-06-22 (progress.py snapshot from status.json plus trace.txt; contig status/watch; polling dashboard view with a collapsible log tail) | L |
 | Self-heal activity feed (live) | The detect-to-patch-to-rerun chain as it happens, with an interactive confirm gate for risky patches | Shipped 2026-06-22 (repair_progress.jsonl appended per attempt, surfaced live; confirm gate: needs_confirmation and destructive patches pause for human approve/reject via pending_approval.json with a 30 minute timeout; contig approve, dashboard Approve/Reject with a destructive double-confirm) | L |
 | In-run controls: cancel and resume | Stop a runaway job, resume from the last good checkpoint | Shipped 2026-06-22 (contig cancel kills the process group and writes status cancelled; contig resume re-runs the same id with Nextflow -resume from cached tasks; dashboard Cancel and Resume controls) | M |
-| Completion and escalation notifications | In-app first, then email/webhook, on finish, failure, or a decision needing confirmation | NEW: event emission | M |
+| Completion and escalation notifications | In-app first, then email/webhook, on finish, failure, or a decision needing confirmation | Shipped 2026-06-22 (notifications.jsonl events on finished/failed/cancelled/awaiting_approval; contig run --notify webhook; SMTP email via env; dashboard activity bell) | M |
 
 ### Corpus curation (the moat compounding)
 
@@ -220,7 +220,7 @@ needs real engine work, so it follows once the read and launch surfaces are soli
 | Feature | What it does | Engine | Effort |
 |---|---|---|---|
 | Detector-improvement trend | Accuracy and per-class scores across successive corpus versions | Shipped 2026-06-22 (EvalSnapshot persisted to eval_history.jsonl by contig eval-detector --snapshot and auto on corpus-promote; contig eval-detector --history; accuracy-over-time trend plus per-class deltas on /eval) | L |
-| Model-swap comparison harness | Two diagnosers/models over the same frozen corpus, per-class deltas, newly fixed vs newly broken | NEW: pluggable detector provider plus versioned eval | L |
+| Model-swap comparison harness | Two diagnosers/models over the same frozen corpus, per-class deltas, newly fixed vs newly broken | Shipped 2026-06-22 (pluggable Detector interface + registry, rules and rules-strict detectors, contig eval-detector --detector scores any over the corpus, dashboard /eval detector selector; an LLM detector plugs in behind the same interface later) | L |
 | Cross-run verification benchmarking (DIFFERENTIATOR) | Show a pipeline's output matches a validated reference output for that assay | NEW: reference-output validation | L |
 
 ### Advanced provenance and guidance
