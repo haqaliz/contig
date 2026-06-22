@@ -4,6 +4,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
 import { SiteNav } from "@/components/site-nav";
+import { NotificationBellServer } from "@/components/notifications/notification-bell-server";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
@@ -36,6 +37,9 @@ export default function RootLayout({
               <span>Contig</span>
             </Link>
             <SiteNav />
+            <div className="ml-auto flex items-center">
+              <NotificationBellServer />
+            </div>
           </nav>
         </header>
         <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">{children}</main>

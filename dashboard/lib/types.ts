@@ -183,6 +183,35 @@ export interface RunProgress {
   repairs: RepairStepLite[];
 }
 
+// One lifecycle event the engine appends to <runsDir>/notifications.jsonl (PRD
+// contract A). The header bell reads these (newest first) into an activity panel;
+// an awaiting_approval event links to its run. The kind set is closed so the panel
+// only ever renders events it knows how to style.
+export type NotificationKind =
+  | "finished"
+  | "failed"
+  | "cancelled"
+  | "awaiting_approval";
+
+export interface NotificationEvent {
+  ts: string;
+  run_id: string;
+  kind: NotificationKind;
+  message: string;
+}
+
+// The output-integrity report from `contig verify <id> --json` (PRD contract B).
+// The engine re-hashes a run's recorded output files on disk against the
+// checksums in run_record.json; ok is true when none drifted. changed lists files
+// whose hash no longer matches, missing lists recorded files now absent. An empty
+// recorded checksum set means there was nothing to verify (the run detail page
+// renders that as a neutral "not captured" badge rather than a pass or a fail).
+export interface OutputVerification {
+  ok: boolean;
+  changed: string[];
+  missing: string[];
+}
+
 // The launch manifest a run writes before self_heal_run (PRD contract A). The
 // reproduce path reads this to rebuild an identical run with a fresh id.
 export interface LaunchManifest {

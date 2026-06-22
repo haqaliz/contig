@@ -16,6 +16,8 @@ import type {
   EvalSnapshot,
   FailureCase,
   LaunchManifest,
+  NotificationEvent,
+  OutputVerification,
   PendingApproval,
   Plan,
   RepairStepLite,
@@ -600,17 +602,42 @@ export async function dispatchReproduce(id: string): Promise<{ run_id: string }>
   return { run_id: runId };
 }
 
+// The detectors the engine registers (the pinned `DETECTORS` registry keys, PRD
+// contract C). "rules" is the default; "rules-strict" prefers unknown/tool_crash
+// when evidence is weak. The /eval selector offers exactly these names, and a
+// query value not in this set falls back to the default so the CLI is never
+// handed an unknown detector name.
+export const DETECTOR_NAMES = ["rules", "rules-strict"] as const;
+export type DetectorName = (typeof DETECTOR_NAMES)[number];
+
+/** Whether a value is one of the registered detector names. */
+export function isDetectorName(value: string | undefined): value is DetectorName {
+  return (DETECTOR_NAMES as readonly string[]).includes(value ?? "");
+}
+
 /**
- * The detector eval, obtained by shelling out to `contig eval-detector --json`
- * (the detector is Python, the moat; we never re-implement it in TS). Returns
- * null if the CLI is unavailable, so the page can degrade gracefully.
+ * The detector eval for a named detector, obtained by shelling out to `contig
+ * eval-detector --detector <name> --json` (the detector is Python, the moat; we
+ * never re-implement it in TS). The detector name is constrained to the known
+ * registry keys before it reaches the CLI, and it is passed as `--detector=<name>`
+ * so it can never be parsed as a separate flag. Returns null if the CLI is
+ * unavailable, so the page can degrade gracefully. Defaults to "rules".
  */
-export async function getDetectorEval(): Promise<DetectorEvalReport | null> {
+export async function getDetectorEval(
+  detector: DetectorName = "rules",
+): Promise<DetectorEvalReport | null> {
+  // Guard again at the boundary: only a known detector name is ever shelled out,
+  // even if a caller bypasses isDetectorName upstream.
+  const name: DetectorName = isDetectorName(detector) ? detector : "rules";
   // Default invocation: `uv run contig eval-detector --json` from the repo root.
   // Override with CONTIG_CMD (e.g. "contig") if the CLI is on PATH directly.
   const override = process.env.CONTIG_CMD;
   const cmd = override ?? "uv";
-  const args = (override ? [] : ["run", "contig"]).concat(["eval-detector", "--json"]);
+  const args = (override ? [] : ["run", "contig"]).concat([
+    "eval-detector",
+    `--detector=${name}`,
+    "--json",
+  ]);
   try {
     const { stdout } = await pexec(cmd, args, { cwd: repoRoot(), timeout: 30_000 });
     return JSON.parse(stdout) as DetectorEvalReport;
@@ -775,5 +802,120 @@ export async function getEvalHistory(): Promise<EvalSnapshot[]> {
     }
   }
   return out;
+}
+
+// --- Notifications (PRD contract A) --------------------------------------------
+// The engine appends one JSON line per lifecycle event to
+// <runsDir>/notifications.jsonl: {ts, run_id, kind, message} with kind one of
+// finished | failed | cancelled | awaiting_approval. The header bell reads the
+// whole file (newest first) into an activity panel; an awaiting_approval event
+// links to its run so a paused run can be resolved.
+
+/** The kinds the notifications feed knows how to render (PRD contract A). */
+const NOTIFICATION_KINDS = new Set([
+  "finished",
+  "failed",
+  "cancelled",
+  "awaiting_approval",
+]);
+
+/** Whether a parsed line is a well-formed NotificationEvent we can render. */
+function isNotificationEvent(value: unknown): value is NotificationEvent {
+  if (typeof value !== "object" || value === null) return false;
+  const e = value as Record<string, unknown>;
+  return (
+    typeof e.ts === "string" &&
+    typeof e.run_id === "string" &&
+    typeof e.kind === "string" &&
+    NOTIFICATION_KINDS.has(e.kind) &&
+    typeof e.message === "string"
+  );
+}
+
+/**
+ * Recent lifecycle events from <runsDir>/notifications.jsonl, newest first. A
+ * missing file (no run has emitted yet) yields an empty list, not an error.
+ * Malformed or half-written lines are skipped, and lines that do not match the
+ * pinned shape are dropped so the panel only ever renders known event kinds.
+ * `limit` caps how many of the newest events are returned.
+ */
+export async function getNotifications(limit = 30): Promise<NotificationEvent[]> {
+  const p = path.join(runsDir(), "notifications.jsonl");
+  let txt: string;
+  try {
+    txt = await fs.readFile(p, "utf8");
+  } catch {
+    return [];
+  }
+  const events: NotificationEvent[] = [];
+  for (const line of txt.split("\n")) {
+    if (line.trim().length === 0) continue;
+    try {
+      const parsed = JSON.parse(line) as unknown;
+      if (isNotificationEvent(parsed)) events.push(parsed);
+    } catch {
+      // A half-written final line (the engine appends concurrently) is ignored.
+    }
+  }
+  // Newest first: the file is append-order (oldest first), so reverse and cap.
+  events.reverse();
+  return events.slice(0, limit);
+}
+
+// --- Output integrity (PRD contract B) -----------------------------------------
+// `contig verify <id> --json` re-hashes a run's recorded output files against the
+// checksums in run_record.json and reports {ok, changed, missing}. The run detail
+// page shows a badge: outputs verified (ok), drift detected (changed/missing), or
+// not captured (the run recorded no output checksums, so there is nothing to
+// verify). The dashboard never re-hashes itself; integrity stays in the engine.
+
+/**
+ * Verify a run's outputs by shelling out to `contig verify <id> --json`. The run
+ * id is validated (same guard as the control commands) and passed as a positional
+ * after a "--" terminator, so it can never be parsed as a flag. Returns the parsed
+ * {ok, changed, missing} report, or null if the CLI is unavailable or its output
+ * is unparseable (the page then degrades to a neutral, not-captured state). A
+ * non-zero exit on drift still carries JSON on stdout, so we read that too.
+ */
+export async function getOutputVerification(
+  id: string,
+): Promise<OutputVerification | null> {
+  if (!isSafeRunId(id)) throw new InvalidRunIdError(`Invalid run id: ${id}`);
+  const base = (process.env.CONTIG_DISPATCH_CMD ?? "uv run contig").split(" ");
+  const args = [
+    ...base.slice(1),
+    "verify",
+    `--runs-dir=${runsDir()}`,
+    "--json",
+    "--",
+    id,
+  ];
+  // `contig verify` exits non-zero on drift, but still prints the JSON report on
+  // stdout, so we parse stdout whether the call resolved or rejected.
+  function parse(stdout: unknown): OutputVerification | null {
+    if (typeof stdout !== "string") return null;
+    try {
+      const data = JSON.parse(stdout) as OutputVerification;
+      if (
+        typeof data.ok === "boolean" &&
+        Array.isArray(data.changed) &&
+        Array.isArray(data.missing)
+      ) {
+        return data;
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+  try {
+    const { stdout } = await pexec(base[0], args, {
+      cwd: repoRoot(),
+      timeout: 30_000,
+    });
+    return parse(stdout);
+  } catch (err) {
+    return parse((err as { stdout?: string })?.stdout);
+  }
 }
 

@@ -1,0 +1,58 @@
+{
+  "run_id": "scrnaseq-fixture",
+  "pipeline": "nf-core/scrnaseq",
+  "pipeline_revision": "2.7.1",
+  "target": {
+    "backend": "local",
+    "container_runtime": "docker",
+    "work_dir": "/tmp/work",
+    "engine": "nextflow",
+    "credentials_ref": null,
+    "backend_options": {},
+    "resource_limits": {}
+  },
+  "input_checksums": {
+    "samplesheet.csv": "cafef00d"
+  },
+  "parameters": {
+    "aligner": "starsolo"
+  },
+  "container_digests": {},
+  "nextflow_version": "24.10.0",
+  "contig_version": "0.1.0",
+  "events": [
+    {
+      "process": "STARSOLO",
+      "status": "COMPLETED",
+      "exit": 0,
+      "task_id": "1",
+      "name": "STARSOLO (SAMPLE_A)"
+    }
+  ],
+  "qc_results": [
+    {
+      "check": "estimated_cells:SAMPLE_A",
+      "status": "pass",
+      "message": "Estimated cells above the floor.",
+      "value": 4821,
+      "expected_range": ">= 500"
+    },
+    {
+      "check": "median_genes_per_cell:SAMPLE_A",
+      "status": "pass",
+      "message": "Median genes per cell above the floor.",
+      "value": 1930,
+      "expected_range": ">= 500"
+    },
+    {
+      "check": "fraction_reads_in_cells:SAMPLE_A",
+      "status": "pass",
+      "message": "Fraction of reads in cells above the floor.",
+      "value": 0.78,
+      "expected_range": ">= 0.7"
+    }
+  ],
+  "output_checksums": {},
+  "repair_history": [],
+  "verdict": "pass"
+}

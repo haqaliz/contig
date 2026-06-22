@@ -1,0 +1,4 @@
+{"ts": "2026-06-22T09:00:00.000Z", "run_id": "scrnaseq-fixture", "kind": "finished", "message": "Run finished: verdict pass."}
+{"ts": "2026-06-22T09:05:00.000Z", "run_id": "taskfail-fixture", "kind": "failed", "message": "Run failed: a task could not be repaired."}
+{"ts": "2026-06-22T09:10:00.000Z", "run_id": "cancelled-fixture", "kind": "cancelled", "message": "Run cancelled by the operator."}
+{"ts": "2026-06-22T09:15:00.000Z", "run_id": "awaiting-approval-fixture", "kind": "awaiting_approval", "message": "A self-heal patch is awaiting your approval."}

@@ -2,6 +2,7 @@
 // it shows how Contig's failure detector scores against the labeled corpus, and
 // frames that score as "how Contig is learning" from real runs. Server Component
 // (no interactivity); it receives an already-fetched report as a prop.
+import type { ReactNode } from "react";
 import { CheckCircle2, AlertTriangle } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
@@ -34,7 +35,15 @@ function ratio(value: number): string {
   return value.toFixed(2);
 }
 
-export function EvalView({ report }: { report: DetectorEvalReport }) {
+export function EvalView({
+  report,
+  selector,
+}: {
+  report: DetectorEvalReport;
+  // The detector picker (a client island), rendered under the header. Optional so
+  // the view still renders standalone (e.g. in tests) without a selector.
+  selector?: ReactNode;
+}) {
   // Sort classes by name so the table order is stable and scannable.
   const classes: Array<[string, ClassScore]> = Object.entries(report.per_class).sort(
     ([a], [b]) => a.localeCompare(b),
@@ -50,6 +59,8 @@ export function EvalView({ report }: { report: DetectorEvalReport }) {
         title="Detector eval"
         description="How Contig is learning: the failure detector scored against the labeled corpus of known failures."
       />
+
+      {selector}
 
       {/* Headline: accuracy as the trust signal. The big percentage is the hero. */}
       <Card>

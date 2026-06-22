@@ -1,0 +1,46 @@
+{
+  "run_id": "verify-fixture",
+  "pipeline": "nf-core/rnaseq",
+  "pipeline_revision": "3.26.0",
+  "target": {
+    "backend": "local",
+    "container_runtime": "docker",
+    "work_dir": "/tmp/work",
+    "engine": "nextflow",
+    "credentials_ref": null,
+    "backend_options": {},
+    "resource_limits": {}
+  },
+  "input_checksums": {
+    "samplesheet.csv": "deadbeef"
+  },
+  "parameters": {
+    "genome": "GRCh38"
+  },
+  "container_digests": {},
+  "nextflow_version": "24.10.0",
+  "contig_version": "0.1.0",
+  "events": [
+    {
+      "process": "SALMON_QUANT",
+      "status": "COMPLETED",
+      "exit": 0,
+      "task_id": "1",
+      "name": "SALMON_QUANT (SAMPLE_A)"
+    }
+  ],
+  "qc_results": [
+    {
+      "check": "min_sample_count",
+      "status": "pass",
+      "message": "OK",
+      "value": 2,
+      "expected_range": ">= 2"
+    }
+  ],
+  "output_checksums": {
+    "multiqc_report.html": "8a63b8b7f98ce0aa4c3385cd51c7e5132eaa21793b2e0b058ec5b8e2f53c0cef"
+  },
+  "repair_history": [],
+  "verdict": "pass"
+}

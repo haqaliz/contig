@@ -9,6 +9,7 @@ import { ArrowLeft } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { CancelledView } from "@/components/run/cancelled-view";
 import { InterruptedView } from "@/components/run/interrupted-view";
+import { OutputIntegrityCard } from "@/components/run/output-integrity-card";
 import { QcPanel } from "@/components/run/qc-panel";
 import { ProvenancePanel } from "@/components/run/provenance-panel";
 import { RepairTimeline } from "@/components/run/repair-timeline";
@@ -102,6 +103,11 @@ export default async function RunDetailPage({
       />
 
       <VerdictCard record={record} />
+
+      <OutputIntegrityCard
+        id={record.run_id}
+        outputCount={Object.keys(record.output_checksums).length}
+      />
 
       {manifest ? <ReproduceActions id={record.run_id} /> : null}
 
