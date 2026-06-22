@@ -1,243 +1,139 @@
-<img src="assets/contig-logo.svg" alt="Contig" width="96" />
+<div align="center">
+
+<img src="assets/contig-logo.svg" alt="Contig" width="108" />
 
 # Contig
 
-**An agentic bioinformatics analyst.**
+**An agentic bioinformatics analyst — it runs the analysis, fixes what breaks, and proves the result.**
 
-Contig ingests a researcher's raw sequencing data, selects and runs the right pipeline on their compute, debugs and self-heals failures, and returns a verified, reproducible result.
+Contig takes raw sequencing data all the way to a *verified, reproducible* answer: it selects and runs the right pipeline on your own compute, diagnoses and **self-heals** failures, **verifies** the output, and writes a portable record anyone can reproduce.
 
----
+[![Python](https://img.shields.io/badge/python-3.12+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Built with uv](https://img.shields.io/badge/built%20with-uv-DE5FE9?logo=astral&logoColor=white)](https://github.com/astral-sh/uv)
+[![Powered by Nextflow](https://img.shields.io/badge/engine-Nextflow-0DC09D)](https://www.nextflow.io/)
+[![Status](https://img.shields.io/badge/status-pre--MVP%20·%20validating-orange)](docs/ROADMAP.md)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-3fb950)](CONTRIBUTING.md)
 
-## What is Contig
+[Quickstart](#-quickstart) · [Usage](docs/USAGE.md) · [How it works](#-how-it-works) · [Architecture](docs/technical/ARCHITECTURE.md) · [Vision](VISION.md) · [Roadmap](docs/ROADMAP.md) · [Contributing](CONTRIBUTING.md)
 
-A "contig" in genomics is one contiguous sequence reconstructed by assembling many overlapping fragments: scattered reads stitched into a coherent whole. Contig the product does the same thing for an analysis: it assembles messy data, scattered tools, and broken steps into one verified working result.
+<br/>
 
-Contig is not a chatbot that writes you a script. It is an agent that takes the analysis all the way to a trustworthy answer: running the workflow on real data and real compute, fixing what breaks, and proving the result is correct and reproducible.
+<img src="assets/contig-demo.svg" alt="A Contig run: validate, plan, self-heal an out-of-memory failure, verify QC, and return a PASS verdict with a reproducible record." width="760" />
 
----
+<sub>A real run shape: validate → plan → <b>self-heal</b> an OOM failure → <b>verify</b> QC → honest <b>verdict</b> + reproducible record.</sub>
 
-## The problem
-
-Bioinformatics has a structural skills gap. Producing an end-to-end analysis from raw sequencing data requires a rare combination of domain biology *and* software/computational engineering, a pairing few individuals hold.
-
-- Roughly **74% of wet-lab scientists have no programming experience** ([arxiv.org/html/2507.20122v1](https://arxiv.org/html/2507.20122v1)).
-- Domain scientists without programming face steep learning curves, and building end-to-end pipelines needs the scarce dual genomics+computation skill set ([arxiv.org/html/2507.20122v1](https://arxiv.org/html/2507.20122v1); [nature.com/articles/s41598-025-25919-z](https://www.nature.com/articles/s41598-025-25919-z)).
-- In practice, researchers scavenge Biostars Q&A threads and paper methods sections to piece pipelines together by hand ([arxiv.org/html/2507.20122v1](https://arxiv.org/html/2507.20122v1)).
-
-The result is slow science, brittle analyses, and results that are hard to reproduce.
+</div>
 
 ---
 
-## The solution and the wedge
+## Why Contig
 
-There are two layers to "AI for bioinformatics," and they are not the same business.
+Producing an end-to-end analysis from raw sequencing data needs a rare pairing of domain biology **and** computational engineering. Roughly **74% of wet-lab scientists have no programming experience** ([2507.20122](https://arxiv.org/html/2507.20122v1)), and frontier models still reach only **~17%** on real bioinformatics analysis ([BixBench, 2503.00096](https://arxiv.org/abs/2503.00096)). Turning English into a workflow is the easy, crowded part. **Running it, fixing it, and proving it is the unsolved part — that's Contig.**
 
-### Layer 1: Translate English into a script/workflow
-Turning a natural-language request into a Galaxy/Nextflow workflow or a script. This layer is **crowded and commoditizing**: Galaxy, KNIME, BioMaster, BioWorkflow, and general-purpose LLMs all do it, and frontier models do it increasingly well. **Contig does not compete here.**
-
-### Layer 2: Actually run it, debug it, self-heal, verify, and guarantee reproducibility
-End-to-end, on the user's own data and compute. Run the pipeline. When a step fails (wrong reference, version mismatch, malformed input, out-of-memory), diagnose it and recover. Then verify the output is correct and produce a reproducible artifact. This layer is **essentially unsolved and barely contested. This is the company.**
-
-The evidence that Layer 2 is the real moat:
-
-- LLMs (GPT-4o, Gemini 2.5 Flash, DeepSeek-V3) already generate technically accurate Galaxy/Nextflow workflows from natural language; small models + RAG over docs reach expert level on the *conceptual* layer, with no massive compute or special credentials required. The conceptual layer is solved-enough.
-- But current systems match experts only on **easy** tasks and **fail on medium/complex** workflows. On BixBench (a benchmark of real bioinformatics analysis), frontier models reach only **~17% accuracy** ([arxiv.org/abs/2503.00096](https://arxiv.org/abs/2503.00096)). The hard execution-and-verification layer is where everyone falls down, which is exactly why it is the moat.
-
-**Key risk we design around:** foundation models will keep improving and may close part of the Layer-2 gap. So Contig's defensibility is built from **execution / verification / reproducibility infrastructure** plus **accumulated workflow-evaluation data**, not from prompting. We are building the part of the system that gets *better* as models improve, not the part they make obsolete.
+- 🧬 **Goal → pipeline, vetted.** Describe your goal in plain language; Contig proposes a curated pipeline + params to approve, and flags problems (no replicates, single-end, missing reference) *before* a multi-hour run.
+- 🩹 **Self-healing runs.** When a step fails (OOM, version mismatch, malformed input), Contig diagnoses it, applies a patch, and retries — and shows you the repair chain.
+- ✅ **Verified outputs.** Every run ends in an honest verdict — `PASS` / `WARN` / `FAIL` / `UNVERIFIED` — backed by real QC checks, never a bare "done".
+- 📦 **Reproducible by default.** Each run pins inputs (checksums), pipeline revision, params, and tool versions into a portable record. Your reads never leave your machine; only hashes are recorded.
+- 📈 **Gets better as it runs.** Every recovered failure becomes a labeled data point in a versioned failure corpus that compounds — independent of any single model.
+- ☁️ **Same run, laptop or cloud.** One command lands unchanged on Docker locally or AWS Batch in your own account, via Nextflow's native executors.
 
 ---
 
-## Who it's for
+## 📦 Installation
 
-- The lone **computational biologist** drowning in pipeline plumbing instead of doing science.
-- The **wet-lab scientist who can't code** but has data and questions.
-- **Core facilities** that run analyses as a service for many labs.
-- **Biotech** R&D teams that need reproducible, auditable results.
+Contig is a Python 3.12 package managed with [`uv`](https://github.com/astral-sh/uv).
+
+```bash
+git clone https://github.com/haqaliz/contig.git
+cd contig
+uv sync          # create the venv and install dependencies
+uv run contig --help
+```
+
+Running a **real** pipeline also needs [Nextflow](https://www.nextflow.io/), a Java runtime (`JAVA_HOME`), and a running Docker daemon. The CLI and the test suite work without them. Full prerequisites are in [docs/USAGE.md](docs/USAGE.md#prerequisites).
 
 ---
 
-## Current status
+## 🚀 Quickstart
 
-**MVP engine built; validating.** The Layer-2 core (run → capture → **self-heal** → verify → reproduce) works end-to-end as a CLI on one pipeline (`nf-core/rnaseq`), built test-first (see [Getting started](#getting-started)). The problem and strategic wedge were adversarially fact-checked through deep research ([docs/RESEARCH_FINDINGS.md](docs/RESEARCH_FINDINGS.md)). Next: willingness-to-pay validation with design partners, and breadth. See [docs/ROADMAP.md](docs/ROADMAP.md).
+Try it in 30 seconds, no data of your own (uses nf-core/rnaseq's bundled test profile):
+
+```bash
+uv run contig run --run-id smoke      # run → self-heal → verify → reproduce
+uv run contig show smoke              # verdict + provenance + repair chain
+```
+
+Run on **your** data — plan first, then run against a reference:
+
+```bash
+uv run contig plan --goal "find differentially expressed genes" \
+  --input samplesheet.csv --genome GRCh38      # propose a pipeline to approve
+
+uv run contig run  --run-id my-analysis \
+  --input samplesheet.csv --genome GRCh38      # or: --fasta ref.fa --gtf genes.gtf
+```
+
+The full sample-sheet format, cloud backends, the reproducible bundle, and the failure-corpus workflow are all in **[docs/USAGE.md](docs/USAGE.md)**.
 
 ---
 
-## Documentation map
+## 🔍 How it works
+
+Contig is built around **Layer 2** — the run-and-verify engine — and consumes Layer-1 workflow generation as a replaceable commodity.
+
+```
+  goal + data ──▶ plan ──▶ run ──▶ ⚠ failure? ──▶ self-heal ──▶ verify ──▶ verdict + record
+                  (vet)   (your    diagnose →     (patch &      (QC        (PASS/WARN/
+                          compute)  classify       retry)        checks)     FAIL/UNVERIFIED)
+```
+
+| Verdict | Meaning |
+|---|---|
+| `PASS` | Ran to completion and every QC check passed |
+| `WARN` | Completed, but a QC check is borderline — look before you trust it |
+| `FAIL` | A task or QC check failed — do not trust the output |
+| `UNVERIFIED` | Completed, but nothing checked it — we won't claim it's correct |
+
+### Supported analyses
+
+| Goal | Pipeline | QC checks |
+|---|---|---|
+| RNA-seq differential expression | [`nf-core/rnaseq`](https://nf-co.re/rnaseq) | alignment/assignment rate, library-size skew, replicate checks |
+| Germline variant calling (research) | [`nf-core/sarek`](https://nf-co.re/sarek) | Ti/Tv & het/hom ratios, coverage |
+
+`contig plan` routes to the right one and **declines goals it has no curated pipeline for** rather than inventing a workflow. The same run → self-heal → verify → reproduce engine serves both.
+
+---
+
+## 📚 Documentation
 
 | Document | What's in it |
 |---|---|
+| **[docs/USAGE.md](docs/USAGE.md)** | Full CLI reference, your-own-data walkthrough, cloud backends, reproduce/share, failure corpus |
+| **[CONTRIBUTING.md](CONTRIBUTING.md)** | Dev setup, package management (uv), tests, project layout, how to contribute |
 | [VISION.md](VISION.md) | The narrative thesis, the moat, why now, non-goals |
 | [docs/RESEARCH_FINDINGS.md](docs/RESEARCH_FINDINGS.md) | The validated evidence base behind the bet |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Phased plan from validation to MVP and beyond |
 | [docs/product/PRODUCT_SPEC.md](docs/product/PRODUCT_SPEC.md) | Product surface, flows, and behavior |
 | [docs/technical/ARCHITECTURE.md](docs/technical/ARCHITECTURE.md) | The agentic execution/verification system design |
-| [docs/business/MARKET_ANALYSIS.md](docs/business/MARKET_ANALYSIS.md) | Market, competitors, and positioning |
-| [docs/business/BUSINESS_MODEL.md](docs/business/BUSINESS_MODEL.md) | Revenue, pricing, ICP |
-| [docs/business/GTM.md](docs/business/GTM.md) | Go-to-market plan |
+| [docs/business/](docs/business/) | Market analysis, business model, go-to-market |
 
-> Note: some of these documents are placeholders to be filled in during the validation phase.
+> Some documents are placeholders being filled in during the validation phase.
 
 ---
 
-## Getting started
+## 🛠 Status & roadmap
 
-Contig is a Python 3.12 package managed with [`uv`](https://github.com/astral-sh/uv).
+**MVP engine built; validating.** The Layer-2 core (run → capture → self-heal → verify → reproduce) works end-to-end as a CLI on `nf-core/rnaseq`, built test-first. Not yet built: a web UI, an LLM-backed planner (the goal→pipeline matcher is deterministic and replaceable today), more assays, and live-tested `slurm`/`gcp_batch`/`k8s` backends (the mapping layer is in place; `local` and `aws_batch` are wired). See [docs/ROADMAP.md](docs/ROADMAP.md).
 
-```bash
-uv sync                 # create the venv and install deps
-uv run pytest           # run the full test suite
-```
+---
 
-To run a real pipeline you also need **Nextflow** (`brew install nextflow`), a
-**Java runtime** (`JAVA_HOME` set to a JDK, e.g. Homebrew's `openjdk`), and a
-running **Docker** daemon. The commands and the test suite work without them.
+## 🤝 Contributing
 
-### Commands
+Contributions are welcome — code, curated pipelines, QC checks, and especially **failure cases** for the corpus. Start with [CONTRIBUTING.md](CONTRIBUTING.md), then open an [issue](https://github.com/haqaliz/contig/issues) or a pull request.
 
-| Command | What it does |
-|---|---|
-| `contig plan --goal "…" --input <sheet>` | Propose a pipeline + params from your goal and data, to approve |
-| `contig run --run-id <id>` | Run a pipeline, self-heal failures, verify, report the verdict |
-| `contig show <id>` | The verdict + provenance + repair chain of a past run |
-| `contig list` | All bundled runs |
-| `contig eval-detector` | Score the failure detector against the labeled failure corpus |
-| `contig version` | Installed version |
+## 📄 License
 
-### Try it in 30 seconds (no real data)
+License not yet finalized (open source intended). Until a `LICENSE` file lands, all rights are reserved by the authors.
 
-```bash
-uv run contig run --run-id smoke      # runs nf-core/rnaseq's bundled test profile
-uv run contig show smoke              # see the verdict + repair chain
-```
-
-### Run on your own data
-
-**1. Write a sample sheet** (`samplesheet.csv`, nf-core/rnaseq format). Paths may
-be relative to the sheet:
-
-```csv
-sample,fastq_1,fastq_2,strandedness
-CTRL_REP1,reads/ctrl1_R1.fastq.gz,reads/ctrl1_R2.fastq.gz,auto
-TREAT_REP1,reads/treat1_R1.fastq.gz,reads/treat1_R2.fastq.gz,auto
-```
-
-**2. (Optional) Plan first.** Describe your goal in plain language and let Contig
-propose a pipeline + params to approve. It flags problems (no replicates,
-single-end, missing reference) *before* you run, and declines goals it has no
-curated pipeline for rather than inventing a workflow:
-
-```bash
-uv run contig plan --goal "find differentially expressed genes" \
-  --input samplesheet.csv --genome GRCh38
-# → Plan: nf-core/rnaseq @ 3.26.0  (assay: rnaseq) … + any warnings
-```
-
-The goal→pipeline matching is deterministic and **replaceable**: a better model
-can be swapped in behind it. Contig's value is the curated registry and the
-run/verify/reproduce engine, not generating workflows from English (that's a
-commodity it consumes; see [VISION.md](VISION.md)).
-
-**3. Run it**, pointing at a reference: an iGenomes key **or** your own FASTA+GTF:
-
-```bash
-uv run contig run --run-id my-analysis \
-  --input samplesheet.csv \
-  --genome GRCh38                       # or: --fasta ref.fa --gtf genes.gtf
-```
-
-Contig first **validates the sample sheet** (missing files, duplicate samples,
-bad columns) and refuses to launch if it's broken, catching the error before it
-costs you a multi-hour run. Then it runs the pipeline, **self-heals** recoverable
-failures, **verifies** the output, and writes a reproducible bundle. Your reads
-never leave your machine; only file hashes are recorded.
-
-### Reading the result
-
-Every run ends in an honest verdict:
-
-| Verdict | Meaning |
-|---|---|
-| `PASS` | Ran to completion and every QC check passed |
-| `WARN` | Completed, but a QC check is borderline; look before you trust it |
-| `FAIL` | A task failed, or a QC check failed; do not trust the output |
-| `UNVERIFIED` | Completed but nothing checked it; we won't claim it's correct |
-
-If a step broke and Contig recovered, the report shows the **repair chain**
-(e.g. `attempt 1: oom → resource patch → patched_and_retried`).
-
-### Reproduce / share
-
-Each run writes `runs/<id>/run_record.json`, a portable record pinning inputs
-(checksums), pipeline + revision, parameters, container/tool versions, every QC
-result, and the full repair chain. `contig show <id>` re-reads it; hand the
-bundle to a colleague (or a reviewer) to reproduce the result.
-
-### How the detector improves (failure corpus)
-
-Every recoverable failure Contig recovers from is a labeled data point. Those
-accumulate into a versioned failure corpus (`failure -> diagnosis -> fix ->
-outcome`), and `contig eval-detector` replays the detector over it to report
-accuracy plus per-class precision/recall:
-
-```bash
-uv run contig eval-detector
-# Detector eval: 11/11 correct (accuracy 100.0%)
-#   bad_param: precision 1.00  recall 1.00  (support 2)
-#   ...
-```
-
-A drop in accuracy means either the detector regressed or a real run exposed a
-gap worth a new rule. This is the compounding asset: the engine gets better as
-runs accrue, independent of any single model.
-
-Capture is automatic: every failed run stashes a case to
-`<runs-dir>/pending_corpus.jsonl` with the detector's diagnosis as a provisional
-label. A human confirms or corrects the label before promoting it into the
-golden corpus, so the eval never grades the detector on its own guesses.
-
-### Where it runs (compute backends)
-
-The same run lands unchanged on your laptop or your cloud: Contig maps the
-target to a generated `nextflow.config` and lets Nextflow's native executors do
-the submission. Pick the backend with `--backend`:
-
-```bash
-# Local (default): Docker on your machine
-uv run contig run --run-id local-run --input samplesheet.csv --genome GRCh38
-
-# AWS Batch: runs in your account; reads stay in your S3, not ours
-uv run contig run --run-id cloud-run \
-  --input samplesheet.csv --genome GRCh38 \
-  --backend aws_batch \
-  --work-dir s3://your-bucket/contig-work \
-  --queue your-batch-queue --region eu-west-1
-```
-
-Contig validates the backend up front: e.g. an `aws_batch` run with no `--queue`
-fails immediately with a clear message, not a half-hour in. AWS credentials are
-read from your environment by Nextflow; Contig never holds them. The generated
-config is written to `runs/<id>/nextflow.config` for inspection. (`local` and
-`aws_batch` are wired today; `slurm`/`gcp_batch`/`k8s` map through the same layer
-as they're validated.)
-
-### Supported analyses
-
-| Goal | Pipeline | QC |
-|---|---|---|
-| RNA-seq differential expression | `nf-core/rnaseq` | alignment/assignment rate, library-size skew, replicate checks |
-| Germline variant calling (research) | `nf-core/sarek` | Ti/Tv & het/hom ratios, coverage |
-
-`contig plan --goal "…"` routes to the right one (and declines goals it has no
-curated pipeline for). The same run → self-heal → verify → reproduce engine
-serves both.
-
-### What's not built yet
-
-A web UI, an LLM-backed planner (the goal→pipeline matcher is deterministic and
-replaceable today), more assays, and live-tested `slurm`/`gcp_batch`/`k8s`
-backends (the mapping layer is in place; `local` and `aws_batch` are wired). See
-[docs/ROADMAP.md](docs/ROADMAP.md).
-
-New here? Read [VISION.md](VISION.md) and [docs/RESEARCH_FINDINGS.md](docs/RESEARCH_FINDINGS.md)
-for the bet, then [docs/technical/ARCHITECTURE.md](docs/technical/ARCHITECTURE.md)
-for the system design.
+<div align="center"><sub>Built test-first. The moat is execution, verification, and reproducibility — the part that gets <i>better</i> as models improve.</sub></div>

@@ -8,3 +8,4 @@ __pycache__/
 dist/
 /runs/
 /_realdata/
+.claude/worktrees/
