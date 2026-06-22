@@ -1,4 +1,4 @@
-# Contig — Usage
+# Contig Usage
 
 The complete guide to running Contig: prerequisites, every CLI command, running
 on your own data, cloud backends, the reproducible bundle, and the failure
@@ -27,7 +27,7 @@ To run a **real** pipeline you also need:
 | **Java runtime** | Nextflow runs on the JVM (`JAVA_HOME` → a JDK) | e.g. Homebrew's `openjdk` |
 | **Docker** | Pulls pinned tool containers; must be running | [Docker Desktop](https://www.docker.com/) |
 
-The CLI and the test suite work **without** Nextflow/Java/Docker — only live runs need them.
+The CLI and the test suite work **without** Nextflow/Java/Docker; only live runs need them.
 
 ---
 
@@ -37,13 +37,28 @@ The CLI and the test suite work **without** Nextflow/Java/Docker — only live r
 |---|---|
 | `contig plan --goal "…" --input <sheet>` | Propose a pipeline + params from your goal and data, to approve |
 | `contig run --run-id <id>` | Run a pipeline, self-heal failures, verify, report the verdict |
-| `contig show <id>` | The verdict + provenance + repair chain of a past run |
+| `contig show <id>` | The verdict + provenance + repair chain of a past run (`--explain` for the deciding QC checks, `--html` for a shareable report) |
+| `contig status <id>` | One-shot live snapshot of a run: state, elapsed, tasks completed and running |
+| `contig watch <id>` | Redraw the live snapshot until the run is no longer running |
+| `contig cancel <id>` | Stop an active run (signals its process group) and mark it cancelled |
+| `contig resume <id>` | Re-run a cancelled or interrupted run from its cached tasks (Nextflow `-resume`) |
+| `contig rerun <id>` | Reproduce a past run from its launch manifest under a fresh run id |
+| `contig approve <id>` | Approve (or `--reject`) the patch a paused self-heal run is waiting on |
 | `contig list` | All bundled runs |
 | `contig corpus-promote` | Promote a confirmed pending failure case into the golden corpus |
-| `contig eval-detector` | Score the failure detector against the labeled failure corpus |
+| `contig eval-detector` | Score the failure detector against the labeled failure corpus (`--snapshot` to record a point in the history, `--history` to show the trend) |
 | `contig version` | Installed version |
 
 Run `uv run contig <command> --help` for the full flag list of any command.
+
+A long run is observable while it is in flight: `contig watch <id>` streams its
+task progress, and the self-heal loop pauses for you when it proposes a risky
+patch. A patch it judges `safe` is applied automatically; a `needs_confirmation`
+or `destructive` patch pauses the run (state `awaiting_approval`) until you
+`contig approve <id>` or `contig approve --reject <id>`, with a timeout
+(`contig run --approval-timeout`, default 1800 seconds) so it never hangs forever.
+Pass `contig run --auto-approve` to apply risky patches without waiting (for
+non-interactive runs).
 
 ---
 
@@ -195,9 +210,24 @@ detector on its own guesses.
 
 ---
 
+## Dashboard (web UI)
+
+A local Next.js dashboard reads the run bundles and corpus straight from disk and
+adds an interactive surface over the same engine: launch a run, watch live task
+progress and the self-heal feed, approve or reject risky patches, cancel and
+resume runs, read the "why this verdict" explanation, reproduce a past run, and
+track detector accuracy over time. It is localhost-only with no auth (it runs the
+CLI on your machine), so do not expose it.
+
+```bash
+cd dashboard
+npm install
+npm run dev            # http://localhost:3000 (reads ../runs)
+```
+
 ## What's not built yet
 
-A web UI, an LLM-backed planner (the goal→pipeline matcher is deterministic and
-replaceable today), more assays, and live-tested `slurm`/`gcp_batch`/`k8s`
-backends (the mapping layer is in place; `local` and `aws_batch` are wired). See
+An LLM-backed planner (the goal→pipeline matcher is deterministic and replaceable
+today), more assays, and live-tested `slurm`/`gcp_batch`/`k8s` backends (the
+mapping layer is in place; `local` and `aws_batch` are wired). See
 [docs/ROADMAP.md](ROADMAP.md).
