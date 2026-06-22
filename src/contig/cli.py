@@ -24,7 +24,13 @@ from contig.corpus import (
     load_corpus,
     promote_pending_case,
 )
-from contig.models import ExecutionTarget, LaunchManifest, RunSummary
+from contig.eval_history import (
+    append_snapshot,
+    default_history_path,
+    load_history,
+    snapshot_from_report,
+)
+from contig.models import ExecutionTarget, LaunchManifest, RunSummary, sha256_file
 from contig.nfconfig import ConfigGenerationError
 from contig.planner import PlanningError
 from contig.planner import plan as build_plan
@@ -34,6 +40,13 @@ from contig.registry import assay_for_pipeline
 from contig.report import render_explain, render_run_report, render_run_report_html
 from contig.runner import PipelineExecutionError, default_executor
 from contig.samplesheet import fastq_paths, validate_samplesheet
+from contig.lifecycle import (
+    CancelError,
+    ResumeError,
+    cancel_run,
+    resumable_state,
+    write_approval,
+)
 from contig.self_heal import self_heal_run
 from contig.workspace import RunNotFoundError, list_run_ids, load_run
 
@@ -125,6 +138,8 @@ def run(
     max_memory: str = typer.Option(None, "--max-memory", help="Cap per-process memory (e.g. '6.GB'), needed to fit nf-core on a laptop."),
     max_cpus: int = typer.Option(None, "--max-cpus", help="Cap per-process CPUs."),
     max_attempts: int = typer.Option(3, "--max-attempts", help="Max self-heal attempts."),
+    auto_approve: bool = typer.Option(False, "--auto-approve", help="Apply gated patches without waiting (non-interactive/CI)."),
+    approval_timeout: float = typer.Option(1800, "--approval-timeout", help="Seconds to wait for a human approval before stopping."),
 ) -> None:
     """Run a pipeline, self-heal recoverable failures, verify it, and report the verdict.
 
@@ -152,6 +167,8 @@ def run(
         max_memory=max_memory,
         max_cpus=max_cpus,
         max_attempts=max_attempts,
+        auto_approve=auto_approve,
+        approval_timeout=approval_timeout,
     )
 
 
@@ -175,6 +192,9 @@ def _dispatch_run(
     max_memory: str | None,
     max_cpus: int | None,
     max_attempts: int,
+    resume: bool = False,
+    auto_approve: bool = False,
+    approval_timeout: float = 1800,
 ) -> None:
     """Validate, write the reproduce sidecar, run through self-heal, and report.
 
@@ -261,6 +281,9 @@ def _dispatch_run(
             params=params or None,
             max_attempts=max_attempts,
             assay=assay_for_pipeline(pipeline) or "rnaseq",
+            resume=resume,
+            auto_approve=auto_approve,
+            approval_timeout=approval_timeout,
         )
     except ConfigGenerationError as exc:
         typer.echo(f"Cannot configure the '{backend}' backend: {exc}", err=True)
@@ -405,6 +428,106 @@ def watch(
         time.sleep(interval)
 
 
+@app.command()
+def resume(
+    run_id: str = typer.Argument(..., help="The cancelled or interrupted run to resume."),
+    runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+) -> None:
+    """Resume a cancelled or interrupted run: re-run the same id with Nextflow -resume.
+
+    Reads the run's launch.json, rebuilds the exact invocation, and re-runs the
+    SAME run id in the SAME run dir with -resume so cached completed tasks are
+    reused. Refuses a finished, errored, or still-running run.
+    """
+    if not _is_safe_run_id(run_id):
+        typer.echo(f"Invalid run id: {run_id!r}", err=True)
+        raise typer.Exit(code=1)
+    try:
+        resumable_state(runs_dir, run_id)
+    except ResumeError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+    manifest_path = Path(runs_dir) / run_id / "launch.json"
+    if not manifest_path.exists():
+        typer.echo(f"No launch manifest for run {run_id!r} in {runs_dir}.", err=True)
+        raise typer.Exit(code=1)
+    try:
+        manifest = LaunchManifest.model_validate_json(manifest_path.read_text())
+    except ValidationError as exc:
+        typer.echo(f"Launch manifest for {run_id!r} is malformed: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    # Do not trust the manifest: a recorded input path may have moved since the
+    # original run. Refuse rather than resume against nothing.
+    if manifest.input is not None and not Path(manifest.input).exists():
+        typer.echo(f"Recorded input no longer exists: {manifest.input}", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Resuming {run_id}")
+    _dispatch_run(
+        run_id=run_id,  # the SAME run id, in the SAME run dir
+        pipeline=manifest.pipeline,
+        revision=manifest.revision,
+        profiles=",".join(manifest.profiles),
+        runs_dir=runs_dir,
+        backend=manifest.backend,
+        container_runtime=manifest.container_runtime,
+        work_dir=None,  # re-defaulted to the same runs/<id>/work the run cached into
+        queue=None,
+        region=None,
+        input=manifest.input,
+        genome=manifest.genome,
+        fasta=manifest.fasta,
+        gtf=manifest.gtf,
+        outdir=None,
+        max_memory=manifest.max_memory,
+        max_cpus=manifest.max_cpus,
+        max_attempts=manifest.max_attempts,
+        resume=True,
+    )
+
+
+@app.command()
+def cancel(
+    run_id: str = typer.Argument(..., help="The run to cancel."),
+    runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+) -> None:
+    """Cancel an active run: reap its process group and write a cancelled verdict.
+
+    Only a `running` or `awaiting_approval` run can be cancelled; anything already
+    finished, errored, or cancelled has nothing to stop and exits non-zero.
+    """
+    if not _is_safe_run_id(run_id):
+        typer.echo(f"Invalid run id: {run_id!r}", err=True)
+        raise typer.Exit(code=1)
+    try:
+        cancel_run(runs_dir, run_id)
+    except CancelError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"Cancelled run {run_id}.")
+
+
+@app.command()
+def approve(
+    run_id: str = typer.Argument(..., help="The awaiting-approval run to decide on."),
+    reject: bool = typer.Option(False, "--reject", help="Reject the gated patch instead of approving it."),
+    runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+) -> None:
+    """Approve (or with --reject, reject) the gated patch a paused run is waiting on.
+
+    Writes runs/<id>/approval.json; the self-heal loop's poll picks it up and
+    either applies the patch and retries, or stops (PRD contract C).
+    """
+    if not _is_safe_run_id(run_id):
+        typer.echo(f"Invalid run id: {run_id!r}", err=True)
+        raise typer.Exit(code=1)
+    write_approval(runs_dir, run_id, approve=not reject)
+    verb = "Rejected" if reject else "Approved"
+    typer.echo(f"{verb} the pending patch for run {run_id}.")
+
+
 @app.command(name="list")
 def list_runs(
     runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
@@ -424,12 +547,15 @@ def corpus_promote(
     pending: str = typer.Option("runs/pending_corpus.jsonl", "--pending", help="Pending corpus JSONL."),
     label: str = typer.Option(None, "--label", help="Correct the failure class (default: keep the provisional one)."),
     golden: str = typer.Option(None, "--golden", help="Golden corpus JSONL (default: the shipped seed)."),
+    history_file: str = typer.Option(None, "--history-file", help="Eval history JSONL (defaults to the shipped one)."),
 ) -> None:
     """Promote a reviewed pending failure case into the golden corpus (moat #2).
 
     The human confirms the detector's provisional label or corrects it with
     --label; the case then moves from pending into the golden corpus that the
-    eval scores against. This is how the corpus compounds from real runs.
+    eval scores against. This is how the corpus compounds from real runs. After a
+    successful promote, a fresh eval of the golden corpus is appended to the
+    history so the trend reflects the grown corpus (PRD contract D).
     """
     try:
         promoted = promote_pending_case(
@@ -441,6 +567,21 @@ def corpus_promote(
     except (ValueError, FileNotFoundError) as exc:
         typer.echo(f"Could not promote {case_id}: {exc}", err=True)
         raise typer.Exit(code=1)
+
+    # Auto-snapshot: eval the now-grown golden corpus and append it to the trend.
+    golden_path = Path(golden) if golden else default_corpus_path()
+    history_path = Path(history_file) if history_file else default_history_path()
+    cases = load_corpus(golden_path)
+    append_snapshot(
+        snapshot_from_report(
+            evaluate_detector(cases),
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            corpus_size=len(cases),
+            corpus_sha=sha256_file(golden_path),
+            contig_version=_pkg_version("contig"),
+        ),
+        history_path,
+    )
     typer.echo(f"Promoted {promoted.case_id} ({promoted.expected_class}) into the golden corpus.")
 
 
@@ -448,13 +589,33 @@ def corpus_promote(
 def eval_detector(
     corpus: str = typer.Option(None, "--corpus", help="Failure-corpus JSONL (defaults to the shipped seed)."),
     json_out: bool = typer.Option(False, "--json", help="Emit the report as JSON (for the dashboard)."),
+    snapshot: bool = typer.Option(False, "--snapshot", help="Append this eval to the committed history (trend)."),
+    show_history: bool = typer.Option(False, "--history", help="Print the recorded accuracy-over-time trend instead of re-evaluating."),
+    history_file: str = typer.Option(None, "--history-file", help="Eval history JSONL (defaults to the shipped one)."),
 ) -> None:
     """Score the failure detector against a labeled corpus (moat #2).
 
     Replays diagnose_failure over every labeled failure and reports accuracy,
     per-class precision/recall, and each miss. A drop in accuracy means the
-    detector regressed or a real case exposed a gap worth a new rule.
+    detector regressed or a real case exposed a gap worth a new rule. With
+    --snapshot the result is appended to the committed history; with --history the
+    recorded trend is printed instead (PRD contract D).
     """
+    history_path = Path(history_file) if history_file else default_history_path()
+
+    if show_history:
+        history = load_history(history_path)
+        if json_out:
+            typer.echo("[" + ",".join(s.model_dump_json() for s in history) + "]")
+            return
+        if not history:
+            typer.echo(f"No eval history recorded yet in {history_path}.")
+            return
+        typer.echo("Detector accuracy over time:")
+        for snap in history:
+            typer.echo(f"  {snap.timestamp}  accuracy {snap.accuracy:.1%}  (corpus {snap.corpus_size})")
+        return
+
     path = Path(corpus) if corpus else default_corpus_path()
     try:
         cases = load_corpus(path)
@@ -462,6 +623,19 @@ def eval_detector(
         typer.echo(f"Corpus not found: {path}", err=True)
         raise typer.Exit(code=1)
     report = evaluate_detector(cases)
+
+    if snapshot:
+        append_snapshot(
+            snapshot_from_report(
+                report,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                corpus_size=len(cases),
+                corpus_sha=sha256_file(path),
+                contig_version=_pkg_version("contig"),
+            ),
+            history_path,
+        )
+
     if json_out:
         typer.echo(report.model_dump_json())
         return

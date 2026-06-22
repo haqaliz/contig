@@ -472,6 +472,154 @@ def test_watch_returns_once_run_is_no_longer_running(tmp_path):
     assert "finished" in result.output.lower()
 
 
+def _write_status(runs_dir, run_id, state, pid=4321):
+    import json
+
+    d = Path(runs_dir) / run_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "status.json").write_text(
+        json.dumps({"run_id": run_id, "state": state, "pid": pid,
+                    "started_at": "2026-06-22T00:00:00+00:00", "finished_at": None})
+    )
+    return d
+
+
+def test_cancel_writes_cancelled_state_for_running_run(tmp_path, monkeypatch):
+    import json
+
+    _write_status(tmp_path, "c1", "running")
+    monkeypatch.setattr("contig.lifecycle.os.killpg", lambda pgid, sig: None)
+    monkeypatch.setattr("contig.lifecycle.os.getpgid", lambda pid: pid)
+    monkeypatch.setattr(
+        "contig.lifecycle.os.kill",
+        lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()),
+    )
+    result = runner.invoke(app, ["cancel", "c1", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    status = json.loads((tmp_path / "c1" / "status.json").read_text())
+    assert status["state"] == "cancelled"
+
+
+def test_cancel_refuses_a_finished_run_nonzero(tmp_path):
+    _write_status(tmp_path, "c2", "finished")
+    result = runner.invoke(app, ["cancel", "c2", "--runs-dir", str(tmp_path)])
+    assert result.exit_code != 0
+    assert "nothing to cancel" in result.output.lower()
+
+
+def test_cancel_rejects_invalid_run_id(tmp_path):
+    result = runner.invoke(app, ["cancel", "--", "-bad", "--runs-dir", str(tmp_path)])
+    assert result.exit_code != 0
+
+
+def test_resume_reruns_same_run_id_with_resume_flag(tmp_path, monkeypatch):
+    import json
+
+    # First a normal run writes launch.json, then we cancel it, then resume.
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(app, ["run", "--run-id", "rsm", "--runs-dir", str(tmp_path / "runs")])
+    # mark it cancelled so it is resumable
+    (tmp_path / "runs" / "rsm" / "status.json").write_text(
+        json.dumps({"run_id": "rsm", "state": "cancelled", "pid": 4321,
+                    "started_at": "2026-06-22T00:00:00+00:00", "finished_at": "2026-06-22T00:01:00+00:00"})
+    )
+
+    seen = {}
+
+    def capture(cmd, trace_path):
+        seen["cmd"] = cmd
+        Path(trace_path).write_text(TRACE_RUN_OK)
+        d = Path(trace_path).parent / "results" / "multiqc"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "multiqc_data.json").write_text(GOOD_MQC)
+        return 0
+
+    monkeypatch.setattr("contig.cli.default_executor", capture)
+    result = runner.invoke(app, ["resume", "rsm", "--runs-dir", str(tmp_path / "runs")])
+    assert result.exit_code == 0
+    assert "-resume" in seen["cmd"]
+    # the SAME run id is reused (not a fresh one)
+    assert (tmp_path / "runs" / "rsm" / "run_record.json").exists()
+
+
+def test_resume_refuses_a_finished_run(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(app, ["run", "--run-id", "fin", "--runs-dir", str(tmp_path / "runs")])
+    result = runner.invoke(app, ["resume", "fin", "--runs-dir", str(tmp_path / "runs")])
+    assert result.exit_code != 0
+    assert "resumable" in result.output.lower()
+
+
+def test_resume_errors_when_launch_manifest_missing(tmp_path):
+    import json
+
+    d = tmp_path / "noman"
+    d.mkdir(parents=True)
+    (d / "status.json").write_text(
+        json.dumps({"run_id": "noman", "state": "cancelled", "pid": 1,
+                    "started_at": "2026-06-22T00:00:00+00:00", "finished_at": None})
+    )
+    result = runner.invoke(app, ["resume", "noman", "--runs-dir", str(tmp_path)])
+    assert result.exit_code != 0
+
+
+def test_resume_rejects_invalid_run_id(tmp_path):
+    result = runner.invoke(app, ["resume", "--", "-bad", "--runs-dir", str(tmp_path)])
+    assert result.exit_code != 0
+
+
+def test_approve_writes_approve_decision(tmp_path):
+    import json
+
+    _write_status(tmp_path, "ap", "awaiting_approval")
+    result = runner.invoke(app, ["approve", "ap", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    data = json.loads((tmp_path / "ap" / "approval.json").read_text())
+    assert data["decision"] == "approve"
+
+
+def test_approve_reject_writes_reject_decision(tmp_path):
+    import json
+
+    _write_status(tmp_path, "rj", "awaiting_approval")
+    result = runner.invoke(app, ["approve", "rj", "--reject", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    data = json.loads((tmp_path / "rj" / "approval.json").read_text())
+    assert data["decision"] == "reject"
+
+
+def test_approve_rejects_invalid_run_id(tmp_path):
+    result = runner.invoke(app, ["approve", "--", "-bad", "--runs-dir", str(tmp_path)])
+    assert result.exit_code != 0
+
+
+def test_run_auto_approve_applies_gated_patch(tmp_path, monkeypatch):
+    # --auto-approve drives a needs_confirmation patch through without a human:
+    # a missing-index failure is gated, then auto-approved, then succeeds.
+    state = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        p = Path(trace_path)
+        if state["n"] == 1:
+            p.write_text(TRACE_FAIL)
+            (p.parent / "run.log").write_text("ERROR: genome.fai index not found")
+            return 1
+        p.write_text(TRACE_RUN_OK)
+        (p.parent / "results" / "multiqc").mkdir(parents=True, exist_ok=True)
+        (p.parent / "results" / "multiqc" / "multiqc_data.json").write_text(GOOD_MQC)
+        return 0
+
+    monkeypatch.setattr("contig.cli.default_executor", executor)
+    result = runner.invoke(
+        app, ["run", "--run-id", "aa", "--runs-dir", str(tmp_path), "--auto-approve"]
+    )
+    assert result.exit_code == 0
+    assert "approved_and_retried" in result.output
+
+
 def test_eval_detector_scores_the_shipped_corpus(tmp_path):
     result = runner.invoke(app, ["eval-detector"])
     assert result.exit_code == 0
@@ -522,12 +670,84 @@ def test_corpus_promote_moves_case_into_golden(tmp_path):
     result = runner.invoke(
         app,
         ["corpus-promote", "r-1", "--pending", str(pending), "--golden", str(golden),
-         "--label", "oom"],
+         "--label", "oom", "--history-file", str(tmp_path / "history.jsonl")],
     )
     assert result.exit_code == 0
     promoted = load_corpus(golden)
     assert len(promoted) == 1 and promoted[0].expected_class == "oom"
     assert load_corpus(pending) == []  # removed from pending
+
+
+def test_eval_detector_snapshot_appends_to_history(tmp_path):
+    from contig.eval_history import load_history
+
+    history = tmp_path / "eval_history.jsonl"
+    result = runner.invoke(
+        app, ["eval-detector", "--snapshot", "--history-file", str(history)]
+    )
+    assert result.exit_code == 0
+    snaps = load_history(history)
+    assert len(snaps) == 1
+    assert snaps[0].corpus_sha  # tied to a corpus version
+    assert snaps[0].corpus_size >= 10
+
+
+def test_eval_detector_history_prints_trend(tmp_path):
+    from contig.eval_history import append_snapshot, snapshot_from_report
+    from contig.models import ClassScore, DetectorEvalReport
+
+    history = tmp_path / "eval_history.jsonl"
+    report = DetectorEvalReport(total=2, correct=2, accuracy=1.0,
+                                per_class={"oom": ClassScore(support=1, predicted=1, correct=1, precision=1.0, recall=1.0)})
+    append_snapshot(snapshot_from_report(report, timestamp="2026-06-22T00:00:00+00:00",
+                                         corpus_size=2, corpus_sha="abc", contig_version="0.0.1"), history)
+    result = runner.invoke(app, ["eval-detector", "--history", "--history-file", str(history)])
+    assert result.exit_code == 0
+    assert "2026-06-22" in result.output
+    assert "100" in result.output  # accuracy rendered
+
+
+def test_eval_detector_history_json_emits_snapshots(tmp_path):
+    import json
+
+    from contig.eval_history import append_snapshot, snapshot_from_report
+    from contig.models import DetectorEvalReport
+
+    history = tmp_path / "eval_history.jsonl"
+    report = DetectorEvalReport(total=1, correct=1, accuracy=1.0)
+    append_snapshot(snapshot_from_report(report, timestamp="t", corpus_size=1,
+                                         corpus_sha="abc", contig_version="0.0.1"), history)
+    result = runner.invoke(app, ["eval-detector", "--history", "--json", "--history-file", str(history)])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert isinstance(data, list)
+    assert data[0]["accuracy"] == 1.0
+    assert data[0]["corpus_sha"] == "abc"
+
+
+def test_corpus_promote_auto_appends_snapshot(tmp_path):
+    from contig.corpus import save_corpus
+    from contig.eval_history import load_history
+    from contig.models import FailureCase, TaskEvent
+
+    pending = tmp_path / "pending.jsonl"
+    golden = tmp_path / "golden.jsonl"
+    history = tmp_path / "eval_history.jsonl"
+    save_corpus(
+        [FailureCase(case_id="r-1", description="d", source="pending:r",
+                     events=[TaskEvent(process="STAR", status="FAILED", exit=137)],
+                     log_text="out of memory exit 137", expected_class="oom")],
+        pending,
+    )
+    save_corpus([], golden)
+    result = runner.invoke(
+        app,
+        ["corpus-promote", "r-1", "--pending", str(pending), "--golden", str(golden),
+         "--history-file", str(history)],
+    )
+    assert result.exit_code == 0
+    snaps = load_history(history)
+    assert len(snaps) == 1  # a snapshot of the golden corpus was recorded on promote
 
 
 def test_corpus_promote_unknown_case_errors(tmp_path):

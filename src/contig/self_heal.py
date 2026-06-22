@@ -15,8 +15,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from contig.bundle import write_bundle
 from contig.corpus import append_case, failure_case_from_run
@@ -86,6 +88,68 @@ def _safe_patch(patches: list[Patch]) -> Patch | None:
     return next((p for p in patches if p.risk == "safe"), None)
 
 
+# A poll function blocks until an approval decision lands or the timeout elapses,
+# returning the decision dict (`{"decision": "approve"|"reject", ...}`) or None on
+# timeout. Injected in tests so they never sleep for real.
+ApprovalPoll = Callable[[Path, float], "dict | None"]
+
+
+def _write_pending_approval(
+    run_dir: Path, run_id: str, attempt: int, diagnosis, patch: Patch, timeout_sec: float
+) -> None:
+    """Write pending_approval.json: the gated patch a human is being asked to decide.
+
+    The dashboard reads this to render the Approve/Reject prompt (PRD contract C).
+    """
+    (run_dir / "pending_approval.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "attempt": attempt,
+                "requested_at": datetime.now(timezone.utc).isoformat(),
+                "timeout_sec": timeout_sec,
+                "diagnosis": {
+                    "failure_class": diagnosis.failure_class,
+                    "root_cause": diagnosis.root_cause,
+                    "confidence": diagnosis.confidence,
+                },
+                "patch": {
+                    "kind": patch.kind,
+                    "risk": patch.risk,
+                    "rationale": patch.rationale,
+                    "operation": patch.operation,
+                    "expected_signal": patch.expected_signal,
+                },
+            }
+        )
+    )
+
+
+def _clear_pending_approval(run_dir: Path) -> None:
+    path = run_dir / "pending_approval.json"
+    if path.exists():
+        path.unlink()
+
+
+def _poll_approval_file(run_dir: Path, timeout_sec: float, interval: float = 1.0) -> dict | None:
+    """Default poll: wait for approval.json up to timeout_sec, then give up.
+
+    Reads `{decision, decided_at, by?}` once the file appears. A malformed file is
+    treated as no decision yet (the human re-writes it).
+    """
+    path = run_dir / "approval.json"
+    deadline = time.monotonic() + timeout_sec
+    while True:
+        if path.exists():
+            try:
+                return json.loads(path.read_text())
+            except (ValueError, OSError):
+                pass
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+
+
 def _lead_number(value: object, default: int) -> float:
     """Leading numeric part of a Nextflow resource literal ('16.GB' -> 16.0)."""
     if value is None:
@@ -94,24 +158,40 @@ def _lead_number(value: object, default: int) -> float:
     return float(match.group()) if match else float(default)
 
 
-def apply_patch(target: ExecutionTarget, patch: Patch) -> ExecutionTarget:
-    """Return a new target with the patch's resource bump applied to resourceLimits.
+def apply_patch(
+    target: ExecutionTarget, patch: Patch, params: dict[str, object] | None = None
+) -> tuple[ExecutionTarget, dict[str, object]]:
+    """Apply a patch to the run inputs, returning the updated (target, params).
 
-    Resource bumps ride in Nextflow's `process.resourceLimits` (what modern
-    nf-core honors; the old `--max_memory` params are ignored); a retry/other
-    patch changes nothing (the re-run itself is the fix).
+    Bounded by kind (PRD contract C):
+
+    - `resource`: bump `process.resourceLimits` (what modern nf-core honors; the
+      old `--max_memory` params are ignored).
+    - `param`: merge the operation into the pipeline params.
+    - `env`: merge the operation into the target's backend_options (string-coerced
+      so it round-trips through the generated config).
+    - `reference`/`code`/`retry`: change nothing. The re-run itself is the fix (a
+      reference/code patch is recorded and re-run only, never synthesized here).
     """
-    if patch.kind != "resource":
-        return target
-    mult = patch.operation.get("multiply", {})
-    limits = dict(target.resource_limits)
-    if "memory" in mult:
-        bumped = int(_lead_number(limits.get("memory"), _DEFAULT_MEMORY_GB) * int(mult["memory"]))
-        limits["memory"] = f"{bumped}.GB"
-    if "time" in mult:
-        bumped = int(_lead_number(limits.get("time"), _DEFAULT_TIME_HOURS) * int(mult["time"]))
-        limits["time"] = f"{bumped}.h"
-    return target.model_copy(update={"resource_limits": limits})
+    params = dict(params or {})
+    if patch.kind == "resource":
+        mult = patch.operation.get("multiply", {})
+        limits = dict(target.resource_limits)
+        if "memory" in mult:
+            bumped = int(_lead_number(limits.get("memory"), _DEFAULT_MEMORY_GB) * int(mult["memory"]))
+            limits["memory"] = f"{bumped}.GB"
+        if "time" in mult:
+            bumped = int(_lead_number(limits.get("time"), _DEFAULT_TIME_HOURS) * int(mult["time"]))
+            limits["time"] = f"{bumped}.h"
+        return target.model_copy(update={"resource_limits": limits}), params
+    if patch.kind == "param":
+        params.update(patch.operation)
+        return target, params
+    if patch.kind == "env":
+        options = dict(target.backend_options)
+        options.update({k: str(v) for k, v in patch.operation.items()})
+        return target.model_copy(update={"backend_options": options}), params
+    return target, params
 
 
 def self_heal_run(
@@ -129,6 +209,10 @@ def self_heal_run(
     max_attempts: int = 3,
     assay: str = "rnaseq",
     pending_corpus: str | Path | None = None,
+    resume: bool = False,
+    auto_approve: bool = False,
+    approval_timeout: float = 1800,
+    poll: ApprovalPoll = _poll_approval_file,
 ) -> RunRecord:
     """Run a pipeline and auto-recover from recoverable failures, logging the chain.
 
@@ -158,7 +242,7 @@ def self_heal_run(
                 executor=executor,
                 params=current_params or None,
                 nextflow_version=nextflow_version,
-                resume=attempt > 1,
+                resume=resume or attempt > 1,
                 assay=assay,
             )
             return _finalize(record, repair_history, run_dir)
@@ -184,13 +268,52 @@ def self_heal_run(
             safe = _safe_patch(patches)
 
             if safe is None:
-                # No automatic fix: pause for a human if there's a gated patch,
-                # otherwise we have nothing left to try.
-                outcome = "stopped_for_confirmation" if patches else "gave_up"
+                # No automatic fix. If there's no patch at all there is nothing
+                # left to try; if there's a gated patch, pause for a human
+                # (or apply it now under --auto-approve).
+                if not patches:
+                    _record_attempt(
+                        run_dir,
+                        repair_history,
+                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=None, outcome="gave_up"),
+                    )
+                    return _finalize(exc.record, repair_history, run_dir)
+
+                gated = patches[0]
+                if attempt >= max_attempts:
+                    _record_attempt(
+                        run_dir,
+                        repair_history,
+                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated, outcome="gave_up"),
+                    )
+                    return _finalize(exc.record, repair_history, run_dir)
+
+                decision = "approve" if auto_approve else None
+                if not auto_approve:
+                    _write_pending_approval(
+                        run_dir, run_id, attempt, diagnosis, gated, approval_timeout
+                    )
+                    _write_status(run_dir, "awaiting_approval")
+                    result = poll(run_dir, approval_timeout)
+                    _clear_pending_approval(run_dir)
+                    decision = (result or {}).get("decision") if result else None
+
+                if decision == "approve":
+                    current_target, current_params = apply_patch(current_target, gated, current_params)
+                    _write_status(run_dir, "running")
+                    _record_attempt(
+                        run_dir,
+                        repair_history,
+                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated, outcome="approved_and_retried"),
+                    )
+                    attempt += 1
+                    continue
+
+                outcome = "rejected_by_user" if decision == "reject" else "approval_timed_out"
                 _record_attempt(
                     run_dir,
                     repair_history,
-                    RepairStep(attempt=attempt, diagnosis=diagnosis, patch=patches[0] if patches else None, outcome=outcome),
+                    RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated, outcome=outcome),
                 )
                 return _finalize(exc.record, repair_history, run_dir)
 
@@ -202,7 +325,7 @@ def self_heal_run(
                 )
                 return _finalize(exc.record, repair_history, run_dir)
 
-            current_target = apply_patch(current_target, safe)
+            current_target, current_params = apply_patch(current_target, safe, current_params)
             _record_attempt(
                 run_dir,
                 repair_history,

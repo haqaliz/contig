@@ -4,9 +4,9 @@ from pathlib import Path
 import pytest
 
 from contig.corpus import load_corpus
-from contig.models import ExecutionTarget, RunSummary
+from contig.models import ExecutionTarget, Patch, RunSummary
 from contig.runner import PipelineExecutionError
-from contig.self_heal import self_heal_run
+from contig.self_heal import apply_patch, self_heal_run
 
 
 def _trace(status, exit_code):
@@ -151,14 +151,17 @@ def test_self_heal_does_not_stash_on_success(tmp_path):
     assert not (tmp_path / "runs" / "pending_corpus.jsonl").exists()
 
 
-def test_self_heal_stops_for_confirmation_on_needs_confirmation(tmp_path):
+def test_self_heal_pauses_for_approval_on_needs_confirmation(tmp_path):
+    # A needs_confirmation patch no longer stops outright: the loop pauses and
+    # awaits a human decision (contract C). With an immediate timeout poll it
+    # records approval_timed_out.
     def executor(cmd, trace_path):
         _write(trace_path, TRACE_TOOL, "ERROR: genome.fai index not found")
         return 1
 
-    record = _heal(tmp_path, executor)
+    record = _heal(tmp_path, executor, poll=lambda run_dir, timeout_sec: None)
     assert record.repair_history[0].diagnosis.failure_class == "missing_index"
-    assert record.repair_history[0].outcome == "stopped_for_confirmation"
+    assert record.repair_history[0].outcome == "approval_timed_out"
 
 
 def test_self_heal_appends_repair_progress_line_per_attempt(tmp_path):
@@ -208,6 +211,179 @@ def test_self_heal_writes_no_repair_progress_on_clean_run(tmp_path):
 
     _heal(tmp_path, executor)
     assert not (tmp_path / "runs" / "r" / "repair_progress.jsonl").exists()
+
+
+def _t():
+    return ExecutionTarget(backend="local", container_runtime="docker", work_dir="w")
+
+
+def test_apply_patch_resource_bump_updates_target_leaves_params(tmp_path):
+    patch = Patch(kind="resource", operation={"multiply": {"memory": 2}},
+                  rationale="x", risk="safe", expected_signal="s")
+    target, params = apply_patch(_t(), patch, {"input": "sheet.csv"})
+    assert target.resource_limits["memory"] == "16.GB"
+    assert params == {"input": "sheet.csv"}
+
+
+def test_apply_patch_param_merges_operation_into_params(tmp_path):
+    patch = Patch(kind="param", operation={"aligner": "star_salmon"},
+                  rationale="x", risk="needs_confirmation", expected_signal="s")
+    target, params = apply_patch(_t(), patch, {"input": "sheet.csv"})
+    assert params["aligner"] == "star_salmon"
+    assert params["input"] == "sheet.csv"
+    assert target.resource_limits == {}  # target untouched
+
+
+def test_apply_patch_env_merges_operation_into_backend_options(tmp_path):
+    patch = Patch(kind="env", operation={"relax_or_pin_env": True},
+                  rationale="x", risk="needs_confirmation", expected_signal="s")
+    target, params = apply_patch(_t(), patch, {})
+    assert target.backend_options["relax_or_pin_env"] == "True"
+
+
+def test_apply_patch_reference_is_rerun_only(tmp_path):
+    patch = Patch(kind="reference", operation={"build_index": True},
+                  rationale="x", risk="needs_confirmation", expected_signal="s")
+    target, params = apply_patch(_t(), patch, {"input": "sheet.csv"})
+    assert params == {"input": "sheet.csv"}  # unchanged: re-run is the fix
+    assert target.resource_limits == {}
+
+
+def test_self_heal_resume_passes_resume_on_first_execute(tmp_path):
+    # With resume=True the FIRST execute must carry -resume (continue a cancelled
+    # or interrupted run against its cached work dir), not just retries.
+    seen = {}
+
+    def executor(cmd, trace_path):
+        seen["cmd"] = cmd
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    _heal(tmp_path, executor, resume=True)
+    assert "-resume" in seen["cmd"]
+
+
+def test_self_heal_first_execute_has_no_resume_by_default(tmp_path):
+    seen = {}
+
+    def executor(cmd, trace_path):
+        seen["cmd"] = cmd
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    _heal(tmp_path, executor)
+    assert "-resume" not in seen["cmd"]
+
+
+TRACE_INDEX = _trace("FAILED", 1)  # paired with a missing-index log -> gated patch
+
+
+def _index_executor():
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_INDEX, "ERROR: genome.fai index not found")
+        return 1
+    return executor
+
+
+def test_self_heal_writes_pending_approval_when_gated_patch_needed(tmp_path):
+    # No safe patch, but a needs_confirmation patch exists: the loop pauses and
+    # writes the approval request (read here from inside the poll, while paused,
+    # since the file is cleared once a decision lands).
+    captured = {}
+
+    def poll(run_dir, timeout_sec):
+        captured["pending"] = json.loads((Path(run_dir) / "pending_approval.json").read_text())
+        return None  # time out
+
+    _heal(tmp_path, _index_executor(), poll=poll)
+    pending = captured["pending"]
+    assert pending["run_id"] == "r"
+    assert pending["attempt"] == 1
+    assert pending["diagnosis"]["failure_class"] == "missing_index"
+    assert pending["patch"]["kind"] == "reference"
+    assert pending["patch"]["risk"] == "needs_confirmation"
+    assert "requested_at" in pending and "timeout_sec" in pending
+
+
+def test_self_heal_sets_awaiting_approval_state_while_paused(tmp_path):
+    seen = {}
+
+    def poll(run_dir, timeout_sec):
+        seen["state"] = json.loads((Path(run_dir) / "status.json").read_text())["state"]
+        return None
+
+    _heal(tmp_path, _index_executor(), poll=poll)
+    assert seen["state"] == "awaiting_approval"
+
+
+def test_self_heal_approve_applies_patch_and_records_approved_outcome(tmp_path):
+    state = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, TRACE_INDEX, "ERROR: genome.fai index not found")
+            return 1
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    def poll(run_dir, timeout_sec):
+        return {"decision": "approve", "decided_at": "2026-06-22T00:00:00+00:00"}
+
+    record = _heal(tmp_path, executor, poll=poll)
+    assert RunSummary.from_events(record.events).succeeded is True
+    assert record.repair_history[0].outcome == "approved_and_retried"
+    # the pending file is cleared once decided
+    assert not (tmp_path / "runs" / "r" / "pending_approval.json").exists()
+    final = json.loads((tmp_path / "runs" / "r" / "status.json").read_text())
+    assert final["state"] == "finished"
+
+
+def test_self_heal_reject_records_rejected_and_stops(tmp_path):
+    def poll(run_dir, timeout_sec):
+        return {"decision": "reject", "decided_at": "2026-06-22T00:00:00+00:00"}
+
+    record = _heal(tmp_path, _index_executor(), poll=poll)
+    assert record.repair_history[-1].outcome == "rejected_by_user"
+    assert not (tmp_path / "runs" / "r" / "pending_approval.json").exists()
+
+
+def test_self_heal_timeout_records_timed_out_and_stops(tmp_path):
+    def poll(run_dir, timeout_sec):
+        return None  # no decision arrived within the window
+
+    record = _heal(tmp_path, _index_executor(), poll=poll)
+    assert record.repair_history[-1].outcome == "approval_timed_out"
+    assert not (tmp_path / "runs" / "r" / "pending_approval.json").exists()
+
+
+def test_self_heal_auto_approve_applies_gated_patch_without_pending(tmp_path):
+    state = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, TRACE_INDEX, "ERROR: genome.fai index not found")
+            return 1
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor, auto_approve=True)
+    assert record.repair_history[0].outcome == "approved_and_retried"
+    # auto-approve never writes a pending request (non-interactive path)
+    assert not (tmp_path / "runs" / "r" / "pending_approval.json").exists()
+
+
+def test_self_heal_gives_up_when_no_patch_at_all(tmp_path):
+    # An unrecoverable tool crash has no patch (safe or gated): still gave_up, no
+    # pending request written.
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_TOOL, "Segmentation fault in some_tool")
+        return 1
+
+    record = _heal(tmp_path, executor)
+    assert record.repair_history[-1].outcome == "gave_up"
+    assert not (tmp_path / "runs" / "r" / "pending_approval.json").exists()
 
 
 def test_self_heal_respects_max_attempts(tmp_path):

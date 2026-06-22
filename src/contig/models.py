@@ -312,3 +312,19 @@ class DetectorEvalReport(BaseModel):
     accuracy: float
     mismatches: list[DetectorMismatch] = []
     per_class: dict[str, ClassScore] = {}
+
+
+class EvalSnapshot(BaseModel):
+    """One detector-eval result tied to a corpus version (PRD contract D).
+
+    Appended to a committed JSONL history so detector accuracy over time is
+    auditable and the dashboard can render the trend. `corpus_sha` ties the
+    snapshot to the exact corpus file it scored.
+    """
+
+    timestamp: str
+    corpus_size: int
+    corpus_sha: str
+    accuracy: float
+    per_class: dict[str, ClassScore] = {}
+    contig_version: str | None = None
