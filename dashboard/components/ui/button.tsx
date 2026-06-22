@@ -1,5 +1,6 @@
 import { Button as ButtonPrimitive } from "@base-ui/react/button"
 import { cva, type VariantProps } from "class-variance-authority"
+import Link from "next/link"
 
 import { cn } from "@/lib/utils"
 
@@ -55,4 +56,23 @@ function Button({
   )
 }
 
-export { Button, buttonVariants }
+// A Link styled as a button. Navigation is a link, not a button, so this keeps
+// the correct <a> (role link) and avoids the Base UI nativeButton warning that
+// Button render={<Link/>} triggers. Use this for any anchor that looks like a
+// button; use Button for real button actions.
+function ButtonLink({
+  className,
+  variant = "default",
+  size = "default",
+  ...props
+}: React.ComponentProps<typeof Link> & VariantProps<typeof buttonVariants>) {
+  return (
+    <Link
+      data-slot="button"
+      className={cn(buttonVariants({ variant, size, className }))}
+      {...props}
+    />
+  )
+}
+
+export { Button, ButtonLink, buttonVariants }

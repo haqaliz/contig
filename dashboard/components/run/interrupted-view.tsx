@@ -4,8 +4,7 @@
 import { AlertTriangle } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import Link from "next/link";
+import { ButtonLink } from "@/components/ui/button";
 
 export function InterruptedView() {
   return (
@@ -22,9 +21,9 @@ export function InterruptedView() {
             You can start a new run.
           </p>
         </div>
-        <Button render={<Link href="/runs/new" />} size="sm" className="mt-1">
+        <ButtonLink href="/runs/new" size="sm" className="mt-1">
           Start a new run
-        </Button>
+        </ButtonLink>
       </CardContent>
     </Card>
   );

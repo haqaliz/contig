@@ -6,7 +6,7 @@ import { GitCompareArrows, Loader2, Plus } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
 import { RunTestProfileButton } from "@/components/run-test-profile-button";
-import { Button } from "@/components/ui/button";
+import { ButtonLink } from "@/components/ui/button";
 import { listRuns, listRunningRuns } from "@/lib/runs";
 import { RunsTable } from "./runs-table";
 
@@ -24,23 +24,19 @@ export default async function RunsPage() {
         description="Every pipeline run that produced a bundle, with its verdict, task outcomes, and whether the self-heal loop had to repair it."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <Button
-              render={<Link href="/runs/new" />}
-              size="sm"
-              className="gap-2"
-            >
+            <ButtonLink href="/runs/new" size="sm" className="gap-2">
               <Plus className="size-4" aria-hidden="true" />
               New run
-            </Button>
-            <Button
-              render={<Link href="/runs/compare" />}
+            </ButtonLink>
+            <ButtonLink
+              href="/runs/compare"
               variant="outline"
               size="sm"
               className="gap-2"
             >
               <GitCompareArrows className="size-4" aria-hidden="true" />
               Compare runs
-            </Button>
+            </ButtonLink>
             <RunTestProfileButton />
           </div>
         }

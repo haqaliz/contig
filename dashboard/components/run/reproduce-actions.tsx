@@ -7,10 +7,9 @@
 // this run's manifest (?from=<id>). Shown only when a launch manifest exists.
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { Loader2, Pencil, RotateCcw } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { Button, ButtonLink } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 
 export function ReproduceActions({ id }: { id: string }) {
@@ -53,10 +52,16 @@ export function ReproduceActions({ id }: { id: string }) {
           )}
           Reproduce exactly
         </Button>
-        <Button variant="outline" disabled={busy} render={<Link href={`/runs/new?from=${encodeURIComponent(id)}`} />}>
+        <ButtonLink
+          variant="outline"
+          href={`/runs/new?from=${encodeURIComponent(id)}`}
+          aria-disabled={busy}
+          tabIndex={busy ? -1 : undefined}
+          className={busy ? "pointer-events-none opacity-50" : undefined}
+        >
           <Pencil className="size-4" aria-hidden="true" />
           Edit and relaunch
-        </Button>
+        </ButtonLink>
         <p className="text-xs text-muted-foreground">
           Reproduce re-runs this exact configuration; edit and relaunch opens a
           pre-filled form.
