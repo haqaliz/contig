@@ -10,7 +10,7 @@ This file orients a coding agent working in this repository. Read it first. Deep
 
 The name: a *contig* is one contiguous sequence assembled from many overlapping fragments. The product assembles messy data, scattered tools, and broken steps into one verified working result.
 
-Status: **pre-MVP, validation phase.** Expect docs and design ahead of code.
+Status: **Layer-2 engine and a local dashboard are built; validating.** The run, self-heal, verify, reproduce loop works end-to-end as a CLI and a dashboard across three assays (RNA-seq, single-cell RNA-seq, germline variant calling), built test-first. Still pre-revenue. Code is now ahead of some of the narrative docs, so when in doubt verify against the code and FEATURES.md.
 
 ---
 

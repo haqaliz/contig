@@ -116,7 +116,7 @@ Recommendation: **RNA-seq differential expression** unless early discovery (Week
 **Objective:** Prove the Layer-2 engine generalizes beyond one pipeline, and that the reproducibility/provenance layer is a paid differentiator, not a nicety.
 
 ### Goals
-- Add **2-3 more pipelines**, chosen by partner demand-pull from Phase 1 (likely candidates: the *other* of RNA-seq DE / variant calling, plus single-cell RNA-seq or 16S/metagenomics).
+- Add **2-3 more pipelines**, chosen by partner demand-pull from Phase 1 (likely candidates: the *other* of RNA-seq DE / variant calling, plus single-cell RNA-seq or 16S/metagenomics). *(Shipped early, ahead of this phase: variant calling and single-cell RNA-seq (nf-core/scrnaseq) are already on the engine as of 2026-06; see FEATURES.md.)*
 - Turn reproducibility into first-class **provenance**: full lineage, audit trail, signed/immutable run records.
 - Introduce **team plans** (shared workspaces, shared pipeline configs, role-based access).
 

@@ -278,6 +278,48 @@ What makes it **shareable**: the record serializes to a portable bundle (params 
 
 ---
 
+## 7.5 Operational surface (built today)
+
+The principles above are realized as a CLI and a local dashboard over the same
+engine. What is implemented now:
+
+- **Run lifecycle and observability.** A run writes a `status.json` marker and a
+  live Nextflow trace, so it is observable before the bundle exists. `contig
+  status` / `contig watch` (and the dashboard live view) show task progress, the
+  currently running steps, and the self-heal feed in flight. `contig cancel`
+  signals the run's process group and marks it cancelled; `contig resume` re-runs
+  the same id with `-resume` from the cached tasks. `contig rerun` reproduces a
+  past run from its launch manifest under a fresh id.
+- **Human-in-the-loop self-heal gate.** Safe patches auto-apply; a
+  `needs_confirmation` or `destructive` patch pauses the run (`awaiting_approval`,
+  a `pending_approval.json` sidecar) and waits for `contig approve` (or
+  `--reject`) with a timeout, so a risky fix is never applied silently. Each
+  decision lands in the repair history.
+- **Notifications.** Run events (finished, failed, cancelled, awaiting_approval)
+  append to `notifications.jsonl`; `contig run --notify <url>` posts a webhook and
+  SMTP env vars enable email. The dashboard surfaces them as an activity bell.
+  Best-effort: a failing notification never fails the run.
+- **Output-integrity re-verification.** Output file checksums are captured at
+  finalize; `contig verify <id>` re-hashes the outputs on disk against the record
+  and reports drift (the strongest reproducibility claim), surfaced as a dashboard
+  badge.
+- **Pluggable detector and the eval flywheel.** The detector is a swappable
+  interface (`rules`, `rules-strict` today; an LLM-backed detector plugs in behind
+  the same interface). `contig eval-detector --detector <name>` scores any detector
+  against the labeled failure corpus; `--snapshot`/`--history` persist an
+  accuracy-over-time trend (moat #2), shown on the dashboard `/eval` page. This is
+  how "gets better as models improve" (§5.5) is measured rather than asserted.
+- **Curated assays.** RNA-seq (`nf-core/rnaseq`), single-cell RNA-seq
+  (`nf-core/scrnaseq`), and germline variant calling (`nf-core/sarek`), each with
+  its own QC rule pack via the single `rule_pack_for(assay)` mapping point. The
+  goal-to-assay router is deterministic and replaceable (Layer 1, consumed not
+  built).
+- **Compute backends.** `local` (Docker) and `aws_batch` map through one config
+  generator; `contig run --backend aws_batch` refuses up front (a preflight) if the
+  queue, region, S3 work dir, or credentials are missing. See the AWS Batch runbook.
+
+---
+
 ## 8. Security, data handling, and trust
 
 Genomic data is sensitive even when not clinical (it is identifying, familial, and often consented for a narrow purpose). Trust is a product feature.
