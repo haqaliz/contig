@@ -76,7 +76,9 @@ def test_match_assay_rnaseq_still_matches_after_adding_variant_calling():
 
 
 def test_match_assay_returns_none_for_unregistered_assay():
-    assert match_assay("assemble a de novo metagenome") is None
+    # ChIP-seq has no curated pipeline in the registry, so a ChIP goal matches
+    # nothing. (A metagenome goal now routes to the mag assay.)
+    assert match_assay("call peaks from my ChIP-seq experiment") is None
 
 
 def test_match_assay_returns_none_for_empty_goal():
@@ -131,3 +133,119 @@ def test_match_assay_matches_tenx_phrase():
 def test_match_assay_rnaseq_not_pulled_into_scrnaseq():
     # bulk RNA-seq must stay rnaseq even though scrnaseq keywords contain "rna"
     assert match_assay("I have bulk RNA-seq data") == "rnaseq"
+
+
+# --- methyl-seq assay (PRD contract D) -----------------------------------------
+
+
+def test_registry_has_methylseq_entry():
+    methyl = [e for e in REGISTRY if e.assay == "methylseq"]
+    assert len(methyl) == 1
+    assert isinstance(methyl[0], PipelineEntry)
+    assert methyl[0].pipeline == "nf-core/methylseq"
+    assert methyl[0].revision  # pinned to a real released tag
+
+
+def test_select_pipeline_returns_methylseq_pipeline():
+    entry = select_pipeline("methylseq")
+    assert entry.assay == "methylseq"
+    assert entry.pipeline == "nf-core/methylseq"
+
+
+def test_assay_for_pipeline_maps_methylseq_pipeline_to_methylseq():
+    assert assay_for_pipeline("nf-core/methylseq") == "methylseq"
+
+
+def test_match_assay_matches_methylation_phrase():
+    assert match_assay("measure DNA methylation in my samples") == "methylseq"
+
+
+def test_match_assay_matches_bisulfite_synonym():
+    assert match_assay("process bisulfite sequencing reads") == "methylseq"
+
+
+def test_match_assay_matches_wgbs_synonym():
+    assert match_assay("analyze my WGBS run") == "methylseq"
+
+
+# --- 16S amplicon assay (PRD contract D) ---------------------------------------
+
+
+def test_registry_has_ampliseq_entry():
+    ampli = [e for e in REGISTRY if e.assay == "ampliseq"]
+    assert len(ampli) == 1
+    assert isinstance(ampli[0], PipelineEntry)
+    assert ampli[0].pipeline == "nf-core/ampliseq"
+    assert ampli[0].revision  # pinned to a real released tag
+
+
+def test_select_pipeline_returns_ampliseq_pipeline():
+    entry = select_pipeline("ampliseq")
+    assert entry.assay == "ampliseq"
+    assert entry.pipeline == "nf-core/ampliseq"
+
+
+def test_assay_for_pipeline_maps_ampliseq_pipeline_to_ampliseq():
+    assert assay_for_pipeline("nf-core/ampliseq") == "ampliseq"
+
+
+def test_match_assay_matches_16s_phrase():
+    assert match_assay("profile the 16S rRNA community") == "ampliseq"
+
+
+def test_match_assay_matches_amplicon_synonym():
+    assert match_assay("run amplicon sequencing analysis") == "ampliseq"
+
+
+def test_match_assay_matches_microbiome_synonym():
+    assert match_assay("characterize the gut microbiome") == "ampliseq"
+
+
+def test_match_assay_matches_dada2_synonym():
+    assert match_assay("denoise reads with DADA2") == "ampliseq"
+
+
+# --- shotgun metagenomics assay (PRD contract D) -------------------------------
+
+
+def test_registry_has_mag_entry():
+    mag = [e for e in REGISTRY if e.assay == "mag"]
+    assert len(mag) == 1
+    assert isinstance(mag[0], PipelineEntry)
+    assert mag[0].pipeline == "nf-core/mag"
+    assert mag[0].revision  # pinned to a real released tag
+
+
+def test_select_pipeline_returns_mag_pipeline():
+    entry = select_pipeline("mag")
+    assert entry.assay == "mag"
+    assert entry.pipeline == "nf-core/mag"
+
+
+def test_assay_for_pipeline_maps_mag_pipeline_to_mag():
+    assert assay_for_pipeline("nf-core/mag") == "mag"
+
+
+def test_match_assay_matches_metagenome_phrase():
+    assert match_assay("assemble a de novo metagenome") == "mag"
+
+
+def test_match_assay_matches_metagenomics_synonym():
+    assert match_assay("run shotgun metagenomics on this sample") == "mag"
+
+
+def test_match_assay_matches_mag_synonym():
+    assert match_assay("recover MAGs from the assembly") == "mag"
+
+
+# --- keyword routing does not collide across the new assays ---------------------
+
+
+def test_metagenome_goal_does_not_misroute_to_ampliseq():
+    # "metagenome" must route to mag, not get pulled into the microbiome keyword
+    assert match_assay("shotgun metagenome assembly") == "mag"
+
+
+def test_amplicon_microbiome_goal_routes_to_ampliseq_not_mag():
+    # a microbiome amplicon study is ampliseq even though both touch communities
+    assert match_assay("16S amplicon microbiome survey") == "ampliseq"

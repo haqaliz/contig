@@ -14,6 +14,11 @@ from contig.samplesheet import SampleRow
 # a warning. Bulk differential-expression RNA-seq does. Single-sample germline
 # variant calling does not, and single-cell RNA-seq does not either: it measures
 # many cells WITHIN a sample, so bulk replicates are not the relevant unit.
+# methyl-seq, 16S amplicon (ampliseq), and shotgun metagenomics (mag) are also
+# not bulk-replicate assays: each sample is analyzed on its own (per-sample
+# methylation calls, per-sample ASV tables, per-sample assemblies/bins), so a
+# single sample is valid and raises no replicate warning. They are absent from
+# this set, and assay_expects_replicates returns False for them.
 _REPLICATE_ASSAYS = {"rnaseq"}
 
 

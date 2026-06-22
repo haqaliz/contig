@@ -99,6 +99,21 @@ class TaskEvent(BaseModel):
         return self.status.upper() == "FAILED" or (self.exit is not None and self.exit != 0)
 
 
+class TaskResource(BaseModel):
+    """One task's measured resource usage, parsed from the Nextflow trace.
+
+    realtime_sec is wall-clock seconds, peak_rss_mb is peak resident memory in
+    megabytes, pct_cpu is the trace's %cpu (can exceed 100 on multi-core tasks).
+    These are the actuals the cost model prices and the dashboard shows.
+    """
+
+    process: str
+    name: str | None = None
+    realtime_sec: float
+    peak_rss_mb: float
+    pct_cpu: float
+
+
 class RunSummary(BaseModel):
     """The reduced outcome of a run, derived from its terminal task events."""
 
@@ -217,6 +232,7 @@ class RunRecord(BaseModel):
     qc_results: list[QCResult] = []
     output_checksums: dict[str, str] = {}
     repair_history: list[RepairStep] = []
+    resource_usage: list[TaskResource] = []
 
     @computed_field  # serialized into run_record.json so the dashboard reads it directly
     @property

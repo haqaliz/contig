@@ -102,6 +102,29 @@ def test_self_heal_writes_status_running_then_finished(tmp_path):
     assert final["state"] == "finished"
 
 
+def test_self_heal_populates_resource_usage_from_trace(tmp_path):
+    # The final record carries per-task resource actuals parsed from trace.txt so
+    # the dashboard and the cost model can price the run.
+    trace = (
+        "task_id\thash\tnative_id\tname\tstatus\texit\tsubmit\t"
+        "duration\trealtime\t%cpu\tpeak_rss\n"
+        "1\tab/cd\t1\tSTAR_ALIGN (S1)\tCOMPLETED\t0\t2026-01-01\t"
+        "2m 5s\t2m 3s\t180.4%\t1.2 GB\n"
+    )
+
+    def executor(cmd, trace_path):
+        _write(trace_path, trace, "done")
+        return 0
+
+    record = _heal(tmp_path, executor)
+    assert len(record.resource_usage) == 1
+    task = record.resource_usage[0]
+    assert task.process == "STAR_ALIGN (S1)"
+    assert task.realtime_sec == 123.0
+    assert task.peak_rss_mb == 1228.8
+    assert task.pct_cpu == 180.4
+
+
 def test_self_heal_writes_status_error_when_no_record(tmp_path):
     # A run that produced no trace at all (engine could not even start) is "error",
     # not a stuck "running".

@@ -69,6 +69,20 @@ def test_one_scrnaseq_sample_has_no_replicate_warning():
     assert not any("replicates" in w for w in shape.warnings)
 
 
+def test_methylseq_does_not_expect_bulk_replicates():
+    # methyl-seq is not a bulk differential-expression assay, so a single sample
+    # must not raise the "needs replicates" warning
+    assert assay_expects_replicates("methylseq") is False
+
+
+def test_ampliseq_does_not_expect_bulk_replicates():
+    assert assay_expects_replicates("ampliseq") is False
+
+
+def test_mag_does_not_expect_bulk_replicates():
+    assert assay_expects_replicates("mag") is False
+
+
 def test_clean_three_sample_paired_run_no_warnings():
     rows = [
         SampleRow(sample="s1", fastq_1="r1_1.fq.gz", fastq_2="r1_2.fq.gz"),

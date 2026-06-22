@@ -29,6 +29,27 @@ REGISTRY: list[PipelineEntry] = [
         revision="4.1.0",
         description="Single-cell RNA-seq quantification + per-cell QC (10x, DropSeq, SmartSeq).",
     ),
+    PipelineEntry(
+        assay="methylseq",
+        pipeline="nf-core/methylseq",
+        # 4.2.0 is the latest released nf-core/methylseq tag (2025-12-12).
+        revision="4.2.0",
+        description="Bisulfite sequencing methylation calling + QC (Bismark/bwa-meth).",
+    ),
+    PipelineEntry(
+        assay="ampliseq",
+        pipeline="nf-core/ampliseq",
+        # 2.18.0 is the latest released nf-core/ampliseq tag (2026-06-17).
+        revision="2.18.0",
+        description="16S/ITS amplicon profiling: DADA2 denoising, ASV inference, taxonomy.",
+    ),
+    PipelineEntry(
+        assay="mag",
+        pipeline="nf-core/mag",
+        # 5.4.2 is the latest released nf-core/mag tag (2026-03-31).
+        revision="5.4.2",
+        description="Shotgun metagenomics: assembly, binning, and bin QC (de novo MAGs).",
+    ),
 ]
 
 _BY_ASSAY: dict[str, PipelineEntry] = {e.assay: e for e in REGISTRY}
@@ -92,6 +113,37 @@ _ASSAY_KEYWORDS: dict[str, tuple[str, ...]] = {
         "snv",
         "indel",
         "variant caller",
+    ),
+    # methyl-seq before the others is harmless (no shared substrings), but kept
+    # grouped with the new assays for readability.
+    "methylseq": (
+        "methylation",
+        "methyl-seq",
+        "methylseq",
+        "bisulfite",
+        "wgbs",
+    ),
+    # shotgun metagenomics. "metagenom" covers metagenome/metagenomic/metagenomics.
+    # "mag"/"mags" are the recovered-genome synonym; we anchor them as standalone
+    # tokens (leading space or "mags") so a bare "mag" inside e.g. "image" or
+    # "magnitude" does not misroute. ampliseq is listed BEFORE mag so a goal that
+    # names both a microbiome AND shotgun lands by the more specific amplicon
+    # signal only when amplicon/16s/dada2 is present (see ampliseq keywords).
+    "mag": (
+        "metagenom",
+        "shotgun",
+        " mag",
+        "mags",
+    ),
+    # 16S/ITS amplicon microbiome profiling. Listed AFTER mag in iteration order
+    # does not matter here because these needles ("16s", "amplicon", "dada2") do
+    # not appear in metagenomics goals; "microbiome" can co-occur with shotgun
+    # work, but a microbiome goal without shotgun/metagenom routes to amplicon.
+    "ampliseq": (
+        "16s",
+        "amplicon",
+        "microbiome",
+        "dada2",
     ),
 }
 

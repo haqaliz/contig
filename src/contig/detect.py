@@ -8,9 +8,11 @@ matching evidence and a confidence the self-healing loop can act on.
 
 from __future__ import annotations
 
-from typing import Callable
+import json
+import os
+from typing import Callable, get_args
 
-from contig.models import Diagnosis, TaskEvent
+from contig.models import Diagnosis, FailureClass, TaskEvent
 
 # A Detector is any callable that maps a failed run's terminal events plus its
 # captured log text to a Diagnosis (PRD contract C). diagnose_failure is the
@@ -254,20 +256,227 @@ def diagnose_failure_strict(events: list[TaskEvent], log_text: str) -> Diagnosis
     )
 
 
+# --- provider-agnostic LLM detector (PRD contract A) ---------------------------
+# An OPTIONAL detector behind the same Detector type. It is gated by env: it
+# registers only when a provider AND its key are configured, so the default
+# suite never imports a provider SDK or hits the network. The provider call is
+# isolated behind `_llm_complete`, a tiny seam tests monkeypatch with a fake.
+
+# Provider -> the env var holding its API key. CONTIG_LLM_PROVIDER selects one.
+_LLM_PROVIDER_KEY_ENV: dict[str, str] = {
+    "claude": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+}
+
+# The valid FailureClass labels, derived from the model so the prompt and the
+# fallback stay in sync with the schema (no hand-maintained second list).
+_VALID_FAILURE_CLASSES: frozenset[str] = frozenset(get_args(FailureClass))
+
+
+def _selected_provider() -> str | None:
+    """The configured provider whose key is present, or None if not usable.
+
+    Returns None when CONTIG_LLM_PROVIDER is unset, names an unknown provider, or
+    the matching key env is empty. This is the single env gate; it never reads or
+    returns the key value itself.
+    """
+    provider = os.environ.get("CONTIG_LLM_PROVIDER")
+    if provider is None:
+        return None
+    provider = provider.strip().lower()
+    key_env = _LLM_PROVIDER_KEY_ENV.get(provider)
+    if key_env is None:
+        return None
+    if not os.environ.get(key_env):
+        return None
+    return provider
+
+
+def llm_detector_available() -> bool:
+    """Whether the LLM detector can be built from the current environment."""
+    return _selected_provider() is not None
+
+
+def _missing_llm_env_message() -> str:
+    """A clear, secret-free explanation of what env the LLM detector needs."""
+    provider = os.environ.get("CONTIG_LLM_PROVIDER")
+    if provider is None:
+        return (
+            "the 'llm' detector needs CONTIG_LLM_PROVIDER set to 'claude' or "
+            "'openai' (with the matching ANTHROPIC_API_KEY or OPENAI_API_KEY)"
+        )
+    provider_norm = provider.strip().lower()
+    key_env = _LLM_PROVIDER_KEY_ENV.get(provider_norm)
+    if key_env is None:
+        known = ", ".join(sorted(_LLM_PROVIDER_KEY_ENV))
+        return (
+            f"the 'llm' detector got unknown CONTIG_LLM_PROVIDER {provider!r}; "
+            f"known providers: {known}"
+        )
+    return f"the 'llm' detector needs {key_env} set for provider {provider_norm!r}"
+
+
+def _llm_complete(provider: str, prompt: str) -> str:
+    """Send one prompt to the selected provider and return the raw text reply.
+
+    This is the ONLY place a provider SDK is imported (lazily) or the network is
+    touched, so the whole detector is mocked by monkeypatching this one function.
+    The API key is read from env here and never logged or returned.
+    """
+    key_env = _LLM_PROVIDER_KEY_ENV[provider]
+    api_key = os.environ[key_env]
+    if provider == "claude":
+        from anthropic import Anthropic
+
+        client = Anthropic(api_key=api_key)
+        resp = client.messages.create(
+            model="claude-opus-4-8",
+            max_tokens=512,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return "".join(
+            block.text for block in resp.content if getattr(block, "type", None) == "text"
+        )
+    # openai
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key)
+    resp = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return resp.choices[0].message.content or ""
+
+
+def _build_prompt(events: list[TaskEvent], log_text: str) -> str:
+    """One prompt asking for a strict JSON diagnosis (FailureClass + cause + conf)."""
+    classes = ", ".join(sorted(_VALID_FAILURE_CLASSES))
+    event_lines = "\n".join(
+        f"- process={e.process} status={e.status} exit={e.exit}" for e in events
+    )
+    return (
+        "You are a bioinformatics pipeline failure classifier. Given a failed "
+        "Nextflow run's terminal task events and its captured error log, classify "
+        "the root cause.\n\n"
+        f"Reply with ONLY a JSON object: {{\"failure_class\": one of [{classes}], "
+        '"root_cause": a short sentence, "confidence": a number from 0.0 to 1.0}}.\n\n'
+        f"Terminal task events:\n{event_lines or '(none)'}\n\n"
+        f"Error log:\n{log_text}\n"
+    )
+
+
+def _extract_json_object(text: str) -> dict | None:
+    """Parse the first top-level JSON object out of a model reply, or None.
+
+    Tolerates JSON wrapped in prose by taking the substring from the first '{'
+    to the last '}'. Returns None when nothing parseable is found.
+    """
+    stripped = text.strip()
+    try:
+        obj = json.loads(stripped)
+        return obj if isinstance(obj, dict) else None
+    except (ValueError, TypeError):
+        pass
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        return None
+    try:
+        obj = json.loads(text[start : end + 1])
+    except (ValueError, TypeError):
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _diagnosis_from_reply(reply: str) -> Diagnosis:
+    """Map a raw model reply to a Diagnosis, falling back to unknown on any gap."""
+    obj = _extract_json_object(reply)
+    if obj is None:
+        return Diagnosis(
+            failure_class="unknown",
+            root_cause="LLM detector could not parse a diagnosis from the response.",
+            confidence=0.2,
+        )
+    failure_class = obj.get("failure_class")
+    if failure_class not in _VALID_FAILURE_CLASSES:
+        return Diagnosis(
+            failure_class="unknown",
+            root_cause="LLM detector returned an unrecognized failure class.",
+            confidence=0.2,
+        )
+    root_cause = str(obj.get("root_cause") or "LLM detector diagnosis.")
+    try:
+        confidence = float(obj.get("confidence", 0.5))
+    except (ValueError, TypeError):
+        confidence = 0.5
+    confidence = min(1.0, max(0.0, confidence))
+    return Diagnosis(
+        failure_class=failure_class, root_cause=root_cause, confidence=confidence
+    )
+
+
+def build_llm_detector() -> Detector:
+    """Build the LLM Detector closure (PRD contract A); requires configured env.
+
+    Raises KeyError (naming the missing env) when no provider/key is configured,
+    so callers get the same clear error get_detector gives. The returned callable
+    maps (events, log_text) to a Diagnosis via one prompt and never raises: any
+    provider or parse error falls back to an unknown Diagnosis.
+    """
+    provider = _selected_provider()
+    if provider is None:
+        raise KeyError(_missing_llm_env_message())
+
+    def detect_with_llm(events: list[TaskEvent], log_text: str) -> Diagnosis:
+        prompt = _build_prompt(events, log_text)
+        try:
+            reply = _llm_complete(provider, prompt)
+        except Exception:
+            # A provider/network error must not crash the self-heal loop; we
+            # degrade to unknown so a rules detector can still act. The exception
+            # is intentionally not logged (it can carry request context).
+            return Diagnosis(
+                failure_class="unknown",
+                root_cause="LLM detector could not reach the provider.",
+                confidence=0.2,
+            )
+        return _diagnosis_from_reply(reply)
+
+    return detect_with_llm
+
+
 # Registry of named detectors (PRD contract C). The orchestrator resolves a CLI
-# flag through get_detector; the corpus eval scores any value here.
+# flag through get_detector; the corpus eval scores any value here. The static
+# map holds only the always-available, network-free rules detectors; "llm" is
+# resolved dynamically (and only when its env is configured) so importing this
+# module never pulls in a provider SDK or touches the network.
 DETECTORS: dict[str, Detector] = {
     "rules": diagnose_failure,
     "rules-strict": diagnose_failure_strict,
 }
 
 
+def available_detectors() -> list[str]:
+    """Names resolvable right now: the static rules plus 'llm' when configured."""
+    names = list(DETECTORS)
+    if llm_detector_available():
+        names.append("llm")
+    return names
+
+
 def get_detector(name: str) -> Detector:
-    """Resolve a detector by name; an unknown name is a clear KeyError."""
+    """Resolve a detector by name; an unknown name is a clear KeyError.
+
+    "llm" is resolved through the env-gated builder: when no provider/key is
+    configured it raises a KeyError naming the missing env, so the optional
+    detector fails loudly instead of silently classifying nothing.
+    """
+    if name == "llm":
+        return build_llm_detector()
     try:
         return DETECTORS[name]
     except KeyError:
-        available = ", ".join(sorted(DETECTORS))
+        available = ", ".join(sorted(available_detectors()))
         raise KeyError(
             f"unknown detector {name!r}; available detectors: {available}"
         ) from None

@@ -23,6 +23,7 @@ from typing import Callable
 from contig.bundle import compute_output_checksums, write_bundle
 from contig.corpus import append_case, failure_case_from_run
 from contig.detect import diagnose_failure
+from contig.events import parse_resource_usage_file
 from contig.models import ExecutionTarget, Patch, RepairStep, RunRecord, RunSummary
 from contig.notify import emit_event
 from contig.repair import propose_patches
@@ -378,6 +379,9 @@ def _finalize(
         raise PipelineExecutionError(1, None)
     record.repair_history = repair_history
     record.output_checksums = compute_output_checksums(_results_dir(record, run_dir))
+    trace_path = Path(run_dir) / "trace.txt"
+    if trace_path.exists():
+        record.resource_usage = parse_resource_usage_file(trace_path)
     write_bundle(record, run_dir)
     _write_status(run_dir, "finished")
     succeeded = RunSummary.from_events(record.events).succeeded

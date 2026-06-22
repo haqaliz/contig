@@ -1,10 +1,11 @@
+import json
 from pathlib import Path
 
 from typer.testing import CliRunner
 
 from contig.bundle import load_bundle, write_bundle
 from contig.cli import app
-from contig.models import ExecutionTarget, RunRecord, TaskEvent
+from contig.models import ExecutionTarget, RunRecord, TaskEvent, TaskResource
 
 
 def _make_sheet(tmp_path, *, valid=True):
@@ -995,3 +996,80 @@ def test_plan_rejects_an_unrecognized_goal(tmp_path):
         app, ["plan", "--goal", "assemble a de novo bacterial genome", "--input", str(sheet)]
     )
     assert result.exit_code != 0
+
+
+def _write_run_with_usage(runs_dir, run_id, usage):
+    record = RunRecord(
+        run_id=run_id,
+        pipeline="nf-core/rnaseq",
+        pipeline_revision="3.26.0",
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_checksums={},
+        events=[TaskEvent(process="X", status="COMPLETED", exit=0)],
+        resource_usage=usage,
+    )
+    write_bundle(record, Path(runs_dir) / run_id)
+
+
+def test_cost_defaults_to_zero_on_local(tmp_path):
+    _write_run_with_usage(
+        tmp_path, "c1",
+        [TaskResource(process="STAR", name="STAR", realtime_sec=3600.0, peak_rss_mb=1024.0, pct_cpu=100.0)],
+    )
+    result = runner.invoke(app, ["cost", "c1", "--runs-dir", str(tmp_path), "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["currency"] == "USD"
+    assert payload["rate_cpu_hour"] == 0.0
+    assert payload["total"] == 0.0
+    assert payload["by_task"][0]["name"] == "STAR"
+
+
+def test_cost_applies_cpu_hour_rate(tmp_path):
+    _write_run_with_usage(
+        tmp_path, "c2",
+        [TaskResource(process="STAR", name="STAR", realtime_sec=3600.0, peak_rss_mb=0.0, pct_cpu=100.0)],
+    )
+    result = runner.invoke(
+        app,
+        ["cost", "c2", "--runs-dir", str(tmp_path), "--rate-cpu-hour=2.0", "--json"],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["total"] == 2.0
+
+
+def test_cost_reports_zero_for_run_without_resource_usage(tmp_path):
+    _write_run_with_usage(tmp_path, "c3", [])
+    result = runner.invoke(
+        app,
+        ["cost", "c3", "--runs-dir", str(tmp_path), "--rate-cpu-hour=5.0", "--json"],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["total"] == 0.0
+    assert payload["by_task"] == []
+
+
+def test_cost_rejects_an_unsafe_run_id(tmp_path):
+    result = runner.invoke(app, ["cost", "-badid", "--runs-dir", str(tmp_path)])
+    assert result.exit_code != 0
+
+
+def test_cost_reports_missing_run(tmp_path):
+    result = runner.invoke(app, ["cost", "ghost", "--runs-dir", str(tmp_path)])
+    assert result.exit_code != 0
+
+
+def test_cost_text_output_shows_total_and_currency(tmp_path):
+    _write_run_with_usage(
+        tmp_path, "c4",
+        [TaskResource(process="STAR", name="STAR", realtime_sec=3600.0, peak_rss_mb=0.0, pct_cpu=100.0)],
+    )
+    result = runner.invoke(
+        app,
+        ["cost", "c4", "--runs-dir", str(tmp_path), "--rate-cpu-hour=1.5", "--currency=EUR"],
+    )
+    assert result.exit_code == 0
+    assert "EUR" in result.output
+    assert "STAR" in result.output

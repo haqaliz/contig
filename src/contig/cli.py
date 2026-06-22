@@ -32,6 +32,7 @@ from contig.eval_history import (
     snapshot_from_report,
 )
 from contig.bundle import compute_output_checksums
+from contig.cost import cost_report
 from contig.models import ExecutionTarget, LaunchManifest, RunRecord, RunSummary, sha256_file
 from contig.nfconfig import ConfigGenerationError, preflight_aws_batch
 from contig.planner import PlanningError
@@ -501,6 +502,51 @@ def verify(
     for rel in result["missing"]:
         typer.echo(f"  missing: {rel}", err=True)
     raise typer.Exit(code=1)
+
+
+@app.command()
+def cost(
+    run_id: str = typer.Argument(..., help="The run to price."),
+    runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+    rate_cpu_hour: float = typer.Option(0.0, "--rate-cpu-hour", help="Price per cpu-hour of realtime (default 0: local is free)."),
+    rate_mem_gb_hour: float = typer.Option(0.0, "--rate-mem-gb-hour", help="Price per GB-hour of peak memory (default 0: local is free)."),
+    currency: str = typer.Option("USD", "--currency", help="Currency label for the report."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the cost report as JSON (for the dashboard)."),
+) -> None:
+    """Price a finished run's recorded resource usage against configurable rates.
+
+    Reads the per-task actuals captured in the record (realtime, peak memory) and
+    applies the cpu-hour and GB-hour rates. Rates default to zero, so a local run
+    is free; a run that captured no resource usage reports a zero total.
+    """
+    if not _is_safe_run_id(run_id):
+        typer.echo(f"Invalid run id: {run_id!r}", err=True)
+        raise typer.Exit(code=1)
+    try:
+        record = load_run(runs_dir, run_id)
+    except RunNotFoundError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+    report = cost_report(
+        record.resource_usage,
+        rate_cpu_hour=rate_cpu_hour,
+        rate_mem_gb_hour=rate_mem_gb_hour,
+        currency=currency,
+    )
+    if json_out:
+        typer.echo(_json.dumps(report))
+        return
+
+    typer.echo(
+        f"Cost for run {run_id}: {report['total']:.4f} {currency} "
+        f"(cpu {rate_cpu_hour}/h, mem {rate_mem_gb_hour}/GB-h)"
+    )
+    for row in report["by_task"]:
+        typer.echo(
+            f"  {row['name']}: {row['realtime_sec']:.0f}s, "
+            f"{row['peak_rss_mb']:.0f} MB -> {row['cost']:.4f} {currency}"
+        )
 
 
 @app.command()

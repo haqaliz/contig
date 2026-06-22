@@ -1,5 +1,8 @@
 from contig.models import QCResult
 from contig.verification.rule_pack import (
+    AMPLISEQ_RULE_PACK,
+    MAG_RULE_PACK,
+    METHYLSEQ_RULE_PACK,
     RNASEQ_RULE_PACK,
     SCRNASEQ_RULE_PACK,
     VARIANT_RULE_PACK,
@@ -263,4 +266,210 @@ def test_scrnaseq_goal_routes_through_registry_to_pack_that_fires_pass_and_fail(
     healthy = evaluate({"OK": _healthy_scrnaseq_sample()}, pack)
     assert healthy and all(r.status == "pass" for r in healthy)
     broken = evaluate({"BAD": _healthy_scrnaseq_sample() | {"estimated_cells": 5.0}}, pack)
+    assert any(r.status == "fail" for r in broken)
+
+
+# --- methyl-seq QC rule pack (PRD contract D) ----------------------------------
+
+
+def test_rule_pack_for_methylseq_returns_the_methylseq_pack():
+    assert rule_pack_for("methylseq") is METHYLSEQ_RULE_PACK
+
+
+def test_methylseq_pack_covers_the_core_bisulfite_metrics():
+    metrics = {c["metric"] for c in METHYLSEQ_RULE_PACK}
+    assert "percent_bs_conversion" in metrics
+    assert "percent_aligned" in metrics
+    assert "percent_duplication" in metrics
+
+
+def _healthy_methylseq_sample():
+    # A clean bisulfite run: near-complete conversion, good mapping efficiency,
+    # modest duplication.
+    return {
+        "percent_bs_conversion": 99.5,
+        "percent_aligned": 75.0,
+        "percent_duplication": 12.0,
+    }
+
+
+def test_healthy_methylseq_sample_passes_every_check():
+    results = evaluate({"BS1": _healthy_methylseq_sample()}, METHYLSEQ_RULE_PACK)
+    assert len(results) == 3
+    assert all(r.status == "pass" for r in results)
+
+
+def test_low_bisulfite_conversion_fails():
+    # Incomplete conversion leaves unconverted cytosines read as methylated, the
+    # canonical methyl-seq "ran but wrong".
+    sample = _healthy_methylseq_sample() | {"percent_bs_conversion": 90.0}
+    results = evaluate({"BAD": sample}, METHYLSEQ_RULE_PACK)
+    conv = [r for r in results if r.value == 90.0]
+    assert conv and any(r.status == "fail" for r in conv)
+
+
+def test_low_mapping_efficiency_fails():
+    sample = _healthy_methylseq_sample() | {"percent_aligned": 20.0}
+    results = evaluate({"BAD": sample}, METHYLSEQ_RULE_PACK)
+    aln = [r for r in results if r.value == 20.0]
+    assert aln and any(r.status == "fail" for r in aln)
+
+
+def test_high_duplication_fails():
+    sample = _healthy_methylseq_sample() | {"percent_duplication": 85.0}
+    results = evaluate({"BAD": sample}, METHYLSEQ_RULE_PACK)
+    dup = [r for r in results if r.value == 85.0]
+    assert dup and any(r.status == "fail" for r in dup)
+
+
+def test_methylseq_goal_routes_through_registry_to_pack_that_fires_pass_and_fail():
+    from contig.registry import assay_for_pipeline, match_assay, select_pipeline
+
+    assay = match_assay("measure DNA methylation with bisulfite sequencing")
+    assert assay == "methylseq"
+    pipeline = select_pipeline(assay).pipeline
+    assert assay_for_pipeline(pipeline) == "methylseq"
+
+    pack = rule_pack_for(assay)
+    healthy = evaluate({"OK": _healthy_methylseq_sample()}, pack)
+    assert healthy and all(r.status == "pass" for r in healthy)
+    broken = evaluate(
+        {"BAD": _healthy_methylseq_sample() | {"percent_bs_conversion": 80.0}}, pack
+    )
+    assert any(r.status == "fail" for r in broken)
+
+
+# --- 16S amplicon QC rule pack (PRD contract D) --------------------------------
+
+
+def test_rule_pack_for_ampliseq_returns_the_ampliseq_pack():
+    assert rule_pack_for("ampliseq") is AMPLISEQ_RULE_PACK
+
+
+def test_ampliseq_pack_covers_the_core_dada2_metrics():
+    metrics = {c["metric"] for c in AMPLISEQ_RULE_PACK}
+    assert "percent_retained" in metrics
+    assert "asv_count" in metrics
+    assert "input_reads" in metrics
+
+
+def _healthy_ampliseq_sample():
+    # A clean 16S run: most reads survive DADA2, a reasonable ASV count, and
+    # enough depth per sample.
+    return {
+        "percent_retained": 75.0,
+        "asv_count": 450.0,
+        "input_reads": 40000.0,
+    }
+
+
+def test_healthy_ampliseq_sample_passes_every_check():
+    results = evaluate({"M1": _healthy_ampliseq_sample()}, AMPLISEQ_RULE_PACK)
+    assert len(results) == 3
+    assert all(r.status == "pass" for r in results)
+
+
+def test_low_read_retention_through_dada2_fails():
+    # Most reads discarded by DADA2 filtering/denoising signals a bad run.
+    sample = _healthy_ampliseq_sample() | {"percent_retained": 10.0}
+    results = evaluate({"BAD": sample}, AMPLISEQ_RULE_PACK)
+    ret = [r for r in results if r.value == 10.0]
+    assert ret and any(r.status == "fail" for r in ret)
+
+
+def test_too_few_asvs_fails():
+    sample = _healthy_ampliseq_sample() | {"asv_count": 3.0}
+    results = evaluate({"BAD": sample}, AMPLISEQ_RULE_PACK)
+    asv = [r for r in results if r.value == 3.0]
+    assert asv and any(r.status == "fail" for r in asv)
+
+
+def test_too_shallow_sample_read_depth_fails():
+    sample = _healthy_ampliseq_sample() | {"input_reads": 200.0}
+    results = evaluate({"BAD": sample}, AMPLISEQ_RULE_PACK)
+    depth = [r for r in results if r.value == 200.0]
+    assert depth and any(r.status == "fail" for r in depth)
+
+
+def test_ampliseq_goal_routes_through_registry_to_pack_that_fires_pass_and_fail():
+    from contig.registry import assay_for_pipeline, match_assay, select_pipeline
+
+    assay = match_assay("profile the 16S microbiome with DADA2")
+    assert assay == "ampliseq"
+    pipeline = select_pipeline(assay).pipeline
+    assert assay_for_pipeline(pipeline) == "ampliseq"
+
+    pack = rule_pack_for(assay)
+    healthy = evaluate({"OK": _healthy_ampliseq_sample()}, pack)
+    assert healthy and all(r.status == "pass" for r in healthy)
+    broken = evaluate(
+        {"BAD": _healthy_ampliseq_sample() | {"percent_retained": 5.0}}, pack
+    )
+    assert any(r.status == "fail" for r in broken)
+
+
+# --- shotgun metagenomics QC rule pack (PRD contract D) ------------------------
+
+
+def test_rule_pack_for_mag_returns_the_mag_pack():
+    assert rule_pack_for("mag") is MAG_RULE_PACK
+
+
+def test_mag_pack_covers_the_core_assembly_and_bin_metrics():
+    metrics = {c["metric"] for c in MAG_RULE_PACK}
+    assert "n50" in metrics
+    assert "completeness" in metrics
+    assert "contamination" in metrics
+
+
+def _healthy_mag_sample():
+    # A clean metagenome assembly: a decent N50, a near-complete bin with low
+    # contamination (CheckM style completeness/contamination percentages).
+    return {
+        "n50": 25000.0,
+        "completeness": 92.0,
+        "contamination": 2.0,
+    }
+
+
+def test_healthy_mag_sample_passes_every_check():
+    results = evaluate({"BIN1": _healthy_mag_sample()}, MAG_RULE_PACK)
+    assert len(results) == 3
+    assert all(r.status == "pass" for r in results)
+
+
+def test_low_assembly_n50_fails():
+    # A fragmented assembly (tiny N50) is the canonical metagenomics "ran but wrong".
+    sample = _healthy_mag_sample() | {"n50": 300.0}
+    results = evaluate({"BAD": sample}, MAG_RULE_PACK)
+    n50 = [r for r in results if r.value == 300.0]
+    assert n50 and any(r.status == "fail" for r in n50)
+
+
+def test_low_bin_completeness_fails():
+    sample = _healthy_mag_sample() | {"completeness": 30.0}
+    results = evaluate({"BAD": sample}, MAG_RULE_PACK)
+    comp = [r for r in results if r.value == 30.0]
+    assert comp and any(r.status == "fail" for r in comp)
+
+
+def test_high_bin_contamination_fails():
+    sample = _healthy_mag_sample() | {"contamination": 40.0}
+    results = evaluate({"BAD": sample}, MAG_RULE_PACK)
+    cont = [r for r in results if r.value == 40.0]
+    assert cont and any(r.status == "fail" for r in cont)
+
+
+def test_mag_goal_routes_through_registry_to_pack_that_fires_pass_and_fail():
+    from contig.registry import assay_for_pipeline, match_assay, select_pipeline
+
+    assay = match_assay("assemble a shotgun metagenome and recover MAGs")
+    assert assay == "mag"
+    pipeline = select_pipeline(assay).pipeline
+    assert assay_for_pipeline(pipeline) == "mag"
+
+    pack = rule_pack_for(assay)
+    healthy = evaluate({"OK": _healthy_mag_sample()}, pack)
+    assert healthy and all(r.status == "pass" for r in healthy)
+    broken = evaluate({"BAD": _healthy_mag_sample() | {"contamination": 50.0}}, pack)
     assert any(r.status == "fail" for r in broken)
