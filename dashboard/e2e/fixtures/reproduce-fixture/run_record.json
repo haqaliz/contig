@@ -1,0 +1,47 @@
+{
+  "run_id": "reproduce-fixture",
+  "pipeline": "nf-core/rnaseq",
+  "pipeline_revision": "3.26.0",
+  "target": {
+    "backend": "local",
+    "container_runtime": "docker",
+    "work_dir": "/tmp/work",
+    "engine": "nextflow",
+    "credentials_ref": null,
+    "backend_options": {},
+    "resource_limits": {
+      "memory": "6.GB",
+      "cpus": "2"
+    }
+  },
+  "input_checksums": {
+    "samplesheet.csv": "abc123"
+  },
+  "parameters": {
+    "genome": "GRCh38"
+  },
+  "container_digests": {},
+  "nextflow_version": "24.10.0",
+  "contig_version": "0.1.0",
+  "events": [
+    {
+      "process": "FASTQC",
+      "status": "COMPLETED",
+      "exit": 0,
+      "task_id": "1",
+      "name": "FASTQC (SAMPLE_A)"
+    }
+  ],
+  "qc_results": [
+    {
+      "check": "salmon_mapping_rate:SAMPLE_A",
+      "status": "pass",
+      "message": "OK",
+      "value": 91.2,
+      "expected_range": ">= 60.0"
+    }
+  ],
+  "output_checksums": {},
+  "repair_history": [],
+  "verdict": "pass"
+}

@@ -1,0 +1,19 @@
+{
+  "run_id": "reproduce-fixture",
+  "pipeline": "nf-core/rnaseq",
+  "revision": "3.26.0",
+  "profiles": [
+    "docker"
+  ],
+  "backend": "local",
+  "container_runtime": "docker",
+  "input": "/Users/aliz/dev/at/contig/runs/reproduce-fixture/samplesheet.csv",
+  "genome": "GRCh38",
+  "fasta": null,
+  "gtf": null,
+  "max_memory": "6.GB",
+  "max_cpus": 2,
+  "max_attempts": 3,
+  "is_test_profile": false,
+  "created_at": "2026-06-22T09:00:00.000Z"
+}

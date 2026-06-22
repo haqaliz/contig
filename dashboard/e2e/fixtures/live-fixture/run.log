@@ -1,0 +1,4 @@
+[32mN E X T F L O W[0m  ~  version 24.10
+Launching nf-core/rnaseq
+[ab/cdef01] process > FASTQC (SAMPLE_A) [100%] 1 of 1
+[12/3456ab] process > STAR_ALIGN (SAMPLE_B) [  0%] 0 of 1

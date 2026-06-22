@@ -1,0 +1,65 @@
+{
+  "run_id": "warn-fixture",
+  "pipeline": "nf-core/rnaseq",
+  "pipeline_revision": "3.26.0",
+  "target": {
+    "backend": "local",
+    "container_runtime": "docker",
+    "work_dir": "/tmp/work",
+    "engine": "nextflow",
+    "credentials_ref": null,
+    "backend_options": {},
+    "resource_limits": {}
+  },
+  "input_checksums": {
+    "samplesheet.csv": "deadbeef"
+  },
+  "parameters": {
+    "genome": "GRCh38"
+  },
+  "container_digests": {},
+  "nextflow_version": "24.10.0",
+  "contig_version": "0.1.0",
+  "events": [
+    {
+      "process": "SALMON_QUANT",
+      "status": "COMPLETED",
+      "exit": 0,
+      "task_id": "1",
+      "name": "SALMON_QUANT (SAMPLE_A)"
+    }
+  ],
+  "qc_results": [
+    {
+      "check": "salmon_mapping_rate:SAMPLE_A",
+      "status": "warn",
+      "message": "Borderline mapping rate.",
+      "value": 58.1,
+      "expected_range": ">= 60.0"
+    },
+    {
+      "check": "salmon_mapping_rate:SAMPLE_B",
+      "status": "warn",
+      "message": "Borderline mapping rate.",
+      "value": 59.4,
+      "expected_range": ">= 60.0"
+    },
+    {
+      "check": "min_sample_count",
+      "status": "pass",
+      "message": "OK",
+      "value": 2,
+      "expected_range": ">= 2"
+    },
+    {
+      "check": "alignment_rate:SAMPLE_A",
+      "status": "pass",
+      "message": "OK",
+      "value": 96.0,
+      "expected_range": ">= 70.0"
+    }
+  ],
+  "output_checksums": {},
+  "repair_history": [],
+  "verdict": "warn"
+}

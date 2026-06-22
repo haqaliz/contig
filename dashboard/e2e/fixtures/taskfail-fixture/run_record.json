@@ -1,0 +1,34 @@
+{
+  "run_id": "taskfail-fixture",
+  "pipeline": "nf-core/rnaseq",
+  "pipeline_revision": "3.26.0",
+  "target": {
+    "backend": "local",
+    "container_runtime": "docker",
+    "work_dir": "/tmp/work",
+    "engine": "nextflow",
+    "credentials_ref": null,
+    "backend_options": {},
+    "resource_limits": {}
+  },
+  "input_checksums": {
+    "samplesheet.csv": "cafe"
+  },
+  "parameters": {},
+  "container_digests": {},
+  "nextflow_version": "24.10.0",
+  "contig_version": "0.1.0",
+  "events": [
+    {
+      "process": "STAR_ALIGN",
+      "status": "FAILED",
+      "exit": 137,
+      "task_id": "1",
+      "name": "STAR_ALIGN (SAMPLE_A)"
+    }
+  ],
+  "qc_results": [],
+  "output_checksums": {},
+  "repair_history": [],
+  "verdict": "fail"
+}
