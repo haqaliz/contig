@@ -12,8 +12,10 @@ It started as the read-only "Run Inspector" and now covers the full Layer-2 loop
 launch a run, watch it live, steer the self-heal, verify and reproduce the result,
 compare runs, curate the failure corpus, and track the detector over time.
 
-> Localhost-only, no auth. It runs the CLI on your machine and can launch and
-> cancel real pipelines, so do not expose it to a network.
+> It runs the CLI on your machine and can launch and cancel real pipelines.
+> Authentication is off by default for local use (see Authentication below); with
+> no Auth0 env configured the dashboard treats every caller as an admin, so do not
+> expose an unconfigured instance to a network.
 
 ## What it does
 
@@ -27,9 +29,12 @@ compare runs, curate the failure corpus, and track the detector over time.
   launch. `?from=<id>` pre-fills it from a past run's launch manifest.
 - **Run detail** (`/runs/<id>`): the verdict explained in plain language with the
   deciding QC checks, an output-integrity badge (verified, drift detected, or not
-  captured) with a **Verify** action, the QC results (per-sample and cross-sample
-  drill-down), the detect to diagnose to patch to outcome repair timeline, the
-  pinned provenance, and **Reproduce exactly** / **Edit and relaunch**.
+  captured) with a **Verify** action, a **resources and cost** card (per-task
+  wall-clock duration and peak memory from the run's recorded `resource_usage`,
+  with a total cost at the default or entered rates via `contig cost --json`), the
+  QC results (per-sample and cross-sample drill-down), the detect to diagnose to
+  patch to outcome repair timeline, the pinned provenance, and **Reproduce
+  exactly** / **Edit and relaunch**.
 - **Live run view**: while a run is in flight the page polls a snapshot (elapsed,
   tasks completed, currently running steps, live self-heal attempts) with a
   collapsible log tail and a **Cancel** button. If the self-heal loop proposes a
@@ -43,9 +48,11 @@ compare runs, curate the failure corpus, and track the detector over time.
   correct their label, promoting them into the golden corpus (moat #2).
 - **Detector** (`/eval`): the failure detector scored against the labeled corpus
   (accuracy, per-class precision/recall, current misses), a **detector selector**
-  (rules, rules-strict) that scores any registered detector, and an
-  accuracy-over-time trend with per-class deltas. The detector stays in Python
-  (the moat); the page shells out to `contig eval-detector --json`.
+  (rules, rules-strict, and the optional **llm** detector) that scores any
+  registered detector, and an accuracy-over-time trend with per-class deltas. The
+  detector stays in Python (the moat); the page shells out to `contig
+  eval-detector --json`. The llm detector is optional: with no provider or key
+  configured it resolves to the existing graceful "not available" branch.
 - **Notifications**: a header activity bell reads `notifications.jsonl` and shows
   recent run events; a run waiting for your approval links straight to it.
 
@@ -68,6 +75,45 @@ CLI is unavailable, pages that need it degrade gracefully. Environment overrides
 | `CONTIG_DISPATCH_CMD` | `uv run contig` | The CLI used to launch and control runs (dispatch, cancel, resume, approve, verify) |
 | `CONTIG_EVAL_HISTORY` | shipped path | The eval-history file the trend reads |
 
+## Authentication
+
+Auth0 provides authentication and role-based authorization, configured entirely
+from env so Contig stays open source with no tenant baked in. The boundary is
+`proxy.ts` (Next 16's renamed middleware): it gates every route, redirects an
+unauthenticated request to login, and rejects a write (action) request that lacks
+the writer role. The action routes (dispatch, launch, cancel, resume, approve,
+reproduce, verify, corpus promote) also re-check the role themselves, so
+authorization never rests on the proxy matcher alone.
+
+Roles come from a namespaced claim on the user (set by an Auth0 Action or rule),
+`https://contig/roles` by default. A user with the **writer** or **admin** role
+may run the action routes; any other authenticated user is read-only (a viewer).
+
+To turn auth on, set these in the environment (never commit real values):
+
+| Variable | What it is |
+|---|---|
+| `AUTH0_SECRET` | A 32-byte hex secret for cookie encryption (`openssl rand -hex 32`) |
+| `AUTH0_DOMAIN` | The tenant domain, e.g. `your-tenant.us.auth0.com` (or set `AUTH0_ISSUER_BASE_URL`) |
+| `AUTH0_CLIENT_ID` | The Auth0 application's client id |
+| `AUTH0_CLIENT_SECRET` | The Auth0 application's client secret |
+| `APP_BASE_URL` | This app's URL, e.g. `http://localhost:3000` |
+| `AUTH0_ROLES_CLAIM` | Optional: override the namespaced roles claim (default `https://contig/roles`) |
+
+The SDK mounts its own routes at `/auth/login`, `/auth/logout`, and
+`/auth/callback`; add the callback and logout URLs to the Auth0 application's
+allow-lists. The header shows the logged-in user with a logout link.
+
+**Dev/test bypass.** When `CONTIG_AUTH_DISABLED=1`, or when no Auth0 env is
+configured, the proxy is a no-op: every route is reachable and the caller is
+treated as an admin, so local dev and the Playwright suite run with no real
+tenant. The header then shows a synthetic "Local admin" account. Run the e2e
+suite with the bypass on:
+
+```bash
+CONTIG_AUTH_DISABLED=1 npx playwright test
+```
+
 ## Testing
 
 - `npx tsc --noEmit` and `npm run lint` for types and lint.
@@ -81,7 +127,11 @@ CLI is unavailable, pages that need it degrade gracefully. Environment overrides
 
 - `lib/types.ts`: TypeScript mirror of the engine's serialized models.
 - `lib/runs.ts`: server-only disk access and CLI shell-outs (bundles, status,
-  progress, corpus, eval, notifications, dispatch, cancel, resume, approve, verify).
+  progress, corpus, eval, notifications, dispatch, cancel, resume, approve,
+  verify, cost).
+- `lib/auth0.ts` + `proxy.ts`: the Auth0 client, the role helpers and the
+  `requireWriter` action-route guard, and the route-gating proxy with its
+  dev/test bypass (see Authentication above).
 - `lib/derive.ts`: pure, client-safe helpers over a run record (verdict
   explanation, task counts, QC sorting).
 - `components/`: the verdict card, QC panels, repair timeline, live run view,

@@ -54,6 +54,18 @@ export interface RepairStep {
   outcome: string;
 }
 
+// Per-task resource actuals parsed from Nextflow's trace.txt and recorded by the
+// engine at finalize (PRD contract B). realtime_sec is the task wall-clock in
+// seconds; peak_rss_mb is its peak resident memory in MB; pct_cpu is the trace
+// %cpu column. name is the concrete task instance (may be null for a process row).
+export interface TaskResource {
+  process: string;
+  name: string | null;
+  realtime_sec: number;
+  peak_rss_mb: number;
+  pct_cpu: number;
+}
+
 export interface RunRecord {
   run_id: string;
   pipeline: string;
@@ -68,7 +80,30 @@ export interface RunRecord {
   qc_results: QCResult[];
   output_checksums: Record<string, string>;
   repair_history: RepairStep[];
+  // Per-task duration, peak memory, and cpu, parsed from the run's trace. Empty
+  // for older runs (predating resource capture) and for runs with no trace.
+  resource_usage: TaskResource[];
   verdict: Verdict;
+}
+
+// The cost report from `contig cost <id> --json` (PRD contract B). The engine
+// applies the configured rates to the recorded resource usage and reports the
+// total and per-task cost. Rates default to 0 (local compute is free), so the
+// default total is 0; entering rates yields a real estimate. by_task is empty
+// when the run recorded no resource usage.
+export interface CostByTask {
+  name: string;
+  realtime_sec: number;
+  peak_rss_mb: number;
+  cost: number;
+}
+
+export interface CostReport {
+  currency: string;
+  rate_cpu_hour: number;
+  rate_mem_gb_hour: number;
+  total: number;
+  by_task: CostByTask[];
 }
 
 // Detector eval (src/contig/models.py: DetectorEvalReport).

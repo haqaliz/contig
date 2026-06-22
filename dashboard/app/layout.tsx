@@ -5,6 +5,7 @@ import "./globals.css";
 
 import { SiteNav } from "@/components/site-nav";
 import { NotificationBellServer } from "@/components/notifications/notification-bell-server";
+import { UserMenuServer } from "@/components/auth/user-menu-server";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
@@ -37,8 +38,9 @@ export default function RootLayout({
               <span>Contig</span>
             </Link>
             <SiteNav />
-            <div className="ml-auto flex items-center">
+            <div className="ml-auto flex items-center gap-1">
               <NotificationBellServer />
+              <UserMenuServer />
             </div>
           </nav>
         </header>

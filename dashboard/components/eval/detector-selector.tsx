@@ -22,6 +22,7 @@ import {
 const LABELS: Record<string, string> = {
   rules: "Rules (default)",
   "rules-strict": "Rules, strict",
+  llm: "LLM (needs a key)",
 };
 
 export function DetectorSelector({

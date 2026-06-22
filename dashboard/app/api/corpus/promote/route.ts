@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { requireWriter } from "@/lib/auth0";
 import { FAILURE_CLASSES } from "@/lib/derive";
 import { promotePendingCase } from "@/lib/runs";
 
@@ -7,6 +8,8 @@ import { promotePendingCase } from "@/lib/runs";
 // into the golden corpus. label (optional) corrects the provisional class and is
 // validated against the known failure classes. The write logic lives in the CLI.
 export async function POST(req: Request) {
+  const denied = await requireWriter();
+  if (denied) return denied;
   const body = (await req.json().catch(() => ({}))) as {
     case_id?: unknown;
     label?: unknown;

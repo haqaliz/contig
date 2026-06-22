@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { requireWriter } from "@/lib/auth0";
 import { cancelRun, InvalidRunIdError, RunControlError } from "@/lib/runs";
 
 // POST /api/runs/[id]/cancel: stop an active run. The dashboard never controls a
@@ -11,6 +12,8 @@ export async function POST(
   _req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const denied = await requireWriter();
+  if (denied) return denied;
   const { id } = await params;
   try {
     await cancelRun(id);

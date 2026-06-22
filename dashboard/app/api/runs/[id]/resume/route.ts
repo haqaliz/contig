@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { requireWriter } from "@/lib/auth0";
 import { resumeRun, InvalidRunIdError, RunControlError } from "@/lib/runs";
 
 // POST /api/runs/[id]/resume: re-run a cancelled or interrupted run with the SAME
@@ -11,6 +12,8 @@ export async function POST(
   _req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const denied = await requireWriter();
+  if (denied) return denied;
   const { id } = await params;
   try {
     await resumeRun(id);

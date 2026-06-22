@@ -12,6 +12,7 @@ import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 
 import type {
+  CostReport,
   DetectorEvalReport,
   EvalSnapshot,
   FailureCase,
@@ -604,10 +605,12 @@ export async function dispatchReproduce(id: string): Promise<{ run_id: string }>
 
 // The detectors the engine registers (the pinned `DETECTORS` registry keys, PRD
 // contract C). "rules" is the default; "rules-strict" prefers unknown/tool_crash
-// when evidence is weak. The /eval selector offers exactly these names, and a
-// query value not in this set falls back to the default so the CLI is never
-// handed an unknown detector name.
-export const DETECTOR_NAMES = ["rules", "rules-strict"] as const;
+// when evidence is weak; "llm" is the optional provider-agnostic LLM detector,
+// resolvable only when a provider + key are configured (without one, the engine
+// returns the graceful not-available branch, which the page already renders).
+// The /eval selector offers exactly these names, and a query value not in this
+// set falls back to the default so the CLI is never handed an unknown detector.
+export const DETECTOR_NAMES = ["rules", "rules-strict", "llm"] as const;
 export type DetectorName = (typeof DETECTOR_NAMES)[number];
 
 /** Whether a value is one of the registered detector names. */
@@ -900,6 +903,79 @@ export async function getOutputVerification(
         typeof data.ok === "boolean" &&
         Array.isArray(data.changed) &&
         Array.isArray(data.missing)
+      ) {
+        return data;
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+  try {
+    const { stdout } = await pexec(base[0], args, {
+      cwd: repoRoot(),
+      timeout: 30_000,
+    });
+    return parse(stdout);
+  } catch (err) {
+    return parse((err as { stdout?: string })?.stdout);
+  }
+}
+
+// --- Resource cost (PRD contract B) --------------------------------------------
+// `contig cost <id> --json` applies the configured rates to the resource_usage
+// recorded in run_record.json and reports {currency, rate_cpu_hour,
+// rate_mem_gb_hour, total, by_task}. Rates default to 0 (local compute is free),
+// so the default total is 0; a caller may pass rates to get a real estimate. The
+// run detail card reads this for the total, and reads resource_usage off the
+// record directly for the per-task duration/memory rows.
+
+/** A non-negative rate string safe to pass to the CLI (no leading dash, plain number). */
+function isSafeRate(value: string): boolean {
+  return /^[0-9]+(\.[0-9]+)?$/.test(value);
+}
+
+/**
+ * The cost report for a run by shelling out to `contig cost <id> --json` (the
+ * cost model lives in the engine). The run id is validated (same guard as the
+ * control commands) and passed as a positional after a "--" terminator, so it can
+ * never be parsed as a flag; the optional rates are validated as plain numbers
+ * and passed as --opt=value. Returns null if the CLI is unavailable or its output
+ * is unparseable, so the card can degrade gracefully. Rates default to 0 (free).
+ */
+export async function getRunCost(
+  id: string,
+  rates?: { cpuHour?: string; memGbHour?: string; currency?: string },
+): Promise<CostReport | null> {
+  if (!isSafeRunId(id)) throw new InvalidRunIdError(`Invalid run id: ${id}`);
+  const base = (process.env.CONTIG_DISPATCH_CMD ?? "uv run contig").split(" ");
+  const extra: string[] = [];
+  if (rates?.cpuHour && isSafeRate(rates.cpuHour)) {
+    extra.push(`--rate-cpu-hour=${rates.cpuHour}`);
+  }
+  if (rates?.memGbHour && isSafeRate(rates.memGbHour)) {
+    extra.push(`--rate-mem-gb-hour=${rates.memGbHour}`);
+  }
+  if (rates?.currency && /^[A-Za-z]{1,5}$/.test(rates.currency)) {
+    extra.push(`--currency=${rates.currency}`);
+  }
+  const args = [
+    ...base.slice(1),
+    "cost",
+    `--runs-dir=${runsDir()}`,
+    "--json",
+    ...extra,
+    "--",
+    id,
+  ];
+  function parse(stdout: unknown): CostReport | null {
+    if (typeof stdout !== "string") return null;
+    try {
+      const data = JSON.parse(stdout) as CostReport;
+      if (
+        typeof data.total === "number" &&
+        typeof data.currency === "string" &&
+        Array.isArray(data.by_task)
       ) {
         return data;
       }

@@ -14,10 +14,17 @@ import { QcPanel } from "@/components/run/qc-panel";
 import { ProvenancePanel } from "@/components/run/provenance-panel";
 import { RepairTimeline } from "@/components/run/repair-timeline";
 import { ReproduceActions } from "@/components/run/reproduce-actions";
+import { ResourceCostCard } from "@/components/run/resource-cost-card";
 import { RunningView } from "@/components/run/running-view";
 import { VerdictCard } from "@/components/run/verdict-card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { getLaunchManifest, getRun, getRunState, getRunStatus } from "@/lib/runs";
+import {
+  getLaunchManifest,
+  getRun,
+  getRunCost,
+  getRunState,
+  getRunStatus,
+} from "@/lib/runs";
 
 // A running run has no bundle yet, so always read fresh.
 export const dynamic = "force-dynamic";
@@ -81,6 +88,12 @@ export default async function RunDetailPage({
   // Reproduce is offered only when the run wrote a launch manifest (older runs
   // predate it). It rebuilds the exact run, or opens a pre-filled launch form.
   const manifest = await getLaunchManifest(id);
+  // The cost at the default rates (zero, so the default total is zero). The card
+  // lets the user enter rates to recompute. Only worth fetching when the run
+  // actually recorded per-task resource usage.
+  const resourceUsage = record.resource_usage ?? [];
+  const initialCost =
+    resourceUsage.length > 0 ? await getRunCost(record.run_id) : null;
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6">
@@ -108,6 +121,14 @@ export default async function RunDetailPage({
         id={record.run_id}
         outputCount={Object.keys(record.output_checksums).length}
       />
+
+      {resourceUsage.length > 0 ? (
+        <ResourceCostCard
+          id={record.run_id}
+          resourceUsage={resourceUsage}
+          initialCost={initialCost}
+        />
+      ) : null}
 
       {manifest ? <ReproduceActions id={record.run_id} /> : null}
 

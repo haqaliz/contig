@@ -1,11 +1,15 @@
 import { NextResponse } from "next/server";
 
+import { requireWriter } from "@/lib/auth0";
 import { dispatchRealRun, DispatchBusyError, LaunchValidationError } from "@/lib/runs";
 
 // POST /api/runs/launch: launch a real-data run from the approved plan + inputs.
 // One at a time. All validation (paths exist, safe keys/caps, known pipeline) is
 // in dispatchRealRun; user values are passed as --opt=value (no flag smuggling).
+// A write action: requires the writer/admin role (the dev bypass allows it).
 export async function POST(req: Request) {
+  const denied = await requireWriter();
+  if (denied) return denied;
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const str = (v: unknown) => (typeof v === "string" ? v : undefined);
   try {

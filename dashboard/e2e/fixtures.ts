@@ -23,6 +23,9 @@ export const FIXTURE_RUN_IDS = [
   // A scRNA-seq run bundle (nf-core/scrnaseq) that renders in the existing
   // run/verdict/QC views with no special UI (PRD contract D).
   "scrnaseq-fixture",
+  // A finished run whose record carries resource_usage (per-task duration, peak
+  // memory, cpu), for the resources-and-cost card (PRD contracts A, B).
+  "resource-fixture",
 ];
 
 // Mirror lib/runs.ts runsDir(): CONTIG_RUNS_DIR, else ../runs from the dashboard

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { requireWriter } from "@/lib/auth0";
 import { getOutputVerification, InvalidRunIdError } from "@/lib/runs";
 
 // POST /api/runs/[id]/verify: re-check a run's outputs against its recorded
@@ -14,6 +15,8 @@ export async function POST(
   _req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const denied = await requireWriter();
+  if (denied) return denied;
   const { id } = await params;
   try {
     const report = await getOutputVerification(id);

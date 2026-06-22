@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { requireWriter } from "@/lib/auth0";
 import {
   dispatchReproduce,
   DispatchBusyError,
@@ -15,6 +16,8 @@ export async function POST(
   _req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const denied = await requireWriter();
+  if (denied) return denied;
   const { id } = await params;
   try {
     const { run_id } = await dispatchReproduce(id);

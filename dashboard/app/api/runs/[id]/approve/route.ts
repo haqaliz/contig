@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { requireWriter } from "@/lib/auth0";
 import { decideApproval, InvalidRunIdError, RunControlError } from "@/lib/runs";
 
 // POST /api/runs/[id]/approve {decision: "approve" | "reject"}: resolve the patch
@@ -12,6 +13,8 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const denied = await requireWriter();
+  if (denied) return denied;
   const { id } = await params;
 
   let decision: unknown;

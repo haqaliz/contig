@@ -1,0 +1,67 @@
+{
+  "run_id": "resource-fixture",
+  "pipeline": "nf-core/rnaseq",
+  "pipeline_revision": "3.26.0",
+  "target": {
+    "backend": "local",
+    "container_runtime": "docker",
+    "work_dir": "/tmp/work",
+    "engine": "nextflow",
+    "credentials_ref": null,
+    "backend_options": {},
+    "resource_limits": {}
+  },
+  "input_checksums": {
+    "samplesheet.csv": "deadbeef"
+  },
+  "parameters": {
+    "genome": "GRCh38"
+  },
+  "container_digests": {},
+  "nextflow_version": "24.10.0",
+  "contig_version": "0.1.0",
+  "events": [
+    {
+      "process": "FASTQC",
+      "status": "COMPLETED",
+      "exit": 0,
+      "task_id": "1",
+      "name": "FASTQC (SAMPLE_A)"
+    },
+    {
+      "process": "SALMON_QUANT",
+      "status": "COMPLETED",
+      "exit": 0,
+      "task_id": "2",
+      "name": "SALMON_QUANT (SAMPLE_A)"
+    }
+  ],
+  "qc_results": [
+    {
+      "check": "min_sample_count",
+      "status": "pass",
+      "message": "OK",
+      "value": 2,
+      "expected_range": ">= 2"
+    }
+  ],
+  "output_checksums": {},
+  "repair_history": [],
+  "resource_usage": [
+    {
+      "process": "NFCORE_RNASEQ:FASTQC",
+      "name": "FASTQC (SAMPLE_A)",
+      "realtime_sec": 123.0,
+      "peak_rss_mb": 512.0,
+      "pct_cpu": 98.0
+    },
+    {
+      "process": "NFCORE_RNASEQ:SALMON_QUANT",
+      "name": "SALMON_QUANT (SAMPLE_A)",
+      "realtime_sec": 2048.0,
+      "peak_rss_mb": 4096.0,
+      "pct_cpu": 760.0
+    }
+  ],
+  "verdict": "pass"
+}

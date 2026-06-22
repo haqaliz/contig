@@ -10,6 +10,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@auth0/nextjs-auth0": "^4.23.0",
     "@base-ui/react": "^1.6.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
