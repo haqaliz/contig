@@ -8,7 +8,24 @@ submission. These tests pin the mapping; live cloud submission is Nextflow's job
 import pytest
 
 from contig.models import ExecutionTarget
-from contig.nfconfig import ConfigGenerationError, generate_nextflow_config
+from contig.nfconfig import (
+    ConfigGenerationError,
+    generate_nextflow_config,
+    preflight_aws_batch,
+)
+
+_AWS_ENV = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_PROFILE")
+
+
+def _set_aws_creds(monkeypatch):
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+
+
+def _clear_aws_creds(monkeypatch):
+    for var in _AWS_ENV:
+        monkeypatch.delenv(var, raising=False)
 
 
 def _target(backend, runtime="docker", work_dir="/runs/r1/work", **opts):
@@ -111,3 +128,66 @@ def test_aws_batch_without_region_is_a_loud_error():
     )
     with pytest.raises(ConfigGenerationError):
         generate_nextflow_config(target)
+
+
+# --- AWS Batch preflight (PRD contract E: refuse a misconfigured launch) --------
+def test_preflight_aws_batch_passes_when_fully_configured(monkeypatch):
+    _set_aws_creds(monkeypatch)
+    assert preflight_aws_batch(_aws_target()) == []
+
+
+def test_preflight_aws_batch_reports_missing_queue(monkeypatch):
+    _set_aws_creds(monkeypatch)
+    target = ExecutionTarget(
+        backend="aws_batch",
+        container_runtime="docker",
+        work_dir="s3://b/w",
+        backend_options={"region": "eu-west-1"},
+    )
+    problems = preflight_aws_batch(target)
+    assert any("queue" in p.lower() for p in problems)
+
+
+def test_preflight_aws_batch_reports_missing_region(monkeypatch):
+    _set_aws_creds(monkeypatch)
+    target = ExecutionTarget(
+        backend="aws_batch",
+        container_runtime="docker",
+        work_dir="s3://b/w",
+        backend_options={"queue": "q"},
+    )
+    problems = preflight_aws_batch(target)
+    assert any("region" in p.lower() for p in problems)
+
+
+def test_preflight_aws_batch_reports_non_s3_work_dir(monkeypatch):
+    _set_aws_creds(monkeypatch)
+    target = _aws_target(work_dir="/local/work")
+    problems = preflight_aws_batch(target)
+    assert any("s3://" in p for p in problems)
+
+
+def test_preflight_aws_batch_reports_absent_credentials(monkeypatch):
+    _clear_aws_creds(monkeypatch)
+    problems = preflight_aws_batch(_aws_target())
+    assert any("credential" in p.lower() for p in problems)
+
+
+def test_preflight_aws_batch_accepts_aws_profile_as_credentials(monkeypatch):
+    _clear_aws_creds(monkeypatch)
+    monkeypatch.setenv("AWS_PROFILE", "contig")
+    assert preflight_aws_batch(_aws_target()) == []
+
+
+def test_preflight_aws_batch_collects_all_problems(monkeypatch):
+    _clear_aws_creds(monkeypatch)
+    target = ExecutionTarget(
+        backend="aws_batch",
+        container_runtime="docker",
+        work_dir="/local/work",
+        backend_options={},
+    )
+    problems = preflight_aws_batch(target)
+    # queue, region, work_dir, credentials: every problem surfaces at once so the
+    # user fixes them in one pass rather than one error at a time.
+    assert len(problems) >= 4

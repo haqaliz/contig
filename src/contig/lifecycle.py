@@ -19,6 +19,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from contig.notify import emit_event
+
 # A run can only be cancelled while it is doing work: actively running or paused
 # waiting for an approval. Anything else has already reached a terminal state.
 _ACTIVE_STATES = {"running", "awaiting_approval"}
@@ -108,6 +110,7 @@ def cancel_run(runs_dir: str | Path, run_id: str, *, wait_seconds: float = 2.0) 
     if isinstance(pid, int):
         _terminate_process_group(pid, wait_seconds)
     _write_terminal_status(run_dir, status, "cancelled")
+    emit_event(runs_dir, run_id, "cancelled", f"Run {run_id} was cancelled.")
 
 
 def write_approval(runs_dir: str | Path, run_id: str, *, approve: bool) -> None:

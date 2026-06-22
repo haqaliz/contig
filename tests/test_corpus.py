@@ -214,3 +214,50 @@ def test_append_case_adds_one_line_to_corpus(tmp_path):
     append_case(c1, path)
     loaded = load_corpus(path)
     assert len(loaded) == 2
+
+
+# --- scoring an arbitrary detector (PRD contract C) ----------------------------
+
+
+def test_evaluate_detector_defaults_to_the_rules_detector():
+    from contig.detect import diagnose_failure
+    cases = [_oom_case(), _mislabeled_case()]
+    # passing the rules detector explicitly matches the default behavior
+    assert evaluate_detector(cases) == evaluate_detector(cases, diagnose_failure)
+
+
+def test_evaluate_detector_scores_a_supplied_detector():
+    # A trivial detector that always says "oom" scores 1/2 here: right on the
+    # real OOM case, wrong on a case whose true label is not oom.
+    def always_oom(events, log_text):
+        from contig.models import Diagnosis
+        return Diagnosis(failure_class="oom", root_cause="forced", confidence=1.0)
+
+    not_oom = FailureCase(
+        case_id="crash-1", description="plain crash", source="synthetic",
+        events=[TaskEvent(process="CALL", status="FAILED", exit=1)],
+        log_text="Segmentation fault", expected_class="tool_crash",
+    )
+    report = evaluate_detector([_oom_case(), not_oom], always_oom)
+    assert report.total == 2
+    assert report.correct == 1
+    assert report.accuracy == 0.5
+
+
+def test_strict_detector_scores_the_shipped_corpus():
+    from contig.detect import diagnose_failure_strict
+    cases = load_corpus(default_corpus_path())
+    report = evaluate_detector(cases, diagnose_failure_strict)
+    # strict trades recall for precision: it may relabel a weak-evidence case as
+    # tool_crash, so its accuracy can sit at or below the rules detector. We only
+    # require that it scores the whole corpus without crashing.
+    assert report.total == len(cases)
+    assert 0.0 <= report.accuracy <= 1.0
+
+
+def test_both_registered_detectors_score_the_corpus():
+    from contig.detect import DETECTORS
+    cases = load_corpus(default_corpus_path())
+    for name, detector in DETECTORS.items():
+        report = evaluate_detector(cases, detector)
+        assert report.total == len(cases), name

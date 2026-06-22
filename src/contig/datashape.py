@@ -10,6 +10,22 @@ from __future__ import annotations
 from contig.models import DataShape
 from contig.samplesheet import SampleRow
 
+# Assays whose analysis needs biological replicates, so a single sample is worth
+# a warning. Bulk differential-expression RNA-seq does. Single-sample germline
+# variant calling does not, and single-cell RNA-seq does not either: it measures
+# many cells WITHIN a sample, so bulk replicates are not the relevant unit.
+_REPLICATE_ASSAYS = {"rnaseq"}
+
+
+def assay_expects_replicates(assay: str) -> bool:
+    """Whether an assay's analysis expects biological replicates.
+
+    scrnaseq and variant_calling return False (a single sample is valid); rnaseq
+    returns True. This is the assay decision `inspect_data_shape` consumes via
+    its `expects_replicates` flag.
+    """
+    return assay in _REPLICATE_ASSAYS
+
 
 def inspect_data_shape(rows: list[SampleRow], expects_replicates: bool = True) -> DataShape:
     """Infer the run's input shape and surface up-front warnings.

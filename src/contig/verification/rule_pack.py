@@ -75,9 +75,51 @@ VARIANT_RULE_PACK: list[dict] = [
 ]
 
 
+# Single-cell RNA-seq per-cell QC (nf-core/scrnaseq, STARsolo/Cell Ranger). These
+# are per-sample summary metrics from the pipeline's MultiQC report (the STARsolo
+# Summary.csv / Cell Ranger metrics_summary that MultiQC ingests). The metric keys
+# below are the slugified names we read out of MultiQC general stats; the exact
+# MultiQC slug can vary by aligner/version, so they are chosen to mirror the
+# documented STARsolo/Cell Ranger fields (Estimated Number of Cells, Median Genes
+# per Cell, Fraction Reads in Cells, % reads mapped to mitochondrial genes). The
+# thresholds are illustrative, tunable engineering defaults for catching a grossly
+# failed capture (almost no cells, near-empty droplets), not biological claims.
+SCRNASEQ_RULE_PACK: list[dict] = [
+    {
+        "check": "estimated_cells",
+        "metric": "estimated_cells",
+        "warn_below": 500.0,
+        "fail_below": 100.0,
+        "message": "estimated number of cells recovered",
+    },
+    {
+        "check": "median_genes_per_cell",
+        "metric": "median_genes_per_cell",
+        "warn_below": 500.0,
+        "fail_below": 200.0,
+        "message": "median genes detected per cell",
+    },
+    {
+        "check": "fraction_reads_in_cells",
+        "metric": "fraction_reads_in_cells",
+        "warn_below": 0.7,
+        "fail_below": 0.5,
+        "message": "fraction of reads assigned to called cells (not ambient droplets)",
+    },
+    {
+        "check": "pct_reads_mito",
+        "metric": "pct_reads_mito",
+        "warn_above": 20.0,
+        "fail_above": 50.0,
+        "message": "percent of reads mapping to mitochondrial genes",
+    },
+]
+
+
 _RULE_PACKS: dict[str, list[dict]] = {
     "rnaseq": RNASEQ_RULE_PACK,
     "variant_calling": VARIANT_RULE_PACK,
+    "scrnaseq": SCRNASEQ_RULE_PACK,
 }
 
 

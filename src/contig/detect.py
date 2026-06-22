@@ -8,7 +8,14 @@ matching evidence and a confidence the self-healing loop can act on.
 
 from __future__ import annotations
 
+from typing import Callable
+
 from contig.models import Diagnosis, TaskEvent
+
+# A Detector is any callable that maps a failed run's terminal events plus its
+# captured log text to a Diagnosis (PRD contract C). diagnose_failure is the
+# default rules detector; a future LLM detector plugs in behind this same type.
+Detector = Callable[[list[TaskEvent], str], Diagnosis]
 
 
 def _matching_lines(log_text: str, needles: tuple[str, ...]) -> list[str]:
@@ -194,3 +201,73 @@ def diagnose_failure(events: list[TaskEvent], log_text: str) -> Diagnosis:
         root_cause="No matching failure signal.",
         confidence=0.2,
     )
+
+
+# --- strict (higher-precision) detector ----------------------------------------
+# Same rules, but it refuses to name a specific class when the evidence is weak.
+# On weak evidence it prefers tool_crash (a task did fail) or unknown (nothing
+# failed) over a confident-sounding guess. This trades recall for precision.
+
+# The two weak-evidence verdicts the default detector can reach:
+#   platform_unsupported: rests on a warning that appears on healthy tasks too,
+#       so a co-occurring kill is suggestive, not conclusive (confidence 0.7).
+#   conda_solve_failed via the loose heuristic: a bare "conda" line plus a bare
+#       "solve" line anywhere in the log, with neither strong needle present.
+# When the default lands on one of these by weak evidence, strict steps back.
+
+_CONDA_STRONG_NEEDLES = ("resolvepackagenotfound", "packagesnotfounderror")
+
+
+def diagnose_failure_strict(events: list[TaskEvent], log_text: str) -> Diagnosis:
+    """Higher-precision detector: demote weak-evidence guesses (PRD contract C).
+
+    Runs the same rules, then steps back from the two classes the default
+    detector reaches on weak evidence (platform_unsupported, and conda_solve_failed
+    matched only by the loose "conda"+"solve" heuristic). On a failed task it
+    reports tool_crash; with no failure it reports unknown.
+    """
+    base = diagnose_failure(events, log_text)
+
+    weak = False
+    if base.failure_class == "platform_unsupported":
+        weak = True
+    elif base.failure_class == "conda_solve_failed" and not _has_any(
+        log_text, _CONDA_STRONG_NEEDLES
+    ):
+        weak = True
+
+    if not weak:
+        return base
+
+    if any(e.is_failure for e in events):
+        crash_lines = [line for line in log_text.splitlines() if line.strip()][-1:]
+        return Diagnosis(
+            failure_class="tool_crash",
+            root_cause="A task failed; evidence too weak to name a specific cause.",
+            evidence=crash_lines,
+            confidence=0.4,
+        )
+    return Diagnosis(
+        failure_class="unknown",
+        root_cause="No conclusive failure signal.",
+        confidence=0.2,
+    )
+
+
+# Registry of named detectors (PRD contract C). The orchestrator resolves a CLI
+# flag through get_detector; the corpus eval scores any value here.
+DETECTORS: dict[str, Detector] = {
+    "rules": diagnose_failure,
+    "rules-strict": diagnose_failure_strict,
+}
+
+
+def get_detector(name: str) -> Detector:
+    """Resolve a detector by name; an unknown name is a clear KeyError."""
+    try:
+        return DETECTORS[name]
+    except KeyError:
+        available = ", ".join(sorted(DETECTORS))
+        raise KeyError(
+            f"unknown detector {name!r}; available detectors: {available}"
+        ) from None

@@ -20,10 +20,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from contig.bundle import write_bundle
+from contig.bundle import compute_output_checksums, write_bundle
 from contig.corpus import append_case, failure_case_from_run
 from contig.detect import diagnose_failure
-from contig.models import ExecutionTarget, Patch, RepairStep, RunRecord
+from contig.models import ExecutionTarget, Patch, RepairStep, RunRecord, RunSummary
+from contig.notify import emit_event
 from contig.repair import propose_patches
 from contig.runner import (
     Executor,
@@ -213,6 +214,7 @@ def self_heal_run(
     auto_approve: bool = False,
     approval_timeout: float = 1800,
     poll: ApprovalPoll = _poll_approval_file,
+    notify_webhook: str | None = None,
 ) -> RunRecord:
     """Run a pipeline and auto-recover from recoverable failures, logging the chain.
 
@@ -245,7 +247,10 @@ def self_heal_run(
                 resume=resume or attempt > 1,
                 assay=assay,
             )
-            return _finalize(record, repair_history, run_dir)
+            return _finalize(
+                record, repair_history, run_dir,
+                runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+            )
         except PipelineExecutionError as exc:
             events = exc.record.events if exc.record else []
             log_text = read_run_log(run_dir) + "\n" + read_task_errors(run_dir)
@@ -277,7 +282,10 @@ def self_heal_run(
                         repair_history,
                         RepairStep(attempt=attempt, diagnosis=diagnosis, patch=None, outcome="gave_up"),
                     )
-                    return _finalize(exc.record, repair_history, run_dir)
+                    return _finalize(
+                        exc.record, repair_history, run_dir,
+                        runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                    )
 
                 gated = patches[0]
                 if attempt >= max_attempts:
@@ -286,7 +294,10 @@ def self_heal_run(
                         repair_history,
                         RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated, outcome="gave_up"),
                     )
-                    return _finalize(exc.record, repair_history, run_dir)
+                    return _finalize(
+                        exc.record, repair_history, run_dir,
+                        runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                    )
 
                 decision = "approve" if auto_approve else None
                 if not auto_approve:
@@ -294,6 +305,11 @@ def self_heal_run(
                         run_dir, run_id, attempt, diagnosis, gated, approval_timeout
                     )
                     _write_status(run_dir, "awaiting_approval")
+                    emit_event(
+                        runs_dir, run_id, "awaiting_approval",
+                        f"Run {run_id} is paused for approval on a {gated.kind} patch.",
+                        webhook=notify_webhook,
+                    )
                     result = poll(run_dir, approval_timeout)
                     _clear_pending_approval(run_dir)
                     decision = (result or {}).get("decision") if result else None
@@ -315,7 +331,10 @@ def self_heal_run(
                     repair_history,
                     RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated, outcome=outcome),
                 )
-                return _finalize(exc.record, repair_history, run_dir)
+                return _finalize(
+                    exc.record, repair_history, run_dir,
+                    runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                )
 
             if attempt >= max_attempts:
                 _record_attempt(
@@ -323,7 +342,10 @@ def self_heal_run(
                     repair_history,
                     RepairStep(attempt=attempt, diagnosis=diagnosis, patch=safe, outcome="gave_up"),
                 )
-                return _finalize(exc.record, repair_history, run_dir)
+                return _finalize(
+                    exc.record, repair_history, run_dir,
+                    runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                )
 
             current_target, current_params = apply_patch(current_target, safe, current_params)
             _record_attempt(
@@ -334,13 +356,43 @@ def self_heal_run(
             attempt += 1
 
 
-def _finalize(record: RunRecord | None, repair_history: list[RepairStep], run_dir: Path) -> RunRecord:
-    """Attach the repair history to the final record and persist the bundle."""
+def _finalize(
+    record: RunRecord | None,
+    repair_history: list[RepairStep],
+    run_dir: Path,
+    *,
+    runs_dir,
+    run_id: str,
+    webhook: str | None = None,
+) -> RunRecord:
+    """Attach the repair history to the final record, persist it, and notify.
+
+    Emits a terminal notification (PRD contract A): `finished` when the run's
+    events show success, otherwise `failed` (a give-up, rejection, or timeout all
+    finalize a failed record). A trace-less run produces no record and no
+    terminal notification: there is nothing to report yet.
+    """
     if record is None:
         # The run failed before producing any trace; nothing was captured.
         _write_status(run_dir, "error")
         raise PipelineExecutionError(1, None)
     record.repair_history = repair_history
+    record.output_checksums = compute_output_checksums(_results_dir(record, run_dir))
     write_bundle(record, run_dir)
     _write_status(run_dir, "finished")
+    succeeded = RunSummary.from_events(record.events).succeeded
+    if succeeded:
+        emit_event(runs_dir, run_id, "finished", f"Run {run_id} finished.", webhook=webhook)
+    else:
+        emit_event(runs_dir, run_id, "failed", f"Run {run_id} failed.", webhook=webhook)
     return record
+
+
+def _results_dir(record: RunRecord, run_dir: Path) -> Path:
+    """Where the run wrote its outputs: the pipeline outdir, else run_dir/results.
+
+    The CLI absolutizes --outdir into record.parameters; a run launched without
+    one (the test profile path) defaults to run_dir/results, mirroring the CLI.
+    """
+    outdir = record.parameters.get("outdir")
+    return Path(str(outdir)) if outdir else Path(run_dir) / "results"

@@ -40,3 +40,21 @@ def compute_input_checksums(paths: list[str | Path]) -> dict[str, str]:
             raise ValueError(f"duplicate input basename {name!r}; inputs must have unique names")
         checksums[name] = sha256_file(p)
     return checksums
+
+
+def compute_output_checksums(results_dir: str | Path) -> dict[str, str]:
+    """Map each output file under ``results_dir`` to its SHA-256 (PRD contract B).
+
+    Keys are paths relative to ``results_dir`` (POSIX separators, so the key
+    survives a re-hash on any platform); this anchors the produced outputs in the
+    RunRecord so ``contig verify`` can detect drift. An absent results dir maps to
+    an empty dict: a run that produced no outputs has nothing to anchor.
+    """
+    root = Path(results_dir)
+    if not root.is_dir():
+        return {}
+    checksums: dict[str, str] = {}
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        rel = path.relative_to(root).as_posix()
+        checksums[rel] = sha256_file(path)
+    return checksums

@@ -8,7 +8,14 @@ It is pure (target -> text) so it is fully testable without any live backend.
 
 from __future__ import annotations
 
+import os
+
 from contig.models import ExecutionTarget
+
+# The env that proves AWS credentials are available to Nextflow's awsbatch
+# executor. Either explicit keys, or a named profile, satisfies the check; the
+# values themselves are never read or logged here.
+_AWS_CREDENTIAL_ENV = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_PROFILE")
 
 # Contig backend -> Nextflow `process.executor` value. Nextflow already speaks
 # all of these; we only choose the name and supply the executor's required knobs.
@@ -68,3 +75,29 @@ def generate_nextflow_config(target: ExecutionTarget) -> str:
 
     lines.append(f"workDir = '{target.work_dir}'")
     return "\n".join(lines) + "\n"
+
+
+def preflight_aws_batch(target: ExecutionTarget) -> list[str]:
+    """List the reasons an AWS Batch launch would fail, before launching (contract E).
+
+    Checks the things Nextflow would only fail on deep in submission: a missing
+    queue or region, a work dir that is not an s3:// URI (Batch tasks share state
+    through S3, not a local path), and absent AWS credentials in the environment.
+    An empty list means the launch is configured; otherwise each string is a
+    human-readable problem to fix. No AWS call is made; this is offline.
+    """
+    problems: list[str] = []
+    opts = target.backend_options
+    if not opts.get("queue"):
+        problems.append("no Batch job queue set (pass --queue)")
+    if not opts.get("region"):
+        problems.append("no AWS region set (pass --region)")
+    if not str(target.work_dir).startswith("s3://"):
+        problems.append(
+            f"work dir {target.work_dir!r} is not an s3:// URI (AWS Batch needs an S3 work dir; pass --work-dir s3://...)"
+        )
+    if not any(os.environ.get(var) for var in _AWS_CREDENTIAL_ENV):
+        problems.append(
+            "no AWS credentials in the environment (set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_PROFILE)"
+        )
+    return problems

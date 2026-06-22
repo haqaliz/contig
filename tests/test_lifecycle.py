@@ -94,6 +94,28 @@ def test_cancel_works_on_awaiting_approval_run(tmp_path, monkeypatch):
     assert status["state"] == "cancelled"
 
 
+def test_cancel_emits_cancelled_notification(tmp_path, monkeypatch):
+    _write_status(tmp_path, "r", "running", pid=4321)
+    monkeypatch.setattr(os, "killpg", lambda pgid, sig: None)
+    monkeypatch.setattr(os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+
+    cancel_run(tmp_path, "r")
+
+    feed = (tmp_path / "notifications.jsonl").read_text().splitlines()
+    rows = [json.loads(line) for line in feed]
+    assert rows[-1]["kind"] == "cancelled"
+    assert rows[-1]["run_id"] == "r"
+
+
+def test_cancel_does_not_emit_when_refused(tmp_path):
+    # A run that cannot be cancelled (already finished) writes no notification.
+    _write_status(tmp_path, "r", "finished", pid=4321)
+    with pytest.raises(CancelError):
+        cancel_run(tmp_path, "r")
+    assert not (tmp_path / "notifications.jsonl").exists()
+
+
 def test_cancel_refuses_a_finished_run(tmp_path):
     _write_status(tmp_path, "r", "finished", pid=4321)
     with pytest.raises(CancelError):

@@ -1,6 +1,7 @@
 from contig.models import QCResult
 from contig.verification.rule_pack import (
     RNASEQ_RULE_PACK,
+    SCRNASEQ_RULE_PACK,
     VARIANT_RULE_PACK,
     evaluate,
     rule_pack_for,
@@ -182,3 +183,84 @@ def test_rule_pack_for_unknown_assay_raises_naming_assay():
         assert "nope" in str(exc)
     else:
         raise AssertionError("expected ValueError for unknown assay")
+
+
+# --- scRNA-seq per-cell QC rule pack (PRD contract D) --------------------------
+
+
+def test_rule_pack_for_scrnaseq_returns_the_scrnaseq_pack():
+    assert rule_pack_for("scrnaseq") is SCRNASEQ_RULE_PACK
+
+
+def test_scrnaseq_pack_covers_the_per_cell_qc_metrics():
+    metrics = {c["metric"] for c in SCRNASEQ_RULE_PACK}
+    assert "estimated_cells" in metrics
+    assert "median_genes_per_cell" in metrics
+    assert "fraction_reads_in_cells" in metrics
+    assert "pct_reads_mito" in metrics
+
+
+def _healthy_scrnaseq_sample():
+    # A clean 10x run: thousands of cells, hundreds of median genes, most reads
+    # inside cells, modest mitochondrial fraction.
+    return {
+        "estimated_cells": 5000.0,
+        "median_genes_per_cell": 1800.0,
+        "fraction_reads_in_cells": 0.85,
+        "pct_reads_mito": 8.0,
+    }
+
+
+def test_healthy_scrnaseq_sample_passes_every_check():
+    results = evaluate({"SAMPLE_10x": _healthy_scrnaseq_sample()}, SCRNASEQ_RULE_PACK)
+    assert len(results) == 4
+    assert all(r.status == "pass" for r in results)
+
+
+def test_too_few_estimated_cells_fails():
+    # A near-empty run (a failed capture) is the canonical "ran but wrong".
+    sample = _healthy_scrnaseq_sample() | {"estimated_cells": 20.0}
+    results = evaluate({"BAD": sample}, SCRNASEQ_RULE_PACK)
+    cell = [r for r in results if r.value == 20.0]
+    assert cell and any(r.status == "fail" for r in cell)
+
+
+def test_low_median_genes_per_cell_fails():
+    sample = _healthy_scrnaseq_sample() | {"median_genes_per_cell": 50.0}
+    results = evaluate({"BAD": sample}, SCRNASEQ_RULE_PACK)
+    genes = [r for r in results if r.value == 50.0]
+    assert genes and any(r.status == "fail" for r in genes)
+
+
+def test_low_fraction_reads_in_cells_fails():
+    # Most reads landing in ambient/empty droplets signals a bad capture.
+    sample = _healthy_scrnaseq_sample() | {"fraction_reads_in_cells": 0.20}
+    results = evaluate({"BAD": sample}, SCRNASEQ_RULE_PACK)
+    frac = [r for r in results if r.value == 0.20]
+    assert frac and any(r.status == "fail" for r in frac)
+
+
+def test_high_mito_fraction_fails():
+    # A high mitochondrial read fraction flags stressed or dying cells.
+    sample = _healthy_scrnaseq_sample() | {"pct_reads_mito": 60.0}
+    results = evaluate({"BAD": sample}, SCRNASEQ_RULE_PACK)
+    mito = [r for r in results if r.value == 60.0]
+    assert mito and any(r.status == "fail" for r in mito)
+
+
+def test_scrnaseq_goal_routes_through_registry_to_pack_that_fires_pass_and_fail():
+    # End-to-end: a single-cell goal maps to the scrnaseq assay, whose pipeline
+    # maps back to scrnaseq, whose rule pack passes a healthy sample and fails a
+    # broken one. This is the path the CLI walks (goal -> assay -> rule_pack_for).
+    from contig.registry import assay_for_pipeline, match_assay, select_pipeline
+
+    assay = match_assay("cluster cells from a single-cell experiment")
+    assert assay == "scrnaseq"
+    pipeline = select_pipeline(assay).pipeline
+    assert assay_for_pipeline(pipeline) == "scrnaseq"
+
+    pack = rule_pack_for(assay)
+    healthy = evaluate({"OK": _healthy_scrnaseq_sample()}, pack)
+    assert healthy and all(r.status == "pass" for r in healthy)
+    broken = evaluate({"BAD": _healthy_scrnaseq_sample() | {"estimated_cells": 5.0}}, pack)
+    assert any(r.status == "fail" for r in broken)

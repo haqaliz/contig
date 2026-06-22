@@ -252,6 +252,8 @@ def test_run_uses_variant_qc_for_sarek_pipeline(tmp_path, monkeypatch):
 def test_run_on_aws_batch_generates_awsbatch_config(tmp_path, monkeypatch):
     # P6: a user reaches the second compute backend by naming it + its queue/region.
     monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
     result = runner.invoke(
         app,
         ["run", "--run-id", "aws", "--runs-dir", str(tmp_path),
@@ -276,6 +278,43 @@ def test_run_aws_batch_without_queue_fails_cleanly(tmp_path, monkeypatch):
     assert result.exit_code != 0
     assert "queue" in result.output.lower()
     assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+def test_run_aws_batch_refuses_without_credentials(tmp_path, monkeypatch):
+    # PRD contract E: a misconfigured AWS Batch launch is refused by the preflight
+    # BEFORE Nextflow is ever invoked. No credentials -> refuse, executor untouched.
+    launched = {"n": 0}
+
+    def spy(cmd, trace_path):
+        launched["n"] += 1
+        return 0
+
+    monkeypatch.setattr("contig.cli.default_executor", spy)
+    for var in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_PROFILE"):
+        monkeypatch.delenv(var, raising=False)
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "awsbad", "--runs-dir", str(tmp_path),
+         "--backend", "aws_batch", "--work-dir", "s3://contig/work",
+         "--queue", "contig-q", "--region", "eu-west-1"],
+    )
+    assert result.exit_code != 0
+    assert "credential" in result.output.lower()
+    assert launched["n"] == 0  # refused before any launch
+
+
+def test_run_aws_batch_refuses_non_s3_work_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "awslocal", "--runs-dir", str(tmp_path),
+         "--backend", "aws_batch", "--work-dir", "/local/work",
+         "--queue", "contig-q", "--region", "eu-west-1"],
+    )
+    assert result.exit_code != 0
+    assert "s3://" in result.output
 
 
 def test_run_self_heals_oom_and_shows_repair_chain(tmp_path, monkeypatch):
@@ -595,6 +634,135 @@ def test_approve_rejects_invalid_run_id(tmp_path):
     assert result.exit_code != 0
 
 
+def test_run_notify_forwards_webhook_and_emits_finished(tmp_path, monkeypatch):
+    import json as _json
+
+    from contig import notify
+
+    posted = []
+    monkeypatch.setattr(notify, "_post_webhook", lambda url, payload: posted.append(url))
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_OK, GOOD_MQC))
+
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "n1", "--runs-dir", str(tmp_path), "--notify", "https://hook.example/x"],
+    )
+    assert result.exit_code == 0
+    feed = (tmp_path / "notifications.jsonl").read_text().splitlines()
+    rows = [_json.loads(line) for line in feed]
+    assert rows[-1]["kind"] == "finished"
+    assert posted == ["https://hook.example/x"]
+
+
+def test_run_rejects_notify_url_with_leading_dash(tmp_path, monkeypatch):
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "n2", "--runs-dir", str(tmp_path), "--notify", "-bad"],
+    )
+    assert result.exit_code != 0
+
+
+def test_run_rejects_non_http_notify_url(tmp_path, monkeypatch):
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "n3", "--runs-dir", str(tmp_path), "--notify", "file:///etc/passwd"],
+    )
+    assert result.exit_code != 0
+
+
+# --- contig verify (PRD contract B: output integrity) --------------------------
+def _write_run_with_outputs(runs_dir, run_id, files):
+    """Write a bundle whose results/ holds ``files`` and whose record records them."""
+    from contig.bundle import compute_output_checksums
+
+    run_dir = Path(runs_dir) / run_id
+    results = run_dir / "results"
+    results.mkdir(parents=True, exist_ok=True)
+    for rel, content in files.items():
+        path = results / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    record = RunRecord(
+        run_id=run_id,
+        pipeline="nf-core/rnaseq",
+        pipeline_revision="3.26.0",
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_checksums={},
+        events=[TaskEvent(process="X", status="COMPLETED", exit=0)],
+        output_checksums=compute_output_checksums(results),
+    )
+    write_bundle(record, run_dir)
+    return run_dir
+
+
+def test_verify_passes_when_outputs_unchanged(tmp_path):
+    _write_run_with_outputs(tmp_path, "ok", {"summary.txt": b"produced"})
+    result = runner.invoke(app, ["verify", "ok", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "verified" in result.output.lower()
+
+
+def test_verify_detects_changed_output(tmp_path):
+    run_dir = _write_run_with_outputs(tmp_path, "drift", {"summary.txt": b"produced"})
+    (run_dir / "results" / "summary.txt").write_bytes(b"tampered")
+    result = runner.invoke(app, ["verify", "drift", "--runs-dir", str(tmp_path)])
+    assert result.exit_code != 0
+    assert "summary.txt" in result.output
+
+
+def test_verify_detects_missing_output(tmp_path):
+    run_dir = _write_run_with_outputs(tmp_path, "gone", {"summary.txt": b"produced"})
+    (run_dir / "results" / "summary.txt").unlink()
+    result = runner.invoke(app, ["verify", "gone", "--runs-dir", str(tmp_path)])
+    assert result.exit_code != 0
+    assert "summary.txt" in result.output
+
+
+def test_verify_nothing_to_verify_when_no_recorded_checksums(tmp_path):
+    _write_run(tmp_path, "empty", [TaskEvent(process="X", status="COMPLETED", exit=0)])
+    result = runner.invoke(app, ["verify", "empty", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "nothing to verify" in result.output.lower()
+
+
+def test_verify_json_reports_drift_shape(tmp_path):
+    import json
+
+    run_dir = _write_run_with_outputs(
+        tmp_path, "j", {"a.txt": b"aaa", "sub/b.txt": b"bbb"}
+    )
+    (run_dir / "results" / "a.txt").write_bytes(b"changed")
+    (run_dir / "results" / "sub" / "b.txt").unlink()
+    result = runner.invoke(app, ["verify", "j", "--runs-dir", str(tmp_path), "--json"])
+    assert result.exit_code != 0
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["changed"] == ["a.txt"]
+    assert data["missing"] == ["sub/b.txt"]
+
+
+def test_verify_json_ok_when_clean(tmp_path):
+    import json
+
+    _write_run_with_outputs(tmp_path, "clean", {"a.txt": b"aaa"})
+    result = runner.invoke(app, ["verify", "clean", "--runs-dir", str(tmp_path), "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data == {"ok": True, "changed": [], "missing": []}
+
+
+def test_verify_errors_on_missing_run(tmp_path):
+    result = runner.invoke(app, ["verify", "nope", "--runs-dir", str(tmp_path)])
+    assert result.exit_code != 0
+
+
+def test_verify_rejects_invalid_run_id(tmp_path):
+    result = runner.invoke(app, ["verify", "--", "-bad", "--runs-dir", str(tmp_path)])
+    assert result.exit_code != 0
+
+
 def test_run_auto_approve_applies_gated_patch(tmp_path, monkeypatch):
     # --auto-approve drives a needs_confirmation patch through without a human:
     # a missing-index failure is gated, then auto-approved, then succeeds.
@@ -652,6 +820,22 @@ def test_eval_detector_json_emits_machine_readable_report(tmp_path):
     data = json.loads(result.output)
     assert "accuracy" in data and "per_class" in data and "mismatches" in data
     assert data["total"] >= 10
+
+
+def test_eval_detector_scores_a_named_detector(tmp_path):
+    import json
+
+    result = runner.invoke(app, ["eval-detector", "--detector", "rules-strict", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert "accuracy" in data and "total" in data
+    assert data["total"] >= 10
+
+
+def test_eval_detector_rejects_an_unknown_detector(tmp_path):
+    result = runner.invoke(app, ["eval-detector", "--detector", "nope"])
+    assert result.exit_code != 0
+    assert "rules" in result.output.lower()
 
 
 def test_corpus_promote_moves_case_into_golden(tmp_path):

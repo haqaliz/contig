@@ -22,6 +22,13 @@ REGISTRY: list[PipelineEntry] = [
         revision="3.5.1",
         description="Germline short-variant calling (GATK best-practices), research use.",
     ),
+    PipelineEntry(
+        assay="scrnaseq",
+        pipeline="nf-core/scrnaseq",
+        # 4.1.0 is the latest released nf-core/scrnaseq tag (2024-10-30).
+        revision="4.1.0",
+        description="Single-cell RNA-seq quantification + per-cell QC (10x, DropSeq, SmartSeq).",
+    ),
 ]
 
 _BY_ASSAY: dict[str, PipelineEntry] = {e.assay: e for e in REGISTRY}
@@ -55,8 +62,18 @@ def assay_for_pipeline(pipeline: str) -> str | None:
 
 # Deterministic keyword rules: free-text goal -> assay key. Lower-cased substring
 # match. "differential" (not "differential expression") so it also catches the
-# inflected "differentially expressed". Order is irrelevant; first hit wins.
+# inflected "differentially expressed". First hit wins, so the MORE SPECIFIC
+# assay is listed first: "scrna-seq" contains the substring "rna-seq", so
+# scrnaseq must be checked before rnaseq or single-cell goals would be misrouted.
 _ASSAY_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "scrnaseq": (
+        "single cell",
+        "single-cell",
+        "scrna-seq",
+        "scrnaseq",
+        "scrna",
+        "10x",
+    ),
     "rnaseq": (
         "rna-seq",
         "rnaseq",

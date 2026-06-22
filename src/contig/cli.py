@@ -24,14 +24,16 @@ from contig.corpus import (
     load_corpus,
     promote_pending_case,
 )
+from contig.detect import get_detector
 from contig.eval_history import (
     append_snapshot,
     default_history_path,
     load_history,
     snapshot_from_report,
 )
-from contig.models import ExecutionTarget, LaunchManifest, RunSummary, sha256_file
-from contig.nfconfig import ConfigGenerationError
+from contig.bundle import compute_output_checksums
+from contig.models import ExecutionTarget, LaunchManifest, RunRecord, RunSummary, sha256_file
+from contig.nfconfig import ConfigGenerationError, preflight_aws_batch
 from contig.planner import PlanningError
 from contig.planner import plan as build_plan
 from contig.progress import read_progress, render_progress
@@ -59,6 +61,17 @@ _SAFE_RUN_ID = _re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 def _is_safe_run_id(run_id: str) -> bool:
     """A run id must be filesystem-safe and never read as a CLI option (no leading dash)."""
     return bool(_SAFE_RUN_ID.match(run_id))
+
+
+def _is_safe_webhook(url: str) -> bool:
+    """A notify webhook must be an http(s) URL and never read as a CLI option.
+
+    No leading dash (so it cannot be mistaken for a flag) and an http/https scheme
+    only (so a stray file:// or other scheme can never be POSTed to).
+    """
+    if not url or url.startswith("-"):
+        return False
+    return url.startswith("http://") or url.startswith("https://")
 
 
 def _generate_run_id() -> str:
@@ -140,6 +153,7 @@ def run(
     max_attempts: int = typer.Option(3, "--max-attempts", help="Max self-heal attempts."),
     auto_approve: bool = typer.Option(False, "--auto-approve", help="Apply gated patches without waiting (non-interactive/CI)."),
     approval_timeout: float = typer.Option(1800, "--approval-timeout", help="Seconds to wait for a human approval before stopping."),
+    notify: str = typer.Option(None, "--notify", help="Webhook URL to POST run lifecycle events to (http/https)."),
 ) -> None:
     """Run a pipeline, self-heal recoverable failures, verify it, and report the verdict.
 
@@ -169,6 +183,7 @@ def run(
         max_attempts=max_attempts,
         auto_approve=auto_approve,
         approval_timeout=approval_timeout,
+        notify=notify,
     )
 
 
@@ -195,12 +210,16 @@ def _dispatch_run(
     resume: bool = False,
     auto_approve: bool = False,
     approval_timeout: float = 1800,
+    notify: str | None = None,
 ) -> None:
     """Validate, write the reproduce sidecar, run through self-heal, and report.
 
     Shared by `run` (fresh invocation) and `rerun` (replayed from a manifest), so
     both paths apply the same validation and write the same launch.json.
     """
+    if notify is not None and not _is_safe_webhook(notify):
+        typer.echo(f"Invalid notify webhook URL: {notify!r} (must be an http/https URL)", err=True)
+        raise typer.Exit(code=1)
     backend_options = {k: v for k, v in (("queue", queue), ("region", region)) if v}
     # Caps ride in the generated config as process.resourceLimits; nf-core
     # ignores the old --max_memory/--max_cpus params.
@@ -220,6 +239,17 @@ def _dispatch_run(
     except ValidationError as exc:
         typer.echo(f"Invalid execution target: {exc}", err=True)
         raise typer.Exit(code=1)
+
+    # AWS Batch refuses a misconfigured launch up front (PRD contract E): a missing
+    # queue/region, a non-s3 work dir, or absent credentials would otherwise only
+    # surface deep in Nextflow submission. Refuse before launching anything.
+    if backend == "aws_batch":
+        problems = preflight_aws_batch(target)
+        if problems:
+            typer.echo("Cannot launch on AWS Batch:", err=True)
+            for problem in problems:
+                typer.echo(f"  - {problem}", err=True)
+            raise typer.Exit(code=1)
 
     params: dict[str, object] = {}
     input_paths: list = []
@@ -284,6 +314,7 @@ def _dispatch_run(
             resume=resume,
             auto_approve=auto_approve,
             approval_timeout=approval_timeout,
+            notify_webhook=notify,
         )
     except ConfigGenerationError as exc:
         typer.echo(f"Cannot configure the '{backend}' backend: {exc}", err=True)
@@ -385,6 +416,91 @@ def show(
         typer.echo(f"Wrote report to {output}")
         return
     typer.echo(rendered)
+
+
+def _results_dir_for(record: RunRecord, runs_dir: str, run_id: str) -> Path:
+    """Where a run's outputs live for re-hashing: recorded outdir, else the default.
+
+    The CLI absolutizes --outdir into record.parameters; verify prefers that path
+    when it still exists, and otherwise falls back to runs_dir/<id>/results (a
+    moved runs directory, or a test-profile run), matching how finalize hashed.
+    """
+    outdir = record.parameters.get("outdir")
+    if outdir:
+        path = Path(str(outdir))
+        if path.is_dir():
+            return path
+    return Path(runs_dir) / run_id / "results"
+
+
+def verify_outputs(record: RunRecord, results_dir: Path) -> dict:
+    """Compare on-disk outputs against the recorded checksums (PRD contract B).
+
+    Returns {ok, changed, missing}: `changed` are recorded files whose current
+    hash differs, `missing` are recorded files no longer on disk (both sorted).
+    Empty recorded checksums report ok with nothing to verify; new files that
+    were never recorded are ignored (only the anchored outputs are guaranteed).
+    """
+    recorded = record.output_checksums
+    if not recorded:
+        return {"ok": True, "changed": [], "missing": []}
+    current = compute_output_checksums(results_dir)
+    changed: list[str] = []
+    missing: list[str] = []
+    for rel, digest in recorded.items():
+        if rel not in current:
+            missing.append(rel)
+        elif current[rel] != digest:
+            changed.append(rel)
+    changed.sort()
+    missing.sort()
+    return {"ok": not (changed or missing), "changed": changed, "missing": missing}
+
+
+@app.command()
+def verify(
+    run_id: str = typer.Argument(..., help="The run whose outputs to re-verify."),
+    runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the result as JSON (for the dashboard)."),
+) -> None:
+    """Re-hash a finished run's outputs and report any drift from the record.
+
+    Reads the recorded output checksums and re-hashes the files on disk: an
+    output that changed or disappeared is drift and exits non-zero. A run whose
+    record captured no outputs reports "nothing to verify" (PRD contract B).
+    """
+    if not _is_safe_run_id(run_id):
+        typer.echo(f"Invalid run id: {run_id!r}", err=True)
+        raise typer.Exit(code=1)
+    try:
+        record = load_run(runs_dir, run_id)
+    except RunNotFoundError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+    if not record.output_checksums:
+        if json_out:
+            typer.echo(_json.dumps({"ok": True, "changed": [], "missing": []}))
+            return
+        typer.echo(f"Nothing to verify for run {run_id}: no outputs were captured.")
+        return
+
+    result = verify_outputs(record, _results_dir_for(record, runs_dir, run_id))
+    if json_out:
+        typer.echo(_json.dumps(result))
+        if not result["ok"]:
+            raise typer.Exit(code=1)
+        return
+
+    if result["ok"]:
+        typer.echo(f"Outputs verified for run {run_id}: all recorded outputs match.")
+        return
+    typer.echo(f"Drift detected for run {run_id}:", err=True)
+    for rel in result["changed"]:
+        typer.echo(f"  changed: {rel}", err=True)
+    for rel in result["missing"]:
+        typer.echo(f"  missing: {rel}", err=True)
+    raise typer.Exit(code=1)
 
 
 @app.command()
@@ -588,6 +704,7 @@ def corpus_promote(
 @app.command(name="eval-detector")
 def eval_detector(
     corpus: str = typer.Option(None, "--corpus", help="Failure-corpus JSONL (defaults to the shipped seed)."),
+    detector: str = typer.Option("rules", "--detector", help="Which detector to score (rules, rules-strict)."),
     json_out: bool = typer.Option(False, "--json", help="Emit the report as JSON (for the dashboard)."),
     snapshot: bool = typer.Option(False, "--snapshot", help="Append this eval to the committed history (trend)."),
     show_history: bool = typer.Option(False, "--history", help="Print the recorded accuracy-over-time trend instead of re-evaluating."),
@@ -616,13 +733,21 @@ def eval_detector(
             typer.echo(f"  {snap.timestamp}  accuracy {snap.accuracy:.1%}  (corpus {snap.corpus_size})")
         return
 
+    try:
+        detector_fn = get_detector(detector)
+    except KeyError as exc:
+        # KeyError stringifies with quotes; the message already lists the
+        # available detectors, so surface it as the user-facing error.
+        typer.echo(str(exc).strip("\"'"), err=True)
+        raise typer.Exit(code=1)
+
     path = Path(corpus) if corpus else default_corpus_path()
     try:
         cases = load_corpus(path)
     except FileNotFoundError:
         typer.echo(f"Corpus not found: {path}", err=True)
         raise typer.Exit(code=1)
-    report = evaluate_detector(cases)
+    report = evaluate_detector(cases, detector_fn)
 
     if snapshot:
         append_snapshot(

@@ -11,7 +11,7 @@ from __future__ import annotations
 from os import PathLike
 from pathlib import Path
 
-from contig.detect import diagnose_failure
+from contig.detect import Detector, diagnose_failure
 from contig.models import (
     ClassScore,
     DetectorEvalReport,
@@ -44,13 +44,20 @@ def load_corpus(path: str | PathLike[str]) -> list[FailureCase]:
     ]
 
 
-def evaluate_detector(cases: list[FailureCase]) -> DetectorEvalReport:
-    """Replay `diagnose_failure` over the corpus and score it per class.
+def evaluate_detector(
+    cases: list[FailureCase], detector: Detector | None = None
+) -> DetectorEvalReport:
+    """Replay a detector over the corpus and score it per class.
+
+    `detector` is any callable matching the Detector type; it defaults to the
+    rules detector (`diagnose_failure`) so existing callers are unchanged. This
+    is how `eval-detector --detector <name>` scores ANY registered detector.
 
     Accuracy is the headline; `mismatches` names every case the detector got
     wrong (so gaps are actionable); `per_class` precision/recall shows where the
     detector is weak, which is what drives the next rule.
     """
+    detector = detector or diagnose_failure
     correct = 0
     mismatches: list[DetectorMismatch] = []
     # Per-class tallies for precision/recall: support (true), predicted, hits.
@@ -59,7 +66,7 @@ def evaluate_detector(cases: list[FailureCase]) -> DetectorEvalReport:
     hits: dict[str, int] = {}
 
     for case in cases:
-        predicted = diagnose_failure(case.events, case.log_text).failure_class
+        predicted = detector(case.events, case.log_text).failure_class
         expected = case.expected_class
         support[expected] = support.get(expected, 0) + 1
         predicted_count[predicted] = predicted_count.get(predicted, 0) + 1

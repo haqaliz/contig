@@ -386,6 +386,82 @@ def test_self_heal_gives_up_when_no_patch_at_all(tmp_path):
     assert not (tmp_path / "runs" / "r" / "pending_approval.json").exists()
 
 
+def test_self_heal_finalize_populates_output_checksums(tmp_path):
+    # On a successful finalize, the produced outputs under results/ are hashed
+    # into the record so a later `contig verify` can detect drift (contract B).
+    from contig.bundle import compute_output_checksums
+
+    def executor(cmd, trace_path):
+        run_dir = Path(trace_path).parent
+        results = run_dir / "results"
+        results.mkdir(parents=True, exist_ok=True)
+        (results / "summary.txt").write_bytes(b"produced")
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor)
+    run_dir = tmp_path / "runs" / "r"
+    assert record.output_checksums == compute_output_checksums(run_dir / "results")
+    assert record.output_checksums["summary.txt"]
+
+
+def test_self_heal_output_checksums_empty_when_no_results(tmp_path):
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor)
+    assert record.output_checksums == {}
+
+
+def _notifications(tmp_path):
+    path = tmp_path / "runs" / "notifications.jsonl"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+def test_self_heal_emits_finished_notification_on_success(tmp_path):
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    _heal(tmp_path, executor)
+    kinds = [n["kind"] for n in _notifications(tmp_path)]
+    assert kinds == ["finished"]
+    assert _notifications(tmp_path)[0]["run_id"] == "r"
+
+
+def test_self_heal_emits_failed_notification_on_give_up(tmp_path):
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_TOOL, "Segmentation fault in some_tool")
+        return 1
+
+    _heal(tmp_path, executor)
+    kinds = [n["kind"] for n in _notifications(tmp_path)]
+    assert kinds[-1] == "failed"
+
+
+def test_self_heal_emits_awaiting_approval_notification_when_paused(tmp_path):
+    _heal(tmp_path, _index_executor(), poll=lambda run_dir, timeout_sec: None)
+    kinds = [n["kind"] for n in _notifications(tmp_path)]
+    assert "awaiting_approval" in kinds
+
+
+def test_self_heal_forwards_webhook_to_emit(tmp_path, monkeypatch):
+    from contig import notify
+
+    captured = []
+    monkeypatch.setattr(notify, "_post_webhook", lambda url, payload: captured.append(url))
+
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    _heal(tmp_path, executor, notify_webhook="https://hook.example/x")
+    assert captured == ["https://hook.example/x"]
+
+
 def test_self_heal_respects_max_attempts(tmp_path):
     attempts = {"n": 0}
 

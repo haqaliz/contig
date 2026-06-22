@@ -93,3 +93,41 @@ def test_assay_for_pipeline_maps_rnaseq_to_rnaseq():
 
 def test_assay_for_pipeline_returns_none_for_unregistered_pipeline():
     assert assay_for_pipeline("nf-core/unknown") is None
+
+
+# --- scRNA-seq assay (PRD contract D) ------------------------------------------
+
+
+def test_registry_has_scrnaseq_entry():
+    scrna = [e for e in REGISTRY if e.assay == "scrnaseq"]
+    assert len(scrna) == 1
+    assert isinstance(scrna[0], PipelineEntry)
+    assert scrna[0].pipeline == "nf-core/scrnaseq"
+    assert scrna[0].revision  # pinned to a real released tag
+
+
+def test_select_pipeline_returns_scrnaseq_pipeline():
+    entry = select_pipeline("scrnaseq")
+    assert entry.assay == "scrnaseq"
+    assert entry.pipeline == "nf-core/scrnaseq"
+
+
+def test_assay_for_pipeline_maps_scrnaseq_pipeline_to_scrnaseq():
+    assert assay_for_pipeline("nf-core/scrnaseq") == "scrnaseq"
+
+
+def test_match_assay_matches_single_cell_phrase():
+    assert match_assay("cluster cells from my single cell experiment") == "scrnaseq"
+
+
+def test_match_assay_matches_scrnaseq_synonyms():
+    assert match_assay("analyze scRNA-seq data") == "scrnaseq"
+
+
+def test_match_assay_matches_tenx_phrase():
+    assert match_assay("process my 10x Genomics run") == "scrnaseq"
+
+
+def test_match_assay_rnaseq_not_pulled_into_scrnaseq():
+    # bulk RNA-seq must stay rnaseq even though scrnaseq keywords contain "rna"
+    assert match_assay("I have bulk RNA-seq data") == "rnaseq"

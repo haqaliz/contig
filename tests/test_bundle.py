@@ -1,7 +1,12 @@
 """Tests for the reproducibility bundle module (ARCHITECTURE §7)."""
 
-from contig.bundle import compute_input_checksums, load_bundle, write_bundle
-from contig.models import ExecutionTarget, QCResult, RunRecord, TaskEvent
+from contig.bundle import (
+    compute_input_checksums,
+    compute_output_checksums,
+    load_bundle,
+    write_bundle,
+)
+from contig.models import ExecutionTarget, QCResult, RunRecord, TaskEvent, sha256_file
 
 
 def _minimal_record() -> RunRecord:
@@ -103,3 +108,42 @@ def test_load_preserves_fail_verdict(tmp_path):
     loaded = load_bundle(write_bundle(rec, tmp_path).parent)
 
     assert loaded.verdict == "fail"
+
+
+# --- output checksums (PRD contract B: output integrity) -----------------------
+def test_compute_output_checksums_maps_relpath_to_sha256(tmp_path):
+    results = tmp_path / "results"
+    (results / "multiqc").mkdir(parents=True)
+    top = results / "summary.txt"
+    top.write_bytes(b"summary")
+    nested = results / "multiqc" / "report.html"
+    nested.write_bytes(b"report")
+
+    sums = compute_output_checksums(results)
+
+    # Keyed by path RELATIVE to results_dir, so the record is portable and the
+    # nested file keeps its subdirectory.
+    assert set(sums) == {"summary.txt", "multiqc/report.html"}
+    assert sums["summary.txt"] == sha256_file(top)
+    assert sums["multiqc/report.html"] == sha256_file(nested)
+
+
+def test_compute_output_checksums_uses_posix_relpaths(tmp_path):
+    results = tmp_path / "results"
+    (results / "star").mkdir(parents=True)
+    (results / "star" / "log.txt").write_bytes(b"x")
+
+    sums = compute_output_checksums(results)
+
+    # Forward slashes on every platform, so the key matches across a re-hash.
+    assert "star/log.txt" in sums
+
+
+def test_compute_output_checksums_skips_absent_results_dir(tmp_path):
+    assert compute_output_checksums(tmp_path / "nope") == {}
+
+
+def test_compute_output_checksums_empty_dir_is_empty_map(tmp_path):
+    results = tmp_path / "results"
+    results.mkdir()
+    assert compute_output_checksums(results) == {}

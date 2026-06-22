@@ -6,7 +6,14 @@ Nextflow error-log text into `diagnose_failure` and asserts the classification.
 
 from __future__ import annotations
 
-from contig.detect import diagnose_failure
+import pytest
+
+from contig.detect import (
+    DETECTORS,
+    diagnose_failure,
+    diagnose_failure_strict,
+    get_detector,
+)
 from contig.models import TaskEvent
 
 
@@ -159,3 +166,76 @@ def test_benign_fai_mention_is_not_missing_index() -> None:
     log = "Running: samtools faidx genome.fasta\nCreated genome.fasta.fai\nunrelated tool error"
     d = diagnose_failure(events, log_text=log)
     assert d.failure_class != "missing_index"
+
+
+# --- pluggable detector registry (PRD contract C) ------------------------------
+
+
+def test_registry_exposes_rules_detector_as_diagnose_failure() -> None:
+    assert DETECTORS["rules"] is diagnose_failure
+
+
+def test_registry_exposes_a_strict_detector() -> None:
+    assert "rules-strict" in DETECTORS
+    assert DETECTORS["rules-strict"] is diagnose_failure_strict
+
+
+def test_get_detector_returns_the_named_callable() -> None:
+    assert get_detector("rules") is diagnose_failure
+    assert get_detector("rules-strict") is diagnose_failure_strict
+
+
+def test_get_detector_unknown_name_raises_a_clear_error() -> None:
+    with pytest.raises(KeyError) as excinfo:
+        get_detector("does-not-exist")
+    # the message names the bad detector and lists what is available
+    assert "does-not-exist" in str(excinfo.value)
+    assert "rules" in str(excinfo.value)
+
+
+def test_a_detector_is_a_callable_returning_a_diagnosis() -> None:
+    events = [TaskEvent(process="ALIGN", status="FAILED", exit=137)]
+    for name, detector in DETECTORS.items():
+        d = detector(events, "out of memory: killed")
+        assert d.failure_class == "oom", name
+
+
+# --- rules-strict: higher precision on weak evidence ---------------------------
+
+
+def test_strict_agrees_with_rules_on_strong_oom_signal() -> None:
+    # An exit-137 kill is unambiguous; strict keeps the confident classification.
+    events = [TaskEvent(process="ALIGN", status="FAILED", exit=137)]
+    log = "Process killed: out of memory (exit 137)"
+    assert diagnose_failure_strict(events, log).failure_class == "oom"
+
+
+def test_strict_demotes_platform_unsupported_to_tool_crash() -> None:
+    # platform_unsupported is the detector's lowest-confidence specific guess
+    # (it leans on a warning that shows up on healthy tasks too). Strict refuses
+    # to name it and falls back to the unarguable fact: a task crashed.
+    events = [TaskEvent(process="MAKE_TRANSCRIPTS_FASTA", status="FAILED", exit=None)]
+    log = (
+        "WARNING: The requested image's platform (linux/amd64) does not match the "
+        "detected host platform (linux/arm64/v8) and no specific platform was requested\n"
+        "Execution cancelled -- Finishing pending tasks before exit"
+    )
+    assert diagnose_failure(events, log).failure_class == "platform_unsupported"
+    assert diagnose_failure_strict(events, log).failure_class == "tool_crash"
+
+
+def test_strict_keeps_strong_conda_signal_but_drops_the_loose_heuristic() -> None:
+    # The strong needle (ResolvePackageNotFound) is kept by strict.
+    events = [TaskEvent(process="SETUP", status="FAILED", exit=1)]
+    strong = "ResolvePackageNotFound:\n  - samtools=1.99"
+    assert diagnose_failure_strict(events, strong).failure_class == "conda_solve_failed"
+    # The loose "conda" + "solve" co-occurrence is weak evidence: rules guesses
+    # conda_solve_failed, strict refuses and reports the bare crash instead.
+    loose = "running conda activate base\ncould not solve the puzzle in this step"
+    assert diagnose_failure(events, loose).failure_class == "conda_solve_failed"
+    assert diagnose_failure_strict(events, loose).failure_class == "tool_crash"
+
+
+def test_strict_keeps_unknown_when_no_task_failed() -> None:
+    # No failing task and no signal: both detectors agree on unknown.
+    assert diagnose_failure_strict([], "").failure_class == "unknown"
