@@ -1,7 +1,7 @@
 # Contributing to Contig
 
 Thanks for your interest. Contig is an agentic bioinformatics analyst focused on
-**Layer 2** — running pipelines, self-healing failures, verifying outputs, and
+**Layer 2**: running pipelines, self-healing failures, verifying outputs, and
 guaranteeing reproducibility. The most valuable contributions harden that engine
 and grow the data behind it. See [VISION.md](VISION.md) for the bet and
 [docs/USAGE.md](docs/USAGE.md) for how the tool is used.
@@ -16,18 +16,18 @@ Contig is a Python 3.12 package managed with [`uv`](https://github.com/astral-sh
 git clone https://github.com/haqaliz/contig.git
 cd contig
 uv sync                 # create the venv and install deps (incl. dev)
-uv run pytest           # run the full test suite — should be green
+uv run pytest           # run the full test suite, should be green
 ```
 
 For **live** pipeline runs you also need Nextflow, a Java runtime (`JAVA_HOME`),
-and a running Docker daemon — see [docs/USAGE.md → Prerequisites](docs/USAGE.md#prerequisites).
+and a running Docker daemon, see [docs/USAGE.md → Prerequisites](docs/USAGE.md#prerequisites).
 The CLI and the test suite run without them.
 
 ### Package management (uv)
 
-- `uv sync` — install/refresh the environment from `uv.lock`.
-- `uv add <pkg>` / `uv add --dev <pkg>` — add a runtime / dev dependency (updates `pyproject.toml` + `uv.lock`).
-- `uv run <cmd>` — run a command inside the project venv (`uv run contig …`, `uv run pytest`).
+- `uv sync`: install/refresh the environment from `uv.lock`.
+- `uv add <pkg>` / `uv add --dev <pkg>`: add a runtime / dev dependency (updates `pyproject.toml` + `uv.lock`).
+- `uv run <cmd>`: run a command inside the project venv (`uv run contig …`, `uv run pytest`).
 - Commit `uv.lock` with any dependency change so builds stay reproducible.
 
 ### Dashboard (Next.js)
@@ -71,7 +71,7 @@ positionals; never build a shell string from user input.
 
 ```
 src/contig/
-├── cli.py            # Typer CLI — the contig commands
+├── cli.py            # Typer CLI, the contig commands
 ├── planner.py        # goal → pipeline matching (deterministic, replaceable)
 ├── registry.py       # curated pipeline registry
 ├── runner.py         # invokes Nextflow, streams events
@@ -79,7 +79,7 @@ src/contig/
 ├── reference.py      # genome/reference resolution (iGenomes key or FASTA+GTF)
 ├── samplesheet.py    # sample-sheet parsing + validation
 ├── datashape.py      # input shape checks (replicates, single/paired-end, …)
-├── detect.py         # failure detector — classifies a failed task
+├── detect.py         # failure detector, classifies a failed task
 ├── repair.py         # repair strategies (e.g. resource patch for OOM)
 ├── self_heal.py      # detect → diagnose → patch → retry loop
 ├── verification/     # QC checks → PASS / WARN / FAIL / UNVERIFIED verdict
@@ -94,7 +94,7 @@ src/contig/
     └── detector_corpus.jsonl   # labeled failure corpus (golden)
 
 tests/                # one test module per source module (test_*.py)
-dashboard/            # Next.js dashboard (Tailwind + shadcn/ui) — see FEATURES.md
+dashboard/            # Next.js dashboard (Tailwind + shadcn/ui), see FEATURES.md
 docs/                 # vision, research, roadmap, product, technical, business
 .claude/skills/       # repo-local Claude Code workflow skills (begin/end/worktrees/…)
 ```
@@ -121,7 +121,7 @@ not a requirement.
 ### Strategic guardrail
 
 Contig deliberately does **not** build Layer 1 (turning English into a
-workflow) as a product — that's a commodity we consume. Contributions should
+workflow) as a product, that's a commodity we consume. Contributions should
 harden the run / debug / self-heal / verify / reproduce engine, not turn Contig
 into a workflow generator. If a change drifts that way, call it out in the PR.
 
@@ -129,15 +129,15 @@ into a workflow generator. If a change drifts that way, call it out in the PR.
 
 ## What to contribute
 
-- 🩹 **Failure cases** — the highest-leverage contribution. A real run that broke,
+- 🩹 **Failure cases**: the highest-leverage contribution. A real run that broke,
   with the diagnosis and fix, grows the corpus that makes the detector better.
   See [docs/USAGE.md → failure corpus](docs/USAGE.md#how-the-detector-improves-failure-corpus)
   and `contig corpus-promote`.
-- 🧪 **QC checks** — new metric or structural verification checks that strengthen a verdict (under `verification/`).
-- 🧬 **Curated assays** — a vetted assay to pipeline mapping plus its QC rule pack. The recipe is five small mapping points, no engine rewrite: see [docs/technical/ADD_AN_ASSAY.md](docs/technical/ADD_AN_ASSAY.md).
-- ☁️ **Backends** — extending the `nfconfig.py` mapping for `gcp_batch` / `k8s` (`local`, `aws_batch`, and `slurm` are wired; `slurm` is live-validated).
-- 🖥 **Dashboard** — UI for any of the above (run views, QC, the corpus, the eval flywheel); see the `dashboard/` notes above.
-- 🐛 **Bugs & docs** — fixes, clarity, examples.
+- 🧪 **QC checks**: new metric or structural verification checks that strengthen a verdict (under `verification/`).
+- 🧬 **Curated assays**: a vetted assay to pipeline mapping plus its QC rule pack. The recipe is five small mapping points, no engine rewrite: see [docs/technical/ADD_AN_ASSAY.md](docs/technical/ADD_AN_ASSAY.md).
+- ☁️ **Backends**: extending the `nfconfig.py` mapping for `gcp_batch` / `k8s` (`local`, `aws_batch`, and `slurm` are wired; `slurm` is live-validated).
+- 🖥 **Dashboard**: UI for any of the above (run views, QC, the corpus, the eval flywheel); see the `dashboard/` notes above.
+- 🐛 **Bugs & docs**: fixes, clarity, examples.
 
 ---
 
