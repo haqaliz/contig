@@ -49,7 +49,10 @@ The CLI and the test suite work **without** Nextflow/Java/Docker; only live runs
 | `contig estimate --pipeline <p> --input <sheet>` | Pre-run runtime and cost estimate, data-driven from past runs of that pipeline with a sample-count heuristic fallback |
 | `contig export <id> --rocrate` | Export the run's provenance as an RO-Crate (ro-crate-metadata.json) |
 | `contig methods <id>` | A deterministic, citation-ready methods paragraph from the bundle |
-| `contig approve <id>` | Approve (or `--reject`) the patch a paused self-heal run is waiting on |
+| `contig approve <id>` | Approve (or `--reject`) the patch a paused self-heal run is waiting on; `--choose N` picks a ranked fix on a choice gate |
+| `contig benchmark <id>` | Compare a run's QC against a designated reference (`benchmark set <id>` to record one) within a tolerance |
+| `contig clusters` | Group failure-corpus cases by class and a normalized log signature (recurring failure modes) |
+| `contig coverage` | Corpus coverage: per-class support, thin-coverage flags, confirmed cases over time |
 | `contig list` | All bundled runs |
 | `contig corpus-promote` | Promote a confirmed pending failure case into the golden corpus |
 | `contig eval-detector` | Score the failure detector against the labeled failure corpus (`--detector rules-strict` or `--detector llm` to score a different detector, `--snapshot` to record a point in the history, `--history` to show the trend) |

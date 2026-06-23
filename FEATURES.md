@@ -213,9 +213,9 @@ needs real engine work, so it follows once the read and launch surfaces are soli
 |---|---|---|---|
 | Pending-review labeling tool (WRITE) | Confirm or correct a provisional label, then promote a real-run failure into the golden corpus | Shipped 2026-06-21 (contig corpus-promote + the dashboard Pending review: confirm/correct a label, dedupe, write into the golden corpus) | L |
 | Provisional vs confirmed split view | Browse confirmed golden cases vs still-provisional pending cases, filter by class and source | Built reads | M |
-| Corpus growth and coverage metrics | Confirmed cases over time, per-class support, thin-coverage flags | NEW: timestamped append history | M |
+| Corpus growth and coverage metrics | Confirmed cases over time, per-class support, thin-coverage flags | Shipped 2026-06-23 (contig coverage: per-class support, thin-coverage flags under 3 cases, by-source counts, confirmed-over-time from the eval history; dashboard coverage panel) | M |
 | Repair success-rate analytics | Across all runs: auto-healed vs paused vs gave-up, by failure class | Built data; cross-run aggregation | M |
-| Recurring failure-pattern clusters | Group by class plus shared log signature to surface systemic failure modes | NEW: signature extraction/clustering | M |
+| Recurring failure-pattern clusters | Group by class plus shared log signature to surface systemic failure modes | Shipped 2026-06-23 (contig clusters: groups cases by failure class plus a normalized log signature that strips paths/numbers/hashes/timestamps, worst-first; dashboard clusters view) | M |
 
 ### Detector improvement and model-swap
 
@@ -223,7 +223,7 @@ needs real engine work, so it follows once the read and launch surfaces are soli
 |---|---|---|---|
 | Detector-improvement trend | Accuracy and per-class scores across successive corpus versions | Shipped 2026-06-22 (EvalSnapshot persisted to eval_history.jsonl by contig eval-detector --snapshot and auto on corpus-promote; contig eval-detector --history; accuracy-over-time trend plus per-class deltas on /eval) | L |
 | Model-swap comparison harness | Two diagnosers/models over the same frozen corpus, per-class deltas, newly fixed vs newly broken | Shipped 2026-06-22, extended 2026-06-23 (pluggable Detector interface + registry: rules, rules-strict, and an optional provider-agnostic llm detector (Claude or OpenAI via env); contig eval-detector --detector scores any over the corpus; dashboard /eval detector selector) | L |
-| Cross-run verification benchmarking (DIFFERENTIATOR) | Show a pipeline's output matches a validated reference output for that assay | NEW: reference-output validation | L |
+| Cross-run verification benchmarking (DIFFERENTIATOR) | Show a pipeline's output matches a validated reference output for that assay | Shipped 2026-06-23 (contig benchmark set designates a reference run per pipeline/assay; contig benchmark compares a run's QC metrics within a relative tolerance plus structural shape, reporting match or drift; dashboard benchmark card) | L |
 
 ### Advanced provenance and guidance
 
@@ -231,7 +231,7 @@ needs real engine work, so it follows once the read and launch surfaces are soli
 |---|---|---|---|
 | Methods-section generator | Draft a citation-ready methods paragraph from the bundle (templating over our own provenance, not workflow authoring) | Shipped 2026-06-23 (contig methods: deterministic citation-ready paragraph from the bundle, no LLM; dashboard download button) | M |
 | Audit trail / provenance log | Cross-run chronological view of every agent action and gating event | Built per-run; cross-run aggregation | M |
-| Guided escalation prompts | When the engine escalates a genuinely ambiguous decision, present it as a plain question with safe options | NEW: structured escalation format | L |
+| Guided escalation prompts | When the engine escalates a genuinely ambiguous decision, present it as a plain question with safe options | Shipped 2026-06-23 (when a self-heal decision is ambiguous the gate offers ranked options; contig approve --choose N, or a choice list in the dashboard, picks one) | L |
 | RO-Crate / interoperable export | Map the bundle to RO-Crate so provenance interoperates beyond Contig | Shipped 2026-06-23 (contig export --rocrate: an RO-Crate ro-crate-metadata.json with the run as a Dataset, the pipeline as a SoftwareApplication, inputs/outputs as Files with checksums; dashboard download button) | L |
 
 ---
