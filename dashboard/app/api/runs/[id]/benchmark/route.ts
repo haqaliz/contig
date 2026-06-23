@@ -29,7 +29,15 @@ export async function GET(
   }
 
   const url = new URL(req.url);
-  const tolerance = url.searchParams.get("tolerance") ?? undefined;
+  // Validate tolerance up front: a non-negative decimal only. getBenchmark already
+  // drops an unsafe value (it gates on the same shape and passes --tolerance=value
+  // after a -- terminator, so a flag can never be smuggled), but reject it here with
+  // a clear 400 rather than silently falling back to the default.
+  const rawTolerance = url.searchParams.get("tolerance");
+  if (rawTolerance !== null && !/^[0-9]+(\.[0-9]+)?$/.test(rawTolerance)) {
+    return NextResponse.json({ error: "Invalid tolerance." }, { status: 400 });
+  }
+  const tolerance = rawTolerance ?? undefined;
   try {
     const report = await getBenchmark(id, tolerance);
     if (!report) {
