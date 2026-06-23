@@ -39,6 +39,16 @@ export const FIXTURE_RUN_IDS = [
   // and kind "structural" (PRD contracts C, F), for the structural-QC labeling in
   // the QC panel (a dedicated structural section, separate from metric checks).
   "structural-fixture",
+  // A finished run (numeric QC metrics) for the cross-run benchmark section (PRD
+  // contract A). The benchmark route is mocked in the spec to return a drift report
+  // and a no_reference report, so the section renders deterministically without the
+  // engine's benchmark CLI in the test environment.
+  "benchmark-fixture",
+  // A paused run whose pending_approval.json carries an options array with
+  // decision_kind "choice" (PRD contract D), for the guided-escalation choice gate.
+  // The approve route is mocked in the spec so the chosen index is asserted without
+  // the real CLI.
+  "choice-fixture",
 ];
 
 // Mirror lib/runs.ts runsDir(): CONTIG_RUNS_DIR, else ../runs from the dashboard

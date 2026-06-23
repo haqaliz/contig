@@ -20,6 +20,8 @@ import { DetectorSelector } from "@/components/eval/detector-selector";
 import { DetectorCompare } from "@/components/eval/detector-compare";
 import { EvalView } from "@/components/eval/eval-view";
 import { EvalHistory } from "@/components/eval/eval-history";
+import { CoveragePanel } from "@/components/eval/coverage-panel";
+import { ClustersView } from "@/components/eval/clusters-view";
 import {
   DETECTOR_NAMES,
   getDetectorEval,
@@ -86,6 +88,12 @@ export default async function EvalPage({
 
         <DetectorCompare history={history} />
         <EvalHistory history={history} />
+
+        {/* Corpus insights (PRD contracts B, C): coverage and recurring failure
+            modes read the corpus directly, so they render even when the live
+            detector eval CLI is unavailable. */}
+        <CoveragePanel />
+        <ClustersView />
       </div>
     );
   }
@@ -95,6 +103,11 @@ export default async function EvalPage({
       <EvalView report={report} selector={selector} />
       <DetectorCompare history={history} />
       <EvalHistory history={history} />
+
+      {/* Corpus insights (PRD contracts B, C): per-class coverage with thin-coverage
+          flags, and the recurring failure clusters worst first. */}
+      <CoveragePanel />
+      <ClustersView />
     </div>
   );
 }

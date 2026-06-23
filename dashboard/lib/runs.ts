@@ -12,11 +12,14 @@ import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 
 import type {
+  BenchmarkReport,
   CostReport,
+  CoverageReport,
   DetectorEvalReport,
   EstimateReport,
   EvalSnapshot,
   FailureCase,
+  FailureCluster,
   LaunchManifest,
   NotificationEvent,
   OutputVerification,
@@ -845,15 +848,31 @@ export async function resumeRun(id: string): Promise<void> {
 }
 
 /**
- * Approve or reject the patch a paused run is waiting on: shell `contig approve
+ * Approve or reject the decision a paused run is waiting on: shell `contig approve
  * <id>` (with --reject for a rejection), which writes runs/<id>/approval.json so
- * the engine's poll unblocks. Throws if the id is invalid or the CLI fails.
+ * the engine's poll unblocks. For a guided-escalation choice (PRD contract D), a
+ * non-negative integer choice picks the ranked option and is passed as
+ * `--choose=<n>`, so the engine applies options[n]. The choice is meaningful only
+ * on an approve; a reject ignores it. Throws if the id is invalid or the CLI fails.
  */
 export async function decideApproval(
   id: string,
   decision: "approve" | "reject",
+  choice?: number,
 ): Promise<void> {
-  await runControlCommand("approve", id, decision === "reject" ? ["--reject"] : []);
+  const flags: string[] = [];
+  if (decision === "reject") {
+    flags.push("--reject");
+  } else if (typeof choice === "number") {
+    // The index is validated at the route boundary (a non-negative integer within
+    // the options length); guard again here so a malformed value never reaches the
+    // CLI as anything but a plain --choose=<n>.
+    if (!Number.isInteger(choice) || choice < 0) {
+      throw new InvalidRunIdError(`Invalid choice index: ${choice}`);
+    }
+    flags.push(`--choose=${choice}`);
+  }
+  await runControlCommand("approve", id, flags);
 }
 
 /**
@@ -1278,6 +1297,143 @@ export async function getRunReportHtml(id: string): Promise<string | null> {
       timeout: 30_000,
     });
     return typeof stdout === "string" && stdout.trim().length > 0 ? stdout : null;
+  } catch {
+    return null;
+  }
+}
+
+// --- Cross-run benchmark (PRD contract A) --------------------------------------
+// `contig benchmark <id> --json` compares a run against the designated reference
+// for its (pipeline, assay) by QC metric values within a relative tolerance plus
+// structural shape, robust to run-to-run non-determinism. The comparison model
+// lives in the engine; the dashboard shells out and renders run vs reference per
+// metric. The run id is validated and passed as a positional after a "--"
+// terminator, and the optional tolerance is validated as a plain number and passed
+// as --opt=value, so there is no flag-smuggling surface. No reference recorded for
+// the run's pipeline/assay yields status "no_reference", a clear state, not an error.
+
+/** A tolerance string safe to pass to the CLI (a plain non-negative number, no leading dash). */
+function isSafeTolerance(value: string): boolean {
+  return /^[0-9]+(\.[0-9]+)?$/.test(value);
+}
+
+/**
+ * The cross-run benchmark for a run by shelling out to `contig benchmark <id>
+ * --json` (PRD contract A). The run id is validated (same guard as the control
+ * commands) and passed as a positional after a "--" terminator; the optional
+ * tolerance is validated and passed as --opt=value. Returns the parsed report, or
+ * null if the CLI is unavailable or its output is unparseable, so the benchmark
+ * section can degrade gracefully. A "no_reference" status is a normal, parseable
+ * report (no reference set), not a failure, and is returned as-is.
+ */
+export async function getBenchmark(
+  id: string,
+  tolerance?: string,
+): Promise<BenchmarkReport | null> {
+  if (!isSafeRunId(id)) throw new InvalidRunIdError(`Invalid run id: ${id}`);
+  const base = (process.env.CONTIG_DISPATCH_CMD ?? "uv run contig").split(" ");
+  const extra: string[] = [];
+  if (tolerance && isSafeTolerance(tolerance)) {
+    extra.push(`--tolerance=${tolerance}`);
+  }
+  const args = [
+    ...base.slice(1),
+    "benchmark",
+    `--runs-dir=${runsDir()}`,
+    "--json",
+    ...extra,
+    "--",
+    id,
+  ];
+  function parse(stdout: unknown): BenchmarkReport | null {
+    if (typeof stdout !== "string") return null;
+    try {
+      const data = JSON.parse(stdout) as BenchmarkReport;
+      if (
+        (data.status === "match" ||
+          data.status === "drift" ||
+          data.status === "no_reference") &&
+        typeof data.tolerance === "number" &&
+        typeof data.matched === "number" &&
+        typeof data.drifted === "number" &&
+        Array.isArray(data.checks)
+      ) {
+        return data;
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+  try {
+    const { stdout } = await pexec(base[0], args, {
+      cwd: repoRoot(),
+      timeout: 30_000,
+    });
+    return parse(stdout);
+  } catch (err) {
+    return parse((err as { stdout?: string })?.stdout);
+  }
+}
+
+// --- Failure clustering + corpus coverage (PRD contracts B, C) ------------------
+// `contig clusters --json` groups corpus and pending cases by failure class plus a
+// normalized log signature, worst first; `contig coverage --json` reports per-class
+// support, the thin classes (fewer than 3 cases), the by-source breakdown, and a
+// confirmed-over-time series. Both read the corpus only (no run id, no network) and
+// the analysis lives in the engine; the dashboard shells out and renders the views.
+
+/**
+ * The failure clusters by shelling out to `contig clusters --json` (PRD contract
+ * B), already ordered worst first by the engine. Returns the parsed list, or null
+ * if the CLI is unavailable or its output is unparseable, so the clusters view can
+ * degrade gracefully. An empty corpus is an empty array (a valid, parseable
+ * result), not null.
+ */
+export async function getClusters(): Promise<FailureCluster[] | null> {
+  const override = process.env.CONTIG_CMD;
+  const cmd = override ?? "uv";
+  const args = (override ? [] : ["run", "contig"]).concat(["clusters", "--json"]);
+  try {
+    const { stdout } = await pexec(cmd, args, { cwd: repoRoot(), timeout: 30_000 });
+    const data = JSON.parse(stdout) as unknown;
+    if (!Array.isArray(data)) return null;
+    return data.filter(
+      (c): c is FailureCluster =>
+        typeof c === "object" &&
+        c !== null &&
+        typeof (c as FailureCluster).failure_class === "string" &&
+        typeof (c as FailureCluster).count === "number" &&
+        Array.isArray((c as FailureCluster).case_ids),
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The corpus coverage report by shelling out to `contig coverage --json` (PRD
+ * contract C). Returns the parsed report, or null if the CLI is unavailable or its
+ * output is unparseable, so the coverage panel can degrade gracefully.
+ */
+export async function getCoverage(): Promise<CoverageReport | null> {
+  const override = process.env.CONTIG_CMD;
+  const cmd = override ?? "uv";
+  const args = (override ? [] : ["run", "contig"]).concat(["coverage", "--json"]);
+  try {
+    const { stdout } = await pexec(cmd, args, { cwd: repoRoot(), timeout: 30_000 });
+    const data = JSON.parse(stdout) as CoverageReport;
+    if (
+      typeof data.total === "number" &&
+      typeof data.per_class === "object" &&
+      data.per_class !== null &&
+      Array.isArray(data.thin) &&
+      typeof data.by_source === "object" &&
+      data.by_source !== null
+    ) {
+      return data;
+    }
+    return null;
   } catch {
     return null;
   }

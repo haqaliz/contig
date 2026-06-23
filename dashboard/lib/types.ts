@@ -159,10 +159,31 @@ export interface RunStatus {
   pid?: number;
 }
 
-// A pending self-heal approval (runs/<id>/pending_approval.json, PRD contract C).
-// Written by the engine when the loop pauses on a gated patch; the dashboard reads
-// it to render the proposed patch with Approve and Reject. Absent when no patch is
-// awaiting a decision.
+// One ranked option in a guided-escalation choice (PRD contract D). When the
+// self-heal decision is ambiguous (a low-confidence diagnosis, or several viable
+// non-safe candidate patches and no single safe one), the engine writes an options
+// array ordered best first, and the human picks one. index is the position the CLI
+// applies via `contig approve <id> --choose <index>`; kind, risk, rationale, and
+// expected_signal mirror the patch fields the single gate shows.
+export interface ApprovalOption {
+  index: number;
+  kind: string;
+  risk: string;
+  rationale: string;
+  expected_signal: string;
+}
+
+// A pending self-heal approval (runs/<id>/pending_approval.json, PRD contracts C
+// and D). Written by the engine when the loop pauses on a gated decision; the
+// dashboard reads it to render the gate. Absent when no decision is awaiting.
+//
+// Two shapes share this file, distinguished by decision_kind:
+//   - "single" (or absent, for back-compat): one proposed patch, rendered with
+//     Approve and Reject. This is the existing binary gate.
+//   - "choice": the decision is ambiguous, so options carries the ranked fixes and
+//     the human picks one. The single patch fields stay populated for back-compat
+//     (they mirror options[0]); the dashboard renders the choice list when options
+//     is present.
 export interface PendingApproval {
   run_id: string;
   attempt: number;
@@ -170,6 +191,68 @@ export interface PendingApproval {
   timeout_sec: number;
   diagnosis: Diagnosis;
   patch: Patch;
+  // "single" (the binary gate) or "choice" (the ranked options below). Absent on
+  // older records, which the dashboard treats as "single".
+  decision_kind?: "single" | "choice";
+  // The ranked fixes for a "choice" decision, best first. Absent for a single gate.
+  options?: ApprovalOption[];
+}
+
+// The cross-run benchmark report from `contig benchmark <id> --json` (PRD contract
+// A). The engine compares a run against the designated reference for its (pipeline,
+// assay) by QC metric values within a relative tolerance plus structural shape (the
+// same QC check names present), robust to run-to-run non-determinism. status is
+// "match" when nothing drifted, "drift" when at least one shared metric is out of
+// tolerance or the shape differs, and "no_reference" when no reference is recorded
+// for this pipeline/assay (a clear state, not an error). Each check carries the run
+// value, the reference value, whether it is within tolerance, and the delta.
+export interface BenchmarkCheck {
+  name: string;
+  run_value: number | null;
+  reference_value: number | null;
+  within_tolerance: boolean;
+  delta: number | null;
+}
+
+export interface BenchmarkReport {
+  reference_run_id: string | null;
+  tolerance: number;
+  matched: number;
+  drifted: number;
+  checks: BenchmarkCheck[];
+  status: "match" | "drift" | "no_reference";
+}
+
+// One failure cluster from `contig clusters --json` (PRD contract B). The engine
+// groups corpus and pending cases by failure_class plus a normalized log signature
+// (lowercase, absolute paths, numbers, hashes, and timestamps stripped, salient
+// lines hashed), so the same systemic failure mode groups even across runs. count
+// is how many cases fall in the cluster; case_ids lists them. The clusters view
+// renders these worst first (largest count).
+export interface FailureCluster {
+  failure_class: string;
+  signature: string;
+  count: number;
+  case_ids: string[];
+}
+
+// The corpus coverage report from `contig coverage --json` (PRD contract C). total
+// is the case count; per_class maps each failure class to its support; thin lists
+// the classes with fewer than 3 cases (a coverage gap); by_source maps each source
+// kind to its count. confirmed_over_time, when present, is a confirmed-cases series
+// derived from the eval history (timestamp + corpus_size), so the panel can show
+// growth. The dashboard renders per-class support bars and flags the thin classes.
+export interface CoveragePoint {
+  timestamp: string;
+  confirmed: number;
+}
+
+export interface CoverageReport {
+  total: number;
+  per_class: Record<string, number>;
+  thin: string[];
+  by_source: Record<string, number>;
+  confirmed_over_time?: CoveragePoint[];
 }
 
 // One eval snapshot (src/contig/data/eval_history.jsonl, PRD contract D). The

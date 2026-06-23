@@ -9,6 +9,7 @@ import { ArrowLeft } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { CancelledView } from "@/components/run/cancelled-view";
 import { InterruptedView } from "@/components/run/interrupted-view";
+import { BenchmarkCard } from "@/components/run/benchmark-card";
 import { OutputIntegrityCard } from "@/components/run/output-integrity-card";
 import { QcPanel } from "@/components/run/qc-panel";
 import { ProvenancePanel } from "@/components/run/provenance-panel";
@@ -127,6 +128,11 @@ export default async function RunDetailPage({
         id={record.run_id}
         outputCount={Object.keys(record.output_checksums).length}
       />
+
+      {/* Cross-run benchmark (PRD contract A): this run vs the reference for its
+          pipeline and assay, per QC metric. The card fetches the benchmark route on
+          mount and degrades to a quiet "no reference" or "unavailable" state. */}
+      <BenchmarkCard id={record.run_id} />
 
       {resourceUsage.length > 0 ? (
         <ResourceCostCard
