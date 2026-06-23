@@ -27,6 +27,10 @@ export async function POST(req: Request) {
       gtf: str(body.gtf),
       maxMemory: str(body.maxMemory),
       maxCpus: str(body.maxCpus),
+      backend: str(body.backend),
+      engine: str(body.engine),
+      queue: str(body.queue),
+      account: str(body.account),
     });
     // Tag the run with its owner for per-user isolation (PRD contract E).
     await writeRunOwner(run_id, { owner: viewer.owner, email: viewer.email });

@@ -5,7 +5,7 @@
 // API routes; these are plain download links, so this stays a Server Component
 // with no client island. The links are real anchors (role link), so we style them
 // with buttonVariants directly rather than a button, keeping the correct element.
-import { FileJson, FileText } from "lucide-react";
+import { FileCode, FileJson, FileText } from "lucide-react";
 
 import {
   Card,
@@ -23,8 +23,9 @@ export function RunExportActions({ id }: { id: string }) {
       <CardHeader>
         <CardTitle>Export and cite</CardTitle>
         <CardDescription>
-          Download this run&apos;s provenance as an RO-Crate (machine readable) or
-          a citation-ready methods paragraph. Both are generated offline from the
+          Download this run&apos;s shareable report (a self-contained HTML page you
+          can save as a PDF), its provenance as an RO-Crate (machine readable), or
+          a citation-ready methods paragraph. All are generated offline from the
           recorded bundle, with no network and no model in the loop.
         </CardDescription>
       </CardHeader>
@@ -32,6 +33,14 @@ export function RunExportActions({ id }: { id: string }) {
         <div className="flex flex-wrap items-center gap-2">
           {/* download attribute so the browser saves the file rather than
               navigating to it; the route also sets a Content-Disposition. */}
+          <a
+            href={`${base}/report`}
+            download
+            className={buttonVariants({ variant: "outline", size: "sm", className: "gap-2" })}
+          >
+            <FileCode className="size-4" aria-hidden="true" />
+            Download report
+          </a>
           <a
             href={`${base}/export`}
             download

@@ -17,6 +17,8 @@ import {
   ShieldCheck,
   ShieldAlert,
   ShieldQuestion,
+  BadgeCheck,
+  BadgeAlert,
   Loader2,
 } from "lucide-react";
 
@@ -76,6 +78,14 @@ export function OutputIntegrityCard({
     (!report.ok || report.changed.length > 0 || report.missing.length > 0);
   const verifiedOk = phase === "verified" && report !== null && !drift;
 
+  // Signed-record status (PRD contracts E, F), known only after a verify since the
+  // signature check rides on the same report. `signed` true with `signature_ok`
+  // true is a verified signature; signed but not ok is a tamper warning. A run with
+  // no signature.json leaves `signed` absent, so no badge is shown.
+  const signed = phase === "verified" && report?.signed === true;
+  const signatureOk = signed && report?.signature_ok === true;
+  const tampered = signed && report?.signature_ok !== true;
+
   return (
     <Card aria-labelledby="integrity-title">
       <CardHeader className="gap-3 border-b pb-4">
@@ -116,6 +126,23 @@ export function OutputIntegrityCard({
               Not yet verified
             </Badge>
           )}
+          {signatureOk ? (
+            <Badge
+              variant="outline"
+              className="gap-1 border-emerald-300 bg-emerald-50 px-3 py-1 text-sm font-medium text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+            >
+              <BadgeCheck className="size-4" aria-hidden="true" />
+              Signed, signature verified
+            </Badge>
+          ) : tampered ? (
+            <Badge
+              variant="outline"
+              className="gap-1 border-red-300 bg-red-50 px-3 py-1 text-sm font-medium text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
+            >
+              <BadgeAlert className="size-4" aria-hidden="true" />
+              Signature mismatch
+            </Badge>
+          ) : null}
           <span className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
             Output integrity
           </span>
@@ -152,6 +179,20 @@ export function OutputIntegrityCard({
               </p>
             ) : null}
           </div>
+        ) : null}
+
+        {signed ? (
+          <p
+            className={cn(
+              "text-sm",
+              signatureOk ? "text-muted-foreground" : "text-destructive",
+            )}
+            role={signatureOk ? undefined : "alert"}
+          >
+            {signatureOk
+              ? "This run carries a detached Ed25519 signature over its content hash, and that signature verified against the recorded bundle."
+              : "This run carries a signature, but it did not verify against the recorded bundle. The record may have been altered after signing."}
+          </p>
         ) : null}
 
         {drift && report ? (

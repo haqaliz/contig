@@ -1,0 +1,62 @@
+{
+  "run_id": "structural-fixture",
+  "pipeline": "nf-core/rnaseq",
+  "pipeline_revision": "3.26.0",
+  "target": {
+    "backend": "local",
+    "container_runtime": "docker",
+    "work_dir": "/tmp/work",
+    "engine": "nextflow",
+    "credentials_ref": null,
+    "backend_options": {},
+    "resource_limits": {}
+  },
+  "input_checksums": {
+    "samplesheet.csv": "deadbeef"
+  },
+  "parameters": {
+    "genome": "GRCh38"
+  },
+  "container_digests": {},
+  "nextflow_version": "24.10.0",
+  "contig_version": "0.1.0",
+  "events": [
+    {
+      "process": "SALMON_QUANT",
+      "status": "COMPLETED",
+      "exit": 0,
+      "task_id": "1",
+      "name": "SALMON_QUANT (SAMPLE_A)"
+    }
+  ],
+  "qc_results": [
+    {
+      "check": "alignment_rate:SAMPLE_A",
+      "status": "pass",
+      "message": "OK",
+      "value": 0.93,
+      "expected_range": ">= 0.7",
+      "kind": "metric"
+    },
+    {
+      "check": "output_present:multiqc_report.html",
+      "status": "fail",
+      "message": "Required output is missing from the results directory.",
+      "value": null,
+      "expected_range": "present and non-empty",
+      "kind": "structural"
+    },
+    {
+      "check": "output_present:salmon.merged.gene_counts.tsv",
+      "status": "pass",
+      "message": "Output present and non-empty.",
+      "value": null,
+      "expected_range": "present and non-empty",
+      "kind": "structural"
+    }
+  ],
+  "output_checksums": {},
+  "repair_history": [],
+  "resource_usage": [],
+  "verdict": "fail"
+}

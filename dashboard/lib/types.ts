@@ -5,6 +5,11 @@
 
 export type Verdict = "pass" | "warn" | "fail" | "unverified";
 export type QCStatus = "pass" | "warn" | "fail";
+// What kind of check produced a QC result: a content-level metric check (a rule
+// pack on MultiQC metrics) or a structural/integrity check on the output files
+// themselves (present, non-empty, valid). Mirrors QCKind in the engine. Older
+// records predate the field, so an absent value reads as "metric".
+export type QCKind = "metric" | "structural";
 
 export interface TaskEvent {
   process: string;
@@ -20,6 +25,10 @@ export interface QCResult {
   message: string;
   value: number | null;
   expected_range: string | null;
+  // "metric" (default) or "structural". A structural check verifies the output
+  // files themselves (present, non-empty, valid) rather than a content metric.
+  // Older records omit it; the QC panel treats an absent value as "metric".
+  kind?: QCKind;
 }
 
 export interface ExecutionTarget {
@@ -271,6 +280,13 @@ export interface OutputVerification {
   ok: boolean;
   changed: string[];
   missing: string[];
+  // Signed-record fields (PRD contract E), present only when a run carries a
+  // signature.json sidecar. `signed` is true when a signature was found; when it
+  // is, `signature_ok` is the result of checking the detached Ed25519 signature
+  // against the recomputed content hash (true verified, false tampered). Absent
+  // for a run with no signature, so the badge stays neutral.
+  signed?: boolean;
+  signature_ok?: boolean;
 }
 
 // The launch manifest a run writes before self_heal_run (PRD contract A). The

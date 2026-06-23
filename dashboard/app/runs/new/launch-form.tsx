@@ -17,8 +17,34 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import type { EstimateReport, LaunchManifest, Plan } from "@/lib/types";
+
+// The execution backends and engines the form offers (PRD contract F). Local and
+// nextflow are the defaults, so the common path is unchanged; slurm reveals a
+// partition and an account, and snakemake is the alternate engine. Kept in sync
+// with KNOWN_BACKENDS / KNOWN_ENGINES in lib/runs.ts (validated again there).
+type Backend = "local" | "slurm";
+type Engine = "nextflow" | "snakemake";
+
+// Friendly labels for the selectors. Base UI renders the raw value in the trigger
+// otherwise (the items mount lazily in a portal), so the trigger uses these via a
+// SelectValue render function to show "SLURM" rather than "slurm".
+const BACKEND_LABELS: Record<Backend, string> = {
+  local: "Local",
+  slurm: "SLURM",
+};
+const ENGINE_LABELS: Record<Engine, string> = {
+  nextflow: "Nextflow",
+  snakemake: "Snakemake",
+};
 
 // Render a duration in seconds as a short human string (e.g. "1h 12m", "45s").
 function formatDuration(totalSec: number): string {
@@ -46,6 +72,14 @@ export function LaunchForm({ from }: { from?: string }) {
   const [maxMemory, setMaxMemory] = useState("");
   const [maxCpus, setMaxCpus] = useState("");
   const [capsOpen, setCapsOpen] = useState(false);
+  // Execution selectors (PRD contract F). They describe where and with which
+  // engine the run executes, not what to run, so they do not invalidate a
+  // previewed plan (a plan is pipeline selection, backend-agnostic). Local +
+  // nextflow keep the common path unchanged.
+  const [backend, setBackend] = useState<Backend>("local");
+  const [engine, setEngine] = useState<Engine>("nextflow");
+  const [partition, setPartition] = useState("");
+  const [account, setAccount] = useState("");
   // When opened as "Edit and relaunch" (?from=<id>), we load that run's launch
   // manifest and pre-fill the inputs. The goal stays empty (it is not stored,
   // Layer-1 NL is not our product) so the user still previews a fresh plan.
@@ -205,6 +239,16 @@ export function LaunchForm({ from }: { from?: string }) {
           ...referencePayload(),
           maxMemory: maxMemory.trim() || undefined,
           maxCpus: maxCpus.trim() || undefined,
+          // Local + nextflow are the defaults, so omit them and keep the request
+          // identical to the common path; only send a non-default selection.
+          backend: backend !== "local" ? backend : undefined,
+          engine: engine !== "nextflow" ? engine : undefined,
+          queue:
+            backend === "slurm" && partition.trim()
+              ? partition.trim()
+              : undefined,
+          account:
+            backend === "slurm" && account.trim() ? account.trim() : undefined,
         }),
       });
       const data = (await res.json()) as { run_id?: string; error?: string };
@@ -432,6 +476,109 @@ export function LaunchForm({ from }: { from?: string }) {
             </div>
           ) : null}
         </div>
+
+        <fieldset className="space-y-3">
+          <legend className="text-sm font-medium text-foreground">
+            Execution
+          </legend>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-2">
+              <label
+                htmlFor="backend"
+                className="text-sm font-medium text-foreground"
+              >
+                Backend
+              </label>
+              <Select
+                value={backend}
+                onValueChange={(value) => setBackend(value as Backend)}
+                disabled={busy}
+              >
+                <SelectTrigger id="backend" className="w-full">
+                  <SelectValue>
+                    {(value) => BACKEND_LABELS[value as Backend] ?? String(value)}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="local">Local</SelectItem>
+                  <SelectItem value="slurm">SLURM</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Where the run executes. Local uses this machine.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <label
+                htmlFor="engine"
+                className="text-sm font-medium text-foreground"
+              >
+                Engine
+              </label>
+              <Select
+                value={engine}
+                onValueChange={(value) => setEngine(value as Engine)}
+                disabled={busy}
+              >
+                <SelectTrigger id="engine" className="w-full">
+                  <SelectValue>
+                    {(value) => ENGINE_LABELS[value as Engine] ?? String(value)}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="nextflow">Nextflow</SelectItem>
+                  <SelectItem value="snakemake">Snakemake</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                The workflow engine that runs the pipeline.
+              </p>
+            </div>
+          </div>
+
+          {backend === "slurm" ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-2">
+                <label
+                  htmlFor="partition"
+                  className="text-sm font-medium text-foreground"
+                >
+                  Partition
+                </label>
+                <Input
+                  id="partition"
+                  value={partition}
+                  onChange={(e) => setPartition(e.target.value)}
+                  placeholder="compute"
+                  className="font-mono"
+                  disabled={busy}
+                />
+                <p className="text-xs text-muted-foreground">
+                  The SLURM partition (queue) to submit to. Required for SLURM.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <label
+                  htmlFor="account"
+                  className="text-sm font-medium text-foreground"
+                >
+                  Account
+                </label>
+                <Input
+                  id="account"
+                  value={account}
+                  onChange={(e) => setAccount(e.target.value)}
+                  placeholder="my-lab"
+                  className="font-mono"
+                  disabled={busy}
+                />
+                <p className="text-xs text-muted-foreground">
+                  The accounting allocation, if your cluster requires one.
+                </p>
+              </div>
+            </div>
+          ) : null}
+        </fieldset>
 
         <div className="flex flex-wrap items-center gap-3">
           <Button type="submit" variant="outline" disabled={busy}>

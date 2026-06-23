@@ -395,6 +395,58 @@ async function resolveReferenceArgs(req: {
 
 const KNOWN_PIPELINES = new Set(["nf-core/rnaseq", "nf-core/sarek"]);
 
+// The execution backends and engines the launch form may select (PRD contract F).
+// "local" + "nextflow" are the defaults, so the common path is unchanged. Slurm
+// adds a partition (passed as --queue) and an account; snakemake is the alternate
+// engine. The set is closed so an unknown value never reaches the CLI.
+const KNOWN_BACKENDS = new Set(["local", "slurm"]);
+const KNOWN_ENGINES = new Set(["nextflow", "snakemake"]);
+
+/**
+ * Append validated backend and engine knobs to a dispatch argv (PRD contract F).
+ * Local + nextflow are the defaults and add nothing, so an unchanged form dispatches
+ * exactly as before. A slurm backend threads --backend=slurm plus the partition as
+ * --queue=<partition> and an optional --account; a snakemake engine threads
+ * --engine=snakemake. Every value is validated (safe key charset, no leading dash)
+ * and passed as --opt=value, so there is no flag-smuggling surface. Throws
+ * LaunchValidationError on an unknown backend/engine or a malformed partition/account.
+ */
+function backendEngineArgs(req: {
+  backend?: string;
+  engine?: string;
+  queue?: string;
+  account?: string;
+}): string[] {
+  const out: string[] = [];
+  if (req.backend && req.backend !== "local") {
+    if (!KNOWN_BACKENDS.has(req.backend)) {
+      throw new LaunchValidationError("Unknown backend.");
+    }
+    out.push(`--backend=${req.backend}`);
+    if (req.backend === "slurm") {
+      // A slurm run needs a partition (the queue). The account is optional but
+      // required by many clusters; we pass it through when present.
+      if (!req.queue || !isSafeKey(req.queue)) {
+        throw new LaunchValidationError("A slurm partition is required.");
+      }
+      out.push(`--queue=${req.queue}`);
+      if (req.account) {
+        if (!isSafeKey(req.account)) {
+          throw new LaunchValidationError("Invalid slurm account.");
+        }
+        out.push(`--account=${req.account}`);
+      }
+    }
+  }
+  if (req.engine && req.engine !== "nextflow") {
+    if (!KNOWN_ENGINES.has(req.engine)) {
+      throw new LaunchValidationError("Unknown engine.");
+    }
+    out.push(`--engine=${req.engine}`);
+  }
+  return out;
+}
+
 /**
  * Produce an approvable plan for a goal + data by shelling out to `contig plan
  * --json`. Returns the plan, or an error string the form can show. All user
@@ -461,6 +513,10 @@ export async function dispatchRealRun(req: {
   gtf?: string;
   maxMemory?: string;
   maxCpus?: string;
+  backend?: string;
+  engine?: string;
+  queue?: string;
+  account?: string;
 }): Promise<{ run_id: string }> {
   const running = await listRunningRuns();
   if (running.length > 0) throw new DispatchBusyError(running[0].run_id);
@@ -486,6 +542,15 @@ export async function dispatchRealRun(req: {
     }
     extra.push(`--max-cpus=${req.maxCpus}`);
   }
+  // Backend and engine selectors (PRD contract F). Local + nextflow add nothing.
+  extra.push(
+    ...backendEngineArgs({
+      backend: req.backend,
+      engine: req.engine,
+      queue: req.queue,
+      account: req.account,
+    }),
+  );
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const runId = `run-${stamp}`;
@@ -940,7 +1005,19 @@ export async function getOutputVerification(
         Array.isArray(data.changed) &&
         Array.isArray(data.missing)
       ) {
-        return data;
+        // The signed-record fields are present only when the run carries a
+        // signature.json (PRD contract E). Keep them only when they are real
+        // booleans so the badge never reads a half-formed value as signed.
+        const out: OutputVerification = {
+          ok: data.ok,
+          changed: data.changed,
+          missing: data.missing,
+        };
+        if (typeof data.signed === "boolean") out.signed = data.signed;
+        if (typeof data.signature_ok === "boolean") {
+          out.signature_ok = data.signature_ok;
+        }
+        return out;
       }
     } catch {
       return null;
@@ -1163,6 +1240,35 @@ export async function getRunMethods(id: string): Promise<string | null> {
     ...base.slice(1),
     "methods",
     `--runs-dir=${runsDir()}`,
+    "--",
+    id,
+  ];
+  try {
+    const { stdout } = await pexec(base[0], args, {
+      cwd: repoRoot(),
+      timeout: 30_000,
+    });
+    return typeof stdout === "string" && stdout.trim().length > 0 ? stdout : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The self-contained shareable HTML report for a run by shelling out to `contig
+ * show <id> --html` (PRD contract D). The report is rendered offline by the engine
+ * (no scripts, no network, fully escaped, print-to-PDF friendly); this returns the
+ * raw HTML string so the route can serve it byte for byte, or null if the CLI is
+ * unavailable. The run id is validated and passed as a positional after "--".
+ */
+export async function getRunReportHtml(id: string): Promise<string | null> {
+  if (!isSafeRunId(id)) throw new InvalidRunIdError(`Invalid run id: ${id}`);
+  const base = (process.env.CONTIG_DISPATCH_CMD ?? "uv run contig").split(" ");
+  const args = [
+    ...base.slice(1),
+    "show",
+    `--runs-dir=${runsDir()}`,
+    "--html",
     "--",
     id,
   ];

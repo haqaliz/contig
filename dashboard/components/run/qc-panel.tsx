@@ -126,8 +126,14 @@ export function QcPanel({ qcResults }: { qcResults: QCResult[] }) {
     );
   }
 
-  const cross = qcResults.filter((q) => isCrossSample(q.check));
-  const perSample = qcResults.filter((q) => !isCrossSample(q.check));
+  // Structural and integrity checks (PRD contract C) verify the output files
+  // themselves (present, non-empty, valid), not a content metric. They carry
+  // kind "structural", so we pull them into their own section and leave the
+  // metric checks to the existing per-sample and cross-sample grouping.
+  const structural = qcResults.filter((q) => q.kind === "structural");
+  const metric = qcResults.filter((q) => q.kind !== "structural");
+  const cross = metric.filter((q) => isCrossSample(q.check));
+  const perSample = metric.filter((q) => !isCrossSample(q.check));
 
   // Group per-sample checks by the sample parsed from their key. Checks whose
   // key carries no sample fall into a shared "(no sample)" bucket.
@@ -151,6 +157,22 @@ export function QcPanel({ qcResults }: { qcResults: QCResult[] }) {
 
   return (
     <div className="space-y-6">
+      {structural.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Structural and integrity checks</CardTitle>
+            <CardDescription>
+              Checks on the output files themselves: that the expected outputs are
+              present, non-empty, and not corrupt. A missing or empty required
+              output fails the verdict.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <QcRows rows={structural} />
+          </CardContent>
+        </Card>
+      )}
+
       {sampleGroups.length > 0 && (
         <Card>
           <CardHeader>

@@ -27,8 +27,18 @@ export const FIXTURE_RUN_IDS = [
   // memory, cpu), for the resources-and-cost card (PRD contracts A, B).
   "resource-fixture",
   // A finished run bundle used by the provenance export buttons (PRD contract C):
-  // the RO-Crate and methods download routes are exercised against this id.
+  // the RO-Crate and methods download routes are exercised against this id. The
+  // report download button (PRD contract D) is exercised against it too.
   "export-fixture",
+  // A finished run carrying an Ed25519 signature.json sidecar (PRD contracts E,
+  // F), for the signed/verified badge on the output-integrity card. The verify
+  // route is mocked in the spec to report signature_ok, so the badge renders
+  // deterministically without the signing toolchain in the test environment.
+  "signed-fixture",
+  // A finished run whose record carries a structural QC result with status fail
+  // and kind "structural" (PRD contracts C, F), for the structural-QC labeling in
+  // the QC panel (a dedicated structural section, separate from metric checks).
+  "structural-fixture",
 ];
 
 // Mirror lib/runs.ts runsDir(): CONTIG_RUNS_DIR, else ../runs from the dashboard
