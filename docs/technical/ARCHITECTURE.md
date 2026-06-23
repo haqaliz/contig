@@ -327,9 +327,22 @@ engine. What is implemented now:
   --rocrate` emits an RO-Crate (ro-crate-metadata.json) and `contig methods` emits a
   deterministic, citation-ready methods paragraph from the bundle, so a run is
   publication and audit ready without re-entering anything by hand.
-- **Compute backends.** `local` (Docker) and `aws_batch` map through one config
-  generator; `contig run --backend aws_batch` refuses up front (a preflight) if the
-  queue, region, S3 work dir, or credentials are missing. See the AWS Batch runbook.
+- **Compute backends.** `local` (Docker), `aws_batch`, and `slurm` map through one
+  config generator; `contig run --backend aws_batch|slurm` refuses up front (a
+  preflight) if the queue/partition, account, work dir, or credentials/scheduler are
+  missing. See the AWS Batch and SLURM runbooks.
+- **Workflow engines.** Beyond Nextflow, a Snakemake adapter runs a Snakemake
+  workflow through the same capture, record, verify, reproduce path
+  (`contig run --engine snakemake --snakefile <file>`), so the engine is not bound to
+  one workflow manager.
+- **Structural verification.** Alongside metric QC, structural checks (expected
+  outputs present and non-empty, indexes present, gzip and BAM integrity, output
+  counts) run per assay and feed the same verdict, so a run that finishes but
+  produces a missing or corrupt output FAILs rather than passing on metrics alone.
+- **Tamper-evident records.** A run can be signed (Ed25519, `contig keygen` +
+  `CONTIG_SIGNING_KEY`): the bundle gets a detached signature, and `contig verify`
+  confirms the shared provenance record was not modified, so reproducibility extends
+  to integrity of the record itself.
 - **Access control and tenancy.** The dashboard integrates Auth0 for authentication
   and role-based authorization (writer/admin gates the action routes; read views are
   open to any authenticated user), configured entirely from env so Contig stays open

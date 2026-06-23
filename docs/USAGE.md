@@ -43,7 +43,8 @@ The CLI and the test suite work **without** Nextflow/Java/Docker; only live runs
 | `contig cancel <id>` | Stop an active run (signals its process group) and mark it cancelled |
 | `contig resume <id>` | Re-run a cancelled or interrupted run from its cached tasks (Nextflow `-resume`) |
 | `contig rerun <id>` | Reproduce a past run from its launch manifest under a fresh run id |
-| `contig verify <id>` | Re-hash a finished run's outputs against the record and report any drift |
+| `contig verify <id>` | Re-hash a finished run's outputs against the record (and check the signature, if signed) and report any drift |
+| `contig keygen` | Generate an Ed25519 signing keypair; set `CONTIG_SIGNING_KEY` to the private key to sign runs |
 | `contig cost <id>` | Per-task duration and peak memory from the run, costed at configurable `--rate-cpu-hour` / `--rate-mem-gb-hour` |
 | `contig estimate --pipeline <p> --input <sheet>` | Pre-run runtime and cost estimate, data-driven from past runs of that pipeline with a sample-count heuristic fallback |
 | `contig export <id> --rocrate` | Export the run's provenance as an RO-Crate (ro-crate-metadata.json) |
@@ -75,7 +76,18 @@ Notifications are best-effort: a failing webhook or email never fails the run.
 
 To run on AWS Batch, see the step-by-step [AWS Batch runbook](technical/AWS_BATCH_RUNBOOK.md);
 `contig run --backend aws_batch` refuses up front if the queue, region, S3 work dir,
-or AWS credentials are missing.
+or AWS credentials are missing. To run on a SLURM cluster, see the
+[SLURM runbook](technical/SLURM_RUNBOOK.md); `contig run --backend slurm
+--queue <partition>` (with `--opt account=...`) refuses up front if the partition,
+account, or `sbatch`/`sinfo` are missing.
+
+Contig is workflow-engine-agnostic: alongside Nextflow it can run a Snakemake
+workflow through the same capture, verify, reproduce engine with `contig run
+--engine snakemake --snakefile <Snakefile>`.
+
+To make a run tamper-evident, generate a keypair with `contig keygen`, set
+`CONTIG_SIGNING_KEY` to the private key, and run: the bundle is signed into a
+`signature.json` and `contig verify` confirms the record was not modified.
 
 ---
 

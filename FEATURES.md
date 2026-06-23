@@ -160,7 +160,8 @@ path or modest engine work (flagged NEW).
 
 | Feature | What it does | Engine | Effort |
 |---|---|---|---|
-| Backend selection plus caps | Local vs AWS Batch (queue, region, S3 work dir), memory/CPU/time ceilings, config preview | Built (nfconfig); AWS Batch preflight refuses a misconfigured launch and a runbook lands the live PASS (2026-06-22) | M |
+| Backend selection plus caps | Local vs AWS Batch vs SLURM (queue/partition, account, work dir), memory/CPU/time ceilings, config preview | Built (nfconfig); AWS Batch and SLURM each have a preflight that refuses a misconfigured launch and a runbook (2026-06-23) | M |
+| Second workflow engine (Snakemake) | Run a Snakemake workflow through the same run, capture, verify, reproduce engine | Shipped 2026-06-23 (engine-adapter foundation: contig run --engine snakemake --snakefile, ingested into the same RunRecord; proves engine-agnosticism) | L |
 | Backend pre-flight validation | Refuses a misconfigured backend up front with the exact missing-option error | Built (ConfigGenerationError) | S |
 
 ### Reproduce, diff, and share
@@ -169,8 +170,8 @@ path or modest engine work (flagged NEW).
 |---|---|---|---|
 | One-click re-run from a bundle | Re-execute the same revision, params, and pinned environment, open beside the original | Shipped 2026-06-22 (launch.json manifest, contig rerun, Reproduce exactly plus Edit and relaunch) | L |
 | Diff two runs | Side by side on params, revision, digests, QC value deltas, output checksums | Built data; new diff helper | M |
-| Export a verified report (HTML/PDF) | Self-contained report (verdict, plan, QC, repair chain, provenance), hashes only, never reads | NEW: HTML/PDF renderer | M |
-| Shareable read-only run page | Static export of one run for someone without the dashboard, metadata only | NEW: static export | M |
+| Export a verified report (HTML/PDF) | Self-contained report (verdict, plan, QC, repair chain, provenance), hashes only, never reads | Shipped 2026-06-23 (contig show --html: polished, self-contained, print-to-PDF report incl structural QC and the signature status; dashboard Download report button) | M |
+| Shareable read-only run page | Static export of one run for someone without the dashboard, metadata only | Shipped 2026-06-23 (the self-contained HTML report is the shareable artifact; hash it, sign it, email it) | M |
 | Reproducibility badge | Compact embeddable status (verified, repaired, fully pinned) for a README or slide | Built | S |
 | Output-integrity re-verification | Re-hash outputs still on disk against output_checksums to prove no drift | Shipped 2026-06-22 (output_checksums captured at finalize; contig verify re-hashes and exits non-zero on drift; dashboard output-integrity badge) | S |
 
@@ -179,7 +180,8 @@ path or modest engine work (flagged NEW).
 | Feature | What it does | Engine | Effort |
 |---|---|---|---|
 | "What to look at" on WARN | Ranks offending checks worst-first in plain language (which sample, metric, measured vs expected) | Built data plus copy | M |
-| Structural / integrity check view | Output present and non-empty, index present, gzip intact | NEW: wire structural checks into run_qc/bundle | M |
+| Structural / integrity check view | Output present and non-empty, index present, gzip intact | Shipped 2026-06-23 (verification/structural.py: per-assay expected-output manifest, present/non-empty/index/gzip/BAM-integrity/count checks wired into run_qc; a missing or corrupt required output FAILs the verdict; grouped on the dashboard QC panel) | M |
+| Signed, tamper-evident run records | Cryptographically sign the bundle so a shared provenance record is verifiably unmodified | Shipped 2026-06-23 (Ed25519: contig keygen, CONTIG_SIGNING_KEY signs at write into signature.json, contig verify checks it and reports signed/signature_ok; dashboard signed badge) | L |
 
 ### Cost and resources
 
