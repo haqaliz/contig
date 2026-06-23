@@ -3,10 +3,11 @@ name: release
 # Cut a release by pushing a version tag (e.g. v0.1.0) over git. This runs in the
 # haqaliz/contig repo context with the repo GITHUB_TOKEN, so the GitHub Release and
 # the GHCR image are owned by the repo, not by whatever account the local gh CLI is
-# logged into. Channels: standalone binaries (Linux, macOS arm64 + x64, Windows),
-# PyPI (trusted publishing), a GHCR container image, and a Homebrew tap (see
-# RELEASING.md). Each channel is an independent job so one failing does not block the
-# others.
+# logged into. Each artifact attaches itself to the release as it finishes, so a slow
+# or unavailable runner (the macOS Intel runners queue for a long time) never blocks
+# the release: it publishes with what is ready and the rest trickle in. Channels:
+# standalone binaries, PyPI (trusted publishing), a GHCR image, and a Homebrew tap
+# (see RELEASING.md).
 
 on:
   push:
@@ -17,20 +18,31 @@ permissions:
   contents: write
 
 jobs:
+  create-release:
+    name: Create the release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create or update the release with notes
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+
   dist:
-    name: Build wheel and sdist
+    name: Wheel and sdist
+    needs: create-release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv build
-      - uses: actions/upload-artifact@v4
+      - uses: softprops/action-gh-release@v2
         with:
-          name: dist
-          path: dist/*
+          files: dist/*
 
   binaries:
-    name: Standalone binary (${{ matrix.asset }})
+    name: Binary (${{ matrix.asset }})
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
@@ -64,45 +76,24 @@ jobs:
         run: |
           "./dist/${{ matrix.asset }}" version
           "./dist/${{ matrix.asset }}" clusters --json > /dev/null
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.asset }}
-          path: dist/${{ matrix.asset }}
-
-  release:
-    name: GitHub Release
-    needs: [dist, binaries]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-      - name: Publish the release with all assets
+      - name: Attach the binary to the release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
-          files: |
-            artifacts/dist/*
-            artifacts/contig-linux-x86_64/contig-linux-x86_64
-            artifacts/contig-macos-arm64/contig-macos-arm64
-            artifacts/contig-macos-x86_64/contig-macos-x86_64
-            artifacts/contig-windows-x86_64.exe/contig-windows-x86_64.exe
+          files: dist/${{ matrix.asset }}
 
   pypi:
     name: Publish to PyPI (trusted publishing)
-    needs: [dist]
+    needs: create-release
     runs-on: ubuntu-latest
     # Requires a one-time PyPI trusted-publisher setup for this repo + workflow
-    # (see RELEASING.md). Independent of the other jobs; skip or remove if unused.
+    # (see RELEASING.md). Independent of the other jobs.
     environment: pypi
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build
       - uses: pypa/gh-action-pypi-publish@release/v1
 
   docker:
