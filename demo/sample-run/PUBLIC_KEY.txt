@@ -1,0 +1,6 @@
+This is the public verification key for demo/sample-run.
+The matching private key was a throwaway, generated for this demo and discarded; it is NOT a real secret.
+Verify the bundle with:
+  uv run contig verify sample-run --runs-dir demo --json
+
+public_key=69ea8ed8d10b2c6038823d6952a456806eb3db552fbf6e5af9962f8933a3b3d9

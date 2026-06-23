@@ -1,0 +1,49 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Contig run sample-run</title><style>
+  :root { --ink: #1a1a1a; --muted: #555; --line: #e3e3e3; --rule: #ddd;
+          --pass: #1a7a1a; --warn: #8a6500; --fail: #a31515; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, system-ui, "Segoe UI", sans-serif;
+         margin: 2.5rem auto; max-width: 62rem; padding: 0 1.5rem;
+         color: var(--ink); line-height: 1.55; }
+  header.report-head { border-bottom: 2px solid var(--ink); padding-bottom: 1rem;
+                       margin-bottom: 1.5rem; }
+  h1 { margin: 0 0 0.25rem; font-size: 1.6rem; }
+  .subtitle { color: var(--muted); margin: 0; }
+  .verdict-row { display: flex; align-items: center; gap: 1rem; margin: 1rem 0 0.25rem; flex-wrap: wrap; }
+  .verdict { display: inline-block; padding: 0.4rem 1.1rem; border-radius: 0.4rem;
+             font-weight: 700; font-size: 1.3rem; letter-spacing: 0.05em; }
+  .verdict.pass { background: #e6f6e6; color: var(--pass); }
+  .verdict.warn { background: #fff6e0; color: var(--warn); }
+  .verdict.fail { background: #fce4e4; color: var(--fail); }
+  .verdict.unverified { background: #eee; color: var(--muted); }
+  .badge { display: inline-block; padding: 0.25rem 0.7rem; border-radius: 1rem;
+           font-size: 0.85rem; font-weight: 600; }
+  .badge.signed-ok { background: #e6f0fb; color: #14457a; }
+  .badge.signed-bad { background: #fce4e4; color: var(--fail); }
+  h2 { border-bottom: 1px solid var(--rule); padding-bottom: 0.3rem;
+       margin: 2.2rem 0 0.5rem; font-size: 1.2rem; }
+  h3 { margin: 1.2rem 0 0.25rem; font-size: 1rem; color: var(--muted); }
+  table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; font-size: 0.95rem; }
+  th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--line);
+           vertical-align: top; }
+  th { background: #fafafa; font-weight: 600; }
+  caption { text-align: left; color: var(--muted); font-size: 0.9rem;
+            padding: 0.3rem 0; caption-side: top; }
+  code, .mono { font-family: ui-monospace, "SF Mono", monospace; font-size: 0.88rem;
+                word-break: break-all; }
+  .note { color: var(--muted); font-style: italic; }
+  .status-pass { color: var(--pass); font-weight: 600; }
+  .status-warn { color: var(--warn); font-weight: 600; }
+  .status-fail { color: var(--fail); font-weight: 600; }
+  footer.report-foot { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--rule);
+                       color: var(--muted); font-size: 0.85rem; }
+  @media print {
+    body { margin: 0; max-width: none; padding: 0; font-size: 11pt; color: #000; }
+    header.report-head { border-bottom-color: #000; }
+    h2 { break-after: avoid; }
+    table { break-inside: auto; }
+    tr { break-inside: avoid; }
+    .verdict, .badge { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    a[href]:after { content: ""; }
+  }
+</style></head><body><header class="report-head"><h1>Contig run report</h1><p class="subtitle mono">Run id: sample-run</p><div class="verdict-row"><span class="verdict pass">PASS</span></div><p>Pipeline: <strong>nf-core/rnaseq</strong> (revision 3.26.0)</p><p>Tasks: 1 (0 failed)</p></header><h2>QC checks</h2><h3>Metric checks</h3><table><thead><tr><th>Check</th><th>Status</th><th>Value</th><th>Expected range</th><th>Message</th></tr></thead><tbody><tr><td>alignment_rate:CONTROL_REP1</td><td class="status-pass">PASS</td><td class="mono">92.4</td><td class="mono">&gt;= 60.0</td><td>CONTROL_REP1: uniquely_mapped_percent=92.4 (pass)</td></tr><tr><td>assignment_rate:CONTROL_REP1</td><td class="status-pass">PASS</td><td class="mono">86.1</td><td class="mono">&gt;= 60.0</td><td>CONTROL_REP1: percent_assigned=86.1 (pass)</td></tr><tr><td>alignment_rate:TREATED_REP1</td><td class="status-pass">PASS</td><td class="mono">91.0</td><td class="mono">&gt;= 60.0</td><td>TREATED_REP1: uniquely_mapped_percent=91.0 (pass)</td></tr><tr><td>assignment_rate:TREATED_REP1</td><td class="status-pass">PASS</td><td class="mono">84.7</td><td class="mono">&gt;= 60.0</td><td>TREATED_REP1: percent_assigned=84.7 (pass)</td></tr><tr><td>min_sample_count</td><td class="status-pass">PASS</td><td class="mono">2.0</td><td class="mono">&gt;= 2</td><td>2 sample(s) present (pass)</td></tr><tr><td>library_size_skew:total_reads</td><td class="status-pass">PASS</td><td class="mono">1.0469798657718121</td><td class="mono">&lt; 3.0</td><td>total_reads max/min ratio across samples = 1.0469798657718121 (pass)</td></tr></tbody></table><h2>Repair chain</h2><table><thead><tr><th>Attempt</th><th>Failure class</th><th>What was patched</th><th>Outcome</th></tr></thead><tbody><tr><td>1</td><td>oom</td><td>resource</td><td>patched_and_retried</td></tr></tbody></table><h2>Provenance</h2><h3>Versions</h3><table><tbody><tr><td class="mono">contig</td><td class="mono">0.0.1</td></tr><tr><td class="mono">nextflow</td><td class="mono">26.04.4</td></tr></tbody></table><h3>Parameters</h3><table><tbody><tr><td class="mono">outdir</td><td class="mono">/var/folders/8y/bfhvlprd3jx4w827tk12326w0000gp/T/contig-demo-hnbsg5ij/runs/sample-run/results</td></tr></tbody></table><h3>Container digests</h3><table><tbody><tr><td colspan="2" class="note">none</td></tr></tbody></table><h3>Input checksums</h3><table><tbody><tr><td colspan="2" class="note">none</td></tr></tbody></table><h3>Output checksums</h3><table><tbody><tr><td class="mono">multiqc/multiqc_data.json</td><td class="mono">1d9153f6ce1f3d0d0982f7f37f5bb2566acfe0b910dbfe6420f601af70045165</td></tr><tr><td class="mono">star_salmon/salmon.merged.gene_counts.tsv</td><td class="mono">857207f06f7549c84ee6082971ca213d88654771fe86371771001ca32b9991f2</td></tr></tbody></table><footer class="report-foot">Generated by Contig. Hashes and metadata only; no raw sequence data is included.</footer></body></html>

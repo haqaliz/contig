@@ -1,0 +1,122 @@
+{
+  "run_id": "sample-run",
+  "pipeline": "nf-core/rnaseq",
+  "pipeline_revision": "3.26.0",
+  "target": {
+    "backend": "local",
+    "container_runtime": "docker",
+    "work_dir": "/var/folders/8y/bfhvlprd3jx4w827tk12326w0000gp/T/contig-demo-hnbsg5ij/work",
+    "engine": "nextflow",
+    "credentials_ref": null,
+    "backend_options": {},
+    "resource_limits": {
+      "memory": "16.GB"
+    }
+  },
+  "input_checksums": {},
+  "parameters": {
+    "outdir": "/var/folders/8y/bfhvlprd3jx4w827tk12326w0000gp/T/contig-demo-hnbsg5ij/runs/sample-run/results"
+  },
+  "container_digests": {},
+  "nextflow_version": "26.04.4",
+  "contig_version": "0.0.1",
+  "events": [
+    {
+      "process": "NFCORE_RNASEQ:STAR_ALIGN (CONTROL_REP1)",
+      "status": "COMPLETED",
+      "exit": 0,
+      "task_id": "1",
+      "name": "NFCORE_RNASEQ:STAR_ALIGN (CONTROL_REP1)"
+    }
+  ],
+  "qc_results": [
+    {
+      "check": "alignment_rate:CONTROL_REP1",
+      "status": "pass",
+      "message": "CONTROL_REP1: uniquely_mapped_percent=92.4 (pass)",
+      "value": 92.4,
+      "expected_range": ">= 60.0",
+      "kind": "metric"
+    },
+    {
+      "check": "assignment_rate:CONTROL_REP1",
+      "status": "pass",
+      "message": "CONTROL_REP1: percent_assigned=86.1 (pass)",
+      "value": 86.1,
+      "expected_range": ">= 60.0",
+      "kind": "metric"
+    },
+    {
+      "check": "alignment_rate:TREATED_REP1",
+      "status": "pass",
+      "message": "TREATED_REP1: uniquely_mapped_percent=91.0 (pass)",
+      "value": 91.0,
+      "expected_range": ">= 60.0",
+      "kind": "metric"
+    },
+    {
+      "check": "assignment_rate:TREATED_REP1",
+      "status": "pass",
+      "message": "TREATED_REP1: percent_assigned=84.7 (pass)",
+      "value": 84.7,
+      "expected_range": ">= 60.0",
+      "kind": "metric"
+    },
+    {
+      "check": "min_sample_count",
+      "status": "pass",
+      "message": "2 sample(s) present (pass)",
+      "value": 2.0,
+      "expected_range": ">= 2",
+      "kind": "metric"
+    },
+    {
+      "check": "library_size_skew:total_reads",
+      "status": "pass",
+      "message": "total_reads max/min ratio across samples = 1.0469798657718121 (pass)",
+      "value": 1.0469798657718121,
+      "expected_range": "< 3.0",
+      "kind": "metric"
+    }
+  ],
+  "output_checksums": {
+    "multiqc/multiqc_data.json": "1d9153f6ce1f3d0d0982f7f37f5bb2566acfe0b910dbfe6420f601af70045165",
+    "star_salmon/salmon.merged.gene_counts.tsv": "857207f06f7549c84ee6082971ca213d88654771fe86371771001ca32b9991f2"
+  },
+  "repair_history": [
+    {
+      "attempt": 1,
+      "diagnosis": {
+        "failure_class": "oom",
+        "root_cause": "Process ran out of memory.",
+        "evidence": [
+          "exit 137",
+          "Process NFCORE_RNASEQ:STAR_ALIGN (CONTROL_REP1) terminated with an error exit status (137). Process killed: out of memory (exit 137)."
+        ],
+        "confidence": 0.9
+      },
+      "patch": {
+        "kind": "resource",
+        "operation": {
+          "multiply": {
+            "memory": 2
+          }
+        },
+        "rationale": "Out of memory; double the memory request and retry.",
+        "risk": "safe",
+        "expected_signal": "no OOM / exit 0"
+      },
+      "outcome": "patched_and_retried"
+    }
+  ],
+  "resource_usage": [
+    {
+      "process": "NFCORE_RNASEQ:STAR_ALIGN (CONTROL_REP1)",
+      "name": "NFCORE_RNASEQ:STAR_ALIGN (CONTROL_REP1)",
+      "realtime_sec": 722.0,
+      "peak_rss_mb": 15155.2,
+      "pct_cpu": 320.0
+    }
+  ],
+  "verdict": "pass"
+}

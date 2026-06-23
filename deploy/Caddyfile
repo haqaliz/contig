@@ -1,0 +1,55 @@
+# Caddy reverse proxy for the Contig dashboard.
+#
+# Caddy is preferred here because it obtains and renews a TLS certificate
+# automatically (Let's Encrypt) for a public domain, with no manual cert
+# management. The dashboard container listens on plain HTTP on :3000; Caddy
+# terminates TLS in front of it and forwards requests over the internal network.
+#
+# Replace dashboard.example.com with your real domain, and make sure that domain
+# resolves to this host and that ports 80 and 443 are reachable, so the automatic
+# certificate challenge can complete. For a purely local or internal deployment,
+# see the commented :80 block at the bottom.
+
+dashboard.example.com {
+	# Forward all traffic to the dashboard service. In docker-compose the
+	# hostname "dashboard" resolves to that service on the shared network; on a
+	# bare host this would be 127.0.0.1:3000 instead.
+	reverse_proxy dashboard:3000 {
+		# Tell the app it is being served over https at its public hostname.
+		# Auth0 callback and logout URLs must line up with APP_BASE_URL, so the
+		# proxy must forward the original scheme and host rather than its own.
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+		header_up Host {host}
+	}
+
+	# Security response headers. HSTS tells browsers to stick to https; the rest
+	# reduce clickjacking and content-type sniffing. Tune to taste.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Caddy advertises itself by default; drop the version banner.
+		-Server
+	}
+
+	# Caddy writes structured access logs to stdout, which docker collects.
+	log {
+		output stdout
+		format console
+	}
+}
+
+# Local or internal alternative: serve plain HTTP on :80 with no certificate.
+# Use this only behind a trusted network or another TLS terminator, and set
+# APP_BASE_URL to the matching http URL. Uncomment to use, and comment the block
+# above.
+#
+# :80 {
+# 	reverse_proxy dashboard:3000 {
+# 		header_up X-Forwarded-Proto {scheme}
+# 		header_up X-Forwarded-Host {host}
+# 		header_up Host {host}
+# 	}
+# }

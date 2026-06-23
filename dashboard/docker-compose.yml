@@ -1,0 +1,86 @@
+# Self-host the Contig dashboard behind a TLS-terminating reverse proxy.
+#
+# This brings up two services:
+#   - dashboard: the Next.js dashboard, built from the existing ./Dockerfile.
+#   - caddy:     a reverse proxy that terminates TLS and forwards to the dashboard
+#                (see ../deploy/Caddyfile).
+#
+# Honest constraint about the engine: the dashboard does NOT embed the contig
+# engine. It shells out to the `contig` CLI for every action (launch, cancel,
+# verify, and so on), so the CLI must be REACHABLE FROM INSIDE THE DASHBOARD
+# CONTAINER. The image built from ./Dockerfile serves the dashboard only; it does
+# not contain the engine or Nextflow. To make the CLI reachable you must do one of:
+#   - bake the engine (and Nextflow, and a container runtime) into a derived image
+#     and point CONTIG_CMD / CONTIG_DISPATCH_CMD at it, or
+#   - mount a host-installed `contig` binary into the container and point the same
+#     vars at the mounted path, or
+#   - run the engine as a sidecar the dashboard can invoke.
+# Until one of those is arranged, read-only pages render but launch and verify do
+# not work. See the Deployment section of README.md and ../deploy/ENV.md.
+#
+# Fill values from your own secret store. NEVER commit real secrets into this file.
+
+services:
+  dashboard:
+    build:
+      # Build context is this dashboard directory, using the multi-stage Dockerfile.
+      context: .
+      dockerfile: Dockerfile
+    # No host port is published: only Caddy is exposed to the network, and it
+    # reaches the dashboard over the internal compose network on :3000.
+    expose:
+      - "3000"
+    volumes:
+      # The shared runs directory: the dashboard reads bundles, status,
+      # notifications.jsonl, and owner.json from here. Point the host path at the
+      # same directory the engine writes to.
+      - ./runs:/runs
+    environment:
+      # Where run bundles live inside the container (the mount above).
+      CONTIG_RUNS_DIR: /runs
+
+      # The CLI the dashboard shells out to. These assume a `contig` reachable
+      # inside the container per the honest constraint above; change them to match
+      # how you made the engine reachable.
+      CONTIG_CMD: ${CONTIG_CMD:-contig}
+      CONTIG_DISPATCH_CMD: ${CONTIG_DISPATCH_CMD:-contig}
+
+      # Auth. For a real deployment, leave CONTIG_AUTH_DISABLED unset and configure
+      # the AUTH0_* block below. Set CONTIG_AUTH_DISABLED=1 ONLY for a trusted,
+      # local, single-user bring-up: it treats every caller as an admin.
+      CONTIG_AUTH_DISABLED: ${CONTIG_AUTH_DISABLED:-}
+
+      # Auth0 (see ../deploy/ENV.md section 4). Supply these from your environment
+      # or secret store; the defaults are empty so an unconfigured compose falls
+      # back to the open local mode above.
+      AUTH0_SECRET: ${AUTH0_SECRET:-}
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN:-}
+      AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID:-}
+      AUTH0_CLIENT_SECRET: ${AUTH0_CLIENT_SECRET:-}
+      # The public https URL the proxy serves, so Auth0 callback and logout line up.
+      APP_BASE_URL: ${APP_BASE_URL:-}
+      # Optional claim overrides (defaults are https://contig/roles and
+      # https://contig/workspaces; only set to override the namespace).
+      AUTH0_ROLES_CLAIM: ${AUTH0_ROLES_CLAIM:-}
+      AUTH0_WORKSPACES_CLAIM: ${AUTH0_WORKSPACES_CLAIM:-}
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - dashboard
+    ports:
+      # 80 and 443 must be reachable for Caddy's automatic TLS challenge.
+      - "80:80"
+      - "443:443"
+    volumes:
+      # The proxy config (terminates TLS, forwards to the dashboard service).
+      - ../deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Persist the obtained certificates and Caddy state across restarts.
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
