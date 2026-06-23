@@ -1162,9 +1162,12 @@ def test_corpus_promote_unknown_case_errors(tmp_path):
 
 
 def test_version_prints_package_version():
+    from importlib.metadata import version as _pkg_version
+
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert "0.0.1" in result.output
+    # Assert against the installed package version, so a version bump never breaks this.
+    assert _pkg_version("contig") in result.output
 
 
 def test_plan_proposes_rnaseq_for_a_de_goal(tmp_path):

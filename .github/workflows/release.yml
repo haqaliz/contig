@@ -1,0 +1,130 @@
+name: release
+
+# Cut a release by pushing a version tag (e.g. v0.1.0) over git. This runs in the
+# haqaliz/contig repo context with the repo GITHUB_TOKEN, so the GitHub Release and
+# the GHCR image are owned by the repo, not by whatever account the local gh CLI is
+# logged into. Channels: standalone binaries (Linux, macOS arm64 + x64, Windows),
+# PyPI (trusted publishing), a GHCR container image, and a Homebrew tap (see
+# RELEASING.md). Each channel is an independent job so one failing does not block the
+# others.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  dist:
+    name: Build wheel and sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+
+  binaries:
+    name: Standalone binary (${{ matrix.asset }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, asset: contig-linux-x86_64, sep: ":", ext: "" }
+          - { os: macos-14, asset: contig-macos-arm64, sep: ":", ext: "" }
+          - { os: macos-13, asset: contig-macos-x86_64, sep: ":", ext: "" }
+          - { os: windows-latest, asset: contig-windows-x86_64.exe, sep: ";", ext: ".exe" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install contig and PyInstaller
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install . pyinstaller
+      - name: Build the binary
+        shell: bash
+        run: |
+          pyinstaller --onefile --name contig \
+            --collect-submodules contig \
+            --copy-metadata contig \
+            --add-data "src/contig/data${{ matrix.sep }}contig/data" \
+            packaging/contig_main.py
+          mv "dist/contig${{ matrix.ext }}" "dist/${{ matrix.asset }}"
+      - name: Smoke test the binary
+        shell: bash
+        run: |
+          "./dist/${{ matrix.asset }}" version
+          "./dist/${{ matrix.asset }}" clusters --json > /dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+
+  release:
+    name: GitHub Release
+    needs: [dist, binaries]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Publish the release with all assets
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/dist/*
+            artifacts/contig-linux-x86_64/contig-linux-x86_64
+            artifacts/contig-macos-arm64/contig-macos-arm64
+            artifacts/contig-macos-x86_64/contig-macos-x86_64
+            artifacts/contig-windows-x86_64.exe/contig-windows-x86_64.exe
+
+  pypi:
+    name: Publish to PyPI (trusted publishing)
+    needs: [dist]
+    runs-on: ubuntu-latest
+    # Requires a one-time PyPI trusted-publisher setup for this repo + workflow
+    # (see RELEASING.md). Independent of the other jobs; skip or remove if unused.
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  docker:
+    name: Publish the CLI image to GHCR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}

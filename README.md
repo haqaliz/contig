@@ -42,16 +42,32 @@ Producing an end-to-end analysis from raw sequencing data needs a rare pairing o
 
 ## 📦 Installation
 
-Contig is a Python 3.12 package managed with [`uv`](https://github.com/astral-sh/uv).
+Pick whichever fits your machine (each release ships all four):
 
 ```bash
-git clone https://github.com/haqaliz/contig.git
-cd contig
-uv sync          # create the venv and install dependencies
-uv run contig --help
+# Python (any OS with Python 3.12+)
+pipx install contig            # or: uvx contig --help
+
+# Standalone binary (no Python needed): download from the latest release
+#   https://github.com/haqaliz/contig/releases/latest
+#   contig-linux-x86_64 | contig-macos-arm64 | contig-macos-x86_64 | contig-windows-x86_64.exe
+chmod +x contig-macos-arm64 && ./contig-macos-arm64 --help
+
+# Container
+docker run --rm ghcr.io/haqaliz/contig:latest --help
+
+# Homebrew (macOS / Linux)
+brew install haqaliz/contig/contig
 ```
 
-Running a **real** pipeline also needs [Nextflow](https://www.nextflow.io/), a Java runtime (`JAVA_HOME`), and a running Docker daemon. The CLI and the test suite work without them. Full prerequisites are in [docs/USAGE.md](docs/USAGE.md#prerequisites).
+From source, with [`uv`](https://github.com/astral-sh/uv):
+
+```bash
+git clone https://github.com/haqaliz/contig.git && cd contig
+uv sync && uv run contig --help
+```
+
+Running a **real** pipeline also needs [Nextflow](https://www.nextflow.io/), a Java runtime (`JAVA_HOME`), and a running container runtime. The CLI and its self-contained commands (plan, show, verify, benchmark, eval-detector, ...) work without them. Full prerequisites are in [docs/USAGE.md](docs/USAGE.md#prerequisites), and the release process is in [RELEASING.md](RELEASING.md).
 
 ---
 

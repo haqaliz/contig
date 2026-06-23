@@ -1,0 +1,39 @@
+name: ci
+
+# Run the test suites on every push to master and on pull requests, so a release is
+# always cut from a green tree. The engine tests need no Nextflow/Java/Docker (a live
+# pipeline run does, but the suite injects a fake executor).
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  engine:
+    name: Engine tests (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run pytest
+
+  dashboard:
+    name: Dashboard (tsc, lint, e2e)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    env:
+      CONTIG_AUTH_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run lint
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test
