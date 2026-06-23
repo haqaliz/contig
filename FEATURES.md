@@ -160,7 +160,7 @@ path or modest engine work (flagged NEW).
 
 | Feature | What it does | Engine | Effort |
 |---|---|---|---|
-| Backend selection plus caps | Local vs AWS Batch vs SLURM (queue/partition, account, work dir), memory/CPU/time ceilings, config preview | Built (nfconfig); AWS Batch and SLURM each have a preflight that refuses a misconfigured launch and a runbook (2026-06-23) | M |
+| Backend selection plus caps | Local vs AWS Batch vs SLURM (queue/partition, account, work dir), memory/CPU/time ceilings, config preview | Built (nfconfig); AWS Batch and SLURM each have a preflight that refuses a misconfigured launch and a runbook; SLURM validated live single-node on 2026-06-23 (nf-core/rnaseq, 234 tasks via sbatch, 0 failed, verdict WARN, identical to the local backend) | M |
 | Second workflow engine (Snakemake) | Run a Snakemake workflow through the same run, capture, verify, reproduce engine | Shipped 2026-06-23 (engine-adapter foundation: contig run --engine snakemake --snakefile, ingested into the same RunRecord; proves engine-agnosticism) | L |
 | Backend pre-flight validation | Refuses a misconfigured backend up front with the exact missing-option error | Built (ConfigGenerationError) | S |
 
