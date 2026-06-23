@@ -9,8 +9,13 @@ It is pure (target -> text) so it is fully testable without any live backend.
 from __future__ import annotations
 
 import os
+import shutil
 
 from contig.models import ExecutionTarget
+
+# The SLURM submission binaries Nextflow shells out to. Their absence on PATH
+# means the slurm executor cannot submit, so preflight refuses before launch.
+_SLURM_BINARIES = ("sbatch", "sinfo")
 
 # The env that proves AWS credentials are available to Nextflow's awsbatch
 # executor. Either explicit keys, or a named profile, satisfies the check; the
@@ -73,6 +78,25 @@ def generate_nextflow_config(target: ExecutionTarget) -> str:
         lines.append(f"process.queue = '{queue}'")
         lines.append(f"aws.region = '{region}'")
 
+    if target.backend == "slurm":
+        opts = target.backend_options
+        partition = opts.get("partition")
+        if not partition:
+            raise ConfigGenerationError("slurm target requires a 'partition' backend option")
+        # The partition is Nextflow's process.queue for the slurm executor.
+        # account/qos are not first-class Nextflow knobs, so they ride in
+        # process.clusterOptions as the literal sbatch flags Nextflow forwards.
+        lines.append(f"process.queue = '{partition}'")
+        cluster_flags = []
+        if opts.get("account"):
+            cluster_flags.append(f"--account={opts['account']}")
+        if opts.get("qos"):
+            cluster_flags.append(f"--qos={opts['qos']}")
+        if cluster_flags:
+            lines.append(f"process.clusterOptions = '{' '.join(cluster_flags)}'")
+        if opts.get("time"):
+            lines.append(f"process.time = '{opts['time']}'")
+
     lines.append(f"workDir = '{target.work_dir}'")
     return "\n".join(lines) + "\n"
 
@@ -100,4 +124,26 @@ def preflight_aws_batch(target: ExecutionTarget) -> list[str]:
         problems.append(
             "no AWS credentials in the environment (set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_PROFILE)"
         )
+    return problems
+
+
+def preflight_slurm(target: ExecutionTarget) -> list[str]:
+    """List the reasons a SLURM launch would fail, before launching (contract A).
+
+    Checks the things Nextflow would only fail on deep in submission: a missing
+    partition (Nextflow's process.queue), a missing account (required by clusters
+    that enforce accounting), and the sbatch/sinfo binaries not being on PATH (so
+    the slurm executor cannot submit at all). An empty list means the launch is
+    configured; otherwise each string is a human-readable problem to fix. No
+    cluster call is made; this is offline.
+    """
+    problems: list[str] = []
+    opts = target.backend_options
+    if not opts.get("partition"):
+        problems.append("no SLURM partition set (pass --queue)")
+    if not opts.get("account"):
+        problems.append("no SLURM account set (pass --opt account=...)")
+    for binary in _SLURM_BINARIES:
+        if shutil.which(binary) is None:
+            problems.append(f"{binary} not found on PATH (is SLURM installed and loaded?)")
     return problems

@@ -24,8 +24,9 @@ def _contig_version() -> str | None:
 
 from contig.bundle import compute_input_checksums, write_bundle
 from contig.events import parse_trace_file
-from contig.models import ExecutionTarget, QCResult, RunRecord
+from contig.models import ExecutionTarget, QCResult, RunRecord, TaskEvent
 from contig.nfconfig import generate_nextflow_config
+from contig.snakemake import build_snakemake_command, parse_snakemake_stats_file
 from contig.verification.rule_pack import rule_pack_for
 from contig.verification.run_qc import evaluate_run_qc
 from contig.verification.structural import evaluate_structural
@@ -152,6 +153,59 @@ def build_nextflow_command(
     return cmd
 
 
+def _build_engine_run(
+    target: ExecutionTarget,
+    run_dir: Path,
+    pipeline: str,
+    revision: str,
+    profiles: list[str],
+    params: dict[str, object] | None,
+    resume: bool,
+) -> tuple[list[str], Path, Callable[[Path], list[TaskEvent]]]:
+    """Build the command, artifact path, and events parser for the target's engine.
+
+    This is the single point where Nextflow and Snakemake diverge. Nextflow gets a
+    generated nextflow.config (the compute abstraction: local/cloud/HPC selected by
+    the profile) and a trace TSV; Snakemake gets a typed `snakemake` command and a
+    stats JSON. Both leave a machine-readable artifact the runner ingests into the
+    same TaskEvent shape.
+    """
+    if target.engine == "snakemake":
+        # `pipeline` carries the Snakefile path for the snakemake engine (there is
+        # no nf-core pipeline ref). cores ride from the resource_limits cap, else 1.
+        artifact_path = run_dir / "stats.json"
+        cores = int(_lead_int(target.resource_limits.get("cpus"), 1))
+        cmd = build_snakemake_command(
+            snakefile=pipeline, cores=cores, run_dir=str(run_dir)
+        )
+        return cmd, artifact_path, parse_snakemake_stats_file
+
+    # Default engine: Nextflow. Map the ExecutionTarget to a nextflow.config (the
+    # compute abstraction: local/cloud/HPC selected by generating the profile, not
+    # by branching here), then build the `nextflow run` argv with trace capture.
+    artifact_path = run_dir / "trace.txt"
+    config_path = run_dir / "nextflow.config"
+    config_path.write_text(generate_nextflow_config(target))
+    cmd = build_nextflow_command(
+        pipeline, revision, profiles, str(artifact_path), params, resume, str(config_path)
+    )
+    return cmd, artifact_path, parse_trace_file
+
+
+def _lead_int(value: object, default: int) -> int:
+    """Leading integer of a resource literal ('4' or '4.GB' -> 4), else the default."""
+    if value is None:
+        return default
+    text = str(value).strip()
+    digits = ""
+    for ch in text:
+        if ch.isdigit():
+            digits += ch
+        else:
+            break
+    return int(digits) if digits else default
+
+
 def run_pipeline(
     *,
     pipeline: str,
@@ -175,24 +229,22 @@ def run_pipeline(
     """
     run_dir = (Path(runs_dir) / run_id).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
-    trace_path = run_dir / "trace.txt"
 
-    # Map the ExecutionTarget to a nextflow.config (the compute abstraction:
-    # local/cloud/HPC selected by generating the profile, not by branching here).
-    config_path = run_dir / "nextflow.config"
-    config_path.write_text(generate_nextflow_config(target))
-
-    cmd = build_nextflow_command(
-        pipeline, revision, profiles, str(trace_path), params, resume, str(config_path)
+    # The Engine seam: build the command for the selected engine and name the
+    # machine-readable artifact it must leave behind (a Nextflow trace TSV, or a
+    # Snakemake stats JSON). Everything downstream (capture, record, verify,
+    # bundle) is engine-agnostic, so the engine is swapped only here.
+    cmd, artifact_path, parse_events = _build_engine_run(
+        target, run_dir, pipeline, revision, profiles, params, resume
     )
-    returncode = executor(cmd, trace_path)
+    returncode = executor(cmd, artifact_path)
 
     # Capture whatever the run produced (success OR failure). The failure data
     # (the detect/diagnose input, and the moat) must not be discarded just
-    # because the run exited nonzero. Only when no trace exists is there nothing
-    # to record.
+    # because the run exited nonzero. Only when no artifact exists is there
+    # nothing to record.
     record: RunRecord | None = None
-    if trace_path.exists():
+    if artifact_path.exists():
         record = RunRecord(
             run_id=run_id,
             pipeline=pipeline,
@@ -200,7 +252,7 @@ def run_pipeline(
             target=target,
             input_checksums=compute_input_checksums(input_paths),
             parameters=params or {},
-            events=parse_trace_file(trace_path),
+            events=parse_events(artifact_path),
             qc_results=_discover_qc(run_dir, assay),
             nextflow_version=nextflow_version,
             contig_version=_contig_version(),
@@ -209,7 +261,7 @@ def run_pipeline(
 
     if returncode != 0:
         raise PipelineExecutionError(returncode, record)
-    # A clean exit must have produced a trace (hence a record); guard the contract
-    # so a silent None can never escape as a "successful" run.
-    assert record is not None, "successful run produced no trace to capture"
+    # A clean exit must have produced an artifact (hence a record); guard the
+    # contract so a silent None can never escape as a "successful" run.
+    assert record is not None, "successful run produced no artifact to capture"
     return record

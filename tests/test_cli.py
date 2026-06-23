@@ -318,6 +318,139 @@ def test_run_aws_batch_refuses_non_s3_work_dir(tmp_path, monkeypatch):
     assert "s3://" in result.output
 
 
+def test_run_on_slurm_generates_slurm_config(tmp_path, monkeypatch):
+    # A user reaches the HPC backend by naming it + its partition (via --queue)
+    # and account (via --opt). sbatch/sinfo present so the preflight passes.
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    monkeypatch.setattr("contig.cli.shutil.which", lambda name: f"/usr/bin/{name}")
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "slurm", "--runs-dir", str(tmp_path),
+         "--backend", "slurm", "--container-runtime", "singularity",
+         "--queue", "general", "--opt", "account=lab"],
+    )
+    assert result.exit_code == 0
+    config = (tmp_path / "slurm" / "nextflow.config").read_text()
+    assert "process.executor = 'slurm'" in config
+    assert "process.queue = 'general'" in config
+    assert "--account=lab" in config
+
+
+def test_run_slurm_refuses_without_partition(tmp_path, monkeypatch):
+    # A missing partition is refused by the preflight, not surfaced as a traceback.
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    monkeypatch.setattr("contig.cli.shutil.which", lambda name: f"/usr/bin/{name}")
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "slurmbad", "--runs-dir", str(tmp_path),
+         "--backend", "slurm", "--opt", "account=lab"],
+    )
+    assert result.exit_code != 0
+    assert "partition" in result.output.lower()
+
+
+def test_run_slurm_refuses_when_sbatch_absent(tmp_path, monkeypatch):
+    # PRD contract A: the slurm launch is refused BEFORE Nextflow runs when the
+    # submission binaries are missing. Executor must never be touched.
+    launched = {"n": 0}
+
+    def spy(cmd, trace_path):
+        launched["n"] += 1
+        return 0
+
+    monkeypatch.setattr("contig.cli.default_executor", spy)
+    monkeypatch.setattr("contig.cli.shutil.which", lambda name: None)
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "slurmnoslurm", "--runs-dir", str(tmp_path),
+         "--backend", "slurm", "--queue", "general", "--opt", "account=lab"],
+    )
+    assert result.exit_code != 0
+    assert "sbatch" in result.output.lower()
+    assert launched["n"] == 0  # refused before any launch
+
+
+def test_run_rejects_malformed_opt(tmp_path, monkeypatch):
+    # An --opt without a key=value form is rejected, never silently dropped.
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "badopt", "--runs-dir", str(tmp_path),
+         "--backend", "slurm", "--queue", "general", "--opt", "noequalshere"],
+    )
+    assert result.exit_code != 0
+    assert "opt" in result.output.lower()
+
+
+def test_run_rejects_opt_with_unsafe_value(tmp_path, monkeypatch):
+    # A backend-option value reaching the generated config is validated: a leading
+    # dash (could be read as a flag) or shell metacharacters are refused.
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "badval", "--runs-dir", str(tmp_path),
+         "--backend", "slurm", "--queue", "general", "--opt", "account=-rm -rf"],
+    )
+    assert result.exit_code != 0
+
+
+SNAKE_STATS = (
+    '{"total_runtime": 7.0, "rules": {"align": {"mean-runtime": 4.0}, "count": {"mean-runtime": 3.0}}}'
+)
+
+
+def _fake_snake_executor(stats_text):
+    def execute(cmd, artifact_path):
+        Path(artifact_path).write_text(stats_text)
+        return 0
+    return execute
+
+
+def test_run_with_snakemake_engine_drives_snakemake(tmp_path, monkeypatch):
+    # A user reaches the second engine by naming it + a Snakefile; the run flows
+    # through capture and record exactly like a Nextflow run does.
+    seen = {}
+
+    def spy(cmd, artifact_path):
+        seen["cmd"] = cmd
+        Path(artifact_path).write_text(SNAKE_STATS)
+        return 0
+
+    monkeypatch.setattr("contig.cli.default_executor", spy)
+    snakefile = tmp_path / "Snakefile"
+    snakefile.write_text("rule all:\n    input: []\n")
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "snk", "--runs-dir", str(tmp_path),
+         "--engine", "snakemake", "--snakefile", str(snakefile)],
+    )
+    assert result.exit_code == 0
+    assert seen["cmd"][0] == "snakemake"
+    record = load_bundle(tmp_path / "snk")
+    assert {e.process for e in record.events} == {"align", "count"}
+
+
+def test_run_snakemake_requires_a_snakefile(tmp_path, monkeypatch):
+    monkeypatch.setattr("contig.cli.default_executor", _fake_snake_executor(SNAKE_STATS))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "snknofile", "--runs-dir", str(tmp_path), "--engine", "snakemake"],
+    )
+    assert result.exit_code != 0
+    assert "snakefile" in result.output.lower()
+
+
+def test_run_snakemake_rejects_missing_snakefile_path(tmp_path, monkeypatch):
+    monkeypatch.setattr("contig.cli.default_executor", _fake_snake_executor(SNAKE_STATS))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "snkbad", "--runs-dir", str(tmp_path),
+         "--engine", "snakemake", "--snakefile", str(tmp_path / "does_not_exist.smk")],
+    )
+    assert result.exit_code != 0
+    assert "snakefile" in result.output.lower()
+
+
 def test_run_self_heals_oom_and_shows_repair_chain(tmp_path, monkeypatch):
     state = {"n": 0}
 
@@ -752,6 +885,52 @@ def test_verify_json_ok_when_clean(tmp_path):
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data == {"ok": True, "changed": [], "missing": []}
+
+
+def test_keygen_prints_a_keypair(tmp_path):
+    result = runner.invoke(app, ["keygen"])
+    assert result.exit_code == 0
+    # A hex private and public key are printed (64 hex chars each for Ed25519).
+    import re
+    hexes = re.findall(r"[0-9a-f]{64}", result.output)
+    assert len(hexes) >= 2
+
+
+def test_verify_reports_signature_ok_for_a_signed_run(tmp_path, monkeypatch):
+    import json
+    from contig import signing
+
+    if not signing.signing_available():
+        import pytest
+        pytest.skip("cryptography not installed")
+    priv, _pub = signing.generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", priv)
+    _write_run(tmp_path, "sgn", [TaskEvent(process="X", status="COMPLETED", exit=0)])
+    result = runner.invoke(app, ["verify", "sgn", "--runs-dir", str(tmp_path), "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["signed"] is True and data["signature_ok"] is True
+
+
+def test_verify_flags_a_tampered_signature(tmp_path, monkeypatch):
+    import json
+    from contig import signing
+
+    if not signing.signing_available():
+        import pytest
+        pytest.skip("cryptography not installed")
+    priv, _pub = signing.generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", priv)
+    _write_run(tmp_path, "tmp", [TaskEvent(process="X", status="COMPLETED", exit=0)])
+    # Tamper the signed record on disk.
+    rec_path = tmp_path / "tmp" / "run_record.json"
+    rec = json.loads(rec_path.read_text())
+    rec["pipeline"] = "nf-core/evil"
+    rec_path.write_text(json.dumps(rec))
+    result = runner.invoke(app, ["verify", "tmp", "--runs-dir", str(tmp_path), "--json"])
+    data = json.loads(result.output)
+    assert data["signed"] is True and data["signature_ok"] is False
+    assert result.exit_code != 0
 
 
 def test_verify_errors_on_missing_run(tmp_path):

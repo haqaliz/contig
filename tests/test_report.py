@@ -238,6 +238,61 @@ def test_html_report_is_metadata_only() -> None:
     assert "abc123" in html  # an input checksum is present (hash, not the read)
 
 
+def test_html_report_carries_print_styles_for_save_as_pdf() -> None:
+    html = render_run_report_html(_full_record())
+    assert "@media print" in html
+
+
+def test_html_report_groups_structural_qc_checks() -> None:
+    record = RunRecord(
+        run_id="r-struct",
+        pipeline="nf-core/rnaseq",
+        pipeline_revision="3.26.0",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="STAR", status="COMPLETED", exit=0)],
+        qc_results=[
+            QCResult(check="mapping_rate", status="pass", message="ok", value=0.97, kind="metric"),
+            QCResult(
+                check="output_present:aligned.bam",
+                status="pass",
+                message="present",
+                value=1234.0,
+                kind="structural",
+            ),
+        ],
+    )
+    html = render_run_report_html(record)
+    assert "output_present:aligned.bam" in html
+    assert "structural" in html.lower()
+
+
+def test_html_report_shows_signature_status_when_present() -> None:
+    record = _full_record()
+    signature_status = {
+        "signed": True,
+        "signature_ok": True,
+        "public_key": "ab" * 32,
+        "algo": "ed25519",
+    }
+    html = render_run_report_html(record, signature_status=signature_status)
+    assert "signature" in html.lower()
+    assert "ab" * 32 in html  # the public key the report was signed with
+    assert "verified" in html.lower()
+
+
+def test_html_report_omits_signature_section_when_not_signed() -> None:
+    html = render_run_report_html(_full_record())
+    # With no signature passed, the report does not claim a signature status.
+    assert "signature verified" not in html.lower()
+
+
+def test_html_report_shows_provenance_input_and_output_checksums() -> None:
+    html = render_run_report_html(_full_record())
+    assert "abc123" in html  # an input checksum
+    assert "00ff11" in html  # an output checksum
+
+
 def test_html_report_escapes_user_text() -> None:
     record = RunRecord(
         run_id="r1",

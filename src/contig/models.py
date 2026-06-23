@@ -52,6 +52,11 @@ QCStatus = Literal["pass", "warn", "fail"]
 # Run-level verdict adds "unverified": the run completed but no QC check covered
 # it, so we must not claim it is verified (PRODUCT_SPEC: false-pass rate ~0).
 Verdict = Literal["pass", "warn", "fail", "unverified"]
+# What kind of check produced a result: a content-level metric check (rule pack on
+# MultiQC metrics) or a structural/integrity check on the output files themselves.
+# Lets the dashboard group the two; defaults to "metric" so older records that
+# predate the field deserialize unchanged.
+QCKind = Literal["metric", "structural"]
 
 
 class QCResult(BaseModel):
@@ -62,6 +67,7 @@ class QCResult(BaseModel):
     message: str
     value: float | None = None
     expected_range: str | None = None
+    kind: QCKind = "metric"
 
 
 def overall_verdict(results: list[QCResult]) -> QCStatus:

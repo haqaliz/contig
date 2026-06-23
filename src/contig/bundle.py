@@ -7,18 +7,49 @@ that anchor it.
 
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
 
 from contig.models import RunRecord, sha256_file
 
+# The env var that, when set to a hex or base64 Ed25519 private key, makes
+# write_bundle emit a detached signature sidecar next to the record. Absent or
+# empty means no sidecar (signing is opt-in and never logs the key).
+SIGNING_KEY_ENV = "CONTIG_SIGNING_KEY"
+
 
 def write_bundle(record: RunRecord, dest_dir: str | Path) -> Path:
-    """Serialize ``record`` to ``dest_dir/run_record.json`` and return that path."""
+    """Serialize ``record`` to ``dest_dir/run_record.json`` and return that path.
+
+    When ``CONTIG_SIGNING_KEY`` is set (and signing is available), also write a
+    detached signature sidecar at ``dest_dir/signature.json`` over the record's
+    canonical content. The signature signs the record content, never the sidecar.
+    """
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
     json_path = dest / "run_record.json"
     json_path.write_text(record.model_dump_json(indent=2))
+    _maybe_write_signature(record, dest)
     return json_path
+
+
+def _maybe_write_signature(record: RunRecord, dest: Path) -> None:
+    """Write signature.json when a signing key is configured; otherwise do nothing."""
+    private_key = os.environ.get(SIGNING_KEY_ENV)
+    if not private_key:
+        return
+    # Imported lazily so the bundle module loads even where cryptography is absent;
+    # a configured key with signing unavailable raises, surfacing the misconfig.
+    from contig.signing import canonical_sha256, public_key_for, sign_record
+
+    sidecar = {
+        "algo": "ed25519",
+        "public_key": public_key_for(private_key),
+        "signature": sign_record(record, private_key),
+        "signed_sha256": canonical_sha256(record),
+    }
+    (dest / "signature.json").write_text(json.dumps(sidecar, indent=2))
 
 
 def load_bundle(dest_dir: str | Path) -> RunRecord:

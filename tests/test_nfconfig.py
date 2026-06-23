@@ -12,6 +12,7 @@ from contig.nfconfig import (
     ConfigGenerationError,
     generate_nextflow_config,
     preflight_aws_batch,
+    preflight_slurm,
 )
 
 _AWS_ENV = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_PROFILE")
@@ -48,7 +49,7 @@ def test_docker_runtime_enables_docker():
 
 
 def test_singularity_runtime_enables_singularity():
-    cfg = generate_nextflow_config(_target("slurm", runtime="singularity"))
+    cfg = generate_nextflow_config(_target("local", runtime="singularity"))
     assert "singularity.enabled = true" in cfg
 
 
@@ -190,4 +191,111 @@ def test_preflight_aws_batch_collects_all_problems(monkeypatch):
     problems = preflight_aws_batch(target)
     # queue, region, work_dir, credentials: every problem surfaces at once so the
     # user fixes them in one pass rather than one error at a time.
+    assert len(problems) >= 4
+
+
+# --- SLURM backend (PRD contract A: the HPC executor) ----------------------
+def _slurm_target(**opts):
+    options = {"partition": "general", "account": "lab", "time": "4.h", "qos": "normal"}
+    options.update(opts)
+    # An explicit None value clears that knob (lets a test omit a single field).
+    options = {k: v for k, v in options.items() if v is not None}
+    return ExecutionTarget(
+        backend="slurm",
+        container_runtime="singularity",
+        work_dir="/scratch/contig/work",
+        backend_options=options,
+    )
+
+
+def test_slurm_backend_selects_slurm_executor():
+    cfg = generate_nextflow_config(_slurm_target())
+    assert "process.executor = 'slurm'" in cfg
+
+
+def test_slurm_backend_sets_partition_as_queue():
+    cfg = generate_nextflow_config(_slurm_target(partition="bigmem"))
+    assert "process.queue = 'bigmem'" in cfg
+
+
+def test_slurm_backend_passes_account_through_clusteroptions():
+    cfg = generate_nextflow_config(_slurm_target(account="genomics"))
+    assert "--account=genomics" in cfg
+
+
+def test_slurm_backend_passes_qos_through_clusteroptions():
+    cfg = generate_nextflow_config(_slurm_target(qos="high"))
+    assert "--qos=high" in cfg
+
+
+def test_slurm_backend_sets_time_as_process_time():
+    cfg = generate_nextflow_config(_slurm_target(time="8.h"))
+    assert "process.time = '8.h'" in cfg
+
+
+def test_slurm_backend_without_partition_is_a_loud_error():
+    with pytest.raises(ConfigGenerationError):
+        generate_nextflow_config(_slurm_target(partition=None))
+
+
+def test_slurm_backend_omits_account_clusteroptions_when_absent():
+    cfg = generate_nextflow_config(_slurm_target(account=None))
+    assert "--account" not in cfg
+
+
+# --- SLURM preflight (PRD contract A: refuse a misconfigured launch) ------------
+def _slurm_on_path(monkeypatch, present=True):
+    import contig.nfconfig as nfconfig
+
+    def fake_which(name):
+        if name in ("sbatch", "sinfo"):
+            return f"/usr/bin/{name}" if present else None
+        return None
+
+    monkeypatch.setattr(nfconfig.shutil, "which", fake_which)
+
+
+def test_preflight_slurm_passes_when_fully_configured(monkeypatch):
+    _slurm_on_path(monkeypatch, present=True)
+    assert preflight_slurm(_slurm_target()) == []
+
+
+def test_preflight_slurm_reports_missing_partition(monkeypatch):
+    _slurm_on_path(monkeypatch, present=True)
+    problems = preflight_slurm(_slurm_target(partition=None))
+    assert any("partition" in p.lower() for p in problems)
+
+
+def test_preflight_slurm_reports_missing_account(monkeypatch):
+    _slurm_on_path(monkeypatch, present=True)
+    problems = preflight_slurm(_slurm_target(account=None))
+    assert any("account" in p.lower() for p in problems)
+
+
+def test_preflight_slurm_reports_sbatch_not_on_path(monkeypatch):
+    _slurm_on_path(monkeypatch, present=False)
+    problems = preflight_slurm(_slurm_target())
+    assert any("sbatch" in p.lower() for p in problems)
+
+
+def test_preflight_slurm_reports_sinfo_not_on_path(monkeypatch):
+    import contig.nfconfig as nfconfig
+
+    monkeypatch.setattr(
+        nfconfig.shutil, "which", lambda name: "/usr/bin/sbatch" if name == "sbatch" else None
+    )
+    problems = preflight_slurm(_slurm_target())
+    assert any("sinfo" in p.lower() for p in problems)
+
+
+def test_preflight_slurm_collects_all_problems(monkeypatch):
+    _slurm_on_path(monkeypatch, present=False)
+    target = ExecutionTarget(
+        backend="slurm",
+        container_runtime="singularity",
+        work_dir="/scratch/work",
+        backend_options={},
+    )
+    problems = preflight_slurm(target)
+    # partition, account, sbatch, sinfo: surface every problem in one pass.
     assert len(problems) >= 4

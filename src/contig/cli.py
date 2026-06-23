@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json as _json
 import re as _re
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,11 +34,12 @@ from contig.eval_history import (
 )
 from contig.bundle import compute_output_checksums
 from contig.cost import cost_report
+from contig.signing import generate_keypair, signing_available, verify_signature
 from contig.estimate import estimate_run
 from contig.methods import render_methods
 from contig.provenance import to_rocrate
 from contig.models import ExecutionTarget, LaunchManifest, RunRecord, RunSummary, sha256_file
-from contig.nfconfig import ConfigGenerationError, preflight_aws_batch
+from contig.nfconfig import ConfigGenerationError, preflight_aws_batch, preflight_slurm
 from contig.planner import PlanningError
 from contig.planner import plan as build_plan
 from contig.progress import read_progress, render_progress
@@ -89,6 +91,33 @@ def _is_safe_webhook(url: str) -> bool:
     if not url or url.startswith("-"):
         return False
     return url.startswith("http://") or url.startswith("https://")
+
+
+# A backend-option value is rendered verbatim into the generated nextflow.config
+# (e.g. as an sbatch --account flag), so it must be a conservative token: no
+# leading dash (could be read as a flag), no whitespace or shell metacharacters.
+_SAFE_OPT_VALUE = _re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+=-]*$")
+_SAFE_OPT_KEY = _re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+
+
+def _parse_backend_opts(opts: list[str] | None) -> dict[str, str]:
+    """Parse repeated `--opt key=value` into a validated backend_options dict.
+
+    Each entry must be `key=value` with a safe key and a safe value (the value
+    reaches the generated config); a malformed entry raises ValueError with a
+    message the CLI surfaces, never silently dropping a knob the user asked for.
+    """
+    parsed: dict[str, str] = {}
+    for raw in opts or []:
+        if "=" not in raw:
+            raise ValueError(f"malformed --opt {raw!r}: expected key=value")
+        key, value = raw.split("=", 1)
+        if not _SAFE_OPT_KEY.match(key):
+            raise ValueError(f"invalid --opt key {key!r}")
+        if not _SAFE_OPT_VALUE.match(value):
+            raise ValueError(f"invalid --opt value for {key!r}: {value!r}")
+        parsed[key] = value
+    return parsed
 
 
 def _generate_run_id() -> str:
@@ -151,15 +180,18 @@ def plan(
 @app.command()
 def run(
     run_id: str = typer.Option(..., "--run-id", help="Identifier for this run."),
-    pipeline: str = typer.Option("nf-core/rnaseq", "--pipeline", help="Pipeline to run."),
+    pipeline: str = typer.Option("nf-core/rnaseq", "--pipeline", help="Pipeline to run (Nextflow engine)."),
     revision: str = typer.Option("3.26.0", "--revision", help="Pipeline revision."),
+    engine: str = typer.Option("nextflow", "--engine", help="Workflow engine (nextflow, snakemake)."),
+    snakefile: str = typer.Option(None, "--snakefile", help="Snakefile path (required for --engine snakemake)."),
     profiles: str = typer.Option(None, "--profiles", help="Comma-separated Nextflow profiles."),
     runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
     backend: str = typer.Option("local", "--backend", help="Execution backend (local, aws_batch, ...)."),
     container_runtime: str = typer.Option("docker", "--container-runtime", help="Container runtime."),
     work_dir: str = typer.Option(None, "--work-dir", help="Nextflow work dir (e.g. s3://bucket/work for aws_batch)."),
-    queue: str = typer.Option(None, "--queue", help="Batch/HPC job queue (aws_batch/slurm)."),
+    queue: str = typer.Option(None, "--queue", help="Batch/HPC job queue, the SLURM partition for --backend slurm (aws_batch/slurm)."),
     region: str = typer.Option(None, "--region", help="Cloud region (aws_batch)."),
+    opt: list[str] = typer.Option(None, "--opt", help="Extra backend option as key=value (e.g. account=lab, qos=high); repeatable."),
     input: str = typer.Option(None, "--input", help="Sample sheet CSV (real-data run)."),
     genome: str = typer.Option(None, "--genome", help="iGenomes reference key (e.g. GRCh38)."),
     fasta: str = typer.Option(None, "--fasta", help="Reference FASTA (with --gtf)."),
@@ -190,6 +222,9 @@ def run(
         work_dir=work_dir,
         queue=queue,
         region=region,
+        opt=opt,
+        engine=engine,
+        snakefile=snakefile,
         input=input,
         genome=genome,
         fasta=fasta,
@@ -224,6 +259,9 @@ def _dispatch_run(
     max_memory: str | None,
     max_cpus: int | None,
     max_attempts: int,
+    opt: list[str] | None = None,
+    engine: str = "nextflow",
+    snakefile: str | None = None,
     resume: bool = False,
     auto_approve: bool = False,
     approval_timeout: float = 1800,
@@ -237,7 +275,35 @@ def _dispatch_run(
     if notify is not None and not _is_safe_webhook(notify):
         typer.echo(f"Invalid notify webhook URL: {notify!r} (must be an http/https URL)", err=True)
         raise typer.Exit(code=1)
-    backend_options = {k: v for k, v in (("queue", queue), ("region", region)) if v}
+    if engine not in ("nextflow", "snakemake"):
+        typer.echo(f"Unsupported engine: {engine!r} (use nextflow or snakemake)", err=True)
+        raise typer.Exit(code=1)
+    # The snakemake engine needs a Snakefile, not an nf-core pipeline ref. Validate
+    # it up front (present, safe, on disk) and make it the effective pipeline so the
+    # runner builds a snakemake command from it.
+    effective_pipeline = pipeline
+    if engine == "snakemake":
+        if not snakefile:
+            typer.echo("The snakemake engine requires --snakefile.", err=True)
+            raise typer.Exit(code=1)
+        snakefile_path = Path(snakefile)
+        if not snakefile_path.is_file():
+            typer.echo(f"Snakefile not found: {snakefile}", err=True)
+            raise typer.Exit(code=1)
+        effective_pipeline = str(snakefile_path.resolve())
+    try:
+        extra_opts = _parse_backend_opts(opt)
+    except ValueError as exc:
+        typer.echo(f"Invalid --opt: {exc}", err=True)
+        raise typer.Exit(code=1)
+    # The SLURM executor reads the partition from process.queue, so --queue maps to
+    # the 'partition' knob there; for cloud Batch it stays 'queue'. Extra --opt
+    # knobs (account, qos, time) layer on, never overriding the mapped queue.
+    if backend == "slurm":
+        backend_options = {k: v for k, v in (("partition", queue), ("region", region)) if v}
+    else:
+        backend_options = {k: v for k, v in (("queue", queue), ("region", region)) if v}
+    backend_options.update(extra_opts)
     # Caps ride in the generated config as process.resourceLimits; nf-core
     # ignores the old --max_memory/--max_cpus params.
     resource_limits = {}
@@ -250,6 +316,7 @@ def _dispatch_run(
             backend=backend,
             container_runtime=container_runtime,
             work_dir=work_dir or f"{runs_dir}/{run_id}/work",
+            engine=engine,
             backend_options=backend_options,
             resource_limits=resource_limits,
         )
@@ -268,29 +335,44 @@ def _dispatch_run(
                 typer.echo(f"  - {problem}", err=True)
             raise typer.Exit(code=1)
 
+    # SLURM refuses a misconfigured launch up front (PRD contract A): a missing
+    # partition/account, or sbatch/sinfo absent from PATH, would otherwise only
+    # surface deep in Nextflow submission. Refuse before launching anything.
+    if backend == "slurm":
+        problems = preflight_slurm(target)
+        if problems:
+            typer.echo("Cannot launch on SLURM:", err=True)
+            for problem in problems:
+                typer.echo(f"  - {problem}", err=True)
+            raise typer.Exit(code=1)
+
     params: dict[str, object] = {}
     input_paths: list = []
-    if input:
-        issues = validate_samplesheet(input)
-        if issues:
-            typer.echo("Sample sheet is invalid:", err=True)
-            for issue in issues:
-                typer.echo(f"  - {issue}", err=True)
-            raise typer.Exit(code=1)
-        try:
-            params.update(resolve_reference(genome=genome, fasta=fasta, gtf=gtf))
-        except ReferenceError as exc:
-            typer.echo(f"Reference error: {exc}", err=True)
-            raise typer.Exit(code=1)
-        # Absolutize the sheet: Nextflow runs with cwd=run_dir, so a relative
-        # --input would fail nf-core's "file does not exist" validation.
-        params["input"] = str(Path(input).resolve())
-        input_paths = [input, *fastq_paths(input)]
+    # The --input/reference/--outdir plumbing is nf-core specific (a samplesheet, a
+    # reference, the pipeline --outdir flag). The snakemake foundation pass drives
+    # its inputs and outputs from the Snakefile itself, so it skips this block.
+    if engine == "nextflow":
+        if input:
+            issues = validate_samplesheet(input)
+            if issues:
+                typer.echo("Sample sheet is invalid:", err=True)
+                for issue in issues:
+                    typer.echo(f"  - {issue}", err=True)
+                raise typer.Exit(code=1)
+            try:
+                params.update(resolve_reference(genome=genome, fasta=fasta, gtf=gtf))
+            except ReferenceError as exc:
+                typer.echo(f"Reference error: {exc}", err=True)
+                raise typer.Exit(code=1)
+            # Absolutize the sheet: Nextflow runs with cwd=run_dir, so a relative
+            # --input would fail nf-core's "file does not exist" validation.
+            params["input"] = str(Path(input).resolve())
+            input_paths = [input, *fastq_paths(input)]
+        # nf-core always requires --outdir; default it under the run dir. Absolute
+        # so Nextflow (which runs in the run dir) writes to the right place.
+        outdir_path = Path(outdir) if outdir else Path(runs_dir) / run_id / "results"
+        params["outdir"] = str(outdir_path.resolve())
     selected_profiles = profiles or ("docker" if input else "test,docker")
-    # nf-core always requires --outdir; default it under the run dir. Absolute so
-    # Nextflow (which runs in the run dir) writes to the right place.
-    outdir_path = Path(outdir) if outdir else Path(runs_dir) / run_id / "results"
-    params["outdir"] = str(outdir_path.resolve())
 
     # Write the reproduce sidecar BEFORE the run, so it exists during the run and
     # on early failure. outdir/work_dir are deliberately not captured: reproduce
@@ -317,7 +399,7 @@ def _dispatch_run(
 
     try:
         record = self_heal_run(
-            pipeline=pipeline,
+            pipeline=effective_pipeline,
             revision=revision,
             profiles=selected_profiles.split(","),
             target=target,
@@ -327,7 +409,7 @@ def _dispatch_run(
             executor=default_executor,
             params=params or None,
             max_attempts=max_attempts,
-            assay=assay_for_pipeline(pipeline) or "rnaseq",
+            assay=assay_for_pipeline(effective_pipeline) or "rnaseq",
             resume=resume,
             auto_approve=auto_approve,
             approval_timeout=approval_timeout,
@@ -495,29 +577,89 @@ def verify(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
 
+    # A signed run carries a signature.json sidecar; a mismatch is a verification
+    # failure (the record was tampered with), so it fails the verify just like drift.
+    sig = _signature_status(runs_dir, run_id, record)
+    sig_bad = sig.get("signed") and sig.get("signature_ok") is False
+
     if not record.output_checksums:
+        result = {"ok": True, "changed": [], "missing": [], **sig}
         if json_out:
-            typer.echo(_json.dumps({"ok": True, "changed": [], "missing": []}))
+            typer.echo(_json.dumps(result))
+            if sig_bad:
+                raise typer.Exit(code=1)
             return
-        typer.echo(f"Nothing to verify for run {run_id}: no outputs were captured.")
+        if sig_bad:
+            typer.echo(f"Signature mismatch for run {run_id}: the record was modified.", err=True)
+            raise typer.Exit(code=1)
+        signed_note = " (signature verified)" if sig.get("signature_ok") else ""
+        typer.echo(f"Nothing to verify for run {run_id}: no outputs were captured.{signed_note}")
         return
 
     result = verify_outputs(record, _results_dir_for(record, runs_dir, run_id))
+    result.update(sig)
     if json_out:
         typer.echo(_json.dumps(result))
-        if not result["ok"]:
+        if not result["ok"] or sig_bad:
             raise typer.Exit(code=1)
         return
 
-    if result["ok"]:
-        typer.echo(f"Outputs verified for run {run_id}: all recorded outputs match.")
+    if result["ok"] and not sig_bad:
+        signed_note = " Signature verified." if sig.get("signature_ok") else ""
+        typer.echo(f"Outputs verified for run {run_id}: all recorded outputs match.{signed_note}")
         return
-    typer.echo(f"Drift detected for run {run_id}:", err=True)
-    for rel in result["changed"]:
-        typer.echo(f"  changed: {rel}", err=True)
-    for rel in result["missing"]:
-        typer.echo(f"  missing: {rel}", err=True)
+    if sig_bad:
+        typer.echo(f"Signature mismatch for run {run_id}: the record was modified.", err=True)
+    if not result["ok"]:
+        typer.echo(f"Drift detected for run {run_id}:", err=True)
+        for rel in result["changed"]:
+            typer.echo(f"  changed: {rel}", err=True)
+        for rel in result["missing"]:
+            typer.echo(f"  missing: {rel}", err=True)
     raise typer.Exit(code=1)
+
+
+def _signature_status(runs_dir: str, run_id: str, record: RunRecord) -> dict:
+    """Read runs/<id>/signature.json and report whether the record is signed and intact.
+
+    Returns {} when there is no signature sidecar. When signing is unavailable
+    (the cryptography package is absent) the signature cannot be checked, so we
+    report signed without a signature_ok claim rather than a false mismatch.
+    """
+    sidecar = Path(runs_dir) / run_id / "signature.json"
+    if not sidecar.exists():
+        return {}
+    try:
+        payload = _json.loads(sidecar.read_text())
+    except (OSError, ValueError):
+        return {"signed": True, "signature_ok": False}
+    if not signing_available():
+        return {"signed": True}
+    ok = verify_signature(record, payload.get("signature", ""), payload.get("public_key", ""))
+    return {"signed": True, "signature_ok": bool(ok)}
+
+
+@app.command()
+def keygen(
+    out: str = typer.Option(None, "--out", help="Write the keypair to this file instead of stdout."),
+) -> None:
+    """Generate an Ed25519 signing keypair for tamper-evident run records.
+
+    Set CONTIG_SIGNING_KEY to the private key before a run to sign its record; a
+    signed run writes a signature.json that `contig verify` checks. Keep the
+    private key secret; share only the public key.
+    """
+    if not signing_available():
+        typer.echo("Signing is unavailable: install the cryptography package.", err=True)
+        raise typer.Exit(code=1)
+    private_key, public_key = generate_keypair()
+    if out:
+        Path(out).write_text(f"private_key={private_key}\npublic_key={public_key}\n")
+        typer.echo(f"Wrote keypair to {out}. Set CONTIG_SIGNING_KEY to the private key to sign runs.")
+        return
+    typer.echo(f"private_key={private_key}")
+    typer.echo(f"public_key={public_key}")
+    typer.echo("Set CONTIG_SIGNING_KEY to the private key to sign runs; keep it secret.")
 
 
 @app.command()

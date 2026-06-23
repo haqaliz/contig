@@ -113,24 +113,53 @@ def render_run_report(record: RunRecord) -> str:
 
 
 _HTML_STYLE = """
-  body { font-family: -apple-system, system-ui, sans-serif; margin: 2rem auto; max-width: 60rem;
-         color: #1a1a1a; line-height: 1.5; }
-  h1 { margin-bottom: 0.25rem; }
-  .verdict { display: inline-block; padding: 0.4rem 1rem; border-radius: 0.4rem;
-             font-weight: 700; font-size: 1.4rem; letter-spacing: 0.05em; }
-  .verdict.pass { background: #e6f6e6; color: #1a7a1a; }
-  .verdict.warn { background: #fff6e0; color: #8a6500; }
-  .verdict.fail { background: #fce4e4; color: #a31515; }
-  .verdict.unverified { background: #eee; color: #555; }
-  h2 { border-bottom: 1px solid #ddd; padding-bottom: 0.25rem; margin-top: 2rem; }
-  table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; }
-  th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #eee; }
-  th { background: #fafafa; }
-  code, .mono { font-family: ui-monospace, monospace; font-size: 0.9rem; word-break: break-all; }
-  .note { color: #555; font-style: italic; }
-  .status-pass { color: #1a7a1a; }
-  .status-warn { color: #8a6500; }
-  .status-fail { color: #a31515; }
+  :root { --ink: #1a1a1a; --muted: #555; --line: #e3e3e3; --rule: #ddd;
+          --pass: #1a7a1a; --warn: #8a6500; --fail: #a31515; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, system-ui, "Segoe UI", sans-serif;
+         margin: 2.5rem auto; max-width: 62rem; padding: 0 1.5rem;
+         color: var(--ink); line-height: 1.55; }
+  header.report-head { border-bottom: 2px solid var(--ink); padding-bottom: 1rem;
+                       margin-bottom: 1.5rem; }
+  h1 { margin: 0 0 0.25rem; font-size: 1.6rem; }
+  .subtitle { color: var(--muted); margin: 0; }
+  .verdict-row { display: flex; align-items: center; gap: 1rem; margin: 1rem 0 0.25rem; flex-wrap: wrap; }
+  .verdict { display: inline-block; padding: 0.4rem 1.1rem; border-radius: 0.4rem;
+             font-weight: 700; font-size: 1.3rem; letter-spacing: 0.05em; }
+  .verdict.pass { background: #e6f6e6; color: var(--pass); }
+  .verdict.warn { background: #fff6e0; color: var(--warn); }
+  .verdict.fail { background: #fce4e4; color: var(--fail); }
+  .verdict.unverified { background: #eee; color: var(--muted); }
+  .badge { display: inline-block; padding: 0.25rem 0.7rem; border-radius: 1rem;
+           font-size: 0.85rem; font-weight: 600; }
+  .badge.signed-ok { background: #e6f0fb; color: #14457a; }
+  .badge.signed-bad { background: #fce4e4; color: var(--fail); }
+  h2 { border-bottom: 1px solid var(--rule); padding-bottom: 0.3rem;
+       margin: 2.2rem 0 0.5rem; font-size: 1.2rem; }
+  h3 { margin: 1.2rem 0 0.25rem; font-size: 1rem; color: var(--muted); }
+  table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; font-size: 0.95rem; }
+  th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--line);
+           vertical-align: top; }
+  th { background: #fafafa; font-weight: 600; }
+  caption { text-align: left; color: var(--muted); font-size: 0.9rem;
+            padding: 0.3rem 0; caption-side: top; }
+  code, .mono { font-family: ui-monospace, "SF Mono", monospace; font-size: 0.88rem;
+                word-break: break-all; }
+  .note { color: var(--muted); font-style: italic; }
+  .status-pass { color: var(--pass); font-weight: 600; }
+  .status-warn { color: var(--warn); font-weight: 600; }
+  .status-fail { color: var(--fail); font-weight: 600; }
+  footer.report-foot { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--rule);
+                       color: var(--muted); font-size: 0.85rem; }
+  @media print {
+    body { margin: 0; max-width: none; padding: 0; font-size: 11pt; color: #000; }
+    header.report-head { border-bottom-color: #000; }
+    h2 { break-after: avoid; }
+    table { break-inside: auto; }
+    tr { break-inside: avoid; }
+    .verdict, .badge { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    a[href]:after { content: ""; }
+  }
 """
 
 
@@ -146,26 +175,73 @@ def _provenance_rows(items: dict[str, object]) -> str:
     return "".join(rows)
 
 
-def render_run_report_html(record: RunRecord) -> str:
-    """Render a self-contained, shareable HTML report of a run.
+def _qc_table(rows: list[QCResult]) -> str:
+    """Render a QC result table; the caller has already grouped by kind."""
+    parts = [
+        "<table><thead><tr><th>Check</th><th>Status</th><th>Value</th>"
+        "<th>Expected range</th><th>Message</th></tr></thead><tbody>"
+    ]
+    for qc in rows:
+        value = "" if qc.value is None else str(qc.value)
+        expected = qc.expected_range or ""
+        parts.append(
+            f"<tr><td>{escape(qc.check)}</td>"
+            f'<td class="status-{escape(qc.status)}">{escape(qc.status.upper())}</td>'
+            f'<td class="mono">{escape(value)}</td>'
+            f'<td class="mono">{escape(expected)}</td>'
+            f"<td>{escape(qc.message)}</td></tr>"
+        )
+    parts.append("</tbody></table>")
+    return "".join(parts)
+
+
+def _signature_badge(signature_status: dict | None) -> str:
+    """A small badge near the verdict: signed and verified, or signed but unverified."""
+    if not signature_status or not signature_status.get("signed"):
+        return ""
+    if signature_status.get("signature_ok"):
+        return '<span class="badge signed-ok">signed, signature verified</span>'
+    return '<span class="badge signed-bad">signed, signature NOT verified</span>'
+
+
+def render_run_report_html(
+    record: RunRecord, signature_status: dict | None = None
+) -> str:
+    """Render a polished, self-contained, print-to-PDF-friendly HTML report.
 
     A single HTML document (no external resources, no JavaScript) carrying the
-    verdict, QC table, repair chain, and pinned provenance. Hashes and metadata
-    only: never raw reads. Any free text is escaped before it enters the markup.
+    verdict, the QC results grouped into metric and structural checks, the repair
+    chain, the pinned provenance, and the signature status when one is supplied.
+    Hashes and metadata only: never raw reads. Any free text is escaped before it
+    enters the markup. The print CSS (`@media print`) makes a browser Save-as-PDF
+    yield a clean one-document report.
+
+    `signature_status` is the optional dict the CLI/dashboard pass after checking
+    signature.json: {signed, signature_ok, public_key, algo}. When absent, the
+    report makes no signature claim.
     """
     summary = RunSummary.from_events(record.events)
     verdict = record.verdict
     parts: list[str] = []
     parts.append("<!DOCTYPE html>")
     parts.append('<html lang="en"><head><meta charset="utf-8">')
+    parts.append('<meta name="viewport" content="width=device-width, initial-scale=1">')
     parts.append(f"<title>Contig run {escape(record.run_id)}</title>")
     parts.append(f"<style>{_HTML_STYLE}</style></head><body>")
 
-    parts.append(f"<h1>Contig run report</h1>")
-    parts.append(f'<p class="mono">Run id: {escape(record.run_id)}</p>')
+    parts.append('<header class="report-head">')
+    parts.append("<h1>Contig run report</h1>")
     parts.append(
-        f'<p><span class="verdict {escape(verdict)}">{escape(verdict.upper())}</span></p>'
+        f'<p class="subtitle mono">Run id: {escape(record.run_id)}</p>'
     )
+    parts.append('<div class="verdict-row">')
+    parts.append(
+        f'<span class="verdict {escape(verdict)}">{escape(verdict.upper())}</span>'
+    )
+    badge = _signature_badge(signature_status)
+    if badge:
+        parts.append(badge)
+    parts.append("</div>")
     parts.append(
         f"<p>Pipeline: <strong>{escape(record.pipeline)}</strong> "
         f"(revision {escape(record.pipeline_revision)})</p>"
@@ -173,25 +249,20 @@ def render_run_report_html(record: RunRecord) -> str:
     parts.append(
         f"<p>Tasks: {summary.total_tasks} ({summary.failed_tasks} failed)</p>"
     )
+    parts.append("</header>")
 
-    # QC table
+    # QC, grouped into metric (content) and structural (integrity) checks so a
+    # reader can tell "the file is there and intact" apart from "the numbers pass".
     parts.append("<h2>QC checks</h2>")
     if record.qc_results:
-        parts.append(
-            "<table><thead><tr><th>Check</th><th>Status</th><th>Value</th>"
-            "<th>Expected range</th><th>Message</th></tr></thead><tbody>"
-        )
-        for qc in record.qc_results:
-            value = "" if qc.value is None else str(qc.value)
-            expected = qc.expected_range or ""
-            parts.append(
-                f"<tr><td>{escape(qc.check)}</td>"
-                f'<td class="status-{escape(qc.status)}">{escape(qc.status.upper())}</td>'
-                f"<td class=\"mono\">{escape(value)}</td>"
-                f"<td class=\"mono\">{escape(expected)}</td>"
-                f"<td>{escape(qc.message)}</td></tr>"
-            )
-        parts.append("</tbody></table>")
+        metric = [qc for qc in record.qc_results if qc.kind == "metric"]
+        structural = [qc for qc in record.qc_results if qc.kind == "structural"]
+        if metric:
+            parts.append("<h3>Metric checks</h3>")
+            parts.append(_qc_table(metric))
+        if structural:
+            parts.append("<h3>Structural and integrity checks</h3>")
+            parts.append(_qc_table(structural))
     else:
         parts.append('<p class="note">No QC checks ran (run is unverified).</p>')
 
@@ -232,5 +303,21 @@ def render_run_report_html(record: RunRecord) -> str:
     parts.append("<h3>Output checksums</h3>")
     parts.append(f"<table><tbody>{_provenance_rows(record.output_checksums)}</tbody></table>")
 
+    # Signature provenance (the key and algorithm the verdict was signed under).
+    if signature_status and signature_status.get("signed"):
+        parts.append("<h2>Signature</h2>")
+        sig_rows: dict[str, object] = {
+            "algorithm": signature_status.get("algo", "ed25519"),
+            "public key": signature_status.get("public_key", ""),
+            "status": (
+                "verified" if signature_status.get("signature_ok") else "NOT verified"
+            ),
+        }
+        parts.append(f"<table><tbody>{_provenance_rows(sig_rows)}</tbody></table>")
+
+    parts.append(
+        '<footer class="report-foot">Generated by Contig. '
+        "Hashes and metadata only; no raw sequence data is included.</footer>"
+    )
     parts.append("</body></html>")
     return "".join(parts)

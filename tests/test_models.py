@@ -43,6 +43,20 @@ def test_overall_verdict_rejects_empty_list_to_prevent_false_pass():
         overall_verdict([])
 
 
+def test_qc_result_defaults_kind_to_metric():
+    assert QCResult(check="alignment_rate", status="pass", message="x").kind == "metric"
+
+
+def test_qc_result_accepts_structural_kind():
+    result = QCResult(check="output_present:a.bam", status="fail", message="x", kind="structural")
+    assert result.kind == "structural"
+
+
+def test_qc_result_rejects_unknown_kind():
+    with pytest.raises(ValidationError):
+        QCResult(check="x", status="pass", message="x", kind="vibes")
+
+
 def test_task_event_is_failure_on_failed_status():
     assert TaskEvent(process="STAR_ALIGN", status="FAILED").is_failure is True
 

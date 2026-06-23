@@ -1,5 +1,9 @@
 """Tests for the reproducibility bundle module (ARCHITECTURE §7)."""
 
+import json
+
+import pytest
+
 from contig.bundle import (
     compute_input_checksums,
     compute_output_checksums,
@@ -7,6 +11,12 @@ from contig.bundle import (
     write_bundle,
 )
 from contig.models import ExecutionTarget, QCResult, RunRecord, TaskEvent, sha256_file
+from contig.signing import (
+    canonical_sha256,
+    generate_keypair,
+    signing_available,
+    verify_signature,
+)
 
 
 def _minimal_record() -> RunRecord:
@@ -147,3 +157,50 @@ def test_compute_output_checksums_empty_dir_is_empty_map(tmp_path):
     results = tmp_path / "results"
     results.mkdir()
     assert compute_output_checksums(results) == {}
+
+
+# --- signed records (PRD contract E: signature sidecar) ------------------------
+requires_signing = pytest.mark.skipif(
+    not signing_available(), reason="cryptography not installed"
+)
+
+
+def test_write_bundle_writes_no_sidecar_without_a_signing_key(tmp_path, monkeypatch):
+    monkeypatch.delenv("CONTIG_SIGNING_KEY", raising=False)
+
+    write_bundle(_minimal_record(), tmp_path)
+
+    assert not (tmp_path / "signature.json").exists()
+
+
+@requires_signing
+def test_write_bundle_writes_signature_sidecar_when_key_is_set(tmp_path, monkeypatch):
+    private_key, public_key = generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+    record = _full_record()
+
+    write_bundle(record, tmp_path)
+
+    sidecar = tmp_path / "signature.json"
+    assert sidecar.is_file()
+    payload = json.loads(sidecar.read_text())
+    assert payload["algo"] == "ed25519"
+    assert payload["public_key"] == public_key
+    assert payload["signed_sha256"] == canonical_sha256(record)
+    assert verify_signature(record, payload["signature"], payload["public_key"]) is True
+
+
+@requires_signing
+def test_signature_sidecar_does_not_sign_itself(tmp_path, monkeypatch):
+    # The signature signs the canonical record content; writing the sidecar must
+    # not change what the signature covers. Reloading the record and re-verifying
+    # against the sidecar still passes.
+    private_key, _ = generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+    record = _full_record()
+
+    write_bundle(record, tmp_path)
+
+    payload = json.loads((tmp_path / "signature.json").read_text())
+    loaded = load_bundle(tmp_path)
+    assert verify_signature(loaded, payload["signature"], payload["public_key"]) is True

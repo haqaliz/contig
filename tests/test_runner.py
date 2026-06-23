@@ -438,3 +438,93 @@ def test_run_pipeline_error_has_no_record_when_no_trace_written(tmp_path):
     with pytest.raises(PipelineExecutionError) as exc:
         _run(tmp_path, TRACE_2_OK, executor=failing_no_trace)
     assert exc.value.record is None
+
+
+# --- Snakemake engine (PRD contract B: the second engine, same RunRecord) -------
+import json as _json
+
+SNAKE_STATS_OK = _json.dumps(
+    {"total_runtime": 9.0, "rules": {"align": {"mean-runtime": 5.0}, "count": {"mean-runtime": 4.0}}}
+)
+SNAKE_STATS_EMPTY = _json.dumps({"total_runtime": 0.0, "rules": {}})
+
+
+def _snake_target(work_dir):
+    return ExecutionTarget(
+        backend="local", container_runtime="conda", work_dir=str(work_dir), engine="snakemake"
+    )
+
+
+def _snake_executor(stats_text):
+    def execute(cmd, artifact_path):
+        # The runner directs the snakemake stats file to artifact_path; the fake
+        # writes it the way a real `snakemake --stats` would.
+        Path(artifact_path).write_text(stats_text)
+        return 0
+    return execute
+
+
+def _run_snake(tmp_path, stats_text, **overrides):
+    snakefile = tmp_path / "Snakefile"
+    snakefile.write_text("rule all:\n    input: []\n")
+    kwargs = dict(
+        pipeline=str(snakefile),
+        revision="local",
+        profiles=[],
+        target=_snake_target(tmp_path / "work"),
+        input_paths=[],
+        runs_dir=tmp_path / "runs",
+        run_id="snake-001",
+        executor=_snake_executor(stats_text),
+    )
+    kwargs.update(overrides)
+    return run_pipeline(**kwargs)
+
+
+def test_run_pipeline_builds_a_snakemake_command_for_the_snakemake_engine(tmp_path):
+    seen = {}
+
+    def spy(cmd, artifact_path):
+        seen["cmd"] = cmd
+        Path(artifact_path).write_text(SNAKE_STATS_OK)
+        return 0
+
+    _run_snake(tmp_path, SNAKE_STATS_OK, executor=spy)
+    assert seen["cmd"][0] == "snakemake"
+    assert "--snakefile" in seen["cmd"]
+    assert "nextflow" not in seen["cmd"]
+
+
+def test_run_pipeline_snakemake_produces_a_runrecord_with_events(tmp_path):
+    record = _run_snake(tmp_path, SNAKE_STATS_OK)
+    assert record.run_id == "snake-001"
+    assert {e.process for e in record.events} == {"align", "count"}
+
+
+def test_run_pipeline_snakemake_record_round_trips_through_the_bundle(tmp_path):
+    record = _run_snake(tmp_path, SNAKE_STATS_OK)
+    loaded = load_bundle(tmp_path / "runs" / "snake-001")
+    assert loaded == record
+
+
+def test_run_pipeline_snakemake_verdict_is_unverified_without_qc(tmp_path):
+    # A clean Snakemake run with no QC artifact is honestly "unverified", never pass.
+    record = _run_snake(tmp_path, SNAKE_STATS_OK)
+    assert record.verdict == "unverified"
+
+
+def test_run_pipeline_snakemake_failure_raises_and_captures_record(tmp_path):
+    def failing_with_stats(cmd, artifact_path):
+        Path(artifact_path).write_text(SNAKE_STATS_OK)
+        return 1
+
+    with pytest.raises(PipelineExecutionError) as exc:
+        _run_snake(tmp_path, SNAKE_STATS_OK, executor=failing_with_stats)
+    assert exc.value.record is not None
+    assert exc.value.record.run_id == "snake-001"
+
+
+def test_run_pipeline_snakemake_writes_a_config_only_for_nextflow(tmp_path):
+    # The snakemake engine does not consume a nextflow.config, so none is written.
+    _run_snake(tmp_path, SNAKE_STATS_OK)
+    assert not (tmp_path / "runs" / "snake-001" / "nextflow.config").exists()
