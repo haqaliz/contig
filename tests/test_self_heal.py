@@ -582,3 +582,146 @@ def test_self_heal_respects_max_attempts(tmp_path):
     assert RunSummary.from_events(record.events).succeeded is False
     assert attempts["n"] <= 2
     assert len(record.repair_history) <= 2
+
+
+# --- guided escalation (PRD contract D) ----------------------------------------
+# When a self-heal decision is AMBIGUOUS (low-confidence diagnosis, or several
+# viable non-safe fixes and no single safe one), the gate becomes a CHOICE: the
+# pending request carries a ranked `options` array (decision_kind "choice"), and
+# the human picks one via approval.json's `choice` index. The existing single
+# gated-patch path (decision_kind "single") is unchanged.
+
+
+from contig.models import Diagnosis  # noqa: E402
+from contig.self_heal import _is_ambiguous  # noqa: E402
+
+
+def _gated(kind, op, rationale, signal):
+    return Patch(
+        kind=kind, operation=op, rationale=rationale,
+        risk="needs_confirmation", expected_signal=signal,
+    )
+
+
+def _two_candidates(diagnosis):
+    # Two viable non-safe fixes and no safe one: an ambiguous choice.
+    return [
+        _gated("reference", {"set_param": {"igenomes_ignore": True}},
+               "Ignore igenomes and use the local reference.", "reference resolved"),
+        _gated("reference", {"build_index": True},
+               "Build the missing index before re-running.", "index present"),
+    ]
+
+
+def test_is_ambiguous_flags_low_confidence_single_gated_patch():
+    # A single gated patch is normally the single path, but a low-confidence
+    # diagnosis makes even that ambiguous: present it as a choice.
+    diagnosis = Diagnosis(failure_class="missing_index", root_cause="guess", confidence=0.3)
+    one = [_gated("reference", {"build_index": True}, "build it", "index present")]
+    assert _is_ambiguous(diagnosis, one) is True
+
+
+def test_is_ambiguous_flags_multiple_viable_non_safe_patches():
+    diagnosis = Diagnosis(failure_class="missing_index", root_cause="sure", confidence=0.9)
+    assert _is_ambiguous(diagnosis, _two_candidates(diagnosis)) is True
+
+
+def test_is_ambiguous_clears_single_confident_gated_patch():
+    diagnosis = Diagnosis(failure_class="missing_index", root_cause="sure", confidence=0.9)
+    one = [_gated("reference", {"build_index": True}, "build it", "index present")]
+    assert _is_ambiguous(diagnosis, one) is False
+
+
+def test_self_heal_ambiguous_decision_writes_options_with_choice_kind(tmp_path):
+    captured = {}
+
+    def poll(run_dir, timeout_sec):
+        captured["pending"] = json.loads((Path(run_dir) / "pending_approval.json").read_text())
+        return None  # time out so the run stops after we inspect the request
+
+    _heal(tmp_path, _index_executor(), poll=poll, propose=_two_candidates)
+    pending = captured["pending"]
+    assert pending["decision_kind"] == "choice"
+    options = pending["options"]
+    assert [o["index"] for o in options] == [0, 1]
+    first = options[0]
+    assert set(first) == {"index", "kind", "risk", "rationale", "expected_signal"}
+    assert first["kind"] == "reference"
+    assert first["risk"] == "needs_confirmation"
+    # back-compat: the single-patch fields still describe the best option
+    assert pending["patch"]["kind"] == options[0]["kind"]
+
+
+def test_self_heal_single_gated_patch_keeps_single_decision_kind(tmp_path):
+    captured = {}
+
+    def poll(run_dir, timeout_sec):
+        captured["pending"] = json.loads((Path(run_dir) / "pending_approval.json").read_text())
+        return None
+
+    _heal(tmp_path, _index_executor(), poll=poll)
+    pending = captured["pending"]
+    assert pending["decision_kind"] == "single"
+    assert "options" not in pending
+
+
+def test_self_heal_chosen_option_is_applied_and_reaches_the_rerun(tmp_path):
+    # Pick option index 1 (build_index). The chosen option is applied and the loop
+    # re-runs to success, recording the chose_and_retried outcome.
+    state = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, TRACE_INDEX, "ERROR: genome.fai index not found")
+            return 1
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    def poll(run_dir, timeout_sec):
+        return {"decision": "approve", "choice": 1, "decided_at": "2026-06-22T00:00:00+00:00"}
+
+    record = _heal(tmp_path, executor, poll=poll, propose=_two_candidates)
+    assert RunSummary.from_events(record.events).succeeded is True
+    step = record.repair_history[0]
+    assert step.outcome == "chose_and_retried"
+    # the applied patch is the chosen option, not the best-ranked default
+    assert step.patch.operation == {"build_index": True}
+    assert not (tmp_path / "runs" / "r" / "pending_approval.json").exists()
+
+
+def test_self_heal_out_of_range_choice_is_refused_not_applied(tmp_path):
+    def poll(run_dir, timeout_sec):
+        return {"decision": "approve", "choice": 9, "decided_at": "2026-06-22T00:00:00+00:00"}
+
+    record = _heal(tmp_path, _index_executor(), poll=poll, propose=_two_candidates)
+    assert RunSummary.from_events(record.events).succeeded is False
+    assert record.repair_history[-1].outcome == "invalid_choice_rejected"
+    assert not (tmp_path / "runs" / "r" / "pending_approval.json").exists()
+
+
+def test_self_heal_choice_reject_stops_without_applying(tmp_path):
+    def poll(run_dir, timeout_sec):
+        return {"decision": "reject", "decided_at": "2026-06-22T00:00:00+00:00"}
+
+    record = _heal(tmp_path, _index_executor(), poll=poll, propose=_two_candidates)
+    assert record.repair_history[-1].outcome == "rejected_by_user"
+
+
+def test_self_heal_choice_timeout_stops_without_applying(tmp_path):
+    record = _heal(
+        tmp_path, _index_executor(),
+        poll=lambda run_dir, timeout_sec: None, propose=_two_candidates,
+    )
+    assert record.repair_history[-1].outcome == "approval_timed_out"
+
+
+def test_self_heal_choice_missing_index_defaults_to_rejected(tmp_path):
+    # Approve with no choice on a choice gate is not actionable: refuse it rather
+    # than silently apply the best-ranked option.
+    def poll(run_dir, timeout_sec):
+        return {"decision": "approve", "decided_at": "2026-06-22T00:00:00+00:00"}
+
+    record = _heal(tmp_path, _index_executor(), poll=poll, propose=_two_candidates)
+    assert record.repair_history[-1].outcome == "invalid_choice_rejected"
+    assert RunSummary.from_events(record.events).succeeded is False

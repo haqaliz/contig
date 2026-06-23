@@ -39,6 +39,10 @@ from contig.runner import (
 _DEFAULT_MEMORY_GB = 8
 _DEFAULT_TIME_HOURS = 4
 
+# A diagnosis below this confidence is treated as ambiguous: even a single gated
+# fix is offered as a choice rather than a take-it-or-leave-it confirm (contract D).
+_AMBIGUOUS_CONFIDENCE = 0.5
+
 
 def _write_status(run_dir: Path, state: str) -> None:
     """Write runs/<id>/status.json so a run is observable while in flight.
@@ -90,6 +94,46 @@ def _safe_patch(patches: list[Patch]) -> Patch | None:
     return next((p for p in patches if p.risk == "safe"), None)
 
 
+def _gated_candidates(patches: list[Patch]) -> list[Patch]:
+    """The non-safe (gated) patches, kept in their proposed best-first order."""
+    return [p for p in patches if p.risk != "safe"]
+
+
+def _is_ambiguous(diagnosis, gated: list[Patch]) -> bool:
+    """True when the gated decision should be a CHOICE rather than a single confirm.
+
+    Ambiguous (contract D) when the diagnosis confidence is below the threshold, OR
+    when there is more than one viable non-safe candidate and no single safe fix.
+    Reached only on the gated path (caller has already established no safe patch).
+    """
+    return diagnosis.confidence < _AMBIGUOUS_CONFIDENCE or len(gated) > 1
+
+
+def _validated_choice(
+    options: list[Patch], decision: object, choice: object
+) -> Patch | None:
+    """The chosen option iff the decision approves with a valid in-range index.
+
+    A reject, a timeout (no decision), an approve with no choice, or an out-of-range
+    index all return None: the choice is refused, never silently coerced (contract D).
+    """
+    if decision != "approve" or not isinstance(choice, int) or isinstance(choice, bool):
+        return None
+    if 0 <= choice < len(options):
+        return options[choice]
+    return None
+
+
+def _choice_refusal_outcome(decision: object, choice: object, n_options: int) -> str:
+    """Why a choice gate did not apply: rejected, timed out, or an invalid choice."""
+    if decision == "reject":
+        return "rejected_by_user"
+    if decision == "approve":
+        # Approved, but the choice was missing or out of range: not actionable.
+        return "invalid_choice_rejected"
+    return "approval_timed_out"
+
+
 # A poll function blocks until an approval decision lands or the timeout elapses,
 # returning the decision dict (`{"decision": "approve"|"reject", ...}`) or None on
 # timeout. Injected in tests so they never sleep for real.
@@ -110,6 +154,7 @@ def _write_pending_approval(
                 "attempt": attempt,
                 "requested_at": datetime.now(timezone.utc).isoformat(),
                 "timeout_sec": timeout_sec,
+                "decision_kind": "single",
                 "diagnosis": {
                     "failure_class": diagnosis.failure_class,
                     "root_cause": diagnosis.root_cause,
@@ -121,6 +166,57 @@ def _write_pending_approval(
                     "rationale": patch.rationale,
                     "operation": patch.operation,
                     "expected_signal": patch.expected_signal,
+                },
+            }
+        )
+    )
+
+
+def _write_pending_choice(
+    run_dir: Path,
+    run_id: str,
+    attempt: int,
+    diagnosis,
+    options: list[Patch],
+    timeout_sec: float,
+) -> None:
+    """Write pending_approval.json for an AMBIGUOUS gate: a ranked choice (contract D).
+
+    Carries an `options` array (ranked best-first) and `decision_kind: "choice"`,
+    ALONGSIDE the existing single-patch fields (the best option) for back-compat, so
+    an older dashboard still renders something. The human picks an option index in
+    approval.json; the loop validates it against the options length.
+    """
+    best = options[0]
+    (run_dir / "pending_approval.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "attempt": attempt,
+                "requested_at": datetime.now(timezone.utc).isoformat(),
+                "timeout_sec": timeout_sec,
+                "decision_kind": "choice",
+                "diagnosis": {
+                    "failure_class": diagnosis.failure_class,
+                    "root_cause": diagnosis.root_cause,
+                    "confidence": diagnosis.confidence,
+                },
+                "options": [
+                    {
+                        "index": index,
+                        "kind": option.kind,
+                        "risk": option.risk,
+                        "rationale": option.rationale,
+                        "expected_signal": option.expected_signal,
+                    }
+                    for index, option in enumerate(options)
+                ],
+                "patch": {
+                    "kind": best.kind,
+                    "risk": best.risk,
+                    "rationale": best.rationale,
+                    "operation": best.operation,
+                    "expected_signal": best.expected_signal,
                 },
             }
         )
@@ -223,6 +319,7 @@ def self_heal_run(
     auto_approve: bool = False,
     approval_timeout: float = 1800,
     poll: ApprovalPoll = _poll_approval_file,
+    propose: Callable[..., list[Patch]] = propose_patches,
     notify_webhook: str | None = None,
 ) -> RunRecord:
     """Run a pipeline and auto-recover from recoverable failures, logging the chain.
@@ -278,7 +375,7 @@ def self_heal_run(
                     ),
                     pending_path,
                 )
-            patches = propose_patches(diagnosis)
+            patches = propose(diagnosis)
             safe = _safe_patch(patches)
 
             if safe is None:
@@ -296,7 +393,8 @@ def self_heal_run(
                         runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
                     )
 
-                gated = patches[0]
+                candidates = _gated_candidates(patches)
+                gated = candidates[0]
                 if attempt >= max_attempts:
                     _record_attempt(
                         run_dir,
@@ -308,20 +406,71 @@ def self_heal_run(
                         runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
                     )
 
-                decision = "approve" if auto_approve else None
-                if not auto_approve:
-                    _write_pending_approval(
-                        run_dir, run_id, attempt, diagnosis, gated, approval_timeout
+                # --auto-approve is non-interactive: it always takes the best-ranked
+                # gated fix, so there is no choice to make even when ambiguous.
+                if auto_approve:
+                    current_target, current_params = apply_patch(current_target, gated, current_params)
+                    _record_attempt(
+                        run_dir,
+                        repair_history,
+                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated, outcome="approved_and_retried"),
+                    )
+                    attempt += 1
+                    continue
+
+                if _is_ambiguous(diagnosis, candidates):
+                    # AMBIGUOUS: present the ranked options and let the human pick one
+                    # (contract D). approval.json carries {decision, choice}.
+                    _write_pending_choice(
+                        run_dir, run_id, attempt, diagnosis, candidates, approval_timeout
                     )
                     _write_status(run_dir, "awaiting_approval")
                     emit_event(
                         runs_dir, run_id, "awaiting_approval",
-                        f"Run {run_id} is paused for approval on a {gated.kind} patch.",
+                        f"Run {run_id} is paused for a choice among {len(candidates)} fixes.",
                         webhook=notify_webhook,
                     )
-                    result = poll(run_dir, approval_timeout)
+                    result = poll(run_dir, approval_timeout) or {}
                     _clear_pending_approval(run_dir)
-                    decision = (result or {}).get("decision") if result else None
+                    decision = result.get("decision")
+                    choice = result.get("choice")
+
+                    chosen = _validated_choice(candidates, decision, choice)
+                    if chosen is not None:
+                        current_target, current_params = apply_patch(current_target, chosen, current_params)
+                        _write_status(run_dir, "running")
+                        _record_attempt(
+                            run_dir,
+                            repair_history,
+                            RepairStep(attempt=attempt, diagnosis=diagnosis, patch=chosen, outcome="chose_and_retried"),
+                        )
+                        attempt += 1
+                        continue
+
+                    outcome = _choice_refusal_outcome(decision, choice, len(candidates))
+                    _record_attempt(
+                        run_dir,
+                        repair_history,
+                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated, outcome=outcome),
+                    )
+                    return _finalize(
+                        exc.record, repair_history, run_dir,
+                        runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                    )
+
+                # The unambiguous single gated patch: a binary confirm gate.
+                _write_pending_approval(
+                    run_dir, run_id, attempt, diagnosis, gated, approval_timeout
+                )
+                _write_status(run_dir, "awaiting_approval")
+                emit_event(
+                    runs_dir, run_id, "awaiting_approval",
+                    f"Run {run_id} is paused for approval on a {gated.kind} patch.",
+                    webhook=notify_webhook,
+                )
+                result = poll(run_dir, approval_timeout)
+                _clear_pending_approval(run_dir)
+                decision = (result or {}).get("decision") if result else None
 
                 if decision == "approve":
                     current_target, current_params = apply_patch(current_target, gated, current_params)

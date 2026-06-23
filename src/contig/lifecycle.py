@@ -113,22 +113,26 @@ def cancel_run(runs_dir: str | Path, run_id: str, *, wait_seconds: float = 2.0) 
     emit_event(runs_dir, run_id, "cancelled", f"Run {run_id} was cancelled.")
 
 
-def write_approval(runs_dir: str | Path, run_id: str, *, approve: bool) -> None:
+def write_approval(
+    runs_dir: str | Path, run_id: str, *, approve: bool, choice: int | None = None
+) -> None:
     """Write runs/<id>/approval.json, the human's decision on a gated patch.
 
-    The self-heal loop's poll reads this `{decision, decided_at}` to either apply
-    the gated patch and retry (approve) or stop (reject) (PRD contract C).
+    The self-heal loop's poll reads this `{decision, decided_at, choice?}` to either
+    apply the gated patch and retry (approve) or stop (reject) (PRD contracts C, D).
+    On a CHOICE gate (the pending request carried a ranked `options` array), `choice`
+    is the picked option index; the loop validates it against the options length, so
+    an out-of-range index is refused, not applied. It is omitted on the single gate.
     """
     run_dir = Path(runs_dir) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "approval.json").write_text(
-        json.dumps(
-            {
-                "decision": "approve" if approve else "reject",
-                "decided_at": datetime.now(timezone.utc).isoformat(),
-            }
-        )
-    )
+    decision = {
+        "decision": "approve" if approve else "reject",
+        "decided_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if choice is not None:
+        decision["choice"] = choice
+    (run_dir / "approval.json").write_text(json.dumps(decision))
 
 
 def resumable_state(runs_dir: str | Path, run_id: str) -> None:

@@ -8,6 +8,8 @@ is how we measure (and then improve) detection as real runs accrue.
 
 from __future__ import annotations
 
+import hashlib
+import re
 from os import PathLike
 from pathlib import Path
 
@@ -16,6 +18,7 @@ from contig.models import (
     ClassScore,
     DetectorEvalReport,
     DetectorMismatch,
+    EvalSnapshot,
     FailureCase,
     FailureClass,
     RunRecord,
@@ -176,3 +179,142 @@ def promote_pending_case(
     append_case(promoted, golden)
     save_corpus([c for c in pending if c.case_id != case_id], pending_path)
     return promoted
+
+
+# --- failure clustering (PRD contract B) ---------------------------------------
+# Group cases by failure class plus a normalized log signature, so the same
+# systemic failure mode collapses into one cluster even across different runs
+# (different absolute paths, task hashes, line numbers, timestamps).
+
+# Patterns we strip so a signature is invariant to the per-run noise that would
+# otherwise scatter one systemic mode across many "unique" logs. Order matters:
+# timestamps and hex hashes are stripped before bare numbers so their digits are
+# not half-consumed by the number rule first.
+_TIMESTAMP_RE = re.compile(
+    r"\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2}:\d{2}(?:\.\d+)?z?", re.IGNORECASE
+)
+# An absolute path (leading slash, then non-space path chars). Replaced wholesale
+# so /work/ab/cd and /data/genome/GRCh38.fa do not split a cluster.
+_PATH_RE = re.compile(r"/[^\s]+")
+# A long-ish hex run (a task hash / digest); 6+ hex chars so ordinary words and
+# small numbers are left for the number rule.
+_HEX_RE = re.compile(r"\b[0-9a-f]{6,}\b", re.IGNORECASE)
+_NUMBER_RE = re.compile(r"\d+")
+
+# Words that mark a salient line (an error / the failure itself). Keeping only
+# these lines focuses the signature on the failure mode, not the surrounding
+# chatter that varies run to run.
+_SALIENT_TOKENS = (
+    "error",
+    "fail",
+    "killed",
+    "not found",
+    "exit",
+    "out of memory",
+    "cannot",
+    "unable",
+    "no such",
+    "missing",
+    "denied",
+    "fault",
+    "exception",
+    "traceback",
+)
+
+
+def normalize_signature(log_text: str) -> str:
+    """A normalized fingerprint of a log: invariant to per-run noise.
+
+    Lowercase, strip absolute paths, hex hashes, timestamps, and bare numbers,
+    keep only the salient (error-like) lines (falling back to all lines when none
+    match), then hash the result. Two logs that describe the same systemic
+    failure mode produce the same signature even when their paths, hashes, line
+    numbers, and timestamps differ.
+    """
+    text = log_text.lower()
+    text = _TIMESTAMP_RE.sub("<ts>", text)
+    text = _PATH_RE.sub("<path>", text)
+    text = _HEX_RE.sub("<hash>", text)
+    text = _NUMBER_RE.sub("<n>", text)
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    salient = [line for line in lines if any(tok in line for tok in _SALIENT_TOKENS)]
+    kept = salient or lines
+    canonical = "\n".join(kept)
+    return hashlib.sha256(canonical.encode()).hexdigest()[:16]
+
+
+def cluster_failures(cases: list[FailureCase]) -> list[dict]:
+    """Group corpus cases by failure class plus a normalized log signature.
+
+    Returns clusters `[{failure_class, signature, count, case_ids}]` ordered
+    worst-first (largest count). Cases sharing a (failure_class, signature) are
+    one cluster, so a recurring systemic mode is one row no matter how many runs
+    it appeared in (PRD contract B).
+    """
+    groups: dict[tuple[str, str], list[str]] = {}
+    for case in cases:
+        signature = normalize_signature(case.log_text)
+        key = (case.expected_class, signature)
+        groups.setdefault(key, []).append(case.case_id)
+
+    clusters = [
+        {
+            "failure_class": failure_class,
+            "signature": signature,
+            "count": len(case_ids),
+            "case_ids": case_ids,
+        }
+        for (failure_class, signature), case_ids in groups.items()
+    ]
+    # Worst-first by count; ties broken by class then signature for determinism.
+    clusters.sort(key=lambda c: (-c["count"], c["failure_class"], c["signature"]))
+    return clusters
+
+
+# --- corpus coverage (PRD contract C) ------------------------------------------
+# Per-class support, a thin-coverage flag (fewer than three cases), a by-source
+# breakdown, and a confirmed-cases-over-time series from the eval history.
+
+_THIN_THRESHOLD = 3
+
+
+def _source_kind(source: str) -> str:
+    """The provenance kind of a case: the prefix before ':' (e.g. run, confirmed).
+
+    A source like "run:r1" or "confirmed:r2" reduces to its kind ("run",
+    "confirmed"); a bare "synthetic" with no colon is its own kind.
+    """
+    return source.split(":", 1)[0] if ":" in source else source
+
+
+def coverage_report(
+    cases: list[FailureCase], *, history: list[EvalSnapshot] | None = None
+) -> dict:
+    """Summarize how well the corpus covers each failure class (PRD contract C).
+
+    Returns `{total, per_class, thin, by_source, confirmed_over_time}`: per_class
+    is the support per failure class, thin lists the classes with fewer than
+    three cases (the gaps to fill next), by_source breaks the corpus down by
+    provenance kind, and confirmed_over_time is the corpus-size trend drawn from
+    the eval history (empty when no history is supplied).
+    """
+    per_class: dict[str, int] = {}
+    by_source: dict[str, int] = {}
+    for case in cases:
+        per_class[case.expected_class] = per_class.get(case.expected_class, 0) + 1
+        kind = _source_kind(case.source)
+        by_source[kind] = by_source.get(kind, 0) + 1
+
+    thin = sorted(cls for cls, count in per_class.items() if count < _THIN_THRESHOLD)
+    confirmed_over_time = [
+        {"timestamp": snap.timestamp, "corpus_size": snap.corpus_size}
+        for snap in (history or [])
+    ]
+    return {
+        "total": len(cases),
+        "per_class": per_class,
+        "thin": thin,
+        "by_source": by_source,
+        "confirmed_over_time": confirmed_over_time,
+    }

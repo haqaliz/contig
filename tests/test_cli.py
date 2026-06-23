@@ -763,6 +763,16 @@ def test_approve_reject_writes_reject_decision(tmp_path):
     assert data["decision"] == "reject"
 
 
+def test_approve_choose_records_the_chosen_option(tmp_path):
+    import json
+
+    _write_status(tmp_path, "ch", "awaiting_approval")
+    result = runner.invoke(app, ["approve", "ch", "--choose", "1", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    data = json.loads((tmp_path / "ch" / "approval.json").read_text())
+    assert data["decision"] == "approve" and data["choice"] == 1
+
+
 def test_approve_rejects_invalid_run_id(tmp_path):
     result = runner.invoke(app, ["approve", "--", "-bad", "--runs-dir", str(tmp_path)])
     assert result.exit_code != 0

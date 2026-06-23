@@ -19,7 +19,17 @@ from importlib.metadata import version as _pkg_version
 import typer
 from pydantic import ValidationError
 
+from contig.benchmark import (
+    benchmark_run,
+    default_reference_path,
+    load_reference_registry,
+    metrics_from_run,
+    record_reference,
+    save_reference_registry,
+)
 from contig.corpus import (
+    cluster_failures,
+    coverage_report,
     default_corpus_path,
     evaluate_detector,
     load_corpus,
@@ -948,19 +958,121 @@ def cancel(
 def approve(
     run_id: str = typer.Argument(..., help="The awaiting-approval run to decide on."),
     reject: bool = typer.Option(False, "--reject", help="Reject the gated patch instead of approving it."),
+    choose: int = typer.Option(None, "--choose", help="On a choice gate, the index of the ranked fix to apply."),
     runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
 ) -> None:
     """Approve (or with --reject, reject) the gated patch a paused run is waiting on.
 
     Writes runs/<id>/approval.json; the self-heal loop's poll picks it up and
-    either applies the patch and retries, or stops (PRD contract C).
+    either applies the patch and retries, or stops. On a choice gate (an ambiguous
+    decision with ranked options), pass --choose N to apply option N (PRD contract D).
     """
     if not _is_safe_run_id(run_id):
         typer.echo(f"Invalid run id: {run_id!r}", err=True)
         raise typer.Exit(code=1)
-    write_approval(runs_dir, run_id, approve=not reject)
-    verb = "Rejected" if reject else "Approved"
-    typer.echo(f"{verb} the pending patch for run {run_id}.")
+    write_approval(runs_dir, run_id, approve=not reject, choice=choose)
+    if reject:
+        typer.echo(f"Rejected the pending patch for run {run_id}.")
+        return
+    if choose is not None:
+        typer.echo(f"Approved option {choose} for run {run_id}.")
+        return
+    typer.echo(f"Approved the pending patch for run {run_id}.")
+
+
+def _benchmark_set(run_id: str, runs_dir: str, registry_path: str | None) -> None:
+    """Record a run's numeric QC metrics as the reference for its (pipeline, assay).
+
+    Loads the run, derives its assay from the registry, and writes (or replaces)
+    the reference entry for that (pipeline, assay) in the registry, deduped so
+    there is exactly one baseline per pair (PRD contract A).
+    """
+    if not _is_safe_run_id(run_id):
+        typer.echo(f"Invalid run id: {run_id!r}", err=True)
+        raise typer.Exit(code=1)
+    try:
+        record = load_run(runs_dir, run_id)
+    except RunNotFoundError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+    path = Path(registry_path) if registry_path else default_reference_path()
+    registry = load_reference_registry(path)
+    assay = assay_for_pipeline(record.pipeline) or "rnaseq"
+    metrics = metrics_from_run(record)
+    registry = record_reference(
+        registry,
+        pipeline=record.pipeline,
+        assay=assay,
+        reference_run_id=run_id,
+        metrics=metrics,
+        recorded_at=datetime.now(timezone.utc).isoformat(),
+    )
+    save_reference_registry(registry, path)
+    typer.echo(
+        f"Recorded run {run_id} as the reference for {record.pipeline} / {assay} "
+        f"({len(metrics)} metric(s))."
+    )
+
+
+@app.command()
+def benchmark(
+    target: str = typer.Argument(..., help="A run id to compare, or 'set' to record a reference (then a run id)."),
+    run_id: str = typer.Argument(None, help="With 'set', the run whose QC metrics become the reference."),
+    tolerance: float = typer.Option(0.1, "--tolerance", help="Relative tolerance for a metric to count as matching."),
+    runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+    registry_path: str = typer.Option(None, "--registry", help="Reference registry JSONL (defaults to the shipped one)."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the comparison as JSON (for the dashboard)."),
+) -> None:
+    """Compare a run against its designated reference, or record one with 'set' (PRD contract A).
+
+    `contig benchmark <run-id>` loads the run, finds the reference for its
+    (pipeline, assay), and compares each shared numeric QC check within the
+    relative tolerance plus a structural shape check (the same check names
+    present). No reference for that pipeline/assay reports "no reference" and
+    exits zero, not an error. `contig benchmark set <run-id>` records that run's
+    numeric QC metrics as the reference for its (pipeline, assay).
+    """
+    # `benchmark set <run-id>` records a reference; the first positional is the
+    # literal keyword and the second is the run id.
+    if target == "set":
+        if run_id is None:
+            typer.echo("Provide a run id: 'benchmark set <run-id>'.", err=True)
+            raise typer.Exit(code=1)
+        _benchmark_set(run_id, runs_dir, registry_path)
+        return
+
+    compare_run_id = target
+    if not _is_safe_run_id(compare_run_id):
+        typer.echo(f"Invalid run id: {compare_run_id!r}", err=True)
+        raise typer.Exit(code=1)
+    try:
+        record = load_run(runs_dir, compare_run_id)
+    except RunNotFoundError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+    path = Path(registry_path) if registry_path else default_reference_path()
+    registry = load_reference_registry(path)
+    assay = assay_for_pipeline(record.pipeline) or "rnaseq"
+    result = benchmark_run(record, registry, assay=assay, tolerance=tolerance)
+
+    if json_out:
+        typer.echo(_json.dumps(result))
+        return
+    if result["status"] == "no_reference":
+        typer.echo(result["message"])
+        return
+    typer.echo(
+        f"Benchmark for run {compare_run_id}: {result['status']} vs {result['reference_run_id']} "
+        f"({result['matched']} matched, {result['drifted']} drifted, tolerance {tolerance})"
+    )
+    for check in result["checks"]:
+        flag = "ok" if check["within_tolerance"] else "DRIFT"
+        typer.echo(
+            f"  {check['name']}: run {check['run_value']} vs ref {check['reference_value']} "
+            f"(delta {check['delta']:.3f}) {flag}"
+        )
 
 
 @app.command(name="list")
@@ -1089,3 +1201,70 @@ def eval_detector(
         typer.echo(f"  {cls}: precision {s.precision:.2f}  recall {s.recall:.2f}  (support {s.support})")
     for m in report.mismatches:
         typer.echo(f"  MISS {m.case_id}: expected {m.expected}, predicted {m.predicted}")
+
+
+@app.command()
+def clusters(
+    corpus: str = typer.Option(None, "--corpus", help="Failure-corpus JSONL (defaults to the shipped seed)."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the clusters as JSON (for the dashboard)."),
+) -> None:
+    """Group corpus failures into recurring systemic modes, worst-first (PRD contract B).
+
+    Clusters cases by failure class plus a normalized log signature (paths,
+    numbers, hashes, and timestamps stripped), so the same systemic failure mode
+    is one row no matter how many runs produced it. Printed largest-cluster
+    first: the recurring modes worth a new rule or a fix at the top.
+    """
+    path = Path(corpus) if corpus else default_corpus_path()
+    try:
+        cases = load_corpus(path)
+    except FileNotFoundError:
+        typer.echo(f"Corpus not found: {path}", err=True)
+        raise typer.Exit(code=1)
+    grouped = cluster_failures(cases)
+
+    if json_out:
+        typer.echo(_json.dumps(grouped))
+        return
+    if not grouped:
+        typer.echo(f"No failure cases in {path}.")
+        return
+    typer.echo(f"Failure clusters ({len(grouped)} mode(s), worst-first):")
+    for cluster in grouped:
+        typer.echo(
+            f"  {cluster['failure_class']}  x{cluster['count']}  "
+            f"(signature {cluster['signature']})"
+        )
+
+
+@app.command()
+def coverage(
+    corpus: str = typer.Option(None, "--corpus", help="Failure-corpus JSONL (defaults to the shipped seed)."),
+    history_file: str = typer.Option(None, "--history-file", help="Eval history JSONL (defaults to the shipped one)."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the coverage report as JSON (for the dashboard)."),
+) -> None:
+    """Report per-class corpus support, thin-coverage gaps, and the confirmed trend (PRD contract C).
+
+    Counts cases per failure class, flags classes with fewer than three cases as
+    thin (the gaps to fill next), breaks the corpus down by provenance kind, and
+    draws a confirmed-over-time series from the eval history.
+    """
+    path = Path(corpus) if corpus else default_corpus_path()
+    try:
+        cases = load_corpus(path)
+    except FileNotFoundError:
+        typer.echo(f"Corpus not found: {path}", err=True)
+        raise typer.Exit(code=1)
+    history_path = Path(history_file) if history_file else default_history_path()
+    history = load_history(history_path)
+    report = coverage_report(cases, history=history)
+
+    if json_out:
+        typer.echo(_json.dumps(report))
+        return
+    typer.echo(f"Corpus coverage: {report['total']} case(s) across {len(report['per_class'])} class(es).")
+    for cls, count in sorted(report["per_class"].items()):
+        thin = "  THIN" if cls in report["thin"] else ""
+        typer.echo(f"  {cls}: {count}{thin}")
+    sources = ", ".join(f"{k}={v}" for k, v in sorted(report["by_source"].items()))
+    typer.echo(f"  by source: {sources}")

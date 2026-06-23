@@ -191,3 +191,24 @@ def test_write_approval_records_reject_decision(tmp_path):
     write_approval(tmp_path, "r", approve=False)
     data = json.loads((d / "approval.json").read_text())
     assert data["decision"] == "reject"
+
+
+def test_write_approval_records_choice_index(tmp_path):
+    from contig.lifecycle import write_approval
+
+    d = tmp_path / "r"
+    d.mkdir()
+    write_approval(tmp_path, "r", approve=True, choice=1)
+    data = json.loads((d / "approval.json").read_text())
+    assert data["decision"] == "approve"
+    assert data["choice"] == 1
+
+
+def test_write_approval_omits_choice_when_not_a_choice_gate(tmp_path):
+    from contig.lifecycle import write_approval
+
+    d = tmp_path / "r"
+    d.mkdir()
+    write_approval(tmp_path, "r", approve=True)
+    data = json.loads((d / "approval.json").read_text())
+    assert "choice" not in data
