@@ -154,7 +154,7 @@ path or modest engine work (flagged NEW).
 | Analysis templates gallery | The curated registry shown as start-from cards (not a blank goal box) | Built (registry) | S |
 | Plan-and-approve view | Proposed pipeline, params, rationale, warnings, with an explicit approve gate | Built planner; NEW run-trigger | M |
 | First-run onboarding wizard | Data to goal to approved plan, guided, for a non-coder's first session | Built planner; NEW trigger | L |
-| Trigger a run from the dashboard | A web entry point that dispatches a planned run | NEW: run-dispatch entrypoint | L |
+| Trigger a run from the dashboard | A web entry point that dispatches a planned run | Shipped 2026-06-21 (Run test profile, the data to plan to launch form, live progress, cancel/resume/approve) | L |
 
 ### Compute and backends
 
@@ -211,7 +211,7 @@ needs real engine work, so it follows once the read and launch surfaces are soli
 
 | Feature | What it does | Engine | Effort |
 |---|---|---|---|
-| Pending-review labeling tool (WRITE) | Confirm or correct a provisional label, then promote a real-run failure into the golden corpus | NEW: safe write-back/promote, dedupe | L |
+| Pending-review labeling tool (WRITE) | Confirm or correct a provisional label, then promote a real-run failure into the golden corpus | Shipped 2026-06-21 (contig corpus-promote + the dashboard Pending review: confirm/correct a label, dedupe, write into the golden corpus) | L |
 | Provisional vs confirmed split view | Browse confirmed golden cases vs still-provisional pending cases, filter by class and source | Built reads | M |
 | Corpus growth and coverage metrics | Confirmed cases over time, per-class support, thin-coverage flags | NEW: timestamped append history | M |
 | Repair success-rate analytics | Across all runs: auto-healed vs paused vs gave-up, by failure class | Built data; cross-run aggregation | M |
