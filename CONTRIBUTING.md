@@ -30,6 +30,41 @@ The CLI and the test suite run without them.
 - `uv run <cmd>` — run a command inside the project venv (`uv run contig …`, `uv run pytest`).
 - Commit `uv.lock` with any dependency change so builds stay reproducible.
 
+### Dashboard (Next.js)
+
+The dashboard under `dashboard/` is a Next.js 16 app (App Router, TypeScript,
+Tailwind, shadcn/ui on Base UI). It reads run bundles from disk and shells out to
+the `contig` CLI; it needs no separate backend.
+
+```bash
+cd dashboard
+npm install
+npm run dev                          # http://localhost:3000 (reads ../runs)
+npx tsc --noEmit && npm run lint     # types and lint, both must be clean
+CONTIG_AUTH_DISABLED=1 npx playwright test   # the e2e suite (auth bypass for local/CI)
+```
+
+Notes for dashboard work: this shadcn is on **Base UI**, not Radix (compose with
+`render={<Component/>}`, not `asChild`; a link styled as a button uses the
+`ButtonLink` component). Next 16 route `params`/`searchParams` are Promises (await
+them). Do not run `next build`/`next start` against a running dev server. The e2e
+suite provisions synthetic run fixtures from `dashboard/e2e/fixtures/` only for the
+duration of the run, so they never clutter the real `runs/` directory. Auth is off
+by default (`CONTIG_AUTH_DISABLED` or no Auth0 env); see the dashboard README for
+the Auth0 and deployment setup.
+
+---
+
+## Style
+
+One hard rule across the whole repo (code, comments, docs, commit messages,
+strings): **no em dash, no en dash, and no hyphen used as a pause or clause break.**
+Use commas, colons, or parentheses instead; plain hyphens only inside compound
+words and flag names. Beyond that, match the surrounding code's naming, comment
+density, and idiom. User input that reaches the CLI or a subprocess is validated
+(charset, no leading dash) and passed as `--opt=value` with a `--` terminator before
+positionals; never build a shell string from user input.
+
 ---
 
 ## Project layout
@@ -98,9 +133,10 @@ into a workflow generator. If a change drifts that way, call it out in the PR.
   with the diagnosis and fix, grows the corpus that makes the detector better.
   See [docs/USAGE.md → failure corpus](docs/USAGE.md#how-the-detector-improves-failure-corpus)
   and `contig corpus-promote`.
-- 🧪 **QC checks** — new verification checks that strengthen a verdict (under `verification/`).
-- 🧬 **Curated pipelines** — adding a vetted assay → pipeline mapping (`registry.py` + planner + QC).
-- ☁️ **Backends** — extending the `nfconfig.py` mapping for `slurm` / `gcp_batch` / `k8s`.
+- 🧪 **QC checks** — new metric or structural verification checks that strengthen a verdict (under `verification/`).
+- 🧬 **Curated assays** — a vetted assay to pipeline mapping plus its QC rule pack. The recipe is five small mapping points, no engine rewrite: see [docs/technical/ADD_AN_ASSAY.md](docs/technical/ADD_AN_ASSAY.md).
+- ☁️ **Backends** — extending the `nfconfig.py` mapping for `gcp_batch` / `k8s` (`local`, `aws_batch`, and `slurm` are wired; `slurm` is live-validated).
+- 🖥 **Dashboard** — UI for any of the above (run views, QC, the corpus, the eval flywheel); see the `dashboard/` notes above.
 - 🐛 **Bugs & docs** — fixes, clarity, examples.
 
 ---
@@ -114,6 +150,16 @@ into a workflow generator. If a change drifts that way, call it out in the PR.
 
 Found a bug or have an idea? Open an [issue](https://github.com/haqaliz/contig/issues)
 first for anything non-trivial, so we can agree on the approach before you build.
+The issue and pull-request templates will guide you (a **failure case** is the
+highest-leverage one).
+
+---
+
+## Conduct and security
+
+By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md). For a
+**security vulnerability**, do not open a public issue: follow [SECURITY.md](SECURITY.md)
+to report it privately.
 
 ---
 
