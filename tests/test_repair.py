@@ -60,22 +60,24 @@ def test_missing_index_needs_confirmation_build() -> None:
     assert p.operation == {"build_index": True}
 
 
-def test_missing_reference_needs_confirmation_resolve() -> None:
+def test_missing_reference_needs_confirmation_swaps_reference_param() -> None:
     patches = propose_patches(diag("missing_reference"))
     assert len(patches) == 1
     p = patches[0]
     assert p.kind == "reference"
     assert p.risk == "needs_confirmation"
-    assert p.operation == {"resolve_reference": True}
+    # carries a concrete reference swap apply_patch merges into params
+    assert p.operation == {"set_param": {"igenomes_ignore": True}}
 
 
-def test_bad_param_needs_confirmation_review() -> None:
+def test_bad_param_needs_confirmation_sets_corrected_param() -> None:
     patches = propose_patches(diag("bad_param"))
     assert len(patches) == 1
     p = patches[0]
     assert p.kind == "param"
     assert p.risk == "needs_confirmation"
-    assert p.operation == {"review_param": True}
+    # carries a concrete param change apply_patch merges into params
+    assert p.operation == {"set_param": {"validate_params": False}}
 
 
 def test_conda_solve_failed_needs_confirmation_env() -> None:
@@ -85,6 +87,40 @@ def test_conda_solve_failed_needs_confirmation_env() -> None:
     assert p.kind == "env"
     assert p.risk == "needs_confirmation"
     assert p.operation == {"relax_or_pin_env": True}
+
+
+def test_download_failed_proposes_safe_retry() -> None:
+    # A staging/network download is often transient: a plain retry is safe.
+    patches = propose_patches(diag("download_failed"))
+    assert len(patches) == 1
+    p = patches[0]
+    assert p.kind == "retry"
+    assert p.risk == "safe"
+    assert p.operation == {"retry": True}
+
+
+def test_disk_full_proposes_needs_confirmation_cleanup() -> None:
+    # Freeing space means deleting the work dir's intermediates: destructive, so
+    # it must NOT auto-apply.
+    patches = propose_patches(diag("disk_full"))
+    assert len(patches) == 1
+    p = patches[0]
+    assert p.kind == "env"
+    assert p.risk == "needs_confirmation"
+    assert p.operation == {"clean_work_dir": True}
+    assert has_safe_patch(diag("disk_full")) is False
+
+
+def test_permission_denied_proposes_needs_confirmation_manual_fix() -> None:
+    # A filesystem permission problem needs a human to fix the path/ownership; a
+    # retry on the same host will not help, so it must NOT auto-apply.
+    patches = propose_patches(diag("permission_denied"))
+    assert len(patches) == 1
+    p = patches[0]
+    assert p.kind == "env"
+    assert p.risk == "needs_confirmation"
+    assert p.operation == {"fix_permissions": True}
+    assert has_safe_patch(diag("permission_denied")) is False
 
 
 def test_tool_crash_has_no_safe_automatic_patch() -> None:

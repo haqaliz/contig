@@ -26,11 +26,14 @@ def snapshot_from_report(
     corpus_size: int,
     corpus_sha: str,
     contig_version: str | None,
+    detector: str = "rules",
 ) -> EvalSnapshot:
     """Build an EvalSnapshot from an eval report plus the corpus identity.
 
     The timestamp and corpus_sha are passed in (computed by the caller) so this
-    stays a pure projection of the report.
+    stays a pure projection of the report. `detector` tags which detector produced
+    the report (defaults to the deterministic rules detector), so the trend can
+    compare detectors (rules vs llm) on the same corpus (PRD contract A).
     """
     return EvalSnapshot(
         timestamp=timestamp,
@@ -39,6 +42,7 @@ def snapshot_from_report(
         accuracy=report.accuracy,
         per_class=report.per_class,
         contig_version=contig_version,
+        detector=detector,
     )
 
 

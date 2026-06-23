@@ -33,6 +33,9 @@ from contig.eval_history import (
 )
 from contig.bundle import compute_output_checksums
 from contig.cost import cost_report
+from contig.estimate import estimate_run
+from contig.methods import render_methods
+from contig.provenance import to_rocrate
 from contig.models import ExecutionTarget, LaunchManifest, RunRecord, RunSummary, sha256_file
 from contig.nfconfig import ConfigGenerationError, preflight_aws_batch
 from contig.planner import PlanningError
@@ -42,7 +45,7 @@ from contig.reference import ReferenceError, resolve_reference
 from contig.registry import assay_for_pipeline
 from contig.report import render_explain, render_run_report, render_run_report_html
 from contig.runner import PipelineExecutionError, default_executor
-from contig.samplesheet import fastq_paths, validate_samplesheet
+from contig.samplesheet import fastq_paths, parse_samplesheet, validate_samplesheet
 from contig.lifecycle import (
     CancelError,
     ResumeError,
@@ -62,6 +65,19 @@ _SAFE_RUN_ID = _re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 def _is_safe_run_id(run_id: str) -> bool:
     """A run id must be filesystem-safe and never read as a CLI option (no leading dash)."""
     return bool(_SAFE_RUN_ID.match(run_id))
+
+
+_SAFE_PIPELINE = _re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+
+
+def _is_safe_pipeline(pipeline: str) -> bool:
+    """A pipeline name must be a plain nf-core-style ref and never read as an option.
+
+    No leading dash (so it cannot be mistaken for a flag) and a conservative
+    charset (letters, digits, dot, slash, underscore, dash) that covers
+    "nf-core/rnaseq" without admitting shell-or-path surprises.
+    """
+    return bool(_SAFE_PIPELINE.match(pipeline))
 
 
 def _is_safe_webhook(url: str) -> bool:
@@ -550,6 +566,121 @@ def cost(
 
 
 @app.command()
+def export(
+    run_id: str = typer.Argument(..., help="The run to export."),
+    rocrate: bool = typer.Option(False, "--rocrate", help="Export an RO-Crate ro-crate-metadata.json (JSON-LD)."),
+    runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+    output: str = typer.Option(None, "--output", help="Write the export to this file instead of stdout."),
+) -> None:
+    """Export a finished run's provenance as a portable RO-Crate.
+
+    With --rocrate, build the ro-crate-metadata.json JSON-LD subset (the run as a
+    Dataset, the pipeline as a SoftwareApplication, inputs and outputs as File
+    entities with checksums, the verdict and QC as properties). The export is
+    deterministic and offline (PRD contract C).
+    """
+    if not _is_safe_run_id(run_id):
+        typer.echo(f"Invalid run id: {run_id!r}", err=True)
+        raise typer.Exit(code=1)
+    if not rocrate:
+        typer.echo("Nothing to export: pass --rocrate for the RO-Crate JSON.", err=True)
+        raise typer.Exit(code=1)
+    try:
+        record = load_run(runs_dir, run_id)
+    except RunNotFoundError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+    rendered = _json.dumps(to_rocrate(record), indent=2)
+    if output:
+        Path(output).write_text(rendered)
+        typer.echo(f"Wrote RO-Crate to {output}")
+        return
+    typer.echo(rendered)
+
+
+@app.command()
+def methods(
+    run_id: str = typer.Argument(..., help="The run to describe."),
+    runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+    output: str = typer.Option(None, "--output", help="Write the paragraph to this file instead of stdout."),
+) -> None:
+    """Render a citation-ready methods paragraph for a finished run.
+
+    Templates the pipeline plus revision, the assay, key params, container
+    digests, and the verdict plus QC summary into a deterministic paragraph a
+    researcher can paste into a manuscript. Offline and rule based (PRD contract C).
+    """
+    if not _is_safe_run_id(run_id):
+        typer.echo(f"Invalid run id: {run_id!r}", err=True)
+        raise typer.Exit(code=1)
+    try:
+        record = load_run(runs_dir, run_id)
+    except RunNotFoundError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+    paragraph = render_methods(record)
+    if output:
+        Path(output).write_text(paragraph)
+        typer.echo(f"Wrote methods to {output}")
+        return
+    typer.echo(paragraph)
+
+
+@app.command()
+def estimate(
+    pipeline: str = typer.Option(..., "--pipeline", help="Pipeline to estimate (e.g. nf-core/rnaseq)."),
+    input: str = typer.Option(..., "--input", help="Sample sheet CSV (its row count is the sample count)."),
+    runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory of prior run bundles to learn from."),
+    rate_cpu_hour: float = typer.Option(0.0, "--rate-cpu-hour", help="Price per cpu-hour of realtime (default 0: local is free)."),
+    rate_mem_gb_hour: float = typer.Option(0.0, "--rate-mem-gb-hour", help="Price per GB-hour of peak memory (default 0: local is free)."),
+    currency: str = typer.Option("USD", "--currency", help="Currency label for the estimate."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the estimate as JSON (for the dashboard)."),
+) -> None:
+    """Estimate a run's runtime, peak memory, and cost before launching it.
+
+    Data-driven from prior FINISHED runs of the same pipeline (their recorded
+    resource_usage scaled per sample to the sheet's sample count); falls back to a
+    transparent per-sample heuristic when there is no history. The sample count
+    comes from the sheet's rows (PRD contract B).
+    """
+    if not _is_safe_pipeline(pipeline):
+        typer.echo(f"Invalid pipeline name: {pipeline!r}", err=True)
+        raise typer.Exit(code=1)
+    if not Path(input).exists():
+        typer.echo(f"Sample sheet not found: {input}", err=True)
+        raise typer.Exit(code=1)
+    try:
+        n_samples = len(parse_samplesheet(input))
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Cannot read sample sheet: {exc}", err=True)
+        raise typer.Exit(code=1)
+    if n_samples <= 0:
+        typer.echo("Sample sheet has no samples to estimate.", err=True)
+        raise typer.Exit(code=1)
+
+    report = estimate_run(
+        pipeline,
+        n_samples,
+        runs_dir,
+        rate_cpu_hour=rate_cpu_hour,
+        rate_mem_gb_hour=rate_mem_gb_hour,
+        currency=currency,
+    )
+    if json_out:
+        typer.echo(report.model_dump_json())
+        return
+
+    typer.echo(
+        f"Estimate for {pipeline} on {n_samples} sample(s) [{report.basis}]: "
+        f"{report.est_runtime_sec:.0f}s, peak {report.est_peak_mem_mb:.0f} MB, "
+        f"{report.est_total_cpu_hours:.2f} cpu-hours -> {report.est_cost:.4f} {currency}"
+    )
+    typer.echo(f"  {report.note}")
+
+
+@app.command()
 def status(
     run_id: str = typer.Argument(..., help="The run to inspect."),
     runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
@@ -803,6 +934,7 @@ def eval_detector(
                 corpus_size=len(cases),
                 corpus_sha=sha256_file(path),
                 contig_version=_pkg_version("contig"),
+                detector=detector,
             ),
             history_path,
         )

@@ -248,8 +248,8 @@ def test_apply_patch_resource_bump_updates_target_leaves_params(tmp_path):
     assert params == {"input": "sheet.csv"}
 
 
-def test_apply_patch_param_merges_operation_into_params(tmp_path):
-    patch = Patch(kind="param", operation={"aligner": "star_salmon"},
+def test_apply_patch_param_merges_set_param_into_params(tmp_path):
+    patch = Patch(kind="param", operation={"set_param": {"aligner": "star_salmon"}},
                   rationale="x", risk="needs_confirmation", expected_signal="s")
     target, params = apply_patch(_t(), patch, {"input": "sheet.csv"})
     assert params["aligner"] == "star_salmon"
@@ -264,12 +264,23 @@ def test_apply_patch_env_merges_operation_into_backend_options(tmp_path):
     assert target.backend_options["relax_or_pin_env"] == "True"
 
 
-def test_apply_patch_reference_is_rerun_only(tmp_path):
+def test_apply_patch_reference_build_index_is_rerun_only(tmp_path):
     patch = Patch(kind="reference", operation={"build_index": True},
                   rationale="x", risk="needs_confirmation", expected_signal="s")
     target, params = apply_patch(_t(), patch, {"input": "sheet.csv"})
     assert params == {"input": "sheet.csv"}  # unchanged: re-run is the fix
     assert target.resource_limits == {}
+
+
+def test_apply_patch_reference_set_param_swaps_the_reference_param(tmp_path):
+    # A reference patch carrying set_param swaps the reference into params (e.g.
+    # point --genome at a resolved build) so the applied patch changes the re-run.
+    patch = Patch(kind="reference", operation={"set_param": {"genome": "GRCh38"}},
+                  rationale="x", risk="needs_confirmation", expected_signal="s")
+    target, params = apply_patch(_t(), patch, {"input": "sheet.csv"})
+    assert params["genome"] == "GRCh38"
+    assert params["input"] == "sheet.csv"  # other params preserved
+    assert target.resource_limits == {}  # target untouched
 
 
 def test_self_heal_resume_passes_resume_on_first_execute(tmp_path):
@@ -483,6 +494,80 @@ def test_self_heal_forwards_webhook_to_emit(tmp_path, monkeypatch):
 
     _heal(tmp_path, executor, notify_webhook="https://hook.example/x")
     assert captured == ["https://hook.example/x"]
+
+
+# --- applied patch reaches the re-run (deeper self-heal, contract D) -----------
+# Proven through the injected executor on the REAL proposer path: it captures
+# the retry command (params ride there as --key value) and the generated config
+# (env/resource ride there), so an applied param/env/reference patch
+# demonstrably changes the next run. Each test triggers a real failure class,
+# the matching gated patch is auto-approved, and the retry is inspected.
+
+
+def _failing_then_capturing(state, log_text, on_retry):
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, TRACE_TOOL, log_text)
+            return 1
+        on_retry(cmd, trace_path)
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+    return executor
+
+
+def test_self_heal_applied_param_patch_reaches_the_rerun_command(tmp_path):
+    # A bad_param failure proposes a param patch carrying a corrected value; once
+    # approved, the corrected parameter must appear in the retry's command.
+    state = {"n": 0}
+    seen = {}
+    log = (
+        "ERROR ~ Validation of pipeline parameters failed!\n"
+        "The following invalid input values have been detected:\n"
+        "* --aligner is not a valid parameter"
+    )
+    executor = _failing_then_capturing(
+        state, log, lambda cmd, tp: seen.__setitem__("cmd", cmd)
+    )
+    record = _heal(tmp_path, executor, auto_approve=True, params={"input": "sheet.csv"})
+    assert RunSummary.from_events(record.events).succeeded is True
+    assert record.repair_history[0].diagnosis.failure_class == "bad_param"
+    assert record.repair_history[0].patch.kind == "param"
+    # the param patch reached the retry command (a real --key value pair)
+    assert "--validate_params" in seen["cmd"]
+    assert "False" in seen["cmd"]
+
+
+def test_self_heal_applied_reference_patch_reaches_the_rerun_command(tmp_path):
+    # A missing_reference failure proposes a reference patch that disables igenomes
+    # so a local reference is used; the swapped param must reach the retry command.
+    state = {"n": 0}
+    seen = {}
+    log = "Error: No such file or directory: /data/genome.fasta"
+    executor = _failing_then_capturing(
+        state, log, lambda cmd, tp: seen.__setitem__("cmd", cmd)
+    )
+    record = _heal(tmp_path, executor, auto_approve=True, params={"input": "sheet.csv"})
+    assert RunSummary.from_events(record.events).succeeded is True
+    assert record.repair_history[0].diagnosis.failure_class == "missing_reference"
+    assert record.repair_history[0].patch.kind == "reference"
+    assert "--igenomes_ignore" in seen["cmd"]
+    assert "True" in seen["cmd"]
+
+
+def test_self_heal_applied_env_patch_reaches_the_rerun_target(tmp_path):
+    # A conda_solve_failed failure proposes an env patch; the env knob must land
+    # on the target that the retry runs against (it rides backend_options into the
+    # generated config). The final record carries the patched target, proving the
+    # applied env change reached the re-run.
+    state = {"n": 0}
+    log = "ResolvePackageNotFound:\n  - bioconductor-dupradar=1.38"
+    executor = _failing_then_capturing(state, log, lambda cmd, tp: None)
+    record = _heal(tmp_path, executor, auto_approve=True, params={"input": "sheet.csv"})
+    assert RunSummary.from_events(record.events).succeeded is True
+    assert record.repair_history[0].diagnosis.failure_class == "conda_solve_failed"
+    assert record.repair_history[0].patch.kind == "env"
+    assert record.target.backend_options.get("relax_or_pin_env") == "True"
 
 
 def test_self_heal_respects_max_attempts(tmp_path):

@@ -82,3 +82,49 @@ def test_eval_snapshot_serializes_per_class_nested():
     )
     data = json.loads(snap.model_dump_json())
     assert data["per_class"]["oom"]["support"] == 1
+
+
+def test_snapshot_from_report_defaults_detector_to_rules():
+    snap = snapshot_from_report(
+        _report(), timestamp="t", corpus_size=4, corpus_sha="abc", contig_version="v",
+    )
+    assert snap.detector == "rules"
+
+
+def test_snapshot_from_report_records_named_detector():
+    snap = snapshot_from_report(
+        _report(), timestamp="t", corpus_size=4, corpus_sha="abc",
+        contig_version="v", detector="llm",
+    )
+    assert snap.detector == "llm"
+
+
+def test_tagged_snapshot_round_trips_through_history(tmp_path):
+    path = tmp_path / "eval_history.jsonl"
+    snap = snapshot_from_report(
+        _report(), timestamp="t", corpus_size=4, corpus_sha="abc",
+        contig_version="v", detector="llm",
+    )
+    append_snapshot(snap, path)
+    loaded = load_history(path)
+    assert loaded[0].detector == "llm"
+
+
+def test_two_detectors_yield_distinguishable_points(tmp_path):
+    path = tmp_path / "eval_history.jsonl"
+    append_snapshot(
+        snapshot_from_report(
+            _report(), timestamp="t1", corpus_size=4, corpus_sha="abc",
+            contig_version="v", detector="rules",
+        ),
+        path,
+    )
+    append_snapshot(
+        snapshot_from_report(
+            _report(), timestamp="t2", corpus_size=4, corpus_sha="abc",
+            contig_version="v", detector="llm",
+        ),
+        path,
+    )
+    detectors = {snap.detector for snap in load_history(path)}
+    assert detectors == {"rules", "llm"}

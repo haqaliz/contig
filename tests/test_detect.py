@@ -168,6 +168,62 @@ def test_benign_fai_mention_is_not_missing_index() -> None:
     assert d.failure_class != "missing_index"
 
 
+# --- broader failure classes for common nf-core failures (contract D) ----------
+
+
+def test_no_space_left_on_device_is_disk_full() -> None:
+    events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=1)]
+    log = "samtools sort: failed writing to tmp: No space left on device"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "disk_full"
+    assert any("No space left" in e for e in d.evidence)
+
+
+def test_enospc_is_disk_full() -> None:
+    events = [TaskEvent(process="SORT", status="FAILED", exit=1)]
+    log = "OSError: [Errno 28] ENOSPC: No space left"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "disk_full"
+
+
+def test_failed_to_download_is_download_failed() -> None:
+    events = [TaskEvent(process="STAGE", status="FAILED", exit=1)]
+    log = "Failed to download https://example.org/ref.fa.gz after 3 attempts"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "download_failed"
+    assert any("Failed to download" in e for e in d.evidence)
+
+
+def test_connection_timed_out_while_staging_is_download_failed() -> None:
+    events = [TaskEvent(process="STAGE", status="FAILED", exit=1)]
+    log = "Unable to stage foreign file: connection timed out"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "download_failed"
+
+
+def test_permission_denied_is_permission_denied() -> None:
+    events = [TaskEvent(process="PUBLISH", status="FAILED", exit=1)]
+    log = "mkdir: cannot create directory '/results': Permission denied"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "permission_denied"
+    assert any("Permission denied" in e for e in d.evidence)
+
+
+def test_eacces_is_permission_denied() -> None:
+    events = [TaskEvent(process="PUBLISH", status="FAILED", exit=1)]
+    log = "Error: EACCES: permission denied, open '/results/out.txt'"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "permission_denied"
+
+
+def test_disk_full_not_misread_as_tool_crash() -> None:
+    # ENOSPC is a clear resource problem; it must beat the generic tool_crash
+    # fallback even though the task also exited nonzero.
+    events = [TaskEvent(process="SORT", status="FAILED", exit=1)]
+    log = "some noise\nNo space left on device\nmore noise"
+    assert diagnose_failure(events, log_text=log).failure_class == "disk_full"
+
+
 # --- pluggable detector registry (PRD contract C) ------------------------------
 
 

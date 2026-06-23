@@ -63,6 +63,30 @@ def diagnose_failure(events: list[TaskEvent], log_text: str) -> Diagnosis:
             confidence=0.9,
         )
 
+    # Disk exhaustion is unambiguous and resource-shaped: a full work/scratch
+    # volume aborts the task. Checked early so it beats the generic crash rule.
+    disk_lines = _matching_lines(
+        log_text, ("no space left on device", "enospc", "disk quota exceeded")
+    )
+    if disk_lines:
+        return Diagnosis(
+            failure_class="disk_full",
+            root_cause="The run ran out of disk space.",
+            evidence=disk_lines,
+            confidence=0.9,
+        )
+
+    # A filesystem permission problem (publishing outputs, writing scratch): a
+    # human must fix the path/ownership; retrying on the same host will not help.
+    perm_lines = _matching_lines(log_text, ("permission denied", "eacces"))
+    if perm_lines:
+        return Diagnosis(
+            failure_class="permission_denied",
+            root_cause="A filesystem permission denied the run access.",
+            evidence=perm_lines,
+            confidence=0.85,
+        )
+
     unavailable_lines = _matching_lines(
         log_text,
         (
@@ -94,6 +118,28 @@ def diagnose_failure(events: list[TaskEvent], log_text: str) -> Diagnosis:
             root_cause="Container image could not be pulled.",
             evidence=pull_lines,
             confidence=0.9,
+        )
+
+    # Staging / network download of a remote input or reference failed. Often
+    # transient (a retry is the fix). Checked after the container-pull rule so an
+    # image pull is not misread as a generic download.
+    download_lines = _matching_lines(
+        log_text,
+        (
+            "failed to download",
+            "unable to stage",
+            "error staging",
+            "connection timed out",
+            "connection reset by peer",
+            "temporary failure in name resolution",
+        ),
+    )
+    if download_lines:
+        return Diagnosis(
+            failure_class="download_failed",
+            root_cause="A remote input or reference could not be downloaded.",
+            evidence=download_lines,
+            confidence=0.85,
         )
 
     conda_lines = _matching_lines(

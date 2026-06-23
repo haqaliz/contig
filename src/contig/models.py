@@ -173,6 +173,9 @@ FailureClass = Literal[
     "container_unavailable",
     "conda_solve_failed",
     "platform_unsupported",
+    "disk_full",
+    "download_failed",
+    "permission_denied",
     "tool_crash",
     "no_progress",
     "qc_anomaly",
@@ -344,3 +347,7 @@ class EvalSnapshot(BaseModel):
     accuracy: float
     per_class: dict[str, ClassScore] = {}
     contig_version: str | None = None
+    # Which detector produced this snapshot, so the trend can compare detectors
+    # (e.g. rules vs llm) on the same corpus. Defaults to the deterministic rules
+    # detector for back-compat with snapshots written before detectors were named.
+    detector: str = "rules"

@@ -5,7 +5,7 @@ from typer.testing import CliRunner
 
 from contig.bundle import load_bundle, write_bundle
 from contig.cli import app
-from contig.models import ExecutionTarget, RunRecord, TaskEvent, TaskResource
+from contig.models import ExecutionTarget, QCResult, RunRecord, TaskEvent, TaskResource
 
 
 def _make_sheet(tmp_path, *, valid=True):
@@ -877,6 +877,32 @@ def test_eval_detector_snapshot_appends_to_history(tmp_path):
     assert snaps[0].corpus_size >= 10
 
 
+def test_eval_detector_snapshot_tags_the_detector_name(tmp_path):
+    from contig.eval_history import load_history
+
+    history = tmp_path / "eval_history.jsonl"
+    result = runner.invoke(
+        app,
+        ["eval-detector", "--detector", "rules-strict", "--snapshot",
+         "--history-file", str(history)],
+    )
+    assert result.exit_code == 0
+    snaps = load_history(history)
+    assert snaps[0].detector == "rules-strict"
+
+
+def test_eval_detector_snapshot_defaults_detector_tag_to_rules(tmp_path):
+    from contig.eval_history import load_history
+
+    history = tmp_path / "eval_history.jsonl"
+    result = runner.invoke(
+        app, ["eval-detector", "--snapshot", "--history-file", str(history)]
+    )
+    assert result.exit_code == 0
+    snaps = load_history(history)
+    assert snaps[0].detector == "rules"
+
+
 def test_eval_detector_history_prints_trend(tmp_path):
     from contig.eval_history import append_snapshot, snapshot_from_report
     from contig.models import ClassScore, DetectorEvalReport
@@ -1073,3 +1099,145 @@ def test_cost_text_output_shows_total_and_currency(tmp_path):
     assert result.exit_code == 0
     assert "EUR" in result.output
     assert "STAR" in result.output
+
+
+def _estimate_sheet(tmp_path, n=2):
+    lines = ["sample,fastq_1,fastq_2,strandedness"]
+    for i in range(1, n + 1):
+        (tmp_path / f"e{i}_R1.fastq.gz").write_bytes(b"\x1f\x8bR1")
+        (tmp_path / f"e{i}_R2.fastq.gz").write_bytes(b"\x1f\x8bR2")
+        lines.append(f"E{i},e{i}_R1.fastq.gz,e{i}_R2.fastq.gz,auto")
+    sheet = tmp_path / "estimate_sheet.csv"
+    sheet.write_text("\n".join(lines) + "\n")
+    return sheet
+
+
+def test_estimate_json_emits_pinned_shape(tmp_path):
+    sheet = _estimate_sheet(tmp_path, 3)
+    result = runner.invoke(
+        app,
+        ["estimate", "--pipeline", "nf-core/rnaseq", "--input", str(sheet),
+         "--runs-dir", str(tmp_path), "--json"],
+    )
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["basis"] == "heuristic"
+    assert data["n_samples"] == 3
+    assert data["pipeline"] == "nf-core/rnaseq"
+
+
+def test_estimate_counts_samples_from_the_sheet(tmp_path):
+    sheet = _estimate_sheet(tmp_path, 5)
+    result = runner.invoke(
+        app,
+        ["estimate", "--pipeline", "nf-core/rnaseq", "--input", str(sheet),
+         "--runs-dir", str(tmp_path), "--json"],
+    )
+    assert result.exit_code == 0
+    assert json.loads(result.output)["n_samples"] == 5
+
+
+def test_estimate_text_output_shows_runtime_and_cost(tmp_path):
+    sheet = _estimate_sheet(tmp_path, 2)
+    result = runner.invoke(
+        app,
+        ["estimate", "--pipeline", "nf-core/rnaseq", "--input", str(sheet),
+         "--runs-dir", str(tmp_path), "--rate-cpu-hour=1.0", "--currency=EUR"],
+    )
+    assert result.exit_code == 0
+    assert "EUR" in result.output
+
+
+def test_estimate_rejects_a_missing_sheet(tmp_path):
+    result = runner.invoke(
+        app,
+        ["estimate", "--pipeline", "nf-core/rnaseq",
+         "--input", str(tmp_path / "nope.csv"), "--runs-dir", str(tmp_path)],
+    )
+    assert result.exit_code != 0
+
+
+def test_estimate_rejects_an_unsafe_pipeline_value(tmp_path):
+    sheet = _estimate_sheet(tmp_path, 2)
+    result = runner.invoke(
+        app,
+        ["estimate", "--pipeline", "--evil", "--input", str(sheet),
+         "--runs-dir", str(tmp_path)],
+    )
+    assert result.exit_code != 0
+
+
+def _write_provenance_run(runs_dir, run_id):
+    record = RunRecord(
+        run_id=run_id,
+        pipeline="nf-core/rnaseq",
+        pipeline_revision="3.26.0",
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_checksums={"samplesheet.csv": "a" * 64},
+        output_checksums={"multiqc/multiqc_report.html": "c" * 64},
+        parameters={"genome": "GRCh38"},
+        container_digests={"star": "sha256:deadbeef"},
+        nextflow_version="24.10.0",
+        events=[TaskEvent(process="STAR", status="COMPLETED", exit=0)],
+        qc_results=[QCResult(check="mapping_rate", status="pass", message="ok", value=92.0)],
+    )
+    write_bundle(record, Path(runs_dir) / run_id)
+
+
+def test_export_rocrate_prints_json_ld(tmp_path):
+    _write_provenance_run(tmp_path, "p1")
+    result = runner.invoke(app, ["export", "p1", "--rocrate", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert "@graph" in data
+    assert "@context" in data
+
+
+def test_export_rocrate_writes_to_output_file(tmp_path):
+    _write_provenance_run(tmp_path, "p1")
+    out = tmp_path / "ro-crate-metadata.json"
+    result = runner.invoke(
+        app,
+        ["export", "p1", "--rocrate", "--output", str(out), "--runs-dir", str(tmp_path)],
+    )
+    assert result.exit_code == 0
+    data = json.loads(out.read_text())
+    assert data["@graph"][0]["@id"] == "ro-crate-metadata.json"
+
+
+def test_export_rejects_a_missing_run(tmp_path):
+    result = runner.invoke(app, ["export", "ghost", "--rocrate", "--runs-dir", str(tmp_path)])
+    assert result.exit_code != 0
+
+
+def test_export_rejects_an_unsafe_run_id(tmp_path):
+    result = runner.invoke(app, ["export", "../etc", "--rocrate", "--runs-dir", str(tmp_path)])
+    assert result.exit_code != 0
+
+
+def test_methods_prints_a_paragraph(tmp_path):
+    _write_provenance_run(tmp_path, "p1")
+    result = runner.invoke(app, ["methods", "p1", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "nf-core/rnaseq" in result.output
+    assert "3.26.0" in result.output
+
+
+def test_methods_writes_to_output_file(tmp_path):
+    _write_provenance_run(tmp_path, "p1")
+    out = tmp_path / "methods.txt"
+    result = runner.invoke(
+        app, ["methods", "p1", "--output", str(out), "--runs-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0
+    assert "nf-core/rnaseq" in out.read_text()
+
+
+def test_methods_rejects_a_missing_run(tmp_path):
+    result = runner.invoke(app, ["methods", "ghost", "--runs-dir", str(tmp_path)])
+    assert result.exit_code != 0
+
+
+def test_methods_rejects_an_unsafe_run_id(tmp_path):
+    result = runner.invoke(app, ["methods", "../etc", "--runs-dir", str(tmp_path)])
+    assert result.exit_code != 0

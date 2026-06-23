@@ -67,8 +67,11 @@ def propose_patches(diagnosis: Diagnosis) -> list[Patch]:
         return [
             Patch(
                 kind="reference",
-                operation={"resolve_reference": True},
-                rationale="Reference genome missing; resolve and stage it.",
+                # Disable the igenomes lookup so the pipeline uses the locally
+                # staged reference instead of a remote build it could not find.
+                # set_param carries the concrete swap apply_patch merges into params.
+                operation={"set_param": {"igenomes_ignore": True}},
+                rationale="Reference genome missing; ignore igenomes and use the local reference.",
                 risk="needs_confirmation",
                 expected_signal="reference resolved",
             )
@@ -77,8 +80,11 @@ def propose_patches(diagnosis: Diagnosis) -> list[Patch]:
         return [
             Patch(
                 kind="param",
-                operation={"review_param": True},
-                rationale="A parameter was rejected; review and correct it.",
+                # Relax nf-core's strict parameter-schema validation so the run
+                # proceeds past the rejected value. set_param carries the concrete
+                # change apply_patch merges into the run params.
+                operation={"set_param": {"validate_params": False}},
+                rationale="A parameter was rejected; relax strict schema validation and retry.",
                 risk="needs_confirmation",
                 expected_signal="parameter accepted",
             )
@@ -105,6 +111,40 @@ def propose_patches(diagnosis: Diagnosis) -> list[Patch]:
                 rationale="Conda solve failed; relax or pin the environment spec.",
                 risk="needs_confirmation",
                 expected_signal="env solved",
+            )
+        ]
+    if diagnosis.failure_class == "download_failed":
+        return [
+            Patch(
+                kind="retry",
+                operation={"retry": True},
+                rationale="A download failed (often transient); retry the staging step.",
+                risk="safe",
+                expected_signal="input downloaded successfully",
+            )
+        ]
+    if diagnosis.failure_class == "disk_full":
+        return [
+            Patch(
+                kind="env",
+                # Reclaiming space deletes the work dir's intermediates: this
+                # destroys data, so it can never auto-apply.
+                operation={"clean_work_dir": True},
+                rationale="Out of disk; clean the work directory to reclaim space, then retry.",
+                risk="needs_confirmation",
+                expected_signal="free disk space available",
+            )
+        ]
+    if diagnosis.failure_class == "permission_denied":
+        return [
+            Patch(
+                kind="env",
+                # The fix is to correct the path's ownership/permissions; only a
+                # human can decide and do that safely.
+                operation={"fix_permissions": True},
+                rationale="Permission denied; fix the path ownership or permissions, then retry.",
+                risk="needs_confirmation",
+                expected_signal="path writable",
             )
         ]
     return []

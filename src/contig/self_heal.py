@@ -165,15 +165,18 @@ def apply_patch(
 ) -> tuple[ExecutionTarget, dict[str, object]]:
     """Apply a patch to the run inputs, returning the updated (target, params).
 
-    Bounded by kind (PRD contract C):
+    Bounded by kind (PRD contract C/D):
 
     - `resource`: bump `process.resourceLimits` (what modern nf-core honors; the
       old `--max_memory` params are ignored).
-    - `param`: merge the operation into the pipeline params.
+    - `param`: merge `set_param` (its concrete key/value swap) into the pipeline
+      params so the corrected parameter reaches the re-run's command.
+    - `reference`: merge `set_param` (the reference swap, e.g. igenomes_ignore)
+      into the params. A reference patch WITHOUT set_param (a build_index /
+      resolve_reference signal) is re-run only: the re-run itself is the fix.
     - `env`: merge the operation into the target's backend_options (string-coerced
-      so it round-trips through the generated config).
-    - `reference`/`code`/`retry`: change nothing. The re-run itself is the fix (a
-      reference/code patch is recorded and re-run only, never synthesized here).
+      so it rides into the generated config / re-run target).
+    - `code`/`retry`: change nothing. The re-run itself is the fix.
     """
     params = dict(params or {})
     if patch.kind == "resource":
@@ -186,8 +189,13 @@ def apply_patch(
             bumped = int(_lead_number(limits.get("time"), _DEFAULT_TIME_HOURS) * int(mult["time"]))
             limits["time"] = f"{bumped}.h"
         return target.model_copy(update={"resource_limits": limits}), params
-    if patch.kind == "param":
-        params.update(patch.operation)
+    if patch.kind in ("param", "reference"):
+        # set_param carries the concrete swap (a corrected param, or a reference
+        # knob like igenomes_ignore) merged into params so it reaches the re-run.
+        # A reference patch with no set_param stays re-run only (unchanged params).
+        swap = patch.operation.get("set_param")
+        if isinstance(swap, dict):
+            params.update(swap)
         return target, params
     if patch.kind == "env":
         options = dict(target.backend_options)

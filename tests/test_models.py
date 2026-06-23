@@ -136,6 +136,20 @@ def test_diagnosis_rejects_confidence_above_one():
         Diagnosis(failure_class="oom", root_cause="x", evidence=["e"], confidence=1.5)
 
 
+def test_failureclass_includes_the_broader_nfcore_classes():
+    # The taxonomy must carry the broader nf-core failure classes the detector
+    # now names, so a Diagnosis round-trips through the model for each.
+    from typing import get_args
+
+    from contig.models import Diagnosis, FailureClass
+
+    classes = set(get_args(FailureClass))
+    for cls in ("disk_full", "download_failed", "permission_denied"):
+        assert cls in classes
+        d = Diagnosis(failure_class=cls, root_cause="x", confidence=0.9)
+        assert Diagnosis.model_validate_json(d.model_dump_json()).failure_class == cls
+
+
 def test_patch_rejects_unknown_kind():
     from contig.models import Patch
 
