@@ -26,15 +26,20 @@ compare runs, curate the failure corpus, and track the detector over time.
   going.
 - **New run** (`/runs/new`): a launch form (goal, sample-sheet path, an iGenomes
   key or a fasta + gtf pair, optional resource caps). Preview the plan, then
-  launch. `?from=<id>` pre-fills it from a past run's launch manifest.
+  launch. After the plan preview it shows a **pre-run estimate** (runtime and cost)
+  derived from past runs of that pipeline (or a transparent heuristic with no
+  history) via `contig estimate --json`. `?from=<id>` pre-fills it from a past
+  run's launch manifest.
 - **Run detail** (`/runs/<id>`): the verdict explained in plain language with the
   deciding QC checks, an output-integrity badge (verified, drift detected, or not
   captured) with a **Verify** action, a **resources and cost** card (per-task
   wall-clock duration and peak memory from the run's recorded `resource_usage`,
   with a total cost at the default or entered rates via `contig cost --json`), the
   QC results (per-sample and cross-sample drill-down), the detect to diagnose to
-  patch to outcome repair timeline, the pinned provenance, and **Reproduce
-  exactly** / **Edit and relaunch**.
+  patch to outcome repair timeline, the pinned provenance, **Reproduce exactly** /
+  **Edit and relaunch**, and **Export and cite** (download the run's RO-Crate
+  metadata JSON via `contig export --rocrate` and a citation-ready methods
+  paragraph via `contig methods`, both generated offline).
 - **Live run view**: while a run is in flight the page polls a snapshot (elapsed,
   tasks completed, currently running steps, live self-heal attempts) with a
   collapsible log tail and a **Cancel** button. If the self-heal loop proposes a
@@ -49,10 +54,14 @@ compare runs, curate the failure corpus, and track the detector over time.
 - **Detector** (`/eval`): the failure detector scored against the labeled corpus
   (accuracy, per-class precision/recall, current misses), a **detector selector**
   (rules, rules-strict, and the optional **llm** detector) that scores any
-  registered detector, and an accuracy-over-time trend with per-class deltas. The
-  detector stays in Python (the moat); the page shells out to `contig
-  eval-detector --json`. The llm detector is optional: with no provider or key
-  configured it resolves to the existing graceful "not available" branch.
+  registered detector, a **side-by-side detector comparison** (the latest snapshot
+  per detector, so rules vs llm is direct: overall accuracy and per-class recall),
+  and an accuracy-over-time trend with per-class deltas. The detector stays in
+  Python (the moat); the page shells out to `contig eval-detector --json`. The llm
+  detector is optional: with no provider or key configured it resolves to the
+  existing graceful "not available" branch. To add an llm-tagged point for the
+  comparison, run `contig eval-detector --detector llm --snapshot` with a provider
+  and key configured.
 - **Notifications**: a header activity bell reads `notifications.jsonl` and shows
   recent run events; a run waiting for your approval links straight to it.
 
@@ -72,7 +81,7 @@ CLI is unavailable, pages that need it degrade gracefully. Environment overrides
 |---|---|---|
 | `CONTIG_RUNS_DIR` | `../runs` | Where run bundles, status, and `notifications.jsonl` are read |
 | `CONTIG_CMD` | `uv run contig` | The CLI used for read-only calls (e.g. eval-detector) |
-| `CONTIG_DISPATCH_CMD` | `uv run contig` | The CLI used to launch and control runs (dispatch, cancel, resume, approve, verify) |
+| `CONTIG_DISPATCH_CMD` | `uv run contig` | The CLI used to launch and control runs, and for estimate, export, and methods (dispatch, cancel, resume, approve, verify, cost, estimate, export, methods) |
 | `CONTIG_EVAL_HISTORY` | shipped path | The eval-history file the trend reads |
 
 ## Authentication
@@ -113,6 +122,48 @@ suite with the bypass on:
 ```bash
 CONTIG_AUTH_DISABLED=1 npx playwright test
 ```
+
+**Per-user run isolation.** With auth on, each dispatch tags its run with the
+owner's identity in `runs/<id>/owner.json` (`{owner, email}`, where `owner` is the
+Auth0 `sub`). The run list and run detail are then scoped to the current user: a
+user sees only the runs they own; the **admin** role sees all; a run with no
+`owner.json` (for example a CLI-launched run) is admin-only; and a run the user
+does not own reads as absent (a 404), so it never leaks. Under the bypass the
+viewer is the synthetic local admin, so local dev and the suite see every run.
+Ownership lives entirely in the dashboard; the engine is unchanged.
+
+## Deploy
+
+The repo ships a multi-stage `Dockerfile` that builds the dashboard into a lean
+Next.js standalone server image (`output: "standalone"` in `next.config.ts`). The
+image serves the dashboard only; it does not bundle the `contig` engine CLI or the
+runs directory, because those live on the user's compute. Build and run it:
+
+```bash
+docker build -t contig-dashboard .
+docker run --rm -p 3000:3000 \
+  -e CONTIG_AUTH_DISABLED=1 \
+  -v /path/to/runs:/runs \
+  -e CONTIG_RUNS_DIR=/runs \
+  contig-dashboard
+```
+
+- **The runs volume.** Mount the host runs directory into the container and point
+  `CONTIG_RUNS_DIR` at the mount, so the dashboard reads the same bundles, status,
+  `notifications.jsonl`, and `owner.json` files the engine writes.
+- **The CLI.** Read-only and action routes shell out to `contig`. Point `CONTIG_CMD`
+  and `CONTIG_DISPATCH_CMD` at a reachable CLI (a host binary on the mounted path,
+  a sidecar container, or `uv run contig` in an image that also has the engine and
+  Nextflow). With no CLI reachable, pages that need it degrade gracefully but
+  launch and verify will not work.
+- **Auth.** For anything network-reachable, configure the Auth0 env above and set
+  `APP_BASE_URL` to the public URL; do **not** expose an unconfigured instance,
+  since the bypass treats every caller as an admin. Set `CONTIG_AUTH_DISABLED=1`
+  only for a trusted, local, single-user deployment.
+- **Reverse proxy.** The container listens on `:3000` over plain HTTP. Put a
+  reverse proxy (nginx, Caddy, a cloud load balancer) in front for TLS termination
+  and to forward `Host` / `X-Forwarded-*` headers; set `APP_BASE_URL` to the
+  externally visible URL so the Auth0 callback and logout URLs line up.
 
 ## Testing
 

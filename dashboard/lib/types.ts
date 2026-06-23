@@ -173,6 +173,32 @@ export interface EvalSnapshot {
   accuracy: number;
   per_class: Record<string, ClassScore>;
   contig_version: string | null;
+  // Which detector produced this snapshot (PRD contract A): "rules" (default),
+  // "rules-strict", or "llm". Older snapshots predate the field; the dashboard
+  // treats an absent value as "rules" so the compare view always has a bucket.
+  detector?: string;
+}
+
+// The pre-run estimate from `contig estimate --json` (PRD contract B). The engine
+// scans prior FINISHED runs of the same pipeline to derive a per-sample resource
+// total and scales it to the requested sample count; with no history it falls
+// back to a transparent heuristic. basis says which path produced the figures.
+// Rates default to 0 (local compute is free), so est_cost is 0 unless rates are
+// passed. note carries a short human-readable caveat. The dashboard reads this on
+// the launch form to show runtime and cost before a run starts.
+export interface EstimateReport {
+  basis: "history" | "heuristic";
+  pipeline: string;
+  n_samples: number;
+  n_prior_runs: number;
+  est_runtime_sec: number;
+  est_peak_mem_mb: number;
+  est_total_cpu_hours: number;
+  est_cost: number;
+  currency: string;
+  rate_cpu_hour: number;
+  rate_mem_gb_hour: number;
+  note: string;
 }
 
 export interface FailureCase {
@@ -265,4 +291,14 @@ export interface LaunchManifest {
   max_attempts: number;
   is_test_profile: boolean;
   created_at: string;
+}
+
+// The owner tag a dispatch route writes to runs/<id>/owner.json (PRD contract E).
+// owner is the stable user identity (the Auth0 `sub`); email is the address if
+// the tenant exposes one. A run with no owner.json predates ownership (e.g. a
+// CLI-launched run) and is admin-only. Under the auth bypass the owner is the
+// synthetic local admin, so local dev and the e2e suite see every run.
+export interface RunOwner {
+  owner: string;
+  email: string | null;
 }

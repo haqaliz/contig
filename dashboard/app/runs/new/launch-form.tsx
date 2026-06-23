@@ -7,7 +7,7 @@
 // never launch a stale plan: editing any field clears the stored plan.
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, ChevronRight, Loader2, Play, Sparkles } from "lucide-react";
+import { ChevronDown, ChevronRight, Clock, Loader2, Play, Sparkles, Wallet } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,7 +18,18 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import type { LaunchManifest, Plan } from "@/lib/types";
+import type { EstimateReport, LaunchManifest, Plan } from "@/lib/types";
+
+// Render a duration in seconds as a short human string (e.g. "1h 12m", "45s").
+function formatDuration(totalSec: number): string {
+  const s = Math.max(0, Math.round(totalSec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
 
 type ReferenceMode = "genome" | "files";
 
@@ -48,6 +59,13 @@ export function LaunchForm({ from }: { from?: string }) {
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [launching, setLaunching] = useState(false);
+
+  // The pre-run estimate (PRD contract B), fetched after a successful plan preview
+  // when we have a pipeline and a sample sheet. It is advisory, so a failed
+  // estimate never blocks the launch: estimating is true while it loads, estimate
+  // holds the figures, and we silently omit the card if the CLI cannot produce one.
+  const [estimate, setEstimate] = useState<EstimateReport | null>(null);
+  const [estimating, setEstimating] = useState(false);
 
   // Load and apply the source run's manifest once, when from=<id> is present.
   useEffect(() => {
@@ -102,6 +120,30 @@ export function LaunchForm({ from }: { from?: string }) {
     setPlan(null);
     setPlanError(null);
     setLaunchError(null);
+    // The estimate is tied to the previewed plan and inputs, so any edit clears it.
+    setEstimate(null);
+  }
+
+  // Fetch the pre-run estimate for the just-approved plan (PRD contract B). The
+  // estimate is advisory: a non-OK response or a thrown error leaves it null and
+  // the card simply does not render, so a missing estimate never blocks a launch.
+  async function loadEstimate(pipeline: string) {
+    setEstimating(true);
+    setEstimate(null);
+    try {
+      const res = await fetch("/api/runs/estimate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pipeline, input: input.trim() }),
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as EstimateReport;
+      setEstimate(data);
+    } catch {
+      // Estimating is best effort; silence the error and show no card.
+    } finally {
+      setEstimating(false);
+    }
   }
 
   // The reference fields we send depend on the active mode only, so switching
@@ -121,6 +163,7 @@ export function LaunchForm({ from }: { from?: string }) {
     setPlan(null);
     setPlanError(null);
     setLaunchError(null);
+    setEstimate(null);
     try {
       const res = await fetch("/api/runs/plan", {
         method: "POST",
@@ -134,6 +177,10 @@ export function LaunchForm({ from }: { from?: string }) {
       const data = (await res.json()) as { plan?: Plan; error?: string };
       if (res.ok && data.plan) {
         setPlan(data.plan);
+        // With a pipeline and sheet in hand, load the pre-run estimate so the
+        // user sees runtime and cost before launching. Advisory, so it runs in
+        // the background and never gates the launch button.
+        void loadEstimate(data.plan.pipeline);
         return;
       }
       setPlanError(data.error ?? "Could not build a plan.");
@@ -474,6 +521,64 @@ export function LaunchForm({ from }: { from?: string }) {
                     </div>
                   ))}
                 </dl>
+              )}
+            </div>
+
+            <Separator />
+
+            {/* Pre-run estimate (PRD contract B): runtime and cost before launch,
+                derived from past runs of this pipeline or a transparent heuristic. */}
+            <div className="space-y-2">
+              <h3 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                Estimate before you launch
+              </h3>
+              {estimating ? (
+                <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                  Estimating runtime and cost from past runs.
+                </p>
+              ) : estimate ? (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap gap-4">
+                    <div className="flex items-center gap-2">
+                      <Clock className="size-4 text-muted-foreground" aria-hidden="true" />
+                      <span className="text-sm">
+                        <span className="font-medium tabular-nums">
+                          {formatDuration(estimate.est_runtime_sec)}
+                        </span>{" "}
+                        <span className="text-muted-foreground">
+                          estimated runtime
+                        </span>
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Wallet className="size-4 text-muted-foreground" aria-hidden="true" />
+                      <span className="text-sm">
+                        <span className="font-medium tabular-nums">
+                          {estimate.est_cost.toFixed(2)} {estimate.currency}
+                        </span>{" "}
+                        <span className="text-muted-foreground">
+                          estimated cost
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {estimate.basis === "history"
+                      ? `Based on ${estimate.n_prior_runs} past run${estimate.n_prior_runs === 1 ? "" : "s"} of this pipeline for ${estimate.n_samples} sample${estimate.n_samples === 1 ? "" : "s"}.`
+                      : `Heuristic estimate for ${estimate.n_samples} sample${estimate.n_samples === 1 ? "" : "s"} (no past runs of this pipeline yet).`}{" "}
+                    {estimate.note}
+                  </p>
+                  {estimate.est_cost === 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      Cost is zero at the default rates (local compute is free).
+                    </p>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  No estimate is available for this pipeline and sheet.
+                </p>
               )}
             </div>
           </CardContent>

@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 
-import { requireWriter } from "@/lib/auth0";
+import { currentViewer, requireWriter } from "@/lib/auth0";
 import {
   dispatchReproduce,
   DispatchBusyError,
   LaunchValidationError,
   NoManifestError,
+  writeRunOwner,
 } from "@/lib/runs";
 
 // POST /api/runs/[id]/reproduce: reproduce a run exactly from its launch.json.
@@ -20,7 +21,10 @@ export async function POST(
   if (denied) return denied;
   const { id } = await params;
   try {
+    const viewer = await currentViewer();
     const { run_id } = await dispatchReproduce(id);
+    // The reproduced run is owned by whoever reproduced it (PRD contract E).
+    await writeRunOwner(run_id, { owner: viewer.owner, email: viewer.email });
     return NextResponse.json({ run_id }, { status: 202 });
   } catch (err) {
     if (err instanceof NoManifestError) {

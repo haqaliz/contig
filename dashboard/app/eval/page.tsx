@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/card";
 import { PageHeader } from "@/components/page-header";
 import { DetectorSelector } from "@/components/eval/detector-selector";
+import { DetectorCompare } from "@/components/eval/detector-compare";
 import { EvalView } from "@/components/eval/eval-view";
 import { EvalHistory } from "@/components/eval/eval-history";
 import {
@@ -83,6 +84,7 @@ export default async function EvalPage({
           </CardContent>
         </Card>
 
+        <DetectorCompare history={history} />
         <EvalHistory history={history} />
       </div>
     );
@@ -91,6 +93,7 @@ export default async function EvalPage({
   return (
     <div className="flex flex-col gap-8">
       <EvalView report={report} selector={selector} />
+      <DetectorCompare history={history} />
       <EvalHistory history={history} />
     </div>
   );

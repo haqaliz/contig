@@ -128,6 +128,44 @@ export async function headerUser(): Promise<HeaderUser | null> {
   };
 }
 
+// The viewer identity used for per-user run isolation (PRD contract E). owner is
+// the stable Auth0 `sub`; isAdmin is true for the admin role and (always) in the
+// dev/test bypass, so an admin and local dev see every run. email is recorded on
+// a run's owner.json so the owner is human-readable later.
+export interface ViewerIdentity {
+  owner: string;
+  email: string | null;
+  isAdmin: boolean;
+}
+
+// The synthetic owner used under the auth bypass (CONTIG_AUTH_DISABLED or no Auth0
+// env). It is an admin, so local dev and the Playwright suite see every run, and
+// any run it dispatches is tagged to this stable id.
+const BYPASS_VIEWER: ViewerIdentity = {
+  owner: "local-admin",
+  email: null,
+  isAdmin: true,
+};
+
+/**
+ * The current viewer for run isolation. In the bypass this is the synthetic local
+ * admin (sees all). When auth is live it is the session user, an admin if they
+ * carry the admin role; an unauthenticated request (which the proxy already
+ * redirects) resolves to a non-admin with an empty owner that matches no run.
+ */
+export async function currentViewer(): Promise<ViewerIdentity> {
+  if (isAuthDisabled()) return BYPASS_VIEWER;
+  const session = await auth0().getSession();
+  if (!session) return { owner: "", email: null, isAdmin: false };
+  const user = session.user;
+  const roles = rolesOf(user);
+  return {
+    owner: typeof user.sub === "string" ? user.sub : "",
+    email: user.email ?? null,
+    isAdmin: roles.includes("admin"),
+  };
+}
+
 /**
  * Guard for an action (write) route. Returns null when the caller may write
  * (the dev bypass, or an authenticated writer/admin), or a ready-to-return

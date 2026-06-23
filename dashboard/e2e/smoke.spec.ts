@@ -33,5 +33,9 @@ test("a missing run returns 404", async ({ page }) => {
 
 test("detector eval page loads", async ({ page }) => {
   await page.goto("/eval");
-  await expect(page.getByRole("heading", { name: /Detector/ })).toBeVisible();
+  // Match the page title exactly: the page now also carries a "Detector
+  // comparison" section heading, so a loose /Detector/ would be ambiguous.
+  await expect(
+    page.getByRole("heading", { name: "Detector eval" }),
+  ).toBeVisible();
 });

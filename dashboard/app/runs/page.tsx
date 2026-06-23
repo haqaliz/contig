@@ -7,6 +7,7 @@ import { GitCompareArrows, Loader2, Plus } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { RunTestProfileButton } from "@/components/run-test-profile-button";
 import { ButtonLink } from "@/components/ui/button";
+import { currentViewer } from "@/lib/auth0";
 import { listRuns, listRunningRuns } from "@/lib/runs";
 import { RunsTable } from "./runs-table";
 
@@ -14,7 +15,13 @@ import { RunsTable } from "./runs-table";
 export const dynamic = "force-dynamic";
 
 export default async function RunsPage() {
-  const [runs, running] = await Promise.all([listRuns(), listRunningRuns()]);
+  // Per-user isolation (PRD contract E): the list shows only runs this viewer may
+  // see. An admin (and the dev/test bypass) sees all; a user sees only their own.
+  const viewer = await currentViewer();
+  const [runs, running] = await Promise.all([
+    listRuns(viewer),
+    listRunningRuns(),
+  ]);
 
   return (
     <div className="space-y-6">

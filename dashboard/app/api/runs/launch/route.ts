@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 
-import { requireWriter } from "@/lib/auth0";
-import { dispatchRealRun, DispatchBusyError, LaunchValidationError } from "@/lib/runs";
+import { currentViewer, requireWriter } from "@/lib/auth0";
+import {
+  dispatchRealRun,
+  DispatchBusyError,
+  LaunchValidationError,
+  writeRunOwner,
+} from "@/lib/runs";
 
 // POST /api/runs/launch: launch a real-data run from the approved plan + inputs.
 // One at a time. All validation (paths exist, safe keys/caps, known pipeline) is
@@ -13,6 +18,7 @@ export async function POST(req: Request) {
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const str = (v: unknown) => (typeof v === "string" ? v : undefined);
   try {
+    const viewer = await currentViewer();
     const { run_id } = await dispatchRealRun({
       input: str(body.input) ?? "",
       pipeline: str(body.pipeline),
@@ -22,6 +28,8 @@ export async function POST(req: Request) {
       maxMemory: str(body.maxMemory),
       maxCpus: str(body.maxCpus),
     });
+    // Tag the run with its owner for per-user isolation (PRD contract E).
+    await writeRunOwner(run_id, { owner: viewer.owner, email: viewer.email });
     return NextResponse.json({ run_id }, { status: 202 });
   } catch (err) {
     if (err instanceof DispatchBusyError) {

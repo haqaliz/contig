@@ -24,6 +24,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { currentViewer } from "@/lib/auth0";
 import { getRun, listRuns } from "@/lib/runs";
 import { diffRuns } from "@/lib/diff";
 import type {
@@ -336,13 +337,16 @@ export default async function CompareRunsPage({
 }) {
   const { a, b } = await searchParams;
 
-  const recordA = a ? await getRun(a) : null;
-  const recordB = b ? await getRun(b) : null;
+  // Per-user isolation (PRD contract E): both the picked runs and the picker list
+  // are scoped to this viewer, so a user can only compare runs they may see.
+  const viewer = await currentViewer();
+  const recordA = a ? await getRun(a, viewer) : null;
+  const recordB = b ? await getRun(b, viewer) : null;
 
   // The picker stays on screen in both states (empty and showing a comparison)
   // so the user can swap either run without first navigating away. It is always
   // pre-filled with the current selection.
-  const runs = await listRuns();
+  const runs = await listRuns(viewer);
   const runIds = runs.map((r) => r.run_id).sort();
 
   const pickerCard = (

@@ -26,6 +26,9 @@ export const FIXTURE_RUN_IDS = [
   // A finished run whose record carries resource_usage (per-task duration, peak
   // memory, cpu), for the resources-and-cost card (PRD contracts A, B).
   "resource-fixture",
+  // A finished run bundle used by the provenance export buttons (PRD contract C):
+  // the RO-Crate and methods download routes are exercised against this id.
+  "export-fixture",
 ];
 
 // Mirror lib/runs.ts runsDir(): CONTIG_RUNS_DIR, else ../runs from the dashboard
@@ -38,6 +41,32 @@ export function runsDir(): string {
 
 function fixturesDir(): string {
   return path.resolve(process.cwd(), "e2e", "fixtures");
+}
+
+// The eval-history file the /eval trend AND the detector-comparison view read
+// (PRD contract A). We provision a fixture history that carries snapshots tagged
+// with two detectors (rules + llm), so the compare view renders rules vs llm side
+// by side, without depending on the user's real committed history. We back up the
+// real file first and restore it on teardown, so a user's own history is never
+// overwritten or lost by the suite. Mirrors lib/runs.ts evalHistoryPath():
+// CONTIG_EVAL_HISTORY, else <repoRoot>/src/contig/data/eval_history.jsonl.
+function evalHistoryPath(): string {
+  return process.env.CONTIG_EVAL_HISTORY
+    ? path.resolve(process.env.CONTIG_EVAL_HISTORY)
+    : path.resolve(
+        process.cwd(),
+        "..",
+        "src",
+        "contig",
+        "data",
+        "eval_history.jsonl",
+      );
+}
+function evalHistoryBackupPath(): string {
+  return `${evalHistoryPath()}.e2e-backup`;
+}
+function evalHistoryFixture(): string {
+  return path.join(fixturesDir(), "_eval_history", "eval_history.jsonl");
 }
 
 // The notifications feed (PRD contract A) reads a single file at the runs-dir
@@ -69,6 +98,14 @@ export function installFixtures(): void {
   if (existsSync(notificationsFixture())) {
     cpSync(notificationsFixture(), live);
   }
+
+  // Provision the eval history (tagged by detector) the same way: back up any real
+  // file, then swap in the fixture so the trend and the compare view both render.
+  const liveEval = evalHistoryPath();
+  if (existsSync(liveEval)) renameSync(liveEval, evalHistoryBackupPath());
+  if (existsSync(evalHistoryFixture())) {
+    cpSync(evalHistoryFixture(), liveEval);
+  }
 }
 
 export function removeFixtures(): void {
@@ -81,4 +118,9 @@ export function removeFixtures(): void {
   rmSync(notificationsPath(), { force: true });
   const backup = notificationsBackupPath();
   if (existsSync(backup)) renameSync(backup, notificationsPath());
+
+  // Remove the fixture eval history, then restore any real one we moved aside.
+  rmSync(evalHistoryPath(), { force: true });
+  const evalBackup = evalHistoryBackupPath();
+  if (existsSync(evalBackup)) renameSync(evalBackup, evalHistoryPath());
 }

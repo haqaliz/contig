@@ -18,6 +18,7 @@ import { ResourceCostCard } from "@/components/run/resource-cost-card";
 import { RunningView } from "@/components/run/running-view";
 import { VerdictCard } from "@/components/run/verdict-card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { currentViewer } from "@/lib/auth0";
 import {
   getLaunchManifest,
   getRun,
@@ -25,6 +26,7 @@ import {
   getRunState,
   getRunStatus,
 } from "@/lib/runs";
+import { RunExportActions } from "@/components/run/run-export-actions";
 
 // A running run has no bundle yet, so always read fresh.
 export const dynamic = "force-dynamic";
@@ -51,7 +53,11 @@ export default async function RunDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const record = await getRun(id);
+  // Per-user isolation (PRD contract E): a run this viewer may not see reads as
+  // absent, so the page 404s rather than leaking another user's run. An admin
+  // (and the dev/test bypass) sees every run.
+  const viewer = await currentViewer();
+  const record = await getRun(id, viewer);
   if (!record) {
     // No bundle yet: a live or paused run shows the polling in-progress view (the
     // view itself surfaces the approval gate when paused); a cancelled run offers
@@ -131,6 +137,8 @@ export default async function RunDetailPage({
       ) : null}
 
       {manifest ? <ReproduceActions id={record.run_id} /> : null}
+
+      <RunExportActions id={record.run_id} />
 
       <Tabs defaultValue="qc" className="gap-4">
         <TabsList className="w-full justify-start sm:w-fit">

@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 
-import { requireWriter } from "@/lib/auth0";
-import { dispatchTestProfileRun, DispatchBusyError } from "@/lib/runs";
+import { currentViewer, requireWriter } from "@/lib/auth0";
+import {
+  dispatchTestProfileRun,
+  DispatchBusyError,
+  writeRunOwner,
+} from "@/lib/runs";
 
 // POST /api/runs/dispatch: launch a test-profile run (no inputs). One at a time.
 // This is the v1a dispatch plumbing: it spawns the existing CLI detached and
@@ -11,7 +15,11 @@ export async function POST() {
   const denied = await requireWriter();
   if (denied) return denied;
   try {
+    const viewer = await currentViewer();
     const { run_id } = await dispatchTestProfileRun();
+    // Tag the run with its owner so per-user isolation (PRD contract E) can scope
+    // it later. Best effort: a failed write leaves the run admin-only, not broken.
+    await writeRunOwner(run_id, { owner: viewer.owner, email: viewer.email });
     return NextResponse.json({ run_id }, { status: 202 });
   } catch (err) {
     if (err instanceof DispatchBusyError) {

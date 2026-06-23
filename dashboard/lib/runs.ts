@@ -14,6 +14,7 @@ import { promisify } from "util";
 import type {
   CostReport,
   DetectorEvalReport,
+  EstimateReport,
   EvalSnapshot,
   FailureCase,
   LaunchManifest,
@@ -22,10 +23,17 @@ import type {
   PendingApproval,
   Plan,
   RepairStepLite,
+  RunOwner,
   RunProgress,
   RunRecord,
   RunStatus,
 } from "./types";
+import { canViewRun, filterOwnedRunIds, type Viewer } from "./ownership";
+
+// Re-export the pure isolation rule so callers can keep importing it from the data
+// layer; the rule itself lives in lib/ownership.ts (no server-only guard) so it is
+// unit-testable in isolation (PRD contract E).
+export { canViewRun, filterOwnedRunIds, type Viewer };
 
 const pexec = promisify(execFile);
 
@@ -50,8 +58,14 @@ async function readRecord(id: string): Promise<RunRecord | null> {
   }
 }
 
-/** All run bundles found on disk. Directories without a run_record.json are skipped. */
-export async function listRuns(): Promise<RunRecord[]> {
+/**
+ * Run bundles found on disk, filtered to the ones the viewer may see (PRD contract
+ * E). A user sees only runs they own; an admin (and the bypass) sees all; a run
+ * with no owner.json is admin-only. Directories without a run_record.json are
+ * skipped. Without a viewer (legacy callers) every bundle is returned, so the raw
+ * disk listing is still available where isolation does not apply.
+ */
+export async function listRuns(viewer?: Viewer): Promise<RunRecord[]> {
   let entries: string[];
   try {
     entries = await fs.readdir(runsDir());
@@ -59,12 +73,34 @@ export async function listRuns(): Promise<RunRecord[]> {
     return [];
   }
   const records = await Promise.all(entries.map((name) => readRecord(name)));
-  return records.filter((r): r is RunRecord => r !== null);
+  const present = records.filter((r): r is RunRecord => r !== null);
+  if (!viewer) return present;
+  // An admin (and the bypass) sees everything, so skip the per-run owner reads.
+  if (viewer.isAdmin) return present;
+  const owned = await Promise.all(
+    present.map(async (r) => ({
+      record: r,
+      visible: canViewRun(viewer, await getRunOwner(r.run_id)),
+    })),
+  );
+  return owned.filter((o) => o.visible).map((o) => o.record);
 }
 
-/** One run bundle by id, or null if absent. */
-export async function getRun(id: string): Promise<RunRecord | null> {
-  return readRecord(id);
+/**
+ * One run bundle by id, or null if absent OR the viewer may not see it (PRD
+ * contract E): a run the user does not own (and is not admin for) reads as absent,
+ * so the detail page 404s rather than leaking another user's run. Without a viewer
+ * the raw bundle is returned (legacy callers that do not apply isolation).
+ */
+export async function getRun(
+  id: string,
+  viewer?: Viewer,
+): Promise<RunRecord | null> {
+  const record = await readRecord(id);
+  if (!record) return null;
+  if (!viewer) return record;
+  if (!canViewRun(viewer, await getRunOwner(id))) return null;
+  return record;
 }
 
 /** The lifecycle marker for a run (running/finished/error), or null if none. */
@@ -992,6 +1028,192 @@ export async function getRunCost(
     return parse(stdout);
   } catch (err) {
     return parse((err as { stdout?: string })?.stdout);
+  }
+}
+
+// --- Pre-run estimate (PRD contract B) -----------------------------------------
+// `contig estimate --pipeline X --input <sheet> --json` derives a runtime and
+// cost estimate from prior FINISHED runs of the same pipeline (data-driven), or a
+// transparent heuristic when there is no history. The estimate model lives in the
+// engine; the dashboard shells out and shows the figures on the launch form before
+// a run starts. The pipeline is constrained to the known set and the sheet path is
+// validated (exists, no leading dash), both passed as --opt=value, so there is no
+// flag-smuggling surface.
+
+/** Raised when an estimate request is invalid (unknown pipeline or bad sheet path). */
+export class EstimateValidationError extends Error {}
+
+/**
+ * A pre-run estimate by shelling out to `contig estimate --json`. The pipeline is
+ * checked against the known set and the sample sheet is validated as a real file
+ * (same guard as dispatch); both pass as --opt=value. Optional rates (validated as
+ * plain numbers) and a currency pass as --opt=value so a real cost figure can be
+ * shown. Returns the parsed EstimateReport, or null if the CLI is unavailable or
+ * its output is unparseable, so the launch form degrades gracefully. Throws
+ * EstimateValidationError on an unknown pipeline or a missing sheet.
+ */
+export async function getEstimate(req: {
+  pipeline: string;
+  input: string;
+  rateCpuHour?: string;
+  rateMemGbHour?: string;
+  currency?: string;
+}): Promise<EstimateReport | null> {
+  if (!KNOWN_PIPELINES.has(req.pipeline)) {
+    throw new EstimateValidationError("Unknown pipeline.");
+  }
+  let input: string;
+  try {
+    input = await assertFile(req.input, "Sample sheet");
+  } catch {
+    throw new EstimateValidationError("Sample sheet not found.");
+  }
+  const base = (process.env.CONTIG_DISPATCH_CMD ?? "uv run contig").split(" ");
+  const extra: string[] = [];
+  if (req.rateCpuHour && isSafeRate(req.rateCpuHour)) {
+    extra.push(`--rate-cpu-hour=${req.rateCpuHour}`);
+  }
+  if (req.rateMemGbHour && isSafeRate(req.rateMemGbHour)) {
+    extra.push(`--rate-mem-gb-hour=${req.rateMemGbHour}`);
+  }
+  if (req.currency && /^[A-Za-z]{1,5}$/.test(req.currency)) {
+    extra.push(`--currency=${req.currency}`);
+  }
+  const args = [
+    ...base.slice(1),
+    "estimate",
+    `--pipeline=${req.pipeline}`,
+    `--input=${input}`,
+    `--runs-dir=${runsDir()}`,
+    "--json",
+    ...extra,
+  ];
+  function parse(stdout: unknown): EstimateReport | null {
+    if (typeof stdout !== "string") return null;
+    try {
+      const data = JSON.parse(stdout) as EstimateReport;
+      if (
+        (data.basis === "history" || data.basis === "heuristic") &&
+        typeof data.est_runtime_sec === "number" &&
+        typeof data.est_cost === "number" &&
+        typeof data.currency === "string"
+      ) {
+        return data;
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+  try {
+    const { stdout } = await pexec(base[0], args, {
+      cwd: repoRoot(),
+      timeout: 30_000,
+    });
+    return parse(stdout);
+  } catch (err) {
+    return parse((err as { stdout?: string })?.stdout);
+  }
+}
+
+// --- Provenance export (PRD contract C) ----------------------------------------
+// `contig export <id> --rocrate` prints an RO-Crate ro-crate-metadata.json and
+// `contig methods <id>` prints a deterministic, citation-ready methods paragraph.
+// Both are offline (no LLM, no network) and live in the engine; the dashboard
+// shells out and serves the bytes for download. The run id is validated and passed
+// as a positional after a "--" terminator, so it can never be parsed as a flag.
+
+/**
+ * The RO-Crate JSON for a run by shelling out to `contig export <id> --rocrate`.
+ * Returns the raw JSON string (already serialized by the engine) so the route can
+ * serve it byte for byte, or null if the CLI is unavailable. The run id is
+ * validated and passed as a positional after "--".
+ */
+export async function getRunRoCrate(id: string): Promise<string | null> {
+  if (!isSafeRunId(id)) throw new InvalidRunIdError(`Invalid run id: ${id}`);
+  const base = (process.env.CONTIG_DISPATCH_CMD ?? "uv run contig").split(" ");
+  const args = [
+    ...base.slice(1),
+    "export",
+    `--runs-dir=${runsDir()}`,
+    "--rocrate",
+    "--",
+    id,
+  ];
+  try {
+    const { stdout } = await pexec(base[0], args, {
+      cwd: repoRoot(),
+      timeout: 30_000,
+    });
+    return typeof stdout === "string" && stdout.trim().length > 0 ? stdout : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The methods paragraph for a run by shelling out to `contig methods <id>`.
+ * Returns the plain-text paragraph, or null if the CLI is unavailable. The run id
+ * is validated and passed as a positional after "--".
+ */
+export async function getRunMethods(id: string): Promise<string | null> {
+  if (!isSafeRunId(id)) throw new InvalidRunIdError(`Invalid run id: ${id}`);
+  const base = (process.env.CONTIG_DISPATCH_CMD ?? "uv run contig").split(" ");
+  const args = [
+    ...base.slice(1),
+    "methods",
+    `--runs-dir=${runsDir()}`,
+    "--",
+    id,
+  ];
+  try {
+    const { stdout } = await pexec(base[0], args, {
+      cwd: repoRoot(),
+      timeout: 30_000,
+    });
+    return typeof stdout === "string" && stdout.trim().length > 0 ? stdout : null;
+  } catch {
+    return null;
+  }
+}
+
+// --- Per-user run isolation (PRD contract E) -----------------------------------
+// A dispatch route tags each run with its owner by writing runs/<id>/owner.json
+// {owner, email}. listRuns and getRun filter by the current viewer: a user sees
+// only their own runs; an admin sees all; a run with no owner.json (a CLI launch)
+// is admin-only. Under the auth bypass the viewer is a synthetic local admin, so
+// local dev and the e2e suite see everything. Ownership lives entirely here in
+// the dashboard; the engine is unchanged. The pure rule (canViewRun,
+// filterOwnedRunIds, Viewer) is re-exported from lib/ownership.ts above.
+
+/** The owner tag a run carries (runs/<id>/owner.json), or null if it has none. */
+export async function getRunOwner(id: string): Promise<RunOwner | null> {
+  const p = path.join(runsDir(), id, "owner.json");
+  try {
+    const data = JSON.parse(await fs.readFile(p, "utf8")) as RunOwner;
+    if (typeof data.owner === "string") return data;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write runs/<id>/owner.json for a freshly dispatched run. Best effort: a failure
+ * to record the owner never blocks the launch (the run still ran), it only means
+ * the run is admin-only until tagged. Called by the dispatch routes after spawn.
+ */
+export async function writeRunOwner(id: string, owner: RunOwner): Promise<void> {
+  const dir = path.join(runsDir(), id);
+  try {
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "owner.json"),
+      JSON.stringify(owner, null, 2),
+      "utf8",
+    );
+  } catch {
+    // Recording the owner is best effort; the run itself is unaffected.
   }
 }
 
