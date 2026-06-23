@@ -320,14 +320,23 @@ engine. What is implemented now:
 - **Resource actuals and cost.** Each run records per-task duration, peak memory,
   and cpu from the trace (`RunRecord.resource_usage`); `contig cost` prices a run
   at configurable cpu-hour and memory-GB-hour rates (default 0 for local), shown on
-  the run page. This is the basis for the managed-compute usage line.
+  the run page. `contig estimate` gives a pre-run runtime and cost estimate, learned
+  from past runs of the same pipeline with a sample-count heuristic fallback (shown
+  on the launch form). This is the basis for the managed-compute usage line.
+- **Interoperable provenance.** Beyond the portable bundle, `contig export
+  --rocrate` emits an RO-Crate (ro-crate-metadata.json) and `contig methods` emits a
+  deterministic, citation-ready methods paragraph from the bundle, so a run is
+  publication and audit ready without re-entering anything by hand.
 - **Compute backends.** `local` (Docker) and `aws_batch` map through one config
   generator; `contig run --backend aws_batch` refuses up front (a preflight) if the
   queue, region, S3 work dir, or credentials are missing. See the AWS Batch runbook.
-- **Access control.** The dashboard integrates Auth0 for authentication and
-  role-based authorization (writer/admin gates the action routes; read views are
-  open to any authenticated user), configured entirely from env so Contig stays
-  open source with no tenant baked in, and a documented bypass for local use.
+- **Access control and tenancy.** The dashboard integrates Auth0 for authentication
+  and role-based authorization (writer/admin gates the action routes; read views are
+  open to any authenticated user), configured entirely from env so Contig stays open
+  source with no tenant baked in, and a documented bypass for local use. Runs are
+  owner-tagged at dispatch (an owner.json from the Auth0 user), so each user sees
+  only their own runs while admins see all; a Dockerfile and deploy guide cover
+  self-hosting.
 
 ---
 

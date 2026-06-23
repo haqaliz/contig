@@ -186,7 +186,7 @@ path or modest engine work (flagged NEW).
 | Feature | What it does | Engine | Effort |
 |---|---|---|---|
 | Resource actuals from the trace | Per-task duration, realtime, peak memory | Shipped 2026-06-23 (RunRecord.resource_usage parsed from the trace; per-task duration, peak RSS, and cpu on the run page) | M |
-| Run cost estimate and actuals | Pre-run estimate from samples plus backend plus caps; post-run actuals for the managed tier | Shipped 2026-06-23 (contig cost: per-task and total cost at configurable cpu-hour and mem-GB-hour rates, default 0 for local; dashboard resources-and-cost card) | L |
+| Run cost estimate and actuals | Pre-run estimate from samples plus backend plus caps; post-run actuals for the managed tier | Shipped 2026-06-23 (contig cost for post-run actuals; contig estimate for a pre-run runtime and cost estimate, data-driven from past runs of the same pipeline with a sample-count heuristic fallback, shown on the launch form) | L |
 
 ---
 
@@ -227,10 +227,10 @@ needs real engine work, so it follows once the read and launch surfaces are soli
 
 | Feature | What it does | Engine | Effort |
 |---|---|---|---|
-| Methods-section generator | Draft a citation-ready methods paragraph from the bundle (templating over our own provenance, not workflow authoring) | NEW: templating step | M |
+| Methods-section generator | Draft a citation-ready methods paragraph from the bundle (templating over our own provenance, not workflow authoring) | Shipped 2026-06-23 (contig methods: deterministic citation-ready paragraph from the bundle, no LLM; dashboard download button) | M |
 | Audit trail / provenance log | Cross-run chronological view of every agent action and gating event | Built per-run; cross-run aggregation | M |
 | Guided escalation prompts | When the engine escalates a genuinely ambiguous decision, present it as a plain question with safe options | NEW: structured escalation format | L |
-| RO-Crate / interoperable export | Map the bundle to RO-Crate so provenance interoperates beyond Contig | NEW: schema mapping | L |
+| RO-Crate / interoperable export | Map the bundle to RO-Crate so provenance interoperates beyond Contig | Shipped 2026-06-23 (contig export --rocrate: an RO-Crate ro-crate-metadata.json with the run as a Dataset, the pipeline as a SoftwareApplication, inputs/outputs as Files with checksums; dashboard download button) | L |
 
 ---
 

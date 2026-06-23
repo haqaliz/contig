@@ -45,6 +45,9 @@ The CLI and the test suite work **without** Nextflow/Java/Docker; only live runs
 | `contig rerun <id>` | Reproduce a past run from its launch manifest under a fresh run id |
 | `contig verify <id>` | Re-hash a finished run's outputs against the record and report any drift |
 | `contig cost <id>` | Per-task duration and peak memory from the run, costed at configurable `--rate-cpu-hour` / `--rate-mem-gb-hour` |
+| `contig estimate --pipeline <p> --input <sheet>` | Pre-run runtime and cost estimate, data-driven from past runs of that pipeline with a sample-count heuristic fallback |
+| `contig export <id> --rocrate` | Export the run's provenance as an RO-Crate (ro-crate-metadata.json) |
+| `contig methods <id>` | A deterministic, citation-ready methods paragraph from the bundle |
 | `contig approve <id>` | Approve (or `--reject`) the patch a paused self-heal run is waiting on |
 | `contig list` | All bundled runs |
 | `contig corpus-promote` | Promote a confirmed pending failure case into the golden corpus |
