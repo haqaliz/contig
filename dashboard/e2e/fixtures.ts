@@ -49,6 +49,11 @@ export const FIXTURE_RUN_IDS = [
   // The approve route is mocked in the spec so the chosen index is asserted without
   // the real CLI.
   "choice-fixture",
+  // A finished run whose owner.json carries a workspace tag (PRD section A): owned
+  // by a non-admin (auth0|bob) and shared into the "lab-x" workspace. Under the
+  // bypass the admin sees it like any run; the cross-user and workspace-shared
+  // denial paths are covered by the unit-level ownership-filter spec.
+  "workspace-fixture",
 ];
 
 // Mirror lib/runs.ts runsDir(): CONTIG_RUNS_DIR, else ../runs from the dashboard

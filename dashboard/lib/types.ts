@@ -392,12 +392,18 @@ export interface LaunchManifest {
   created_at: string;
 }
 
-// The owner tag a dispatch route writes to runs/<id>/owner.json (PRD contract E).
-// owner is the stable user identity (the Auth0 `sub`); email is the address if
-// the tenant exposes one. A run with no owner.json predates ownership (e.g. a
-// CLI-launched run) and is admin-only. Under the auth bypass the owner is the
-// synthetic local admin, so local dev and the e2e suite see every run.
+// The owner tag a dispatch route writes to runs/<id>/owner.json (PRD contract E,
+// PRD section A). owner is the stable user identity (the Auth0 `sub`); email is
+// the address if the tenant exposes one. workspace, when present, is the shared
+// run pool the run belongs to (the dispatcher's first workspace at launch time),
+// so every member of that workspace can see the run. A run with no owner.json
+// predates ownership (e.g. a CLI-launched run) and is admin-only. Under the auth
+// bypass the owner is the synthetic local admin, so local dev and the e2e suite
+// see every run.
 export interface RunOwner {
   owner: string;
   email: string | null;
+  // The shared workspace this run belongs to, or absent for a solo run (no
+  // workspace at dispatch). When set, any viewer in this workspace may see it.
+  workspace?: string;
 }

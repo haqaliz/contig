@@ -108,6 +108,7 @@ To turn auth on, set these in the environment (never commit real values):
 | `AUTH0_CLIENT_SECRET` | The Auth0 application's client secret |
 | `APP_BASE_URL` | This app's URL, e.g. `http://localhost:3000` |
 | `AUTH0_ROLES_CLAIM` | Optional: override the namespaced roles claim (default `https://contig/roles`) |
+| `AUTH0_WORKSPACES_CLAIM` | Optional: override the namespaced workspaces claim (default `https://contig/workspaces`) |
 
 The SDK mounts its own routes at `/auth/login`, `/auth/logout`, and
 `/auth/callback`; add the callback and logout URLs to the Auth0 application's
@@ -131,6 +132,21 @@ user sees only the runs they own; the **admin** role sees all; a run with no
 does not own reads as absent (a 404), so it never leaks. Under the bypass the
 viewer is the synthetic local admin, so local dev and the suite see every run.
 Ownership lives entirely in the dashboard; the engine is unchanged.
+
+**Team / shared workspaces.** A workspace is a shared run pool a lab sees
+together, layered on the per-user ownership above. Each user carries a list of
+workspaces in a namespaced claim, `https://contig/workspaces` by default (a string
+array set by an Auth0 Action or rule, overridable with `AUTH0_WORKSPACES_CLAIM`).
+At dispatch the run is tagged with the launcher's first workspace, recorded as an
+optional `workspace` field on `owner.json` (omitted for a solo user in no
+workspace). Visibility then widens by one rule: a user sees a run when they own
+it **or** the run carries a workspace they belong to. The **admin** role still
+sees every run, and the solo case (a run with no `workspace`) is unchanged, so
+only its owner (or an admin) sees it. Visibility denies by default: a run a user
+neither owns nor shares a workspace with reads as absent (a 404). The account menu
+in the header shows the viewer's workspace membership read-only (the name(s), or
+"No workspace"); there is no switcher in v1. Under the bypass the local admin
+already sees every run, so no workspace label is shown.
 
 ## Deploy
 
@@ -164,6 +180,31 @@ docker run --rm -p 3000:3000 \
   reverse proxy (nginx, Caddy, a cloud load balancer) in front for TLS termination
   and to forward `Host` / `X-Forwarded-*` headers; set `APP_BASE_URL` to the
   externally visible URL so the Auth0 callback and logout URLs line up.
+
+## Deployment
+
+Contig is self-hostable and free. The repo ships a one-command bring-up that puts
+the dashboard behind a TLS-terminating reverse proxy, plus a full environment
+checklist and proxy examples.
+
+- `docker-compose.yml` (in this directory) brings up two services: the dashboard
+  (built from the `Dockerfile` above) with a mounted runs directory and the env
+  wired (`CONTIG_RUNS_DIR`, `CONTIG_DISPATCH_CMD`, `AUTH0_*`, and
+  `CONTIG_AUTH_DISABLED` for a trusted local bring-up), and a Caddy proxy in front
+  for automatic TLS. Bring it up with `docker compose up` from this directory.
+- `../deploy/Caddyfile` is the reverse-proxy example (auto-TLS via Let's Encrypt);
+  `../deploy/nginx.conf` is the same for nginx if you manage certificates
+  yourself.
+- `../deploy/ENV.md` is the complete environment checklist for a real deployment:
+  the Auth0 tenant and application setup, the `https://contig/roles` and
+  `https://contig/workspaces` namespaced claims, `CONTIG_RUNS_DIR`,
+  `CONTIG_SIGNING_KEY`, and the `CONTIG_SMTP_*` email variables. It uses
+  placeholders only; never commit real secrets.
+
+One honest constraint carried from the Deploy section above: the dashboard image
+serves the dashboard only and shells out to the `contig` CLI, so the engine must
+be reachable from the dashboard container (baked into a derived image, mounted
+from the host, or run as a sidecar). The compose file documents this inline.
 
 ## Testing
 

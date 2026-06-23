@@ -23,8 +23,13 @@ export async function POST(
   try {
     const viewer = await currentViewer();
     const { run_id } = await dispatchReproduce(id);
-    // The reproduced run is owned by whoever reproduced it (PRD contract E).
-    await writeRunOwner(run_id, { owner: viewer.owner, email: viewer.email });
+    // The reproduced run is owned by whoever reproduced it (PRD contract E), and
+    // shared with their first workspace (PRD section A) when present.
+    await writeRunOwner(run_id, {
+      owner: viewer.owner,
+      email: viewer.email,
+      ...(viewer.workspaces[0] ? { workspace: viewer.workspaces[0] } : {}),
+    });
     return NextResponse.json({ run_id }, { status: 202 });
   } catch (err) {
     if (err instanceof NoManifestError) {

@@ -21,6 +21,10 @@ export interface UserMenuProps {
   name: string;
   email: string | null;
   roles: string[];
+  // The shared run pools the user belongs to (PRD section A). Read-only for v1:
+  // a membership indicator, with no switcher. Empty for a solo user and under the
+  // bypass (the local admin already sees every run).
+  workspaces: string[];
   // True in the dev/test bypass: no real session, so no logout link.
   bypass: boolean;
 }
@@ -32,8 +36,24 @@ function primaryRole(roles: string[]): string {
   return "viewer";
 }
 
-export function UserMenuClient({ name, email, roles, bypass }: UserMenuProps) {
+// What the workspace line shows: under the bypass nothing (the local admin sees
+// every run, so a workspace label would only mislead); for a real viewer, the
+// workspace name(s) they belong to, or "No workspace" for a solo user.
+function workspaceLabel(workspaces: string[], bypass: boolean): string | null {
+  if (bypass) return null;
+  if (workspaces.length === 0) return "No workspace";
+  return workspaces.join(", ");
+}
+
+export function UserMenuClient({
+  name,
+  email,
+  roles,
+  workspaces,
+  bypass,
+}: UserMenuProps) {
   const role = primaryRole(roles);
+  const workspace = workspaceLabel(workspaces, bypass);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -58,6 +78,11 @@ export function UserMenuClient({ name, email, roles, bypass }: UserMenuProps) {
             <span className="text-xs text-muted-foreground">{email}</span>
           ) : null}
           <span className="text-xs text-muted-foreground">Role: {role}</span>
+          {workspace ? (
+            <span className="text-xs text-muted-foreground">
+              Workspace: {workspace}
+            </span>
+          ) : null}
         </div>
         {bypass ? null : (
           <>

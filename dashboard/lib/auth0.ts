@@ -24,6 +24,14 @@ import type { SessionData, User } from "@auth0/nextjs-auth0/types";
 export const ROLES_CLAIM =
   process.env.AUTH0_ROLES_CLAIM ?? "https://contig/roles";
 
+// The namespaced claim our Auth0 tenant adds the workspace list to (set by an
+// Action or a rule), a string array of the workspaces a user belongs to. Same
+// namespacing reason as the roles claim. Overridable for a tenant that uses
+// another namespace. A workspace is a shared run pool a lab sees together,
+// layered on top of the per-user ownership.
+export const WORKSPACES_CLAIM =
+  process.env.AUTH0_WORKSPACES_CLAIM ?? "https://contig/workspaces";
+
 // The roles allowed to run the action (write) routes. A viewer (any other
 // authenticated user) gets read-only access; these two may also act.
 const WRITER_ROLES = new Set(["writer", "admin"]);
@@ -84,6 +92,18 @@ export function hasWriterRole(roles: readonly string[]): boolean {
 }
 
 /**
+ * The workspaces on a user, read from the namespaced claim. Returns an empty list
+ * for a user in no workspace (the solo case). The claim is whatever Auth0 put
+ * there, so we accept only a string array and ignore anything else.
+ */
+export function workspacesOf(user: User | undefined | null): string[] {
+  if (!user) return [];
+  const raw = user[WORKSPACES_CLAIM];
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((w): w is string => typeof w === "string");
+}
+
+/**
  * The current session, or null. In the bypass this returns null (there is no
  * real session) and callers treat that as an admin via isAuthDisabled(); when
  * auth is live it returns the real SessionData or null if unauthenticated.
@@ -100,6 +120,9 @@ export interface HeaderUser {
   email: string | null;
   picture: string | null;
   roles: string[];
+  // The shared run pools the user belongs to (the namespaced workspaces claim),
+  // shown read-only in the account menu. Empty in the bypass and for a solo user.
+  workspaces: string[];
   // True in the dev/test bypass, so the header can omit a real logout link.
   bypass: boolean;
 }
@@ -112,6 +135,7 @@ export async function headerUser(): Promise<HeaderUser | null> {
       email: null,
       picture: null,
       roles: ["admin"],
+      workspaces: [],
       bypass: true,
     };
   }
@@ -124,45 +148,55 @@ export async function headerUser(): Promise<HeaderUser | null> {
     email: user.email ?? null,
     picture: user.picture ?? null,
     roles,
+    workspaces: workspacesOf(user),
     bypass: false,
   };
 }
 
-// The viewer identity used for per-user run isolation (PRD contract E). owner is
-// the stable Auth0 `sub`; isAdmin is true for the admin role and (always) in the
-// dev/test bypass, so an admin and local dev see every run. email is recorded on
-// a run's owner.json so the owner is human-readable later.
+// The viewer identity used for per-user run isolation (PRD contract E) and shared
+// workspace visibility (PRD section A). owner is the stable Auth0 `sub`; isAdmin
+// is true for the admin role and (always) in the dev/test bypass, so an admin and
+// local dev see every run. email is recorded on a run's owner.json so the owner is
+// human-readable later. workspaces is the user's shared run pools, read from the
+// namespaced workspaces claim: a viewer also sees any run tagged with a workspace
+// they belong to.
 export interface ViewerIdentity {
   owner: string;
   email: string | null;
   isAdmin: boolean;
+  workspaces: string[];
 }
 
 // The synthetic owner used under the auth bypass (CONTIG_AUTH_DISABLED or no Auth0
 // env). It is an admin, so local dev and the Playwright suite see every run, and
-// any run it dispatches is tagged to this stable id.
+// any run it dispatches is tagged to this stable id. Its workspaces list is empty:
+// admin already sees every run, so it needs no workspace membership to do so.
 const BYPASS_VIEWER: ViewerIdentity = {
   owner: "local-admin",
   email: null,
   isAdmin: true,
+  workspaces: [],
 };
 
 /**
- * The current viewer for run isolation. In the bypass this is the synthetic local
- * admin (sees all). When auth is live it is the session user, an admin if they
- * carry the admin role; an unauthenticated request (which the proxy already
- * redirects) resolves to a non-admin with an empty owner that matches no run.
+ * The current viewer for run isolation and workspace visibility. In the bypass
+ * this is the synthetic local admin (sees all). When auth is live it is the
+ * session user, an admin if they carry the admin role, with the workspaces from
+ * their namespaced claim; an unauthenticated request (which the proxy already
+ * redirects) resolves to a non-admin with an empty owner and no workspaces, which
+ * matches no run.
  */
 export async function currentViewer(): Promise<ViewerIdentity> {
   if (isAuthDisabled()) return BYPASS_VIEWER;
   const session = await auth0().getSession();
-  if (!session) return { owner: "", email: null, isAdmin: false };
+  if (!session) return { owner: "", email: null, isAdmin: false, workspaces: [] };
   const user = session.user;
   const roles = rolesOf(user);
   return {
     owner: typeof user.sub === "string" ? user.sub : "",
     email: user.email ?? null,
     isAdmin: roles.includes("admin"),
+    workspaces: workspacesOf(user),
   };
 }
 

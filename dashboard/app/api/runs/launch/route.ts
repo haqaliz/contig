@@ -32,8 +32,14 @@ export async function POST(req: Request) {
       queue: str(body.queue),
       account: str(body.account),
     });
-    // Tag the run with its owner for per-user isolation (PRD contract E).
-    await writeRunOwner(run_id, { owner: viewer.owner, email: viewer.email });
+    // Tag the run with its owner for per-user isolation (PRD contract E), plus the
+    // viewer's first workspace (PRD section A) when present, so the run is shared
+    // with that workspace.
+    await writeRunOwner(run_id, {
+      owner: viewer.owner,
+      email: viewer.email,
+      ...(viewer.workspaces[0] ? { workspace: viewer.workspaces[0] } : {}),
+    });
     return NextResponse.json({ run_id }, { status: 202 });
   } catch (err) {
     if (err instanceof DispatchBusyError) {

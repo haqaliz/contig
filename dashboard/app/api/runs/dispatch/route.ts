@@ -18,8 +18,14 @@ export async function POST() {
     const viewer = await currentViewer();
     const { run_id } = await dispatchTestProfileRun();
     // Tag the run with its owner so per-user isolation (PRD contract E) can scope
-    // it later. Best effort: a failed write leaves the run admin-only, not broken.
-    await writeRunOwner(run_id, { owner: viewer.owner, email: viewer.email });
+    // it later, plus the viewer's first workspace (PRD section A) when present, so
+    // the run is shared with that workspace. Best effort: a failed write leaves
+    // the run admin-only, not broken.
+    await writeRunOwner(run_id, {
+      owner: viewer.owner,
+      email: viewer.email,
+      ...(viewer.workspaces[0] ? { workspace: viewer.workspaces[0] } : {}),
+    });
     return NextResponse.json({ run_id }, { status: 202 });
   } catch (err) {
     if (err instanceof DispatchBusyError) {

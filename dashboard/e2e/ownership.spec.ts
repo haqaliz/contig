@@ -27,3 +27,19 @@ test("the admin (bypass) can open an untagged run", async ({ page }) => {
   // CardTitle renders as a div, so match the export card by text.
   await expect(page.getByText("Export and cite")).toBeVisible();
 });
+
+test("the admin (bypass) sees a workspace-shared run", async ({ page }) => {
+  // workspace-fixture is owned by a non-admin (auth0|bob) and shared into the
+  // "lab-x" workspace (PRD section A). The admin bypass sees it like any run, so a
+  // workspace tag never hides a run from the admin. The non-admin denial paths are
+  // covered by the unit-level ownership-filter spec.
+  await page.goto("/runs");
+  await expect(
+    page.getByRole("link", { name: "workspace-fixture" }),
+  ).toBeVisible();
+
+  await page.goto("/runs/workspace-fixture");
+  await expect(
+    page.getByRole("heading", { name: "workspace-fixture" }),
+  ).toBeVisible();
+});

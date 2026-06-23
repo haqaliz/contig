@@ -1,0 +1,49 @@
+{
+  "run_id": "workspace-fixture",
+  "pipeline": "nf-core/rnaseq",
+  "pipeline_revision": "3.26.0",
+  "target": {
+    "backend": "local",
+    "container_runtime": "docker",
+    "work_dir": "/tmp/work",
+    "engine": "nextflow",
+    "credentials_ref": null,
+    "backend_options": {},
+    "resource_limits": {}
+  },
+  "input_checksums": {
+    "samplesheet.csv": "deadbeef"
+  },
+  "parameters": {
+    "genome": "GRCh38"
+  },
+  "container_digests": {
+    "nf-core/fastqc": "sha256:abc123"
+  },
+  "nextflow_version": "24.10.0",
+  "contig_version": "0.1.0",
+  "events": [
+    {
+      "process": "FASTQC",
+      "status": "COMPLETED",
+      "exit": 0,
+      "task_id": "1",
+      "name": "FASTQC (SAMPLE_A)"
+    }
+  ],
+  "qc_results": [
+    {
+      "check": "min_sample_count",
+      "status": "pass",
+      "message": "OK",
+      "value": 2,
+      "expected_range": ">= 2"
+    }
+  ],
+  "output_checksums": {
+    "results/multiqc_report.html": "cafebabe"
+  },
+  "repair_history": [],
+  "resource_usage": [],
+  "verdict": "pass"
+}

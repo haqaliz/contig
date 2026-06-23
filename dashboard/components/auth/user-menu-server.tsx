@@ -29,6 +29,7 @@ export async function UserMenuServer() {
       name={user.name}
       email={user.email}
       roles={user.roles}
+      workspaces={user.workspaces}
       bypass={user.bypass}
     />
   );

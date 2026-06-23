@@ -1453,8 +1453,15 @@ export async function getRunOwner(id: string): Promise<RunOwner | null> {
   const p = path.join(runsDir(), id, "owner.json");
   try {
     const data = JSON.parse(await fs.readFile(p, "utf8")) as RunOwner;
-    if (typeof data.owner === "string") return data;
-    return null;
+    if (typeof data.owner !== "string") return null;
+    const owner: RunOwner = {
+      owner: data.owner,
+      email: typeof data.email === "string" ? data.email : null,
+    };
+    // The workspace tag is optional (a solo run omits it). Keep it only when it
+    // is a real string, so a malformed value never grants shared visibility.
+    if (typeof data.workspace === "string") owner.workspace = data.workspace;
+    return owner;
   } catch {
     return null;
   }
