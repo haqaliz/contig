@@ -70,22 +70,45 @@ The `pypi` job uses OIDC (`id-token: write`), so no API token secret is stored.
 
 ### Homebrew tap
 
-1. Create a public repo `haqaliz/homebrew-contig`.
-2. After a release builds the binaries, compute their checksums and fill them into
-   `homebrew/contig.rb`:
+The tap repo `haqaliz/homebrew-contig` already exists (public). The formula lives
+there as `Formula/contig.rb`; `homebrew/contig.rb` in this repo is the source of
+truth that gets copied over. Per release:
+
+1. After a release builds the binaries, compute their checksums and fill them into
+   `homebrew/contig.rb` (also bump the `version` and the three release URLs):
 
    ```bash
    for a in contig-macos-arm64 contig-macos-x86_64 contig-linux-x86_64; do
-     curl -fsSL -o "$a" "https://github.com/haqaliz/contig/releases/download/v0.1.0/$a"
+     curl -fsSL -o "$a" "https://github.com/haqaliz/contig/releases/download/vX.Y.Z/$a"
      shasum -a 256 "$a"
    done
    ```
 
-3. Commit the filled formula to the tap as `Formula/contig.rb`. Users then run
+2. Copy the filled formula to the tap as `Formula/contig.rb` and push (the tap
+   pushes over SSH as the `haqaliz` identity). Users then run
    `brew install haqaliz/contig/contig`.
 
 This step is manual per release for now (the checksums change each build). A future
 job can update the tap automatically with a tap-scoped token.
+
+If the macOS Intel (`macos-13`) binary job stalls in CI and `contig-macos-x86_64`
+is missing from the release, build it locally on an Apple Silicon machine under
+Rosetta and upload it as `haqaliz` (not the push-only collaborator):
+
+```bash
+# x86_64 Python 3.12 (uv is arm64-only, so fetch a standalone build)
+curl -fsSL -o py.tgz "https://github.com/astral-sh/python-build-standalone/releases/latest/download/cpython-3.12-x86_64-apple-darwin-install_only.tar.gz" || \
+  echo "pick the exact asset URL from the python-build-standalone latest release"
+tar -xzf py.tgz -C /tmp/py-x64
+arch -x86_64 /tmp/py-x64/python/bin/python3 -m venv /tmp/contig-x64
+arch -x86_64 /tmp/contig-x64/bin/python -m pip install --only-binary=:all: cryptography pydantic typer
+arch -x86_64 /tmp/contig-x64/bin/python -m pip install --no-deps . pyinstaller
+arch -x86_64 /tmp/contig-x64/bin/pyinstaller --onefile --name contig \
+  --collect-submodules contig --copy-metadata contig \
+  --add-data "src/contig/data:contig/data" packaging/contig_main.py
+mv dist/contig dist/contig-macos-x86_64
+gh release upload vX.Y.Z dist/contig-macos-x86_64 --repo haqaliz/contig
+```
 
 ## Note on the runtime
 
