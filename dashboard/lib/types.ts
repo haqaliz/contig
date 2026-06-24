@@ -4,12 +4,17 @@
 // (a pydantic computed_field), so the dashboard never re-implements trust logic.
 
 export type Verdict = "pass" | "warn" | "fail" | "unverified";
-export type QCStatus = "pass" | "warn" | "fail";
+// A QC check status. "unverified" is emitted when a check could not reach a
+// verdict (for example a concordance check with no corroborating second tool to
+// compare against): it is a neutral, non-severity state, distinct from a pass,
+// warn, or fail.
+export type QCStatus = "pass" | "warn" | "fail" | "unverified";
 // What kind of check produced a QC result: a content-level metric check (a rule
-// pack on MultiQC metrics) or a structural/integrity check on the output files
-// themselves (present, non-empty, valid). Mirrors QCKind in the engine. Older
-// records predate the field, so an absent value reads as "metric".
-export type QCKind = "metric" | "structural";
+// pack on MultiQC metrics), a structural/integrity check on the output files
+// themselves (present, non-empty, valid), or a concordance check that corroborates
+// a result across tools (cross-tool agreement). Mirrors QCKind in the engine.
+// Older records predate the field, so an absent value reads as "metric".
+export type QCKind = "metric" | "structural" | "concordance";
 
 export interface TaskEvent {
   process: string;

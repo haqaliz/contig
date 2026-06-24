@@ -30,8 +30,16 @@ export const VERDICT_ORDER: Record<Verdict, number> = {
 
 // QC severity reduction, mirror of overall_verdict in src/contig/models.py:
 // a fail dominates a warn, a warn a pass. Callers handle the empty case as
-// "unverified" before reaching here.
-const QC_RANK: Record<QCStatus, number> = { fail: 0, warn: 1, pass: 2 };
+// "unverified" before reaching here. "unverified" is a neutral per-check status
+// (for example a concordance check with no second tool to compare against): it
+// carries no severity, so it sorts last, after a clean pass, and does not drive
+// the overall reduction below.
+const QC_RANK: Record<QCStatus, number> = {
+  fail: 0,
+  warn: 1,
+  pass: 2,
+  unverified: 3,
+};
 
 function overallQc(results: QCResult[]): QCStatus {
   const statuses = new Set(results.map((r) => r.status));
