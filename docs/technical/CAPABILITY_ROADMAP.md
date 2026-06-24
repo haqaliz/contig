@@ -1,0 +1,265 @@
+# Contig: Engine Capability Roadmap (next 6 months)
+
+The dashboard roadmap in [`FEATURES.md`](../../FEATURES.md) is largely shipped.
+This document is the next layer of work: the **scientific and execution
+capabilities of the engine itself**, the things that make Contig *do more* as a
+genomics and bioinformatics tool. It is a sequenced backlog so we can go through
+it one capability at a time.
+
+Everything here stays on the Layer-2 side of the wedge (run, self-heal, verify,
+reproduce). Nothing here authors pipelines from English (Layer 1), and nothing
+here needs wet-lab or clinical credentials. See the guardrails at the end.
+
+---
+
+## How to read this
+
+- Capabilities are labelled **C1 ... C6** in build order. Each is independently
+  shippable and leaves the engine more capable than before.
+- **Time windows** (months 1 to 6) are guidance for sequencing, not commitments.
+  Real demand-pull from a design partner reorders this freely.
+- Every capability is built **test-first** (the repo's standing discipline): each
+  one lists its acceptance as a failing test we write before the code.
+- Every capability names the **eval data it captures**, because the accumulating
+  failure-and-verification corpus is moat #2 and must compound with each feature.
+
+### The single framing
+
+The moat is the verified verdict and the self-heal loop. Each capability below
+either makes the verdict *more trustworthy* (concordance, biological plausibility,
+reference integrity), *recovers more failures autonomously* (self-heal breadth,
+auto resource-scaling), or *widens what we can verify at all* (a new assay). A
+better base model should make each of these stronger, never redundant.
+
+---
+
+## C1. Cross-tool concordance verification  ·  months 1 to 2  ·  LEAD
+
+**The chosen next capability.** Today the verdict rests on QC thresholds,
+structural checks, and (where a reference run exists) benchmarking against a
+known-good prior run. Concordance adds an independent axis: run a **second,
+independent tool** on the same input and treat agreement as corroboration of the
+result. Disagreement is surfaced honestly, never hidden.
+
+This is distinct from the shipped `contig benchmark` (which compares a run to a
+designated *reference run* of the same pipeline). Concordance compares **two
+different tools on the same data within one analysis**, so it catches tool-specific
+error even when no reference run exists.
+
+**Why it is moat.** No incumbent issues a correctness verdict at all, let alone a
+cross-tool one. Concordance is a defensible verification primitive, it produces
+rich evaluation data (agreement distributions per assay), and it gets better as
+models get better at adjudicating *why* two tools disagree.
+
+**What we build (per assay):**
+- Germline variants: a second caller (for example bcftools or DeepVariant against
+  the primary GATK HaplotypeCaller call set), reported as genotype concordance,
+  Ti/Tv ratio agreement, and F1 of one call set against the other.
+- RNA-seq quantification: a second quantifier (for example Salmon against
+  STAR plus featureCounts, or kallisto), reported as per-gene rank correlation
+  (Spearman) and the fraction of genes agreeing within a tolerance.
+- Single-cell RNA-seq: cell-count and cluster-stability agreement across two
+  quantifiers (for example STARsolo against alevin-fry).
+- A new `verification.concordance` module and a `ConcordanceResult` model
+  (metric, value, tolerance, status, the two tools compared), wired into
+  `run_qc` and the verdict reduction. Concordance can move a verdict to WARN; it
+  never alone promotes UNVERIFIED to PASS.
+- Surfaced on the verdict card and in `contig show` as a named "corroborated by"
+  line listing the metric and the second tool.
+
+**Acceptance (test-first):** synthetic fixtures of two call sets / two count
+matrices. A concordant pair yields a PASS concordance check with the metric
+reported; a deliberately divergent pair yields WARN with the exact metric and the
+two tool names in the message. Deterministic, no network.
+
+**Eval data captured:** concordance metric per run and assay becomes a reference
+distribution; runs whose tools disagree are flagged into the corpus as
+verification-divergence cases.
+
+**Dependencies:** none blocking. Reuses the existing QC and verdict plumbing.
+
+---
+
+## C2. Self-heal breadth plus auto resource-scaling  ·  months 2 to 3
+
+Expand the failure-mode catalog and repair strategies well past the current set,
+and make repairs resource-aware. This is the most directly "gets better with
+better models" surface and the richest corpus fuel.
+
+**Why it is moat.** Unattended-completion rate is the headline reliability metric
+(ROADMAP Phase 1). Every new recovered failure mode both raises that number and
+adds a golden corpus case that improves the detector for everyone.
+
+**What we build:**
+- Resource-aware retry: out-of-memory detected, retry the failed process with
+  scaled memory within a bounded ceiling; walltime exceeded, scale time; record
+  the scaling as a structured patch with its rationale and expected signal.
+- New repair strategies, each with a `FailureClass`, a detector corpus seed, and
+  an injected-failure fixture: missing or stale index (build it), reference and
+  genome-build mismatch (detect by contig-naming and assembly signature, propose
+  the matching reference), input-format issues (detect and convert, for example
+  bgzip or CRAM and BAM), container or dependency pin conflict (repin to a known
+  good digest).
+- A bounded retry budget so auto-scaling can never loop without converging.
+
+**Acceptance (test-first):** for each new failure mode, an injected-failure
+fixture that the engine must detect, diagnose, patch, and recover from without
+human help; and a budget test proving the loop terminates.
+
+**Eval data captured:** each new mode plus its fix lands in the failure-and-fix
+corpus; repair success-rate analytics gain new classes.
+
+**Dependencies:** builds on the existing detect, repair, self-heal loop.
+
+---
+
+## C3. Biological-plausibility verification  ·  months 3 to 4
+
+Deepen the verdict scientifically with **assay-aware sanity checks** that encode
+what a biologically reasonable result looks like, beyond generic QC thresholds.
+
+**Why it is moat.** This is the verification layer getting *smarter about biology*,
+which is exactly the judgement incumbents leave to the human. It scopes
+verifiability honestly per assay (guardrail: no over-claiming).
+
+**What we build (assay-specific checks wired into the verdict):**
+- RNA-seq: rRNA-contamination fraction within expected bounds, gene-body coverage
+  evenness, exonic-mapping fraction, library-complexity and duplication sanity.
+- Germline variants: Ti/Tv ratio in the expected range for the capture, het/hom
+  ratio sanity, sex-check concordance between reported and inferred sex, expected
+  variant-count band for the assay.
+- Single-cell RNA-seq: doublet-rate band, mitochondrial-fraction distribution,
+  knee-point sanity on the barcode-rank curve, expected recovered-cell band.
+- Each check is conservative, names its evidence, and degrades to UNVERIFIED
+  (not PASS) when the inputs to the check are absent.
+
+**Acceptance (test-first):** fixtures at and outside each plausibility band; a
+result inside the band passes, a result outside drops the verdict with the named
+biological reason; missing inputs yield UNVERIFIED, never PASS.
+
+**Eval data captured:** plausibility outcomes per assay extend the reference
+distributions and flag implausible-but-completed runs for review.
+
+**Dependencies:** strengthened by C1 (concordance) but independent of it.
+
+---
+
+## C4. New assay, depth-first: somatic variant calling  ·  months 4 to 5
+
+Add one assay end to end rather than several shallowly. Recommended:
+**somatic (tumor and normal) variant calling** via an existing nf-core pipeline
+(for example nf-core/sarek in somatic mode). It is a natural extension of the
+shipped germline assay, it is high-value, and it is rich to verify.
+
+**Why it is moat.** Each new assay brings new failure modes, new verification
+logic, and new corpus data. Depth-first means we only add an assay we can
+genuinely verify, per the standing rule.
+
+**What we build (via the `ADD_AN_ASSAY` path):**
+- Registry entry and planner match for the somatic goal; tumor and normal
+  sample-sheet shape and pre-flight validation.
+- Structural output manifest for the somatic outputs; QC and biological-plausibility
+  checks (VAF distribution sanity, panel-of-normals filtering present, expected
+  somatic-count band).
+- A concordance hook (C1) against a second somatic caller.
+- Seed corpus cases for the somatic-specific failure modes.
+
+**Acceptance (test-first):** a planned somatic run on a public tumor and normal
+test profile validates, produces the expected structural outputs, and yields a
+scoped verdict; an injected somatic-specific failure self-heals.
+
+**Eval data captured:** a whole new assay's worth of failure and verification
+cases.
+
+**Dependencies:** reuses C1, C2, C3 on the new assay.
+
+---
+
+## C5. Reference and input-data integrity  ·  month 5
+
+Make reference assets first-class and reproducibility-grade: pin, verify, and
+record the genome build, annotation version, and known-sites resources, and
+detect mismatches before they corrupt a run.
+
+**Why it is moat.** Reference and build mismatch is a notorious silent-failure
+class (a run "succeeds" against the wrong genome). Pinning and verifying
+references both prevents a failure class (feeding C2's mismatch detector) and
+deepens the reproduce guarantee (the manifest already pins tools and params; this
+pins the *data* they ran against).
+
+**What we build:**
+- Capture reference identity into provenance: build name, annotation (GTF)
+  version, and checksums of the reference and known-sites files.
+- A pre-flight reference-integrity check: refuse or warn when the sample data's
+  contig naming or assembly signature does not match the selected reference.
+- Surface reference identity in the provenance panel and the methods output.
+
+**Acceptance (test-first):** a run whose data and reference disagree is caught at
+pre-flight with the exact mismatch named; the reference identity appears in the
+bundle and reproduces on re-run.
+
+**Eval data captured:** reference-mismatch cases join the corpus.
+
+**Dependencies:** complements C2 (mismatch repair) and the shipped provenance work.
+
+---
+
+## C6. Eval flywheel as a continuous loop  ·  month 6
+
+Turn the corpus, detector-eval, and model-swap machinery (already shipped as
+discrete commands) into a **continuous, measured improvement loop**, and fold the
+new C1 to C5 signals into it.
+
+**Why it is moat.** This is ROADMAP Phase 3's data flywheel made concrete and
+started early: verification and self-heal accuracy improving over time, measured
+against a held-out internal benchmark, *learned from real failures* rather than
+from a static model.
+
+**What we build:**
+- Feed concordance outcomes (C1), new repair outcomes (C2), and plausibility
+  outcomes (C3) into the eval history alongside the detector scores.
+- A held-out internal benchmark set and a single command that reports current
+  verification and self-heal accuracy against it, trended over corpus versions.
+- A regression guard: a corpus or detector change that lowers accuracy on the
+  held-out set is flagged before it ships.
+
+**Acceptance (test-first):** a frozen held-out set; a known-good detector scores
+above a threshold; a deliberately worse detector is flagged as a regression.
+
+**Eval data captured:** this *is* the capture loop; it closes over all the above.
+
+**Dependencies:** consumes the outputs of C1 to C5.
+
+---
+
+## Sequencing summary
+
+| ID | Capability | Window | Leverage |
+|----|-----------|--------|----------|
+| C1 | Cross-tool concordance verification | M1 to M2 | Verdict trust, novel primitive (LEAD) |
+| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 | Unattended-completion rate, corpus fuel |
+| C3 | Biological-plausibility verification | M3 to M4 | Verdict gets smarter about biology |
+| C4 | New assay: somatic variant calling | M4 to M5 | Breadth, depth-first, new corpus |
+| C5 | Reference and input-data integrity | M5 | Kills a silent-failure class, deepens reproduce |
+| C6 | Eval flywheel as a continuous loop | M6 | Compounding accuracy from real runs |
+
+**One-line mantra:** make every verdict harder to fool, recover more failures
+without a human, and let every run make the next verdict smarter.
+
+---
+
+## Guardrails (unchanged, restated so this track does not drift)
+
+- **No Layer-1 workflow authoring as a product surface.** We consume nf-core and
+  the planner's deterministic match; we do not generate pipelines from English.
+- **No raw-read egress.** Concordance, plausibility, and reference checks all run
+  on the user's compute; only hashes and metadata ever leave the machine.
+- **Nothing requiring wet-lab or clinical credentials**, proprietary biological
+  datasets, or EHR/regulatory integration.
+- **No correctness over-claiming.** Concordance is corroboration, not ground
+  truth; plausibility checks are scoped per assay; UNVERIFIED is never rendered as
+  PASS.
+- **Test-first.** Every capability lands with its failing test written first.
+
+See also: [`ARCHITECTURE.md`](ARCHITECTURE.md), [`ADD_AN_ASSAY.md`](ADD_AN_ASSAY.md),
+[`ROADMAP.md`](../ROADMAP.md), and [`FEATURES.md`](../../FEATURES.md).

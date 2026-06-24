@@ -172,6 +172,30 @@ Recommendation: **RNA-seq differential expression** unless early discovery (Week
 
 ---
 
+## Next 6 months: engine capability track
+
+The dashboard and the run, self-heal, verify, reproduce loop are built and
+validating (see FEATURES.md, mostly shipped). The next six months deepen the
+**scientific and execution capability of the engine itself**, the work that makes
+Contig *do more* as a genomics tool while staying entirely inside Layer 2. This
+track is sequenced as a one-at-a-time backlog in
+[`docs/technical/CAPABILITY_ROADMAP.md`](technical/CAPABILITY_ROADMAP.md):
+
+| ID | Capability | Window | Why |
+|----|-----------|--------|-----|
+| **C1** | Cross-tool concordance verification (LEAD) | M1 to M2 | A second independent tool corroborates the result; a novel verdict axis no incumbent has |
+| **C2** | Self-heal breadth plus auto resource-scaling | M2 to M3 | Raises unattended-completion (Phase 1 metric) and compounds the corpus |
+| **C3** | Biological-plausibility verification | M3 to M4 | The verdict gets smarter about biology, the judgement incumbents leave to humans |
+| **C4** | New assay, depth-first: somatic variant calling | M4 to M5 | Breadth via demand-pull, only assays we can genuinely verify |
+| **C5** | Reference and input-data integrity | M5 | Kills the wrong-genome silent-failure class; deepens reproduce |
+| **C6** | Eval flywheel as a continuous loop | M6 | Phase 3's data flywheel, started early and measured |
+
+This track maps onto Phase 1 (hardening, deeper verify/self-heal) and the leading
+edge of Phase 2 (a demand-pulled additional assay). It does not change the gates
+below; it is how we earn them.
+
+---
+
 ## Risks & Assumptions Register
 
 | # | Risk / Assumption | Tied to | Likelihood | Impact | Mitigation / Test |

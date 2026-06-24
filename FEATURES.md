@@ -236,6 +236,30 @@ needs real engine work, so it follows once the read and launch surfaces are soli
 
 ---
 
+## Next: the engine capability track (separate from the dashboard)
+
+The phases above are the **dashboard** roadmap, and they are largely shipped. The
+*tool's* next six months are about deepening the engine's scientific and execution
+capability: making the verdict harder to fool, recovering more failures without a
+human, and widening what we can verify. That work has its own sequenced backlog in
+[`docs/technical/CAPABILITY_ROADMAP.md`](docs/technical/CAPABILITY_ROADMAP.md),
+built one capability at a time, test-first:
+
+| ID | Capability | Window | What it adds |
+|----|-----------|--------|--------------|
+| **C1** | Cross-tool concordance verification (LEAD) | M1 to M2 | A second independent tool corroborates the result; a verdict axis distinct from the shipped reference-run benchmark |
+| **C2** | Self-heal breadth plus auto resource-scaling | M2 to M3 | Resource-aware retries and a wider failure catalog (index, reference and build mismatch, format, pin conflict) |
+| **C3** | Biological-plausibility verification | M3 to M4 | Assay-aware sanity (rRNA, Ti/Tv, sex-check, doublet rate, knee-point) scoped honestly per assay |
+| **C4** | New assay, depth-first: somatic variant calling | M4 to M5 | A full new assay end to end via the ADD_AN_ASSAY path |
+| **C5** | Reference and input-data integrity | M5 | Pin and verify genome build, annotation, and known-sites; catch wrong-reference runs at pre-flight |
+| **C6** | Eval flywheel as a continuous loop | M6 | Fold C1 to C5 outcomes into a measured, regression-guarded improvement loop |
+
+Each capability dovetails with the dashboard items above (for example C1 surfaces
+as a "corroborated by" line on the verdict card, C3 extends the QC panel). It
+stays inside the same guardrails restated below.
+
+---
+
 ## Engine work required (cross-cutting)
 
 These are the net-new Python items that gate dashboard features. The founder
