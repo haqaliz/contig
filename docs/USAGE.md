@@ -43,7 +43,7 @@ The CLI and the test suite work **without** Nextflow/Java/Docker; only live runs
 | `contig cancel <id>` | Stop an active run (signals its process group) and mark it cancelled |
 | `contig resume <id>` | Re-run a cancelled or interrupted run from its cached tasks (Nextflow `-resume`) |
 | `contig rerun <id>` | Reproduce a past run from its launch manifest under a fresh run id |
-| `contig verify <id>` | Re-hash a finished run's outputs against the record (and check the signature, if signed) and report any drift |
+| `contig verify <id>` | Re-hash a finished run's outputs against the record (and check the signature, if signed) and report any drift. `--concordance-vcf <vcf>` also corroborates a germline run's variants against a second, independent call set (genotype concordance over shared sites plus site overlap); concordance is at most WARN and never changes the exit code |
 | `contig keygen` | Generate an Ed25519 signing keypair; set `CONTIG_SIGNING_KEY` to the private key to sign runs |
 | `contig cost <id>` | Per-task duration and peak memory from the run, costed at configurable `--rate-cpu-hour` / `--rate-mem-gb-hour` |
 | `contig estimate --pipeline <p> --input <sheet>` | Pre-run runtime and cost estimate, data-driven from past runs of that pipeline with a sample-count heuristic fallback |

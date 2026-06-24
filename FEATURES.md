@@ -247,7 +247,7 @@ built one capability at a time, test-first:
 
 | ID | Capability | Window | What it adds |
 |----|-----------|--------|--------------|
-| **C1** | Cross-tool concordance verification (LEAD) | M1 to M2 | A second independent tool corroborates the result; a verdict axis distinct from the shipped reference-run benchmark |
+| **C1** | Cross-tool concordance verification | **Shipped v0.2.0** | A second independent tool corroborates the result; a verdict axis distinct from the shipped reference-run benchmark (germline slice via `contig verify --concordance-vcf`; auto-run second caller deferred) |
 | **C2** | Self-heal breadth plus auto resource-scaling | M2 to M3 | Resource-aware retries and a wider failure catalog (index, reference and build mismatch, format, pin conflict) |
 | **C3** | Biological-plausibility verification | M3 to M4 | Assay-aware sanity (rRNA, Ti/Tv, sex-check, doublet rate, knee-point) scoped honestly per assay |
 | **C4** | New assay, depth-first: somatic variant calling | M4 to M5 | A full new assay end to end via the ADD_AN_ASSAY path |

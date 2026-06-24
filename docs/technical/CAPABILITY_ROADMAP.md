@@ -33,9 +33,20 @@ better base model should make each of these stronger, never redundant.
 
 ---
 
-## C1. Cross-tool concordance verification  ·  months 1 to 2  ·  LEAD
+## C1. Cross-tool concordance verification  ·  SHIPPED v0.2.0 (germline slice)
 
-**The chosen next capability.** Today the verdict rests on QC thresholds,
+**Shipped (slice 1) in v0.2.0.** The verdict gained a third axis alongside QC
+thresholds and structural checks: `verification/concordance.py` computes a
+deterministic `genotype_concordance` (over shared sites) plus a `site_overlap`
+check, both `kind="concordance"`, surfaced via `contig verify --concordance-vcf
+<vcf>` and grouped in the text/HTML reports and the dashboard QC panel. Concordance
+is at most WARN (corroboration, not ground truth), never changes the verify exit
+code, and reports `unverified` (never a false pass) when the two call sets share no
+comparable site. **Deferred to a follow-on slice:** auto-running a second caller
+(today the user supplies the second VCF), RNA-seq and single-cell concordance, and
+FAIL-severity once thresholds are calibrated on real data.
+
+The original framing, for reference: today the verdict rests on QC thresholds,
 structural checks, and (where a reference run exists) benchmarking against a
 known-good prior run. Concordance adds an independent axis: run a **second,
 independent tool** on the same input and treat agreement as corroboration of the
@@ -236,7 +247,7 @@ above a threshold; a deliberately worse detector is flagged as a regression.
 
 | ID | Capability | Window | Leverage |
 |----|-----------|--------|----------|
-| C1 | Cross-tool concordance verification | M1 to M2 | Verdict trust, novel primitive (LEAD) |
+| C1 | Cross-tool concordance verification | SHIPPED v0.2.0 | Verdict trust, novel primitive (germline slice; auto-run second caller deferred) |
 | C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 | Unattended-completion rate, corpus fuel |
 | C3 | Biological-plausibility verification | M3 to M4 | Verdict gets smarter about biology |
 | C4 | New assay: somatic variant calling | M4 to M5 | Breadth, depth-first, new corpus |
