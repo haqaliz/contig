@@ -115,7 +115,7 @@ def _genotype_from_columns(cols: list[str]) -> str | None:
 
     FORMAT is column 8, the first sample is column 9. We find GT's position in the
     colon-delimited FORMAT and read the matching subfield. Anything missing (no
-    FORMAT, no sample, no GT key) yields None — an unknown genotype, not a crash.
+    FORMAT, no sample, no GT key) yields None (an unknown genotype, not a crash).
     """
     if len(cols) < 10:
         return None
@@ -188,8 +188,8 @@ def concordance_results(
     """Emit the two concordance checks for a pair of call sets.
 
     `genotype_concordance`: PASS at/above the threshold, WARN below it; UNVERIFIED
-    when no shared site had a known genotype in both (nothing was corroborated — we
-    must not claim a pass, and there is no 0/0). `site_overlap`: PASS at/above the
+    when no shared site had a known genotype in both (nothing was corroborated, so
+    we must not claim a pass, and there is no 0/0). `site_overlap`: PASS at/above the
     threshold, WARN below it (0.0 overlap is itself a signal that the two callers
     found disjoint sites). The message names both call sets by basename so the
     comparison is auditable.
