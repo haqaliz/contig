@@ -48,15 +48,20 @@ class ExecutionTarget(BaseModel):
     resource_limits: dict[str, str] = Field(default_factory=dict)
 
 
-QCStatus = Literal["pass", "warn", "fail"]
-# Run-level verdict adds "unverified": the run completed but no QC check covered
-# it, so we must not claim it is verified (PRODUCT_SPEC: false-pass rate ~0).
+# A single check's status. "unverified" means the check ran but could not
+# corroborate anything (e.g. concordance over two call sets that share no
+# comparable site): it must never be read as a pass (PRODUCT_SPEC: false-pass
+# rate ~0). It carries no severity, so it neither passes nor fails a verdict.
+QCStatus = Literal["pass", "warn", "fail", "unverified"]
+# Run-level verdict: same vocabulary; "unverified" is the run-level verdict when
+# no QC check covered the run at all.
 Verdict = Literal["pass", "warn", "fail", "unverified"]
 # What kind of check produced a result: a content-level metric check (rule pack on
-# MultiQC metrics) or a structural/integrity check on the output files themselves.
-# Lets the dashboard group the two; defaults to "metric" so older records that
+# MultiQC metrics), a structural/integrity check on the output files themselves, or
+# a cross-tool concordance check (agreement between two independent call sets).
+# Lets the dashboard group them; defaults to "metric" so older records that
 # predate the field deserialize unchanged.
-QCKind = Literal["metric", "structural"]
+QCKind = Literal["metric", "structural", "concordance"]
 
 
 class QCResult(BaseModel):
@@ -75,6 +80,9 @@ def overall_verdict(results: list[QCResult]) -> QCStatus:
 
     Refuses an empty list: "all of nothing passed" is the false-pass we must never
     emit (PRODUCT_SPEC). Callers with no checks should report "unverified" instead.
+    An "unverified" check carries no severity (it corroborated nothing); it cannot
+    by itself turn into a pass, so a set of only unverified checks reduces to
+    "unverified", never "pass".
     """
     if not results:
         raise ValueError("overall_verdict requires at least one QC result; use 'unverified'")
@@ -83,7 +91,9 @@ def overall_verdict(results: list[QCResult]) -> QCStatus:
         return "fail"
     if "warn" in statuses:
         return "warn"
-    return "pass"
+    if "pass" in statuses:
+        return "pass"
+    return "unverified"
 
 
 class TaskEvent(BaseModel):
