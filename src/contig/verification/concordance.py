@@ -30,6 +30,12 @@ from contig.models import QCResult
 _CONCORDANCE_WARN_BELOW = 0.90
 _OVERLAP_WARN_BELOW = 0.90
 
+# Assays for which cross-tool concordance is defined. A second call set only
+# corroborates where there IS a call set to compare (germline variants today);
+# an RNA-seq quantification has no genotypes to agree on. Kept as a set so a new
+# assay (e.g. somatic) is a one-line addition.
+_CONCORDANCE_ASSAYS = {"variant_calling"}
+
 # Site key: a variant site as the tuple of its coordinates and alleles.
 SiteKey = tuple[str, str, str, str]
 
@@ -225,3 +231,19 @@ def concordance_results(
     )
 
     return [genotype_result, overlap_result]
+
+
+def evaluate_concordance(
+    primary_vcf: str | os.PathLike,
+    second_vcf: str | os.PathLike,
+    assay: str,
+) -> list[QCResult]:
+    """Assay-gated entry point: concordance checks where the assay defines a comparison.
+
+    Returns the two `concordance_results` for an assay in `_CONCORDANCE_ASSAYS`
+    (germline variant calling today), else an empty list. Gating here keeps the
+    caller (run_qc) from having to know which assays support concordance.
+    """
+    if assay not in _CONCORDANCE_ASSAYS:
+        return []
+    return concordance_results(primary_vcf, second_vcf)

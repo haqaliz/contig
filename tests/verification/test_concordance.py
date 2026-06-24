@@ -7,6 +7,7 @@ import gzip
 
 from contig.verification.concordance import (
     concordance_results,
+    evaluate_concordance,
     genotype_concordance,
     parse_vcf,
 )
@@ -139,3 +140,25 @@ def test_phased_and_unphased_compare_equal(tmp_path):
 
     assert stats.concordant == 1
     assert stats.rate == 1.0
+
+
+def test_evaluate_concordance_for_variant_assay(tmp_path):
+    rows = [("chr1", 100, "A", "G", "0/1")]
+    a = _write_vcf(tmp_path / "a.vcf", rows)
+    b = _write_vcf(tmp_path / "b.vcf", rows)
+
+    results = evaluate_concordance(a, b, assay="variant_calling")
+
+    assert len(results) == 2
+    assert all(r.kind == "concordance" for r in results)
+    assert {r.check for r in results} == {"genotype_concordance", "site_overlap"}
+
+
+def test_evaluate_concordance_skips_non_variant_assay(tmp_path):
+    rows = [("chr1", 100, "A", "G", "0/1")]
+    a = _write_vcf(tmp_path / "a.vcf", rows)
+    b = _write_vcf(tmp_path / "b.vcf", rows)
+
+    # Concordance is only defined for assays with a defined comparison; RNA-seq
+    # quantification has no germline call set to corroborate.
+    assert evaluate_concordance(a, b, assay="rnaseq") == []

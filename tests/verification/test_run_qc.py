@@ -108,3 +108,65 @@ def test_successful_run_with_good_qc_reads_pass(tmp_path):
         qc_results=evaluate_run_qc(f),
     )
     assert record.verdict == "pass"
+
+
+_VCF_HEADER = (
+    "##fileformat=VCFv4.2\n"
+    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n"
+)
+
+
+def _write_vcf(path, rows):
+    """rows: list of (chrom, pos, ref, alt, gt)."""
+    body = "".join(
+        f"{c}\t{p}\t.\t{r}\t{al}\t.\tPASS\t.\tGT\t{gt}\n" for (c, p, r, al, gt) in rows
+    )
+    path.write_text(_VCF_HEADER + body)
+    return path
+
+
+def _record_with(qc_results, pipeline="nf-core/sarek", revision="3.5.1"):
+    return RunRecord(
+        run_id="r",
+        pipeline=pipeline,
+        pipeline_revision=revision,
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_checksums={},
+        events=[TaskEvent(process="X", status="COMPLETED", exit=0)],
+        qc_results=qc_results,
+    )
+
+
+def test_run_qc_includes_concordance_when_vcf_given(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    concordant_rows = [
+        ("chr1", 100, "A", "G", "0/1"),
+        ("chr1", 200, "C", "T", "1/1"),
+    ]
+    primary = _write_vcf(tmp_path / "primary.vcf", concordant_rows)
+
+    # A concordant pair: both checks pass -> verdict is pass.
+    agree = _write_vcf(tmp_path / "agree.vcf", concordant_rows)
+    results = run_qc(
+        run_dir, concordance=(primary, agree), assay="variant_calling"
+    )
+    assert any(r.kind == "concordance" for r in results)
+    assert {r.check for r in results if r.kind == "concordance"} == {
+        "genotype_concordance",
+        "site_overlap",
+    }
+    assert _record_with(results).verdict in ("pass", "unverified")
+
+    # A divergent pair: concordance can WARN but must never push the verdict to FAIL.
+    divergent = _write_vcf(
+        tmp_path / "divergent.vcf",
+        [("chr9", 999, "G", "A", "0/1")],  # disjoint sites
+    )
+    div_results = run_qc(
+        run_dir, concordance=(primary, divergent), assay="variant_calling"
+    )
+    assert any(r.kind == "concordance" for r in div_results)
+    assert _record_with(div_results).verdict in ("pass", "warn", "unverified")
+    assert _record_with(div_results).verdict != "fail"
