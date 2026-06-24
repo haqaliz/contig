@@ -194,6 +194,15 @@ This track maps onto Phase 1 (hardening, deeper verify/self-heal) and the leadin
 edge of Phase 2 (a demand-pulled additional assay). It does not change the gates
 below; it is how we earn them.
 
+For the wider menu of analysis types the engine can serve over time (variant
+annotation, structural and copy-number, pharmacogenomics research, pathogen and
+AMR research, epigenomics, long-read, assembly), and the explicit bright line
+against clinical diagnosis, see
+[`docs/technical/USE_CASE_UNIVERSE.md`](technical/USE_CASE_UNIVERSE.md). The short
+version: Contig runs and verifies the *research* pipeline; it never issues the
+clinical verdict, because diagnosis needs credentials and regulatory validation
+that sit outside the founder's edge by design (constraint #4).
+
 ---
 
 ## Risks & Assumptions Register

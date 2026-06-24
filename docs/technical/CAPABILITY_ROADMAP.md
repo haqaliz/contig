@@ -261,5 +261,10 @@ without a human, and let every run make the next verdict smarter.
   PASS.
 - **Test-first.** Every capability lands with its failing test written first.
 
+For the broader menu of analysis types these capabilities unlock (variant
+annotation, pathogen and AMR research, epigenomics, long-read, assembly, and the
+bright line against clinical diagnosis), see
+[`USE_CASE_UNIVERSE.md`](USE_CASE_UNIVERSE.md).
+
 See also: [`ARCHITECTURE.md`](ARCHITECTURE.md), [`ADD_AN_ASSAY.md`](ADD_AN_ASSAY.md),
 [`ROADMAP.md`](../ROADMAP.md), and [`FEATURES.md`](../../FEATURES.md).
