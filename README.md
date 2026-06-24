@@ -53,7 +53,8 @@ pipx install contig            # or: uvx contig --help
 #   contig-linux-x86_64 | contig-macos-arm64 | contig-macos-x86_64 | contig-windows-x86_64.exe
 chmod +x contig-macos-arm64 && ./contig-macos-arm64 --help
 
-# Container
+# Container (Docker Hub or GitHub Container Registry, same image)
+docker run --rm haqaliz/contig:latest --help
 docker run --rm ghcr.io/haqaliz/contig:latest --help
 
 # Homebrew (macOS / Linux)
