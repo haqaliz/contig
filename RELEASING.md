@@ -38,6 +38,24 @@ Nothing to set up for publishing (the workflow uses `GITHUB_TOKEN` with
 `packages: write`). After the first push, make the package public in the repo's
 Packages settings if you want anonymous `docker pull`.
 
+### Docker Hub (optional second registry)
+
+The `docker` job also pushes to Docker Hub, but only when the
+`DOCKERHUB_USERNAME` repository secret is set. If it is unset the Docker Hub
+steps are skipped and only GHCR is published. One time, to enable it:
+
+1. On Docker Hub, create a public repository named `contig` under the account
+   that owns the image (it lives at `docker.io/<username>/contig`).
+2. Create a personal access token with Read and Write permission
+   (Account Settings, Personal access tokens).
+3. Add two repository secrets on GitHub
+   (`Settings, Secrets and variables, Actions`):
+   - `DOCKERHUB_USERNAME`: the Docker Hub username (also the image namespace).
+   - `DOCKERHUB_TOKEN`: the access token from step 2.
+
+The image is then published as `docker.io/<username>/contig:<tag>` and `:latest`
+alongside the GHCR tags.
+
 ### PyPI (trusted publishing, no token)
 
 One time, on PyPI:

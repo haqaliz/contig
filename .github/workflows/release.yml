@@ -99,11 +99,15 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
 
   docker:
-    name: Publish the CLI image to GHCR
+    name: Publish the CLI image (GHCR and Docker Hub)
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    # Docker Hub is optional: the steps that touch it only run when the
+    # DOCKERHUB_USERNAME secret is set (see RELEASING.md). GHCR always runs.
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - uses: actions/checkout@v4
       - name: Log in to GHCR
@@ -112,12 +116,29 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Assemble image tags
+        id: tags
+        shell: bash
+        run: |
+          tags="ghcr.io/${{ github.repository }}:latest"$'\n'"ghcr.io/${{ github.repository }}:${{ github.ref_name }}"
+          if [ -n "${DOCKERHUB_USERNAME}" ]; then
+            tags="${tags}"$'\n'"docker.io/${DOCKERHUB_USERNAME}/contig:latest"$'\n'"docker.io/${DOCKERHUB_USERNAME}/contig:${{ github.ref_name }}"
+          fi
+          {
+            echo "list<<EOF"
+            echo "${tags}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
           push: true
-          tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          tags: ${{ steps.tags.outputs.list }}
