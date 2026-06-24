@@ -4,6 +4,25 @@ All notable changes to Contig are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims for
 [semantic versioning](https://semver.org/) once it reaches 1.0.
 
+## [0.2.0] - 2026-06-24
+
+### Added
+
+- Cross-tool concordance verification (capability C1, germline slice): corroborate a
+  germline run's variants against a second, independent call set. A new `concordance`
+  QC kind emits a `genotype_concordance` check (over shared sites) plus a
+  `site_overlap` check; `contig verify --concordance-vcf <vcf>` runs them against the
+  run's primary VCF. Concordance is at most WARN (corroboration, not ground truth)
+  and never changes the verify exit code; an empty site intersection reports
+  `unverified`, never a false pass. Surfaced in the text and HTML reports and the
+  dashboard QC panel.
+
+### Changed
+
+- `QCStatus` gains `unverified` as a per-check status (previously run-level only).
+  `overall_verdict` reduces a set of only-unverified checks to `unverified`, never
+  `pass`, preserving the near-zero false-pass guarantee.
+
 ## [0.1.0] - 2026-06-24
 
 The first tagged release: the Layer-2 engine (run, self-heal, verify, reproduce)
