@@ -267,6 +267,115 @@ def test_html_report_groups_structural_qc_checks() -> None:
     assert "structural" in html.lower()
 
 
+def test_html_report_groups_concordance() -> None:
+    # A concordance result is grouped under its own heading, apart from the
+    # metric and structural tables.
+    record = RunRecord(
+        run_id="r-concordance",
+        pipeline="nf-core/sarek",
+        pipeline_revision="3.4.0",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="HAPLOTYPECALLER", status="COMPLETED", exit=0)],
+        qc_results=[
+            QCResult(
+                check="mapping_rate",
+                status="pass",
+                message="ok",
+                value=0.97,
+                kind="metric",
+            ),
+            QCResult(
+                check="output_present:calls.vcf.gz",
+                status="pass",
+                message="present",
+                value=4096.0,
+                kind="structural",
+            ),
+            QCResult(
+                check="genotype_concordance",
+                status="warn",
+                message="corroborated by second_caller.vcf.gz",
+                value=0.84,
+                expected_range=">= 0.90",
+                kind="concordance",
+            ),
+        ],
+    )
+    html = render_run_report_html(record)
+    # the distinct concordance heading is present
+    assert "Concordance (cross-tool corroboration)" in html
+    # the concordance check row renders
+    assert "genotype_concordance" in html
+    # the concordance result is grouped after (not inside) the metric/structural
+    # tables: its heading comes after both of those headings.
+    concordance_heading = html.index("Concordance (cross-tool corroboration)")
+    metric_heading = html.index("Metric checks")
+    structural_heading = html.index("Structural and integrity checks")
+    assert concordance_heading > metric_heading
+    assert concordance_heading > structural_heading
+    # and the concordance check name appears only after the concordance heading,
+    # so it is not inside the metric or structural tables.
+    assert html.index("genotype_concordance") > concordance_heading
+
+
+def test_html_report_renders_unverified_status() -> None:
+    # A concordance check that corroborated nothing carries status "unverified".
+    # It must render without error and show the UNVERIFIED label.
+    record = RunRecord(
+        run_id="r-unverified",
+        pipeline="nf-core/sarek",
+        pipeline_revision="3.4.0",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="HAPLOTYPECALLER", status="COMPLETED", exit=0)],
+        qc_results=[
+            QCResult(
+                check="genotype_concordance",
+                status="unverified",
+                message="no shared sites between the two call sets",
+                kind="concordance",
+            ),
+        ],
+    )
+    html = render_run_report_html(record)
+    assert "UNVERIFIED" in html
+    assert "genotype_concordance" in html
+    # the status carries a CSS class consistent with the others
+    assert "status-unverified" in html
+
+
+def test_text_report_shows_concordance_line() -> None:
+    record = RunRecord(
+        run_id="r-concordance",
+        pipeline="nf-core/sarek",
+        pipeline_revision="3.4.0",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="HAPLOTYPECALLER", status="COMPLETED", exit=0)],
+        qc_results=[
+            QCResult(
+                check="mapping_rate",
+                status="pass",
+                message="ok",
+                value=0.97,
+                kind="metric",
+            ),
+            QCResult(
+                check="genotype_concordance",
+                status="warn",
+                message="corroborated by second_caller.vcf.gz",
+                value=0.84,
+                expected_range=">= 0.90",
+                kind="concordance",
+            ),
+        ],
+    )
+    report = render_run_report(record)
+    assert "genotype_concordance" in report
+    assert "Concordance" in report or "corroborated by" in report
+
+
 def test_html_report_shows_signature_status_when_present() -> None:
     record = _full_record()
     signature_status = {

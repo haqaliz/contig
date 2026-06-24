@@ -96,9 +96,17 @@ def render_run_report(record: RunRecord) -> str:
     if record.nextflow_version is not None:
         lines.append(f"Nextflow version: {record.nextflow_version}")
     if record.qc_results:
+        # Concordance (cross-tool corroboration) is named in its own section so
+        # a reader can tell agreement between tools apart from a file's own checks.
+        concordance = [qc for qc in record.qc_results if qc.kind == "concordance"]
+        primary = [qc for qc in record.qc_results if qc.kind != "concordance"]
         lines.append("QC checks:")
-        for qc in record.qc_results:
+        for qc in primary:
             lines.append(f"  - {qc.check}: {qc.status.upper()} (value {qc.value})")
+        if concordance:
+            lines.append("Concordance (cross-tool corroboration):")
+            for qc in concordance:
+                lines.append(f"  - {qc.check}: {qc.status.upper()} (value {qc.value})")
     else:
         lines.append("QC checks: no QC checks ran (run is unverified).")
     if record.repair_history:
@@ -149,6 +157,7 @@ _HTML_STYLE = """
   .status-pass { color: var(--pass); font-weight: 600; }
   .status-warn { color: var(--warn); font-weight: 600; }
   .status-fail { color: var(--fail); font-weight: 600; }
+  .status-unverified { color: var(--muted); font-weight: 600; }
   footer.report-foot { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--rule);
                        color: var(--muted); font-size: 0.85rem; }
   @media print {
@@ -263,6 +272,13 @@ def render_run_report_html(
         if structural:
             parts.append("<h3>Structural and integrity checks</h3>")
             parts.append(_qc_table(structural))
+        # Concordance (cross-tool corroboration) is grouped apart from the
+        # metric and structural checks: it answers "does an independent tool
+        # agree?", not "does this file pass its own rule pack".
+        concordance = [qc for qc in record.qc_results if qc.kind == "concordance"]
+        if concordance:
+            parts.append("<h3>Concordance (cross-tool corroboration)</h3>")
+            parts.append(_qc_table(concordance))
     else:
         parts.append('<p class="note">No QC checks ran (run is unverified).</p>')
 

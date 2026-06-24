@@ -39,6 +39,12 @@ export const FIXTURE_RUN_IDS = [
   // and kind "structural" (PRD contracts C, F), for the structural-QC labeling in
   // the QC panel (a dedicated structural section, separate from metric checks).
   "structural-fixture",
+  // A finished run whose record carries concordance QC results (kind
+  // "concordance"): one passing cross-tool agreement check and one "unverified"
+  // check (no second tool to compare against), for the concordance section in the
+  // QC panel (a dedicated cross-tool corroboration section, separate from metric
+  // and structural checks) and for the neutral "unverified" status pill.
+  "concordance-fixture",
   // A finished run (numeric QC metrics) for the cross-run benchmark section (PRD
   // contract A). The benchmark route is mocked in the spec to return a drift report
   // and a no_reference report, so the section renders deterministically without the

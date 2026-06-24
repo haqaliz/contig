@@ -53,7 +53,13 @@ function parseCheck(check: string): { check: string; sample: string | null } {
 }
 
 // Severity order so a sample's worst status floats to the top of its group.
-const STATUS_RANK: Record<QCStatus, number> = { fail: 0, warn: 1, pass: 2 };
+// "unverified" is neutral (no severity), so it sorts last, after a clean pass.
+const STATUS_RANK: Record<QCStatus, number> = {
+  fail: 0,
+  warn: 1,
+  pass: 2,
+  unverified: 3,
+};
 
 function worst(a: QCStatus, b: QCStatus): QCStatus {
   return STATUS_RANK[a] <= STATUS_RANK[b] ? a : b;
@@ -131,7 +137,13 @@ export function QcPanel({ qcResults }: { qcResults: QCResult[] }) {
   // kind "structural", so we pull them into their own section and leave the
   // metric checks to the existing per-sample and cross-sample grouping.
   const structural = qcResults.filter((q) => q.kind === "structural");
-  const metric = qcResults.filter((q) => q.kind !== "structural");
+  // Concordance checks corroborate a result across tools (cross-tool agreement).
+  // They carry kind "concordance" and get their own section, mirroring structural.
+  // A check with no second tool to compare against reports status "unverified".
+  const concordance = qcResults.filter((q) => q.kind === "concordance");
+  const metric = qcResults.filter(
+    (q) => q.kind !== "structural" && q.kind !== "concordance",
+  );
   const cross = metric.filter((q) => isCrossSample(q.check));
   const perSample = metric.filter((q) => !isCrossSample(q.check));
 
@@ -169,6 +181,23 @@ export function QcPanel({ qcResults }: { qcResults: QCResult[] }) {
           </CardHeader>
           <CardContent>
             <QcRows rows={structural} />
+          </CardContent>
+        </Card>
+      )}
+
+      {concordance.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Concordance (cross-tool corroboration)</CardTitle>
+            <CardDescription>
+              Checks that corroborate a result by comparing it across independent
+              tools. Agreement raises confidence in the output. A check with no
+              second tool to compare against is reported as unverified (a neutral
+              state, not a failure).
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <QcRows rows={concordance} />
           </CardContent>
         </Card>
       )}

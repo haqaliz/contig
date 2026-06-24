@@ -1,0 +1,62 @@
+{
+  "run_id": "concordance-fixture",
+  "pipeline": "nf-core/rnaseq",
+  "pipeline_revision": "3.26.0",
+  "target": {
+    "backend": "local",
+    "container_runtime": "docker",
+    "work_dir": "/tmp/work",
+    "engine": "nextflow",
+    "credentials_ref": null,
+    "backend_options": {},
+    "resource_limits": {}
+  },
+  "input_checksums": {
+    "samplesheet.csv": "deadbeef"
+  },
+  "parameters": {
+    "genome": "GRCh38"
+  },
+  "container_digests": {},
+  "nextflow_version": "24.10.0",
+  "contig_version": "0.1.0",
+  "events": [
+    {
+      "process": "SALMON_QUANT",
+      "status": "COMPLETED",
+      "exit": 0,
+      "task_id": "1",
+      "name": "SALMON_QUANT (SAMPLE_A)"
+    }
+  ],
+  "qc_results": [
+    {
+      "check": "alignment_rate:SAMPLE_A",
+      "status": "pass",
+      "message": "OK",
+      "value": 0.93,
+      "expected_range": ">= 0.7",
+      "kind": "metric"
+    },
+    {
+      "check": "gene_count_agreement:salmon_vs_featurecounts",
+      "status": "pass",
+      "message": "Gene counts agree across salmon and featureCounts (Spearman 0.99).",
+      "value": 0.99,
+      "expected_range": ">= 0.95",
+      "kind": "concordance"
+    },
+    {
+      "check": "variant_agreement:gatk_vs_deepvariant",
+      "status": "unverified",
+      "message": "No second caller ran, so this result has no cross-tool corroboration.",
+      "value": null,
+      "expected_range": "two or more callers",
+      "kind": "concordance"
+    }
+  ],
+  "output_checksums": {},
+  "repair_history": [],
+  "resource_usage": [],
+  "verdict": "pass"
+}

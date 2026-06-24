@@ -10,6 +10,7 @@ from os import PathLike
 from pathlib import Path
 
 from contig.models import QCResult
+from contig.verification.concordance import evaluate_concordance
 from contig.verification.cross_sample import evaluate_cross_sample
 from contig.verification.qc_ingest import parse_multiqc_general_stats_file
 from contig.verification.rule_pack import RNASEQ_RULE_PACK, evaluate
@@ -43,6 +44,8 @@ def run_qc(
     manifest: ExpectedOutputs | None = None,
     rule_pack: list[dict] = RNASEQ_RULE_PACK,
     cross_sample: bool = True,
+    concordance: tuple[str | PathLike[str], str | PathLike[str]] | None = None,
+    assay: str = "rnaseq",
 ) -> list[QCResult]:
     """Verify a finished run: MultiQC metric checks plus manifest structural checks.
 
@@ -53,6 +56,12 @@ def run_qc(
     output or a corrupt file) drives the computed verdict to FAIL exactly like a
     metric fail. With no MultiQC and no manifest, an empty list means the caller
     honestly reports "unverified".
+
+    When `concordance=(primary_vcf, second_vcf)` is supplied, the cross-tool
+    concordance checks are appended, gated by `assay` (concordance is only defined
+    for germline variant calling today). `assay` is used ONLY for that gating; it
+    does not change metric or structural behavior. Absent `concordance`, the result
+    is byte-for-byte identical to before this parameter existed.
     """
     run_path = Path(run_dir)
     results: list[QCResult] = []
@@ -66,5 +75,9 @@ def run_qc(
     if manifest is not None:
         outputs = Path(results_dir) if results_dir is not None else run_path / "results"
         results.extend(evaluate_against_manifest(outputs, manifest))
+
+    if concordance is not None:
+        primary_vcf, second_vcf = concordance
+        results.extend(evaluate_concordance(primary_vcf, second_vcf, assay))
 
     return results

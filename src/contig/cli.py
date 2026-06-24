@@ -56,6 +56,8 @@ from contig.progress import read_progress, render_progress
 from contig.reference import ReferenceError, resolve_reference
 from contig.registry import assay_for_pipeline
 from contig.report import render_explain, render_run_report, render_run_report_html
+from contig.verification.concordance import evaluate_concordance
+from contig.verification.structural import manifest_for
 from contig.runner import PipelineExecutionError, default_executor
 from contig.samplesheet import fastq_paths, parse_samplesheet, validate_samplesheet
 from contig.lifecycle import (
@@ -571,12 +573,22 @@ def verify(
     run_id: str = typer.Argument(..., help="The run whose outputs to re-verify."),
     runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
     json_out: bool = typer.Option(False, "--json", help="Emit the result as JSON (for the dashboard)."),
+    concordance_vcf: str = typer.Option(
+        None,
+        "--concordance-vcf",
+        help="A second call set (VCF) to corroborate this germline run's variants against.",
+    ),
 ) -> None:
     """Re-hash a finished run's outputs and report any drift from the record.
 
     Reads the recorded output checksums and re-hashes the files on disk: an
     output that changed or disappeared is drift and exits non-zero. A run whose
     record captured no outputs reports "nothing to verify" (PRD contract B).
+
+    With --concordance-vcf, also corroborate the run's germline variants against a
+    second call set (PRD C1): the concordance checks are printed (and included in
+    the JSON payload), but concordance is at-most-WARN and NEVER changes the exit
+    code, which only output drift or a signature mismatch can do.
     """
     if not _is_safe_run_id(run_id):
         typer.echo(f"Invalid run id: {run_id!r}", err=True)
@@ -587,6 +599,15 @@ def verify(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
 
+    # Concordance is independent of output-drift: compute it (if requested) up front
+    # so it is surfaced on BOTH the no-checksums and has-checksums paths, and so it
+    # can never influence the `ok`/exit decision below.
+    concordance = (
+        _evaluate_run_concordance(record, runs_dir, run_id, concordance_vcf)
+        if concordance_vcf
+        else None
+    )
+
     # A signed run carries a signature.json sidecar; a mismatch is a verification
     # failure (the record was tampered with), so it fails the verify just like drift.
     sig = _signature_status(runs_dir, run_id, record)
@@ -594,6 +615,8 @@ def verify(
 
     if not record.output_checksums:
         result = {"ok": True, "changed": [], "missing": [], **sig}
+        if concordance is not None:
+            result["concordance"] = [c.model_dump() for c in concordance]
         if json_out:
             typer.echo(_json.dumps(result))
             if sig_bad:
@@ -601,13 +624,17 @@ def verify(
             return
         if sig_bad:
             typer.echo(f"Signature mismatch for run {run_id}: the record was modified.", err=True)
+            _echo_concordance(concordance)
             raise typer.Exit(code=1)
         signed_note = " (signature verified)" if sig.get("signature_ok") else ""
         typer.echo(f"Nothing to verify for run {run_id}: no outputs were captured.{signed_note}")
+        _echo_concordance(concordance)
         return
 
     result = verify_outputs(record, _results_dir_for(record, runs_dir, run_id))
     result.update(sig)
+    if concordance is not None:
+        result["concordance"] = [c.model_dump() for c in concordance]
     if json_out:
         typer.echo(_json.dumps(result))
         if not result["ok"] or sig_bad:
@@ -617,6 +644,7 @@ def verify(
     if result["ok"] and not sig_bad:
         signed_note = " Signature verified." if sig.get("signature_ok") else ""
         typer.echo(f"Outputs verified for run {run_id}: all recorded outputs match.{signed_note}")
+        _echo_concordance(concordance)
         return
     if sig_bad:
         typer.echo(f"Signature mismatch for run {run_id}: the record was modified.", err=True)
@@ -626,7 +654,50 @@ def verify(
             typer.echo(f"  changed: {rel}", err=True)
         for rel in result["missing"]:
             typer.echo(f"  missing: {rel}", err=True)
+    _echo_concordance(concordance)
     raise typer.Exit(code=1)
+
+
+def _evaluate_run_concordance(
+    record: RunRecord, runs_dir: str, run_id: str, concordance_vcf: str
+) -> list:
+    """Concordance checks for a germline run vs a second call set, or [] with a note.
+
+    Resolves the run's assay from its pipeline and, for germline variant calling,
+    its primary VCF from the results dir (the variant_calling manifest's `*.vcf.gz`
+    glob). A non-germline assay or a missing primary VCF prints a clear note and
+    yields no checks (never a crash, never a false pass). Returns the QCResult list
+    so the caller surfaces it without changing the exit code.
+    """
+    assay = assay_for_pipeline(record.pipeline)
+    if assay != "variant_calling":
+        typer.echo(
+            "Skipping concordance: it is only defined for germline variants today "
+            f"(run {run_id} is {assay or record.pipeline})."
+        )
+        return []
+
+    results_dir = _results_dir_for(record, runs_dir, run_id)
+    manifest = manifest_for("variant_calling")
+    pattern = manifest.required[0]  # "*.vcf.gz", the primary germline call set
+    primaries = sorted(p for p in results_dir.rglob(pattern) if p.is_file())
+    if not primaries:
+        typer.echo(
+            f"Skipping concordance: no primary VCF ({pattern}) found for run {run_id}."
+        )
+        return []
+
+    return evaluate_concordance(primaries[0], concordance_vcf, assay="variant_calling")
+
+
+def _echo_concordance(concordance: list | None) -> None:
+    """Print the concordance checks in the text path; a no-op when none were run."""
+    if not concordance:
+        return
+    typer.echo("Concordance (cross-tool corroboration):")
+    for qc in concordance:
+        value = "" if qc.value is None else f" value={qc.value}"
+        typer.echo(f"  {qc.check}: {qc.status.upper()}{value} ({qc.message})")
 
 
 def _signature_status(runs_dir: str, run_id: str, record: RunRecord) -> dict:

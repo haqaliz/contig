@@ -897,6 +897,133 @@ def test_verify_json_ok_when_clean(tmp_path):
     assert data == {"ok": True, "changed": [], "missing": []}
 
 
+# --- contig verify --concordance-vcf (PRD C1, slice 1) -------------------------
+# A minimal germline VCF: header line + sites carrying a GT for one sample.
+_VCF_HEADER = (
+    "##fileformat=VCFv4.2\n"
+    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n"
+)
+_VCF_SITES_A = (
+    "chr1\t100\t.\tA\tT\t50\tPASS\t.\tGT\t0/1\n"
+    "chr1\t200\t.\tC\tG\t50\tPASS\t.\tGT\t1/1\n"
+    "chr2\t300\t.\tG\tA\t50\tPASS\t.\tGT\t0/1\n"
+)
+# Same sites, same genotypes (phased 0|1 must compare equal to 0/1) -> concordant.
+_VCF_SITES_CONCORDANT = (
+    "chr1\t100\t.\tA\tT\t50\tPASS\t.\tGT\t0|1\n"
+    "chr1\t200\t.\tC\tG\t50\tPASS\t.\tGT\t1/1\n"
+    "chr2\t300\t.\tG\tA\t50\tPASS\t.\tGT\t1/0\n"
+)
+# Same sites, but two of the three genotypes differ -> low concordance -> WARN.
+_VCF_SITES_DIVERGENT = (
+    "chr1\t100\t.\tA\tT\t50\tPASS\t.\tGT\t1/1\n"
+    "chr1\t200\t.\tC\tG\t50\tPASS\t.\tGT\t0/1\n"
+    "chr2\t300\t.\tG\tA\t50\tPASS\t.\tGT\t0/1\n"
+)
+
+
+def _write_germline_run_with_vcf(runs_dir, run_id, vcf_body):
+    """A variant_calling run whose results/ holds a primary ``*.vcf.gz`` call set."""
+    import gzip as _gzip
+    from contig.bundle import compute_output_checksums
+
+    run_dir = Path(runs_dir) / run_id
+    results = run_dir / "results"
+    results.mkdir(parents=True, exist_ok=True)
+    primary = results / "S1.vcf.gz"
+    primary.write_bytes(_gzip.compress((_VCF_HEADER + vcf_body).encode()))
+    record = RunRecord(
+        run_id=run_id,
+        pipeline="nf-core/sarek",  # variant_calling assay
+        pipeline_revision="3.5.1",
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_checksums={},
+        events=[TaskEvent(process="X", status="COMPLETED", exit=0)],
+        output_checksums=compute_output_checksums(results),
+    )
+    write_bundle(record, run_dir)
+    return run_dir
+
+
+def _write_second_vcf(tmp_path, name, vcf_body):
+    import gzip as _gzip
+
+    path = tmp_path / name
+    path.write_bytes(_gzip.compress((_VCF_HEADER + vcf_body).encode()))
+    return path
+
+
+def test_verify_concordance_vcf_emits_checks(tmp_path):
+    _write_germline_run_with_vcf(tmp_path, "g1", _VCF_SITES_A)
+    concordant = _write_second_vcf(tmp_path, "second_ok.vcf.gz", _VCF_SITES_CONCORDANT)
+    divergent = _write_second_vcf(tmp_path, "second_bad.vcf.gz", _VCF_SITES_DIVERGENT)
+
+    ok = runner.invoke(
+        app,
+        ["verify", "g1", "--runs-dir", str(tmp_path), "--concordance-vcf", str(concordant)],
+    )
+    assert ok.exit_code == 0
+    out = ok.output.lower()
+    assert "genotype_concordance" in out
+    assert "site_overlap" in out
+    assert "pass" in out
+
+    bad = runner.invoke(
+        app,
+        ["verify", "g1", "--runs-dir", str(tmp_path), "--concordance-vcf", str(divergent)],
+    )
+    assert "genotype_concordance" in bad.output.lower()
+    assert "warn" in bad.output.lower()
+
+
+def test_verify_concordance_vcf_at_most_warn_exit(tmp_path):
+    # The only issue is a divergent (WARN) concordance; outputs are unchanged, so
+    # there is no drift and no signature mismatch -> exit code must stay 0.
+    _write_germline_run_with_vcf(tmp_path, "g2", _VCF_SITES_A)
+    divergent = _write_second_vcf(tmp_path, "second_bad.vcf.gz", _VCF_SITES_DIVERGENT)
+    result = runner.invoke(
+        app,
+        ["verify", "g2", "--runs-dir", str(tmp_path), "--concordance-vcf", str(divergent)],
+    )
+    assert result.exit_code == 0
+    assert "warn" in result.output.lower()
+
+
+def test_verify_concordance_json_includes_results(tmp_path):
+    _write_germline_run_with_vcf(tmp_path, "g3", _VCF_SITES_A)
+    concordant = _write_second_vcf(tmp_path, "second_ok.vcf.gz", _VCF_SITES_CONCORDANT)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "g3",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-vcf",
+            str(concordant),
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert "concordance" in data
+    checks = {r["check"] for r in data["concordance"]}
+    assert {"genotype_concordance", "site_overlap"} <= checks
+
+
+def test_verify_concordance_non_germline_assay_skips(tmp_path):
+    # An rnaseq run with --concordance-vcf: concordance is not defined for it, so the
+    # command prints a clear note, does not crash, and the exit code is unaffected.
+    _write_run_with_outputs(tmp_path, "rna", {"summary.txt": b"produced"})  # nf-core/rnaseq
+    second = _write_second_vcf(tmp_path, "second.vcf.gz", _VCF_SITES_A)
+    result = runner.invoke(
+        app,
+        ["verify", "rna", "--runs-dir", str(tmp_path), "--concordance-vcf", str(second)],
+    )
+    assert result.exit_code == 0
+    assert "germline" in result.output.lower()
+
+
 def test_keygen_prints_a_keypair(tmp_path):
     result = runner.invoke(app, ["keygen"])
     assert result.exit_code == 0
