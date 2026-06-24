@@ -8,7 +8,7 @@ arguments: "type id"
 
 ## Overview
 
-Closes out a unit of work's local state after the PR has merged: **master → pull → remove worktree → delete branch.** No report (use `contig-end` / `ce` for that).
+Closes out a unit of work's local state after the PR has merged: **master → pull → remove worktree → delete branch**, with an **optional new-version release** across every publish channel. No report (use `contig-end` / `ce` for that).
 
 **Invocation:** `cef <type> <id>` — e.g. `cef bug 12`, `cef feat verify-layer`.
 
@@ -65,7 +65,30 @@ git -C "$PRIMARY" worktree list           # the worktree should be gone
 git -C "$PRIMARY" branch --list "$BRANCH" # should print nothing
 ```
 
-### Phase 3 — Comment on the issue (optional)
+### Phase 3 — Release a new version (optional)
+
+Only when this merged work should ship as a new **published** version. A release goes out across **every** channel at once: the GitHub Release binaries, PyPI, GHCR, Docker Hub, and the Homebrew tap. Most units of work do **not** release on their own (fixes batch into a later version), so ask first: *"Cut and publish a new version for this, or batch it for later?"* Default to **skipping**. If the user says skip, go straight to Phase 4.
+
+If releasing, follow `RELEASING.md` (the source of truth) from the **primary** checkout on `master` (the merged work is already there after Phase 1).
+
+**Release identity, do not get this wrong:** the release belongs to the **haqaliz** account, never `playdolphia`. The tag push uses the repo's git/SSH identity (haqaliz). Any manual asset upload or tap push must run with `gh` active as haqaliz (`gh auth switch --user haqaliz`). Never run `gh release create` by hand; the workflow creates the Release as `github-actions[bot]`.
+
+1. **Pick the version.** Ask the user, or propose a semver bump from the work type: `feat` → minor, `bug`/`chore`/`task` → patch. Confirm the exact `vX.Y.Z`.
+2. **Bump and changelog.** Edit `version` in `pyproject.toml` and add a `CHANGELOG.md` section for `vX.Y.Z`. Commit and push to `master`. Wait for CI to go green.
+3. **Tag and push** (this triggers `.github/workflows/release.yml`):
+
+   ```bash
+   git tag -a vX.Y.Z -m "contig X.Y.Z"
+   git push origin vX.Y.Z
+   ```
+
+   The workflow builds the wheel/sdist and per-OS binaries, creates the GitHub Release, and publishes to PyPI (trusted publishing), GHCR, and Docker Hub (when the `DOCKERHUB_USERNAME` secret is set). Watch it with `gh run watch`. Each channel is an independent job, so one failing does not block the others.
+4. **Homebrew tap**, once the binaries are attached to the Release: compute the three binary checksums, fill `homebrew/contig.rb` (version, the three URLs, and the sha256s), copy it to the `haqaliz/homebrew-contig` tap as `Formula/contig.rb`, and push (SSH = haqaliz). See `RELEASING.md` for the exact commands and the Rosetta fallback if the macOS Intel (`macos-13`) binary job stalls.
+5. **Verify each channel is live** before calling it done: the GitHub Release page, `pip install contig==X.Y.Z` (or the PyPI JSON returning 200), `docker pull haqaliz/contig:vX.Y.Z` plus the `ghcr.io/haqaliz/contig` path, and `brew install haqaliz/contig/contig`.
+
+Report which channels published and surface any job that failed; do not claim a channel shipped without checking it.
+
+### Phase 4 — Comment on the issue (optional)
 
 Optional, and only if there's a reachable GitHub issue. Ask first: *"Want me to post a short comment on the issue explaining what we did?"* If the user declines, there's nothing meaningful to say, or there's no issue (the work came from an inline brief), skip.
 
@@ -98,4 +121,7 @@ Otherwise:
 | Forcing worktree remove with `--force` | Same — never silently discard uncommitted work |
 | Worktree dir vs branch confusion | Worktree dir is `<type>-<id>` (e.g. `bug-12`); branch is `<type>/<id>/aliz` |
 | Posting the issue comment without confirmation | Draft first, show the user, only post after explicit OK |
-| Trying to comment when the work has no issue | Skip Phase 3 — it came from an inline brief |
+| Trying to comment when the work has no issue | Skip Phase 4 — it came from an inline brief |
+| Releasing every unit of work automatically | Phase 3 is opt-in; ask, default to skipping, fixes batch into a later version |
+| Cutting the release as `playdolphia` | The release is haqaliz's; switch with `gh auth switch --user haqaliz`, push the tag, never `gh release create` |
+| Calling a release done after pushing the tag | Watch the workflow, do the Homebrew tap, and verify every channel is live first |
