@@ -24,8 +24,18 @@ test("a run with no recorded outputs shows the not-captured badge", async ({
 test("verifying a run with intact outputs shows the verified badge", async ({
   page,
 }) => {
-  // verify-fixture records one output whose file is present on disk, so the real
-  // `contig verify` reports ok. Before a verify the badge invites the check.
+  // Mock the verify route to report ok, exercising the verified-badge rendering.
+  // We mock rather than call the real `contig verify` because the dashboard CI job
+  // runs Node only (no Python or the contig CLI on PATH); the real re-hash is
+  // covered by the engine's Python tests. Mirrors the drift case below.
+  await page.route("**/api/runs/verify-fixture/verify", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, changed: [], missing: [] }),
+    });
+  });
+
   await page.goto("/runs/verify-fixture");
   await expect(page.getByText("Not yet verified")).toBeVisible();
 
