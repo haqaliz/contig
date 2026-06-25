@@ -124,7 +124,16 @@ corpus; repair success-rate analytics gain new classes.
 
 ---
 
-## C3. Biological-plausibility verification  ·  months 3 to 4
+## C3. Biological-plausibility verification  ·  SHIPPED v0.3.0 (germline slice)
+
+**Shipped (germline slice) in v0.3.0.** The germline plausibility rules (Ti/Tv and
+het/hom ratios) already existed in `VARIANT_RULE_PACK` but were dormant because
+their metrics were never ingested. `verification/variant_metrics.py` now computes
+`ts_tv` and `het_hom` from the run's VCF and feeds them to the verdict on a path
+independent of MultiQC, capped at WARN (corroboration, not a clinical claim), with
+`unverified` when a ratio is uncomputable. **Deferred:** rRNA (RNA-seq), doublet
+rate (single-cell), coverage-from-VCF, multi-sample, and FAIL severity until the
+bands are calibrated on real data.
 
 Deepen the verdict scientifically with **assay-aware sanity checks** that encode
 what a biologically reasonable result looks like, beyond generic QC thresholds.
@@ -249,7 +258,7 @@ above a threshold; a deliberately worse detector is flagged as a regression.
 |----|-----------|--------|----------|
 | C1 | Cross-tool concordance verification | SHIPPED v0.2.0 | Verdict trust, novel primitive (germline slice; auto-run second caller deferred) |
 | C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 | Unattended-completion rate, corpus fuel |
-| C3 | Biological-plausibility verification | M3 to M4 | Verdict gets smarter about biology |
+| C3 | Biological-plausibility verification | SHIPPED v0.3.0 | Verdict gets smarter about biology (germline Ti/Tv, het/hom; other assays deferred) |
 | C4 | New assay: somatic variant calling | M4 to M5 | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 | Kills a silent-failure class, deepens reproduce |
 | C6 | Eval flywheel as a continuous loop | M6 | Compounding accuracy from real runs |
