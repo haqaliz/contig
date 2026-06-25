@@ -48,21 +48,21 @@ RNASEQ_RULE_PACK: list[dict] = [
 # likely run problem rather than a biological claim.
 VARIANT_RULE_PACK: list[dict] = [
     {
+        # WARN-capped: these germline plausibility rules never FAIL a verdict in
+        # this slice (the bands flag a likely run problem, not a clinical claim),
+        # so they carry no fail_below/fail_above.
         "check": "ts_tv_ratio",
         "metric": "ts_tv",
-        "fail_below": 1.5,
         "warn_below": 1.8,
         "warn_above": 2.4,
-        "fail_above": 3.0,
         "message": "transition/transversion ratio of called variants",
     },
     {
+        # WARN-capped (see ts_tv_ratio): no fail_below/fail_above.
         "check": "het_hom_ratio",
         "metric": "het_hom",
-        "fail_below": 1.0,
         "warn_below": 1.4,
         "warn_above": 2.5,
-        "fail_above": 3.5,
         "message": "heterozygous/homozygous-alt genotype ratio",
     },
     {

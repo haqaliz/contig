@@ -6,7 +6,10 @@ Mirrors the style of test_concordance.py (tiny inline VCFs).
 
 import gzip
 
-from contig.verification.variant_metrics import variant_metrics
+from contig.verification.variant_metrics import (
+    evaluate_variant_plausibility,
+    variant_metrics,
+)
 
 _HEADER = "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n"
 
@@ -130,3 +133,70 @@ def test_gzip_vcf_supported(tmp_path):
     assert gz_metrics == plain_metrics
     assert gz_metrics.ts_tv == 2.0
     assert gz_metrics.het_hom == 2.0
+
+
+# --- plausibility evaluator (Phase 2): WARN-capped, explicit unverified --------
+
+
+def test_plausibility_in_band_passes(tmp_path):
+    # A ts_tv inside the band [1.8, 2.4] yields a PASS ts_tv_ratio check. Three
+    # transitions to two transversions is 1.5, so build a clean ~2.0 instead:
+    # four transitions (A>G, C>T, G>A, T>C) over two transversions (A>C, G>T) = 2.0.
+    rows = [
+        ("chr1", 100, "A", "G", "0/1"),  # transition
+        ("chr1", 200, "C", "T", "0/1"),  # transition
+        ("chr1", 300, "G", "A", "0/1"),  # transition
+        ("chr1", 400, "T", "C", "0/1"),  # transition
+        ("chr1", 500, "A", "C", "1/1"),  # transversion, also a hom-alt
+        ("chr1", 600, "G", "T", "0/1"),  # transversion
+    ]
+    vcf = _write_vcf(tmp_path / "a.vcf", rows)
+
+    results = evaluate_variant_plausibility(vcf)
+
+    ts_tv = [r for r in results if r.check == "ts_tv_ratio:sample"]
+    assert len(ts_tv) == 1
+    assert ts_tv[0].status == "pass"
+    assert ts_tv[0].kind == "metric"
+    assert ts_tv[0].value == 2.0
+
+
+def test_plausibility_out_of_band_warns_never_fails(tmp_path):
+    # ts_tv far below the band (one transition over two transversions = 0.5) must
+    # WARN, never FAIL (the germline rules are WARN-capped in this slice). The
+    # value and expected range are populated.
+    rows = [
+        ("chr1", 100, "A", "G", "0/1"),  # transition
+        ("chr1", 200, "A", "C", "1/1"),  # transversion, hom-alt
+        ("chr1", 300, "G", "T", "0/1"),  # transversion
+    ]
+    vcf = _write_vcf(tmp_path / "a.vcf", rows)
+
+    results = evaluate_variant_plausibility(vcf)
+
+    ts_tv = [r for r in results if r.check == "ts_tv_ratio:sample"]
+    assert len(ts_tv) == 1
+    assert ts_tv[0].status == "warn"
+    assert ts_tv[0].status != "fail"
+    assert ts_tv[0].value == 0.5
+    assert ts_tv[0].expected_range is not None
+
+
+def test_plausibility_uncomputable_is_unverified(tmp_path):
+    # No transversion -> ts_tv is None -> ts_tv_ratio is unverified (not skipped,
+    # not pass). No homozygous-alt -> het_hom is None -> het_hom_ratio unverified.
+    rows = [
+        ("chr1", 100, "A", "G", "0/1"),  # transition, het
+        ("chr1", 200, "C", "T", "0/1"),  # transition, het
+    ]
+    vcf = _write_vcf(tmp_path / "a.vcf", rows)
+
+    results = evaluate_variant_plausibility(vcf)
+    by_check = {r.check: r for r in results}
+
+    assert by_check["ts_tv_ratio:sample"].status == "unverified"
+    assert by_check["ts_tv_ratio:sample"].kind == "metric"
+    assert by_check["ts_tv_ratio:sample"].value is None
+    assert by_check["het_hom_ratio:sample"].status == "unverified"
+    assert by_check["het_hom_ratio:sample"].kind == "metric"
+    assert by_check["het_hom_ratio:sample"].value is None

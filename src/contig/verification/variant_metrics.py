@@ -20,7 +20,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from contig.models import QCResult
 from contig.verification.concordance import parse_vcf
+from contig.verification.rule_pack import VARIANT_RULE_PACK, evaluate
 
 # The four single-base alleles a biallelic SNV can carry.
 _BASES = {"A", "C", "G", "T"}
@@ -114,3 +116,64 @@ def variant_metrics(vcf_path: str | os.PathLike) -> VariantMetrics:
         ts_tv=_compute_ts_tv(sites),
         het_hom=_compute_het_hom(sites),
     )
+
+
+# The two germline plausibility rules, sourced from the shared pack by their
+# "check" field so the bands stay single-sourced in rule_pack.py (this module
+# never hardcodes a threshold). Each VariantMetrics field maps to one rule via the
+# rule's "metric" key. mean_coverage is intentionally absent: it is a MultiQC
+# metric, not VCF-derived, so it is not part of the VCF plausibility pass.
+_PLAUSIBILITY_CHECKS = ("ts_tv_ratio", "het_hom_ratio")
+
+
+def _rule_by_check(check_name: str) -> dict:
+    """Look up one rule in VARIANT_RULE_PACK by its check name."""
+    for rule in VARIANT_RULE_PACK:
+        if rule["check"] == check_name:
+            return rule
+    raise KeyError(check_name)
+
+
+def evaluate_variant_plausibility(
+    vcf_path: str | os.PathLike, sample: str = "sample"
+) -> list[QCResult]:
+    """Evaluate the germline plausibility rules over a VCF, capped at WARN.
+
+    Computes ts_tv and het_hom (Phase 1), then runs the two WARN-capped germline
+    rules from VARIANT_RULE_PACK over the COMPUTABLE metrics via the shared
+    evaluate() (so the band logic and check naming, "<check>:<sample>", stay
+    single-sourced). A metric that could not be computed (None: no transversion,
+    or no homozygous-alt genotype) is NOT silently skipped: it gets an explicit
+    "unverified" QCResult, which carries no severity and so can never read as a
+    pass (PRODUCT_SPEC false-pass rate ~0). Every result is kind "metric".
+    """
+    metrics = variant_metrics(vcf_path)
+    rules = [_rule_by_check(name) for name in _PLAUSIBILITY_CHECKS]
+
+    # The computable metrics, keyed by each rule's "metric" so evaluate() picks
+    # them up; a None metric is omitted here and handled as unverified below.
+    by_metric = {"ts_tv": metrics.ts_tv, "het_hom": metrics.het_hom}
+    computable = {
+        metric: value for metric, value in by_metric.items() if value is not None
+    }
+
+    results = evaluate({sample: computable}, rules)
+
+    # Reasons keyed by the rule's "metric" so the message matches the missing one.
+    _uncomputable_reason = {
+        "ts_tv": "no transversions to compute ts_tv",
+        "het_hom": "no homozygous-alt genotypes to compute het_hom",
+    }
+    for rule in rules:
+        metric = rule["metric"]
+        if by_metric[metric] is None:
+            results.append(
+                QCResult(
+                    check=f"{rule['check']}:{sample}",
+                    status="unverified",
+                    message=f"{sample}: {_uncomputable_reason[metric]}",
+                    value=None,
+                    kind="metric",
+                )
+            )
+    return results
