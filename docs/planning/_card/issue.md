@@ -1,60 +1,64 @@
-# C1 — Cross-tool concordance verification
+# C3, Biological-plausibility verification
 
-Source: no GitHub issue. Inline brief, owner `aliz`, branch `feat/concordance/aliz`.
-Origin: `docs/technical/CAPABILITY_ROADMAP.md` capability C1 (the chosen lead), plus
-the engine investigation captured in the working session.
+Source: no GitHub issue. Inline brief, owner `aliz`, branch `feat/bio-plausibility/aliz`.
+Origin: `docs/technical/CAPABILITY_ROADMAP.md` capability C3, plus the engine
+investigation captured earlier this session.
 
 ## Brief
 
-Add a new verification axis to the verified verdict: run a **second, independent
-tool** on the same input as the primary pipeline and treat agreement between the
-two as corroboration of the result. Disagreement is surfaced honestly and moves
-the verdict, never hidden.
+Deepen the verified verdict with **assay-aware biological sanity checks**: encode
+what a biologically reasonable result looks like for each assay, beyond the generic
+metric thresholds already in the rule packs. This is the verification layer getting
+smarter about biology, the judgement incumbents leave to the human.
 
-This is distinct from the already-shipped `contig benchmark`, which compares a run
-to a designated **reference run** of the same pipeline. Concordance compares **two
-different tools on the same data within one analysis**, so it catches tool-specific
-error even when no reference run exists.
+Candidate checks per assay (illustrative, tunable engineering defaults, NOT clinical
+claims):
+- RNA-seq: rRNA-contamination fraction within expected bounds, exonic/gene-body
+  coverage sanity, duplication/library-complexity sanity.
+- Germline variants: Ti/Tv ratio in the expected range for the capture, het/hom
+  ratio sanity, expected variant-count band, optional sex-check concordance.
+- Single-cell RNA-seq: doublet-rate band, mitochondrial-fraction distribution,
+  knee-point sanity on the barcode-rank curve, recovered-cell band.
 
-Lead assay: **germline variant calling** (already on the engine), where the metric
-is clearest: genotype concordance between two call sets. RNA-seq quantification
-(per-gene rank correlation) and single-cell come later, same mechanism.
+Each check is conservative, names its evidence, and degrades to UNVERIFIED (never
+PASS) when the inputs the check needs are absent. Honesty scoped per assay.
 
 ## Why it is the moat
 
-No incumbent issues a correctness verdict at all, let alone a cross-tool one.
-Concordance is a defensible verification primitive, it produces rich evaluation
-data (agreement distributions per assay), and it gets better as models get better
-at adjudicating why two tools disagree.
+This is verification getting smarter about biology, exactly the judgement
+incumbents punt to the human. It composes with the QC rule packs and the new C1
+concordance axis: more ways the verdict is hard to fool, all feeding the
+evaluation corpus.
 
 ## Investigation findings (from the session, to confirm in Phase 2)
 
-- `QCResult.kind` already discriminates `"metric" | "structural"` (`src/contig/models.py`).
-  Concordance is a third kind; a concordance `QCResult` flows through
-  `overall_verdict` unchanged (a `fail` dominates a `warn`, a `warn` a `pass`).
-- Pattern to mirror: `src/contig/verification/structural.py` (a `_structural()`
-  tagging helper; per-assay manifests via `manifest_for(assay)`). Add
-  `src/contig/verification/concordance.py` the same shape.
-- Seam to wire into: `src/contig/verification/run_qc.py` (assay-gated, exactly like
-  `cross_sample` is gated there today).
-- Surface: a "corroborated by" line in `contig show` naming the metric and the
-  second tool.
+- `src/contig/verification/rule_pack.py` is **data, not code**: per-assay rule
+  packs (`rule_pack_for(assay)`), evaluated by `evaluate(metrics, pack)`. Existing
+  thresholds are explicitly "illustrative, tunable, not clinical".
+- So most plausibility checks are likely **new declarative rule entries** in the
+  existing pack structure, plus a few new metric extractors where the needed metric
+  is not already parsed from MultiQC.
+- Metrics come from MultiQC via `verification/qc_ingest.py`
+  (`parse_multiqc_general_stats_file`); `run_qc.py` ties ingestion to the pack.
+- A plausibility result is just a `QCResult` (kind defaults to "metric"); it flows
+  through `overall_verdict` like any other check. Note: `QCStatus` now includes
+  "unverified" (added by C1), which is exactly what an absent-metric check needs.
 
-## Scope guardrails (from CLAUDE.md / FEATURES.md / USE_CASE_UNIVERSE.md)
+## Scope guardrails (CLAUDE.md / FEATURES.md / USE_CASE_UNIVERSE.md)
 
-- Concordance is **corroboration, not ground truth**. It can move a verdict to WARN.
-  It never alone promotes UNVERIFIED to PASS.
-- No raw-read egress; the second tool runs on the user's compute.
-- No clinical claim. A verdict means "ran correctly and reproducibly," scoped per
-  assay.
-- Test-first: every piece lands with its failing test written first.
+- No clinical claims. A check means "biologically plausible for this assay", scoped
+  honestly; UNVERIFIED when the metric is missing, never a false PASS.
+- No Layer-1 authoring. No raw-read egress. Engineering-defensible defaults only.
+- Test-first: every check lands with its failing test first.
 
 ## Open questions for the interview
 
-- For the first slice, do we compute the metric on **two call sets the engine
-  produced** (primary plus a second caller actually run), or start with the pure
-  metric function over two given call sets and defer the second-caller execution?
-- WARN vs FAIL threshold for genotype concordance, and whether it is ever FAIL or
-  always at most WARN in the first slice.
-- Which second germline caller to standardize on (for example bcftools call vs
-  the primary GATK HaplotypeCaller).
+- Which assay to lead with for slice 1 (germline Ti/Tv is a clean, well-known
+  check; RNA-seq rRNA is also clean). Depth-first on one, then extend.
+- Are the needed metrics already in the MultiQC general-stats parse, or do some
+  need a new extractor?
+- A new QC `kind` for plausibility (like concordance got), or do these stay
+  kind="metric" but live in a separate, clearly-labelled pack?
+- Exact conservative default bands per check, and the WARN vs UNVERIFIED vs FAIL
+  policy (slice 1 likely WARN-or-unverified only, mirroring how concordance stayed
+  conservative).
