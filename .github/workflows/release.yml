@@ -51,7 +51,6 @@ jobs:
         include:
           - { os: ubuntu-latest, asset: contig-linux-x86_64, sep: ":", ext: "" }
           - { os: macos-14, asset: contig-macos-arm64, sep: ":", ext: "" }
-          - { os: macos-13, asset: contig-macos-x86_64, sep: ":", ext: "" }
           - { os: windows-latest, asset: contig-windows-x86_64.exe, sep: ";", ext: ".exe" }
     runs-on: ${{ matrix.os }}
     steps:
@@ -82,6 +81,54 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/${{ matrix.asset }}
+
+  binary-macos-intel:
+    name: Binary (contig-macos-x86_64)
+    needs: create-release
+    # GitHub's macOS Intel (macos-13) runners queue indefinitely, so we build the
+    # x86_64 binary on the plentiful Apple Silicon runner under Rosetta, using a
+    # standalone x86_64 CPython (setup-python and uv only provide arm64 here). This
+    # mirrors the local fallback in RELEASING.md. Independent job, so an Intel
+    # failure never blocks the rest of the release.
+    runs-on: macos-14
+    env:
+      # python-build-standalone release providing the x86_64-apple-darwin CPython.
+      # Bump deliberately; the asset stays available, so the build env is pinned.
+      PBS_TAG: "20260623"
+      PBS_PY: "cpython-3.12.13+20260623-x86_64-apple-darwin-install_only.tar.gz"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure Rosetta is present
+        run: softwareupdate --install-rosetta --agree-to-license || true
+      - name: Build the x86_64 binary under Rosetta
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/py.tgz \
+            "https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}/${PBS_PY}"
+          mkdir -p /tmp/py-x64 && tar -xzf /tmp/py.tgz -C /tmp/py-x64
+          arch -x86_64 /tmp/py-x64/python/bin/python3 -m venv /tmp/cx64
+          arch -x86_64 /tmp/cx64/bin/python -m pip install --upgrade pip
+          arch -x86_64 /tmp/cx64/bin/python -m pip install --only-binary=:all: cryptography pydantic typer
+          arch -x86_64 /tmp/cx64/bin/python -m pip install --no-deps .
+          arch -x86_64 /tmp/cx64/bin/python -m pip install pyinstaller
+          arch -x86_64 /tmp/cx64/bin/pyinstaller --onefile --name contig \
+            --collect-submodules contig \
+            --copy-metadata contig \
+            --add-data "src/contig/data:contig/data" \
+            packaging/contig_main.py
+          mv dist/contig dist/contig-macos-x86_64
+      - name: Verify x86_64 and smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          file dist/contig-macos-x86_64 | grep -q "x86_64"
+          arch -x86_64 ./dist/contig-macos-x86_64 version
+          arch -x86_64 ./dist/contig-macos-x86_64 clusters --json > /dev/null
+      - name: Attach the binary to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/contig-macos-x86_64
 
   pypi:
     name: Publish to PyPI (trusted publishing)
