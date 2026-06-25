@@ -1,4 +1,7 @@
+import gzip
+
 from contig.models import ExecutionTarget, RunRecord, TaskEvent
+from contig.runner import _discover_qc
 from contig.verification.run_qc import evaluate_run_qc, run_qc
 from contig.verification.structural import ExpectedOutputs
 
@@ -170,3 +173,64 @@ def test_run_qc_includes_concordance_when_vcf_given(tmp_path):
     assert any(r.kind == "concordance" for r in div_results)
     assert _record_with(div_results).verdict in ("pass", "warn", "unverified")
     assert _record_with(div_results).verdict != "fail"
+
+
+# Rows with both transitions and transversions plus a het and a hom-alt genotype,
+# so both plausibility metrics (ts_tv_ratio, het_hom_ratio) are computable.
+_PLAUSIBLE_ROWS = [
+    ("chr1", 100, "A", "G", "0/1"),  # transition, het
+    ("chr1", 200, "C", "T", "1/1"),  # transition, hom-alt
+    ("chr1", 300, "A", "C", "0/1"),  # transversion, het
+]
+
+
+def _write_vcf_gz(path, rows):
+    """Write a gzipped VCF (the `*.vcf.gz` the variant_calling manifest globs for)."""
+    body = "".join(
+        f"{c}\t{p}\t.\t{r}\t{al}\t.\tPASS\t.\tGT\t{gt}\n" for (c, p, r, al, gt) in rows
+    )
+    path.write_bytes(gzip.compress((_VCF_HEADER + body).encode()))
+    return path
+
+
+def test_discover_qc_includes_plausibility_for_variant_run(tmp_path):
+    # A germline run whose results carry a primary VCF and NO multiqc_data.json
+    # still gets the plausibility checks: the MultiQC-independent path.
+    run_dir = tmp_path / "run"
+    results_dir = run_dir / "results"
+    results_dir.mkdir(parents=True)
+    _write_vcf_gz(results_dir / "x.vcf.gz", _PLAUSIBLE_ROWS)
+
+    results = _discover_qc(run_dir, assay="variant_calling")
+    checks = [r.check for r in results]
+    assert any(c.startswith("ts_tv_ratio") for c in checks)
+    assert any(c.startswith("het_hom_ratio") for c in checks)
+
+
+def test_plausibility_not_run_for_non_variant_assay(tmp_path):
+    # An rnaseq run does not get the variant plausibility checks, even if a VCF
+    # happens to sit under its results.
+    run_dir = tmp_path / "run"
+    results_dir = run_dir / "results"
+    results_dir.mkdir(parents=True)
+    _write_vcf_gz(results_dir / "x.vcf.gz", _PLAUSIBLE_ROWS)
+
+    results = _discover_qc(run_dir, assay="rnaseq")
+    checks = [r.check for r in results]
+    assert not any(c.startswith("ts_tv_ratio") for c in checks)
+    assert not any(c.startswith("het_hom_ratio") for c in checks)
+
+
+def test_plausibility_runs_alongside_multiqc(tmp_path):
+    # A variant run that ALSO has a multiqc_data.json still gets the plausibility
+    # checks: they are additive, not gated behind the presence of a MultiQC report.
+    run_dir = tmp_path / "run"
+    results_dir = run_dir / "results"
+    results_dir.mkdir(parents=True)
+    (run_dir / "multiqc_data.json").write_text(GOOD_MQC)
+    _write_vcf_gz(results_dir / "x.vcf.gz", _PLAUSIBLE_ROWS)
+
+    results = _discover_qc(run_dir, assay="variant_calling")
+    checks = [r.check for r in results]
+    assert any(c.startswith("ts_tv_ratio") for c in checks)
+    assert any(c.startswith("het_hom_ratio") for c in checks)
