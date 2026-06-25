@@ -18,9 +18,13 @@ logged into. Do not run `gh release create` by hand; let the workflow do it.
 
 4. The `release` workflow (`.github/workflows/release.yml`) then, in parallel:
    - builds the wheel and sdist,
-   - builds standalone binaries for Linux, macOS (arm64 and x64), and Windows,
+   - builds standalone binaries for Linux, macOS arm64, and Windows in the `binaries`
+     matrix, and the macOS x64 binary in a dedicated `binary-macos-intel` job that
+     builds under Rosetta on the Apple Silicon runner (the macOS Intel runners queue
+     indefinitely, so we no longer wait on them),
    - creates the GitHub Release and attaches all of them,
-   - publishes the CLI image to GHCR (`ghcr.io/haqaliz/contig:<tag>` and `:latest`),
+   - publishes the CLI image to GHCR (`ghcr.io/haqaliz/contig:<tag>` and `:latest`)
+     plus Docker Hub when the `DOCKERHUB_USERNAME` secret is set,
    - publishes to PyPI (if trusted publishing is set up, see below).
 
 Watch it with `gh run watch` or the Actions tab. Each channel is an independent job,
@@ -91,9 +95,11 @@ truth that gets copied over. Per release:
 This step is manual per release for now (the checksums change each build). A future
 job can update the tap automatically with a tap-scoped token.
 
-If the macOS Intel (`macos-13`) binary job stalls in CI and `contig-macos-x86_64`
-is missing from the release, build it locally on an Apple Silicon machine under
-Rosetta and upload it as `haqaliz` (not the push-only collaborator):
+CI now builds `contig-macos-x86_64` in the `binary-macos-intel` job (Rosetta on the
+Apple Silicon runner), so it should be on the release automatically. Only if that
+job ever fails and `contig-macos-x86_64` is missing, build it locally on an Apple
+Silicon machine under Rosetta (the same steps the job runs) and upload it as
+`haqaliz` (not the push-only collaborator):
 
 ```bash
 # x86_64 Python 3.12 (uv is arm64-only, so fetch a standalone build)
