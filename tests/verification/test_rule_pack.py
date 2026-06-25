@@ -174,6 +174,15 @@ def test_variant_rule_pack_non_empty_and_covers_ts_tv():
     assert "ts_tv" in metrics
 
 
+def test_variant_pack_ts_tv_and_het_hom_are_warn_only():
+    # The activated germline plausibility rules are WARN-capped in this slice: no
+    # FAIL band. mean_coverage is unchanged (it may keep its fail band).
+    by_check = {c["check"]: c for c in VARIANT_RULE_PACK}
+    for name in ("ts_tv_ratio", "het_hom_ratio"):
+        assert "fail_below" not in by_check[name]
+        assert "fail_above" not in by_check[name]
+
+
 def test_rule_pack_for_known_assays():
     assert rule_pack_for("rnaseq") is RNASEQ_RULE_PACK
     assert rule_pack_for("variant_calling") is VARIANT_RULE_PACK

@@ -29,12 +29,13 @@ from contig.nfconfig import generate_nextflow_config
 from contig.snakemake import build_snakemake_command, parse_snakemake_stats_file
 from contig.verification.rule_pack import rule_pack_for
 from contig.verification.run_qc import evaluate_run_qc
-from contig.verification.structural import evaluate_structural
+from contig.verification.structural import evaluate_structural, manifest_for
+from contig.verification.variant_metrics import evaluate_variant_plausibility
 
 
 def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
     """Verify a finished run: MultiQC metric checks (assay-specific rule pack) +
-    structural checks on outputs."""
+    structural checks on outputs + (germline only) VCF plausibility checks."""
     results: list[QCResult] = []
     multiqc = next(run_dir.glob("**/multiqc_data.json"), None)
     if multiqc is not None:
@@ -52,6 +53,17 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
     bams = sorted(run_dir.glob("**/*.bam"))
     if bams:
         results.extend(evaluate_structural(bams))
+    # Germline biological-plausibility checks (ts_tv, het_hom) computed straight
+    # from the VCF. This path is INDEPENDENT of MultiQC: it runs whether or not a
+    # report was found, so a germline run is never left without these checks. We
+    # locate the primary VCF exactly as concordance does (the variant_calling
+    # manifest's first required glob, rglob'd under the run), and skip cleanly when
+    # there is none. Gated strictly to germline so other assays are untouched.
+    if assay == "variant_calling":
+        pattern = manifest_for("variant_calling").required[0]  # "*.vcf.gz"
+        vcfs = sorted(p for p in run_dir.rglob(pattern) if p.is_file())
+        if vcfs:
+            results.extend(evaluate_variant_plausibility(vcfs[0]))
     return results
 
 # An executor runs the Nextflow argv and is responsible for the trace file
