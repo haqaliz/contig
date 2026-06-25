@@ -4,6 +4,24 @@ All notable changes to Contig are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims for
 [semantic versioning](https://semver.org/) once it reaches 1.0.
 
+## [0.3.0] - 2026-06-26
+
+### Added
+
+- Germline biological-plausibility verification (capability C3, germline slice):
+  `ts_tv` (transition/transversion ratio over biallelic SNVs) and `het_hom`
+  (heterozygous/homozygous-alt genotype ratio) are computed deterministically from
+  a germline run's VCF, activating the previously-dormant `VARIANT_RULE_PACK`
+  plausibility rules. The checks run whether or not a MultiQC report exists, are
+  capped at WARN (corroboration, not a clinical claim), and report `unverified`
+  (never a false pass) when a ratio is uncomputable.
+
+### Changed
+
+- The `ts_tv_ratio` and `het_hom_ratio` rules in `VARIANT_RULE_PACK` are capped at
+  WARN (their FAIL bands removed) until the bands are calibrated on real data;
+  `mean_coverage` is unchanged.
+
 ## [0.2.0] - 2026-06-24
 
 ### Added
