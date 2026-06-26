@@ -11,6 +11,7 @@ from __future__ import annotations
 import json as _json
 import re as _re
 import shutil
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,6 +58,10 @@ from contig.reference import ReferenceError, resolve_reference
 from contig.registry import assay_for_pipeline
 from contig.report import render_explain, render_run_report, render_run_report_html
 from contig.verification.concordance import evaluate_concordance
+from contig.verification.second_caller import (
+    SecondCallerError,
+    run_bcftools_caller,
+)
 from contig.verification.structural import manifest_for
 from contig.runner import PipelineExecutionError, default_executor
 from contig.samplesheet import fastq_paths, parse_samplesheet, validate_samplesheet
@@ -578,6 +583,21 @@ def verify(
         "--concordance-vcf",
         help="A second call set (VCF) to corroborate this germline run's variants against.",
     ),
+    concordance_auto: bool = typer.Option(
+        False,
+        "--concordance-auto",
+        help="Run a second variant caller (bcftools) on --bam and --ref and corroborate against it.",
+    ),
+    bam: str = typer.Option(
+        None,
+        "--bam",
+        help="Aligned BAM for --concordance-auto's second caller.",
+    ),
+    ref: str = typer.Option(
+        None,
+        "--ref",
+        help="Reference FASTA for --concordance-auto's second caller.",
+    ),
 ) -> None:
     """Re-hash a finished run's outputs and report any drift from the record.
 
@@ -589,9 +609,19 @@ def verify(
     second call set (PRD C1): the concordance checks are printed (and included in
     the JSON payload), but concordance is at-most-WARN and NEVER changes the exit
     code, which only output drift or a signature mismatch can do.
+
+    With --concordance-auto (plus --bam and --ref), Contig produces that second call
+    set itself by running a second variant caller (bcftools) and corroborates the run
+    against it; the same at-most-WARN, never-changes-exit contract applies.
     """
     if not _is_safe_run_id(run_id):
         typer.echo(f"Invalid run id: {run_id!r}", err=True)
+        raise typer.Exit(code=1)
+    if concordance_vcf and concordance_auto:
+        typer.echo(
+            "Choose one of --concordance-vcf or --concordance-auto, not both.",
+            err=True,
+        )
         raise typer.Exit(code=1)
     try:
         record = load_run(runs_dir, run_id)
@@ -602,11 +632,12 @@ def verify(
     # Concordance is independent of output-drift: compute it (if requested) up front
     # so it is surfaced on BOTH the no-checksums and has-checksums paths, and so it
     # can never influence the `ok`/exit decision below.
-    concordance = (
-        _evaluate_run_concordance(record, runs_dir, run_id, concordance_vcf)
-        if concordance_vcf
-        else None
-    )
+    if concordance_vcf:
+        concordance = _evaluate_run_concordance(record, runs_dir, run_id, concordance_vcf)
+    elif concordance_auto:
+        concordance = _evaluate_run_concordance_auto(record, runs_dir, run_id, bam, ref)
+    else:
+        concordance = None
 
     # A signed run carries a signature.json sidecar; a mismatch is a verification
     # failure (the record was tampered with), so it fails the verify just like drift.
@@ -669,13 +700,68 @@ def _evaluate_run_concordance(
     yields no checks (never a crash, never a false pass). Returns the QCResult list
     so the caller surfaces it without changing the exit code.
     """
+    primary = _resolve_primary_vcf(record, runs_dir, run_id)
+    if primary is None:
+        return []
+    return evaluate_concordance(primary, concordance_vcf, assay="variant_calling")
+
+
+def _evaluate_run_concordance_auto(
+    record: RunRecord,
+    runs_dir: str,
+    run_id: str,
+    bam: str,
+    ref: str,
+    caller=None,
+) -> list:
+    """Concordance checks for a germline run vs a freshly produced second call set.
+
+    Like `_evaluate_run_concordance`, but Contig produces the second call set itself:
+    it gates to germline variant calling, resolves the same primary VCF, validates
+    that --bam and --ref were given and exist, then runs the second caller (bcftools
+    by default; injectable via `caller` and monkeypatchable as the module-level
+    `run_bcftools_caller`). A missing input, a missing caller binary, or any
+    SecondCallerError prints a clear skip note and yields no checks (never a crash,
+    never a false pass). Returns the QCResult list so the caller surfaces it without
+    changing the exit code.
+    """
+    primary = _resolve_primary_vcf(record, runs_dir, run_id)
+    if primary is None:
+        return []
+
+    for label, value in (("--bam", bam), ("--ref", ref)):
+        if not value:
+            typer.echo(f"Skipping concordance: {label} is required for --concordance-auto.")
+            return []
+        if not Path(value).is_file():
+            typer.echo(f"Skipping concordance: {label} file not found: {value}.")
+            return []
+
+    run_caller = caller if caller is not None else run_bcftools_caller
+    with tempfile.TemporaryDirectory() as out_dir:
+        try:
+            second_vcf = run_caller(bam, ref, out_dir)
+        except SecondCallerError as exc:
+            typer.echo(f"Skipping concordance: the second caller could not run ({exc}).")
+            return []
+        return evaluate_concordance(primary, second_vcf, assay="variant_calling")
+
+
+def _resolve_primary_vcf(record: RunRecord, runs_dir: str, run_id: str):
+    """Resolve a germline run's primary VCF, or None with a clear skip note.
+
+    Shared by both concordance paths so the assay gate and the primary-VCF glob
+    cannot drift apart. Gates the run's assay to germline variant calling and finds
+    its primary `*.vcf.gz` from the variant_calling manifest under the results dir. A
+    non-germline assay or a missing primary VCF prints a clear note and returns None.
+    """
     assay = assay_for_pipeline(record.pipeline)
     if assay != "variant_calling":
         typer.echo(
             "Skipping concordance: it is only defined for germline variants today "
             f"(run {run_id} is {assay or record.pipeline})."
         )
-        return []
+        return None
 
     results_dir = _results_dir_for(record, runs_dir, run_id)
     manifest = manifest_for("variant_calling")
@@ -685,9 +771,8 @@ def _evaluate_run_concordance(
         typer.echo(
             f"Skipping concordance: no primary VCF ({pattern}) found for run {run_id}."
         )
-        return []
-
-    return evaluate_concordance(primaries[0], concordance_vcf, assay="variant_calling")
+        return None
+    return primaries[0]
 
 
 def _echo_concordance(concordance: list | None) -> None:

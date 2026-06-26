@@ -1024,6 +1024,232 @@ def test_verify_concordance_non_germline_assay_skips(tmp_path):
     assert "germline" in result.output.lower()
 
 
+# --- contig verify --concordance-auto (PRD C1, second-caller seam) -------------
+# A fake second caller stands in for bcftools so CI never runs the real binary.
+# It writes a recorded second VCF under out_dir and returns that path, exactly the
+# contract of run_bcftools_caller (bam, ref, out_dir) -> vcf_path.
+
+
+def _fake_caller_writing(vcf_body):
+    """Build a fake second caller that writes `vcf_body` and returns its path."""
+    import gzip as _gzip
+
+    def fake(bam, ref, out_dir):
+        path = Path(out_dir) / "second.vcf.gz"
+        path.write_bytes(_gzip.compress((_VCF_HEADER + vcf_body).encode()))
+        return str(path)
+
+    return fake
+
+
+def test_verify_concordance_auto_emits_checks(tmp_path, monkeypatch):
+    _write_germline_run_with_vcf(tmp_path, "g1", _VCF_SITES_A)
+    bam = tmp_path / "input.bam"
+    bam.write_bytes(b"BAM")
+    ref = tmp_path / "ref.fa"
+    ref.write_bytes(b">chr1\nACGT\n")
+
+    monkeypatch.setattr(
+        "contig.cli.run_bcftools_caller", _fake_caller_writing(_VCF_SITES_CONCORDANT)
+    )
+    ok = runner.invoke(
+        app,
+        [
+            "verify",
+            "g1",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-auto",
+            "--bam",
+            str(bam),
+            "--ref",
+            str(ref),
+        ],
+    )
+    assert ok.exit_code == 0
+    out = ok.output.lower()
+    assert "genotype_concordance" in out
+    assert "site_overlap" in out
+    assert "pass" in out
+
+    monkeypatch.setattr(
+        "contig.cli.run_bcftools_caller", _fake_caller_writing(_VCF_SITES_DIVERGENT)
+    )
+    bad = runner.invoke(
+        app,
+        [
+            "verify",
+            "g1",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-auto",
+            "--bam",
+            str(bam),
+            "--ref",
+            str(ref),
+        ],
+    )
+    assert "genotype_concordance" in bad.output.lower()
+    assert "warn" in bad.output.lower()
+
+
+def test_verify_concordance_auto_at_most_warn_exit(tmp_path, monkeypatch):
+    # A divergent second caller is the only issue; outputs are unchanged, so there
+    # is no drift -> the exit code must stay 0 (concordance is at-most-WARN).
+    _write_germline_run_with_vcf(tmp_path, "g2", _VCF_SITES_A)
+    bam = tmp_path / "input.bam"
+    bam.write_bytes(b"BAM")
+    ref = tmp_path / "ref.fa"
+    ref.write_bytes(b">chr1\nACGT\n")
+
+    monkeypatch.setattr(
+        "contig.cli.run_bcftools_caller", _fake_caller_writing(_VCF_SITES_DIVERGENT)
+    )
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "g2",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-auto",
+            "--bam",
+            str(bam),
+            "--ref",
+            str(ref),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "warn" in result.output.lower()
+
+
+def test_verify_concordance_auto_json_includes_results(tmp_path, monkeypatch):
+    _write_germline_run_with_vcf(tmp_path, "g3", _VCF_SITES_A)
+    bam = tmp_path / "input.bam"
+    bam.write_bytes(b"BAM")
+    ref = tmp_path / "ref.fa"
+    ref.write_bytes(b">chr1\nACGT\n")
+
+    monkeypatch.setattr(
+        "contig.cli.run_bcftools_caller", _fake_caller_writing(_VCF_SITES_CONCORDANT)
+    )
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "g3",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-auto",
+            "--bam",
+            str(bam),
+            "--ref",
+            str(ref),
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert "concordance" in data
+    checks = {r["check"] for r in data["concordance"]}
+    assert {"genotype_concordance", "site_overlap"} <= checks
+
+
+def test_verify_concordance_auto_missing_bam_or_ref_skips(tmp_path, monkeypatch):
+    # A non-existent BAM: the CLI must note the skip before invoking the caller,
+    # emit no concordance, and leave the exit code unaffected (no crash).
+    _write_germline_run_with_vcf(tmp_path, "g4", _VCF_SITES_A)
+    ref = tmp_path / "ref.fa"
+    ref.write_bytes(b">chr1\nACGT\n")
+
+    def boom(bam, ref, out_dir):  # the caller must not be reached
+        raise AssertionError("caller invoked despite missing BAM")
+
+    monkeypatch.setattr("contig.cli.run_bcftools_caller", boom)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "g4",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-auto",
+            "--bam",
+            str(tmp_path / "missing.bam"),
+            "--ref",
+            str(ref),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "skipping concordance" in result.output.lower()
+    assert "genotype_concordance" not in result.output.lower()
+
+
+def test_verify_concordance_auto_caller_failure_skips(tmp_path, monkeypatch):
+    # The caller raises SecondCallerError (e.g. bcftools not on PATH): the CLI must
+    # turn it into a clear note, no PASS, no crash, exit unaffected.
+    _write_germline_run_with_vcf(tmp_path, "g5", _VCF_SITES_A)
+    bam = tmp_path / "input.bam"
+    bam.write_bytes(b"BAM")
+    ref = tmp_path / "ref.fa"
+    ref.write_bytes(b">chr1\nACGT\n")
+
+    from contig.verification.second_caller import SecondCallerError
+
+    def boom(bam, ref, out_dir):
+        raise SecondCallerError("bcftools not found")
+
+    monkeypatch.setattr("contig.cli.run_bcftools_caller", boom)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "g5",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-auto",
+            "--bam",
+            str(bam),
+            "--ref",
+            str(ref),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "skipping concordance" in result.output.lower()
+    assert "genotype_concordance" not in result.output.lower()
+
+
+def test_verify_concordance_auto_non_germline_skips(tmp_path, monkeypatch):
+    # An rnaseq run with --concordance-auto: concordance is not defined for it, so
+    # the command prints a clear note, does not crash, and the exit is unaffected.
+    _write_run_with_outputs(tmp_path, "rna", {"summary.txt": b"produced"})  # nf-core/rnaseq
+    bam = tmp_path / "input.bam"
+    bam.write_bytes(b"BAM")
+    ref = tmp_path / "ref.fa"
+    ref.write_bytes(b">chr1\nACGT\n")
+
+    def boom(bam, ref, out_dir):  # the caller must not be reached for a non-germline run
+        raise AssertionError("caller invoked for a non-germline run")
+
+    monkeypatch.setattr("contig.cli.run_bcftools_caller", boom)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "rna",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-auto",
+            "--bam",
+            str(bam),
+            "--ref",
+            str(ref),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "germline" in result.output.lower()
+
+
 def test_keygen_prints_a_keypair(tmp_path):
     result = runner.invoke(app, ["keygen"])
     assert result.exit_code == 0
