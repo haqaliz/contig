@@ -1,68 +1,49 @@
-# C3 bio-plausibility, Phase 2 understanding
+# concordance-autorun, Phase 2 understanding
 
-Grounded by a graphify-first code-mapping pass. File:line anchors are against the
-worktree.
+Graphify-first code map. File:line against the worktree.
 
-## The big finding (contradicts the brief, surfaced not papered over)
+## Ready to reuse (good)
 
-Much of what the C3 capability spec describes as future work **already exists in
-the code** (CLAUDE.md: "code is ahead of the narrative docs"):
+`evaluate_concordance(primary_vcf, second_vcf, assay)`
+(`verification/concordance.py:236-249`) takes two VCF **paths** and is agnostic to
+how they were produced. Only new work: produce the second VCF and pass its path.
+The verify CLI already resolves the primary VCF (`cli.py:661-690`).
 
-1. The rule schema **already supports two-sided bands**: `warn_above`/`fail_above`
-   alongside `warn_below`/`fail_below`, evaluated by `_status_for`
-   (`rule_pack.py:249-268`), with `_expected_range` formatting `[lo, hi]`. Tests
-   exist (`tests/verification/test_rule_pack.py:122-166`). So a Ti/Tv or doublet
-   band is expressible today, no schema work.
-2. The germline pack **already declares the marquee plausibility checks**
-   (`VARIANT_RULE_PACK`, `rule_pack.py:49-75`): `ts_tv_ratio` (metric `ts_tv`,
-   band 1.5/1.8..2.4/3.0), `het_hom_ratio` (metric `het_hom`), `mean_coverage`.
+## Injectable-caller seam (test-only execution) is available
 
-## The real gap (where the actual work is)
+The engine has the pattern: `Executor = Callable[[list[str], Path], int]`
+(`runner.py:69-72`), default shells out (`runner.py:88-99`), injected into
+`run_pipeline(executor=...)` so tests inject a fake (`tests/test_runner.py`). The
+second caller mirrors it: `VariantCaller = Callable[[primary, bam, ref], str]`,
+default = real bcftools, tests inject a fake returning a recorded VCF. So the
+no-tool-execution test rule is satisfiable.
 
-`evaluate(metrics, pack)` (`rule_pack.py:282-301`) **skips any rule whose metric is
-absent** from the ingested metrics (`if check["metric"] not in sample_metrics:
-continue`). Metrics come only from MultiQC general-stats via
-`parse_multiqc_general_stats_file` (`qc_ingest.py`). So the germline plausibility
-rules **only fire if `ts_tv`/`het_hom`/`mean_coverage` are in sarek's MultiQC
-general-stats**. They are most likely NOT (bcftools stats land in a separate
-MultiQC section, not general-stats, and our parser reads general-stats only). If
-so, **the germline plausibility rules are declared but dead.**
+## The contradiction the brief missed (CRITICAL)
 
-So the highest-value, most concrete slice is: **make the existing germline
-plausibility rules actually fire** by computing `ts_tv` and `het_hom` (and
-optionally coverage) **from the VCF**, then merging them into the metrics before
-`evaluate()`. This directly reuses the deterministic VCF parser we just built for
-concordance (`verification/concordance.py` `parse_vcf`), so it is testable the same
-way (tiny inline VCF fixtures, no tool execution, no network).
+A **finished** germline bundle does not carry what a second caller needs:
+- The **BAM is absent** (nf-core/sarek writes it to Nextflow `work/`, not
+  `results/`; the bundle and checksums cover `results/` only; the variant manifest
+  is `["*.vcf.gz"]`). Users often delete `work/`.
+- The **reference** is in `launch.json` (`fasta`/`genome`) but may be unlocatable
+  (a bare `--genome hg38` stores only the name).
 
-Genuinely-missing checks for OTHER assays (not declared today): RNA-seq rRNA
-contamination, scRNA-seq doublet rate. Those need both a new rule AND a metric
-source, so they are later slices, not slice 1.
+So "turnkey from a finished run" is not achievable as stated. Options:
+- **A. In-pipeline:** run the second caller during the germline run (both VCFs
+  together). Most reproducible; a run-time feature, not post-hoc verify.
+- **B. Post-hoc with explicit inputs:** `contig verify --concordance-auto --bam
+  <bam> --ref <ref>`, Contig runs bcftools for you, you point it at the BAM and
+  reference. Simple, testable, unblocks the value (no hand-built second VCF).
+  RECOMMENDED slice 1.
+- **C. Best-effort discovery:** fragile, silent failures, maybe network. Avoid.
 
-## Affected areas (confirmed)
-
-- `src/contig/verification/rule_pack.py`, `VARIANT_RULE_PACK` (rules exist);
-  `evaluate` skips absent metrics; `_status_for` already two-sided.
-- `src/contig/verification/qc_ingest.py`, `parse_multiqc_general_stats[_file]`
-  returns `{sample: {metric: float}}`. The merge point for VCF-derived metrics.
-- `src/contig/verification/run_qc.py` `run_qc` / `evaluate_run_qc`, and
-  `src/contig/runner.py:35 _discover_qc(run_dir, assay)`, where a per-assay pack is
-  selected and evaluated; where VCF-derived germline metrics would be computed and
-  merged before pack evaluation.
-- `src/contig/verification/concordance.py` `parse_vcf`, the reusable VCF parser
-  pattern for a `variant_metrics.py` (Ti/Tv, het/hom from genotypes).
-- `QCResult.kind`: reuse `"metric"` (no new kind, no report/dashboard grouping
-  change). The mapping agent confirmed a new kind would cost report.py + qc-panel.tsx
-  changes for little benefit.
+## Affected areas
+- `cli.py` verify: add an auto path mirroring `_evaluate_run_concordance`, with an
+  injectable `caller`.
+- new `verification/second_caller.py`: `VariantCaller` protocol + `run_bcftools_caller`.
+- Tests mirror `tests/test_concordance.py` + `tests/test_cli.py`; inject a fake
+  caller so bcftools never runs. Reuses `kind="concordance"`; no UI change.
 
 ## Open questions for the interview
-
-1. Slice 1 = compute germline Ti/Tv + het/hom from the VCF so the existing rules
-   fire (recommended), vs starting with a different assay.
-2. Whether to also compute `mean_coverage` (needs depth info, not just genotypes;
-   may not be derivable from the VCF alone) or leave that rule metric-dependent.
-3. Confirm the bands in the existing VARIANT_RULE_PACK are acceptable or need
-   tuning, and the WARN/FAIL/UNVERIFIED policy (slice 1 likely keep the existing
-   bands; an absent VCF or zero variants yields unverified, never a false pass).
-4. Do we tune the rRNA/doublet checks now or defer to a later slice (recommend
-   defer; slice 1 is germline-metrics-from-VCF).
+1. A (in-pipeline) vs B (post-hoc explicit `--bam`/`--ref`). Recommend B.
+2. Second caller = bcftools call for slice 1.
+3. Missing-binary at runtime -> unverified/skip with a clear message, never PASS.
