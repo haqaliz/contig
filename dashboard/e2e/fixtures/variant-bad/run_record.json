@@ -1,0 +1,57 @@
+{
+  "run_id": "variant-bad",
+  "pipeline": "nf-core/sarek",
+  "pipeline_revision": "3.5.1",
+  "target": {
+    "backend": "local",
+    "container_runtime": "docker",
+    "work_dir": "runs/variant-bad/work",
+    "engine": "nextflow",
+    "credentials_ref": null,
+    "backend_options": {},
+    "resource_limits": {}
+  },
+  "input_checksums": {},
+  "parameters": {
+    "genome": "GRCh38",
+    "outdir": "runs/variant-bad/results"
+  },
+  "container_digests": {},
+  "nextflow_version": "26.04.4",
+  "contig_version": "0.0.1",
+  "events": [
+    {
+      "process": "NFCORE_SAREK:HAPLOTYPECALLER (S1)",
+      "status": "COMPLETED",
+      "exit": 0,
+      "task_id": "1",
+      "name": "NFCORE_SAREK:HAPLOTYPECALLER (S1)"
+    }
+  ],
+  "qc_results": [
+    {
+      "check": "ts_tv_ratio:S1",
+      "status": "fail",
+      "message": "S1: ts_tv=3.5 (fail)",
+      "value": 3.5,
+      "expected_range": "[1.8, 2.4]"
+    },
+    {
+      "check": "het_hom_ratio:S1",
+      "status": "pass",
+      "message": "S1: het_hom=1.6 (pass)",
+      "value": 1.6,
+      "expected_range": "[1.4, 2.5]"
+    },
+    {
+      "check": "mean_coverage:S1",
+      "status": "pass",
+      "message": "S1: mean_coverage=35.0 (pass)",
+      "value": 35.0,
+      "expected_range": ">= 20.0"
+    }
+  ],
+  "output_checksums": {},
+  "repair_history": [],
+  "verdict": "fail"
+}

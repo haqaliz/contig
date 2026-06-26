@@ -2,14 +2,22 @@
 // live, reproduce, verify, scrnaseq, and so on). They live here, NOT in the real
 // runs directory, so they never clutter a user's dashboard. The global setup
 // copies them into the runs directory before the suite and the teardown removes
-// them after, so they exist only while the tests run. Real run bundles (testpass2,
-// variant-bad) stay in the runs directory permanently and are not managed here.
+// them after, so they exist only while the tests run. This includes the baseline
+// bundles testpass2 (nf-core/rnaseq, pass) and variant-bad (nf-core/sarek, fail):
+// they used to be expected as permanent bundles in the gitignored runs directory,
+// which meant they were absent in CI and the suite failed there. They are managed
+// fixtures now so the suite is self-contained.
 import { cpSync, rmSync, existsSync, renameSync } from "fs";
 import path from "path";
 
 // The fixture run ids this suite provisions. Each is a directory under
 // e2e/fixtures/<id> that is copied to <runsDir>/<id>.
 export const FIXTURE_RUN_IDS = [
+  // Baseline bundles the smoke, explain, reproduce, and compare specs read by id.
+  // run_record.json only (no heavy results/.nextflow/work), which is all the
+  // dashboard renders for these tests.
+  "testpass2",
+  "variant-bad",
   "awaiting-approval-fixture",
   "awaiting-confirm-fixture",
   "cancelled-fixture",

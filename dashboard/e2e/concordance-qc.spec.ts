@@ -29,7 +29,10 @@ test("concordance checks render in their own labeled section", async ({
   await expect(
     page.getByRole("cell", { name: "variant_agreement:gatk_vs_deepvariant" }),
   ).toBeVisible();
-  await expect(page.getByText("Unverified")).toBeVisible();
+  // Exact match: the section's card description prose also contains the word
+  // "unverified", so an inexact getByText would resolve to two elements. We want
+  // the neutral status pill, which is exactly "Unverified".
+  await expect(page.getByText("Unverified", { exact: true })).toBeVisible();
 
   // The metric check stays in the per-sample grouping, not the concordance section.
   await expect(page.getByText("Per-sample checks")).toBeVisible();
