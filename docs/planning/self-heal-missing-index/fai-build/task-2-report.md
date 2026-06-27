@@ -87,3 +87,50 @@ detector rather than a stub.
   so the optional lint step was skipped.
 - Builder cwd is `run_dir` (the resolved run directory), per the plan; real-run
   path-mismatch risk (PRD R2) is noted as a follow-up, out of scope here.
+
+## Final-review fixes
+
+Two minor quality fixes applied as a single commit (`6884ed7`).
+
+### FIX 1 — `default_index_builder` logs to `run.log`
+
+**File:** `src/contig/runner.py`
+
+Changed `default_index_builder` to open `run.log` in the cwd in append mode (`"ab"`)
+and tee combined stdout+stderr there, mirroring `default_executor` (which uses `"wb"`
+on the first write). The append mode ensures the index-build output is captured without
+clobbering the pipeline log that the executor wrote on the initial attempt.
+
+Updated test in `tests/test_runner.py`:
+- Renamed `test_default_index_builder_returns_zero_for_success` →
+  `test_default_index_builder_returns_zero_and_tees_output_to_run_log`.
+- Changed the command from `[sys.executable, "-c", ""]` to
+  `[sys.executable, "-c", "print('faidx ok')"]`.
+- Added: `assert b"faidx ok" in (tmp_path / "run.log").read_bytes()`.
+- The existing non-zero-exit test (`test_default_index_builder_returns_nonzero_for_failure`)
+  is unchanged.
+
+### FIX 2 — Lock non-build gated outcome string
+
+**File:** `tests/test_self_heal.py`
+
+Added one assertion in `test_self_heal_applied_param_patch_reaches_the_rerun_command`:
+
+```python
+assert record.repair_history[0].outcome == "approved_and_retried"
+```
+
+This locks the literal default outcome string for the non-build auto-approve path
+(`bad_param` → `param` patch) without weakening any existing assertion.
+
+### Test commands and output
+
+```
+uv run pytest tests/test_runner.py tests/test_self_heal.py -v
+# 111 passed in 0.26s
+
+uv run pytest
+# 789 passed, 1 skipped in 10.06s
+```
+
+The 1 skip is the pre-existing env-gated LLM detector test.
