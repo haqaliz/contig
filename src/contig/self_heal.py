@@ -259,6 +259,18 @@ def _lead_number(value: object, default: int) -> float:
     return float(match.group()) if match else float(default)
 
 
+def _resource_ceiling_block(diagnosis, target, ceiling) -> str | None:
+    """Message if the resource this failure class scales is already at/above its
+    cap (so auto-scaling can grow it no further); else None."""
+    if diagnosis.failure_class == "oom":
+        if _lead_number(target.resource_limits.get("memory"), _DEFAULT_MEMORY_GB) >= ceiling["memory"]:
+            return f"Out of memory persists at the {ceiling['memory']} GB ceiling; needs a node with more memory."
+    if diagnosis.failure_class == "time_limit":
+        if _lead_number(target.resource_limits.get("time"), _DEFAULT_TIME_HOURS) >= ceiling["time"]:
+            return f"Time limit persists at the {ceiling['time']} h ceiling; needs a longer walltime allowance."
+    return None
+
+
 def apply_patch(
     target: ExecutionTarget,
     patch: Patch,
@@ -339,6 +351,7 @@ def self_heal_run(
     poll: ApprovalPoll = _poll_approval_file,
     propose: Callable[..., list[Patch]] = propose_patches,
     notify_webhook: str | None = None,
+    resource_ceiling: dict[str, int] | None = None,
 ) -> RunRecord:
     """Run a pipeline and auto-recover from recoverable failures, logging the chain.
 
@@ -349,6 +362,7 @@ def self_heal_run(
     """
     run_dir = (Path(runs_dir) / run_id).resolve()
     _write_status(run_dir, "running")
+    resource_ceiling = resource_ceiling or {"memory": CEILING_MEMORY_GB, "time": CEILING_TIME_H}
     pending_path = Path(pending_corpus) if pending_corpus else Path(runs_dir) / "pending_corpus.jsonl"
     current_params = dict(params or {})
     current_target = target
@@ -427,7 +441,7 @@ def self_heal_run(
                 # --auto-approve is non-interactive: it always takes the best-ranked
                 # gated fix, so there is no choice to make even when ambiguous.
                 if auto_approve:
-                    current_target, current_params = apply_patch(current_target, gated, current_params)
+                    current_target, current_params = apply_patch(current_target, gated, current_params, ceiling=resource_ceiling)
                     _record_attempt(
                         run_dir,
                         repair_history,
@@ -455,7 +469,7 @@ def self_heal_run(
 
                     chosen = _validated_choice(candidates, decision, choice)
                     if chosen is not None:
-                        current_target, current_params = apply_patch(current_target, chosen, current_params)
+                        current_target, current_params = apply_patch(current_target, chosen, current_params, ceiling=resource_ceiling)
                         _write_status(run_dir, "running")
                         _record_attempt(
                             run_dir,
@@ -491,7 +505,7 @@ def self_heal_run(
                 decision = (result or {}).get("decision") if result else None
 
                 if decision == "approve":
-                    current_target, current_params = apply_patch(current_target, gated, current_params)
+                    current_target, current_params = apply_patch(current_target, gated, current_params, ceiling=resource_ceiling)
                     _write_status(run_dir, "running")
                     _record_attempt(
                         run_dir,
@@ -523,7 +537,15 @@ def self_heal_run(
                     runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
                 )
 
-            current_target, current_params = apply_patch(current_target, safe, current_params)
+            block = _resource_ceiling_block(diagnosis, current_target, resource_ceiling)
+            if block is not None:
+                _record_attempt(run_dir, repair_history,
+                    RepairStep(attempt=attempt, diagnosis=diagnosis, patch=safe,
+                               outcome="gave_up_at_ceiling", detail=block))
+                return _finalize(exc.record, repair_history, run_dir,
+                    runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook)
+
+            current_target, current_params = apply_patch(current_target, safe, current_params, ceiling=resource_ceiling)
             _record_attempt(
                 run_dir,
                 repair_history,
