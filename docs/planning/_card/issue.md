@@ -1,63 +1,72 @@
-# resource-aware-retry (bounded resource-aware self-heal retry)
+# self-heal-missing-index (real recovery from a missing/stale index)
 
-Source: no GitHub issue. Inline brief, owner `aliz`, branch `feat/resource-aware-retry/aliz`.
-Origin: first slice of capability C2 (self-heal breadth + auto resource-scaling),
-`docs/technical/CAPABILITY_ROADMAP.md:94-124`. Picked by `contig-next` as the
-highest-leverage next feature after v0.4.0 closed C1's turnkey follow-on.
+Source: no GitHub issue. Inline brief, owner `aliz`, branch
+`feat/self-heal-missing-index/aliz`. Origin: the explicitly-named next slice of
+capability **C2** (self-heal breadth), `docs/technical/CAPABILITY_ROADMAP.md:94-132`,
+called out as a later C2 slice in the resource-aware-retry PRD Out-of-Scope
+(`docs/planning/resource-aware-retry/prd.md:186-188`). Picked by `contig-next` as
+the highest-leverage unblocked feature after the resource-aware-retry slice closed.
 
 ## Brief
 
-C2's headline item is resource-aware retry: when a process fails out-of-memory,
-retry it with **scaled memory within a bounded ceiling**; when walltime is
-exceeded, scale time; record the scaling as a structured patch with its rationale
-and expected signal; and bound the whole thing with a retry budget that provably
-converges.
+Make Contig's self-heal actually recover from a **missing or stale index** instead
+of a no-op re-run. It is unblocked (unlike peak-RSS scaling, which needs a
+`resource_usage` refactor).
 
-Today the `oom` and `time_limit` repairs already exist but as **one-shot**
-multipliers: OOM proposes `{"multiply": {"memory": 2}}` (`repair.py:16-34`) and the
-self-heal loop is globally capped by `max_attempts=3` (`self_heal.py:315`). What is
-missing — and what this slice adds:
+### The gap
 
-- A bounded resource **ceiling** so scaling can't grow without limit.
-- **Progressive** scaling that converges across attempts (not a fixed re-double
-  that may overshoot or never reach the needed size within the attempt budget).
-- The structured patch carrying its scaling **rationale + expected_signal**.
-- A dedicated **budget test** proving the auto-scale loop terminates.
-- Capture of the recovered case into the failure-and-fix corpus (moat #2 fuel).
+- `repair.py:56-64` already proposes a `kind="reference", operation={"build_index":
+  True}` patch for the `missing_index` FailureClass.
+- But `self_heal.py:293-295` notes a reference patch *without* `set_param` "stays
+  re-run only (unchanged params)" — i.e. today the index is never built, so the
+  retry just fails again the same way. The scaffolding (FailureClass + patch
+  proposal) exists but the repair is hollow.
+
+### What to build
+
+- Implement the `build_index` operation in `apply_patch` (`self_heal.py`) as an
+  **auxiliary prep action** — build/regenerate the missing index, then retry —
+  rather than the config mutations the loop does today. (New patch *action shape*:
+  running a command, not mutating config.)
+- Confirm `detect.py` actually emits the `missing_index` FailureClass from real log
+  signatures; seed a corpus case for it.
+- Keep it deterministic and CI-safe behind the injected `Executor` (no real
+  tool/Nextflow runs), test-first, mirroring `tests/test_self_heal.py`.
 
 ## Why it is the moat
 
-Unattended-completion rate is the Phase-1 headline reliability metric
-(`ROADMAP.md:101`, `CAPABILITY_ROADMAP.md:100-102`). OOM is one of the named top-5
-failure modes (`ROADMAP.md:56`). Incumbents only do mechanical OOM resubmit; none
-records a structured, rationale-bearing scaling patch (`FEATURES.md:64`, Terra
-row). Every recovered failure also seeds the detector corpus. Stays entirely Layer
-2 (run + self-heal), never Layer 1.
+Raises the headline reliability metric — unattended-completion rate
+(`CAPABILITY_ROADMAP.md:110-111`). Each recovered mode seeds a golden corpus case
+(moat #2), and the diagnosis path gets better as base models improve. Incumbents do
+mechanical resubmit only; none builds the missing artifact and retries. Stays
+entirely Layer 2 (run + self-heal), never Layer 1.
 
-## The caveat (hardening, not greenfield)
+## The caveat (nearest feasibility risk)
 
-OOM/walltime **detection** already exists (`detect.py:42-50` for oom; time_limit
-likewise), and the loop is already bounded by `max_attempts=3`. This slice must
-treat detection as present and scope strictly to the **scaling / ceiling /
-convergence** layer — do not re-implement detection or the outer loop.
+`build_index` is currently a no-op re-run (`self_heal.py:293-295`). Making it real
+introduces a new patch *action shape* (run a command to build the index before
+retry), unlike the existing config-mutation patches. Need to decide which indices,
+and how to build them in a tool-agnostic, injectable, CI-safe way. Must confirm
+`detect.py` classifies `missing_index` from real log signatures.
 
 ## Scope guardrails (CLAUDE.md / FEATURES.md)
 
-- No raw-read egress; retries run on the user's compute.
-- Self-heal stays bounded and logged; the budget must provably terminate.
+- No raw-read egress; the index build runs on the user's compute.
+- Self-heal stays bounded and logged; reuse the existing `max_attempts` bound.
 - Test-first; no real pipeline/tool execution in tests (inject fakes per the
   existing `Executor` seam in `runner.py`).
 
 ## Open questions for the interview
 
-- Ceiling policy: absolute cap (e.g. memory <= N GB, walltime <= T h) vs a multiple
-  of the original request (e.g. <= 8x). And whether the ceiling is per-process or
-  global.
-- Progression: geometric (2x, 4x, 8x) capped at the ceiling, or jump-to-ceiling on
-  the last attempt.
-- What happens at the ceiling: give up with a clear "needs bigger box" message
-  (never a false PASS) vs pause for human approval.
-- Whether the scaled value is informed by the trace's peak RSS (already parsed into
-  `RunRecord.resource_usage`) or purely multiplicative.
-- Does this live only in the self-heal repair path, or also surface a structured
-  `expected_signal` the verdict/report can show.
+- Which indices are in scope (FASTA `.fai`, BWA/STAR index, `.dict`, tabix `.tbi`,
+  BAM `.bai`)? Start with one, or a small declared set?
+- How is the index built — a tool command via the `Executor`, or by letting the
+  pipeline regenerate it (e.g. clearing a stale index / flipping a param)? The
+  former is a new action shape; the latter may reuse the existing config-mutation
+  path.
+- "Missing" vs "stale": is stale-index detection in scope, or only fully-missing?
+- How is the build command resolved without raw tool execution in tests — a typed
+  build step the injected `Executor` fulfils?
+- What does the seeded corpus case look like (log signature → `missing_index`)?
+- Does anything need to surface in the report/verdict, or is `repair_history` +
+  JSONL the whole footprint this slice (mirroring the resource-aware-retry slice)?
