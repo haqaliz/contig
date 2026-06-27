@@ -39,6 +39,9 @@ from contig.runner import (
 _DEFAULT_MEMORY_GB = 8
 _DEFAULT_TIME_HOURS = 4
 
+CEILING_MEMORY_GB = 128
+CEILING_TIME_H = 72
+
 # A diagnosis below this confidence is treated as ambiguous: even a single gated
 # fix is offered as a choice rather than a take-it-or-leave-it confirm (contract D).
 _AMBIGUOUS_CONFIDENCE = 0.5
@@ -257,14 +260,21 @@ def _lead_number(value: object, default: int) -> float:
 
 
 def apply_patch(
-    target: ExecutionTarget, patch: Patch, params: dict[str, object] | None = None
+    target: ExecutionTarget,
+    patch: Patch,
+    params: dict[str, object] | None = None,
+    *,
+    ceiling: dict[str, int] | None = None,
 ) -> tuple[ExecutionTarget, dict[str, object]]:
     """Apply a patch to the run inputs, returning the updated (target, params).
 
     Bounded by kind (PRD contract C/D):
 
     - `resource`: bump `process.resourceLimits` (what modern nf-core honors; the
-      old `--max_memory` params are ignored).
+      old `--max_memory` params are ignored). The `ceiling` kwarg (default:
+      ``{"memory": CEILING_MEMORY_GB, "time": CEILING_TIME_H}``) sets an absolute
+      upper bound on each auto-scaled value. A pre-existing value that already
+      exceeds the ceiling is preserved as-is (never-shrink rule).
     - `param`: merge `set_param` (its concrete key/value swap) into the pipeline
       params so the corrected parameter reaches the re-run's command.
     - `reference`: merge `set_param` (the reference swap, e.g. igenomes_ignore)
@@ -274,16 +284,24 @@ def apply_patch(
       so it rides into the generated config / re-run target).
     - `code`/`retry`: change nothing. The re-run itself is the fix.
     """
+    if ceiling is None:
+        ceiling = {"memory": CEILING_MEMORY_GB, "time": CEILING_TIME_H}
     params = dict(params or {})
     if patch.kind == "resource":
         mult = patch.operation.get("multiply", {})
         limits = dict(target.resource_limits)
         if "memory" in mult:
-            bumped = int(_lead_number(limits.get("memory"), _DEFAULT_MEMORY_GB) * int(mult["memory"]))
-            limits["memory"] = f"{bumped}.GB"
+            current = _lead_number(limits.get("memory"), _DEFAULT_MEMORY_GB)
+            bumped = int(current * int(mult["memory"]))
+            capped = min(bumped, ceiling["memory"])
+            final = max(capped, int(current))
+            limits["memory"] = f"{final}.GB"
         if "time" in mult:
-            bumped = int(_lead_number(limits.get("time"), _DEFAULT_TIME_HOURS) * int(mult["time"]))
-            limits["time"] = f"{bumped}.h"
+            current = _lead_number(limits.get("time"), _DEFAULT_TIME_HOURS)
+            bumped = int(current * int(mult["time"]))
+            capped = min(bumped, ceiling["time"])
+            final = max(capped, int(current))
+            limits["time"] = f"{final}.h"
         return target.model_copy(update={"resource_limits": limits}), params
     if patch.kind in ("param", "reference"):
         # set_param carries the concrete swap (a corrected param, or a reference

@@ -297,6 +297,89 @@ def test_self_heal_resume_passes_resume_on_first_execute(tmp_path):
     assert "-resume" in seen["cmd"]
 
 
+# ---------------------------------------------------------------------------
+# Ceiling-clamp + never-shrink tests (Task 1: resource-aware-retry)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_patch_clamps_memory_to_ceiling():
+    # 96 GB * 2 = 192 GB, but ceiling is 128 GB -> clamped to 128 GB
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"memory": 2}},
+        rationale="OOM retry",
+        risk="safe",
+        expected_signal="no OOM exit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"memory": "96.GB"},
+    )
+    result, _ = apply_patch(target, patch, ceiling={"memory": 128, "time": 72})
+    assert result.resource_limits["memory"] == "128.GB"
+
+
+def test_apply_patch_clamps_time_to_ceiling():
+    # 48 h * 2 = 96 h, but ceiling is 72 h -> clamped to 72 h
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"time": 2}},
+        rationale="timeout retry",
+        risk="safe",
+        expected_signal="pipeline completes within time limit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"time": "48.h"},
+    )
+    result, _ = apply_patch(target, patch, ceiling={"memory": 128, "time": 72})
+    assert result.resource_limits["time"] == "72.h"
+
+
+def test_apply_patch_does_not_shrink_oversized_request():
+    # Current allocation (256 GB) already exceeds the ceiling (128 GB).
+    # The never-shrink rule must keep it at 256 GB, not reduce it to 128 GB.
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"memory": 2}},
+        rationale="OOM retry",
+        risk="safe",
+        expected_signal="no OOM exit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"memory": "256.GB"},
+    )
+    result, _ = apply_patch(target, patch, ceiling={"memory": 128, "time": 72})
+    assert result.resource_limits["memory"] == "256.GB"
+
+
+def test_apply_patch_scales_normally_below_ceiling():
+    # 8 GB * 2 = 16 GB, well below ceiling of 128 GB -> normal scale, no clamp.
+    # Uses the default ceiling=None path to prove built-in defaults (128/72) apply.
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"memory": 2}},
+        rationale="OOM retry",
+        risk="safe",
+        expected_signal="no OOM exit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"memory": "8.GB"},
+    )
+    result, _ = apply_patch(target, patch)  # ceiling=None -> uses CEILING_MEMORY_GB=128
+    assert result.resource_limits["memory"] == "16.GB"
+
+
 def test_self_heal_first_execute_has_no_resume_by_default(tmp_path):
     seen = {}
 
