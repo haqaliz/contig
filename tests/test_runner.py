@@ -534,12 +534,16 @@ def test_run_pipeline_snakemake_writes_a_config_only_for_nextflow(tmp_path):
 # IndexBuilder seam: default_index_builder
 # ---------------------------------------------------------------------------
 
-def test_default_index_builder_returns_zero_for_success(tmp_path):
+def test_default_index_builder_returns_zero_and_tees_output_to_run_log(tmp_path):
     import sys
     from contig.runner import default_index_builder
 
-    rc = default_index_builder([sys.executable, "-c", ""], tmp_path)
+    rc = default_index_builder(
+        [sys.executable, "-c", "print('faidx ok')"], tmp_path
+    )
     assert rc == 0
+    log = (tmp_path / "run.log").read_bytes()
+    assert b"faidx ok" in log
 
 
 def test_default_index_builder_returns_nonzero_for_failure(tmp_path):

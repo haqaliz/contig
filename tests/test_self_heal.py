@@ -620,6 +620,7 @@ def test_self_heal_applied_param_patch_reaches_the_rerun_command(tmp_path):
     assert RunSummary.from_events(record.events).succeeded is True
     assert record.repair_history[0].diagnosis.failure_class == "bad_param"
     assert record.repair_history[0].patch.kind == "param"
+    assert record.repair_history[0].outcome == "approved_and_retried"
     # the param patch reached the retry command (a real --key value pair)
     assert "--validate_params" in seen["cmd"]
     assert "False" in seen["cmd"]

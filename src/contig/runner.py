@@ -107,10 +107,13 @@ def default_executor(cmd: list[str], trace_path: Path) -> int:
 def default_index_builder(cmd: list[str], cwd: Path) -> int:
     """Run an auxiliary index-build command (e.g. ``samtools faidx ref``) in cwd.
 
-    Returns the process exit code. Tests inject a fake builder so no real tool
-    runs in CI.
+    Tees combined stdout+stderr to run.log (appending), so the build output is
+    captured alongside the pipeline log that default_executor wrote. Returns the
+    process exit code. Tests inject a fake builder so no real tool runs in CI.
     """
-    proc = subprocess.run(cmd, cwd=cwd, check=False)
+    log_path = Path(cwd) / "run.log"
+    with open(log_path, "ab") as log:
+        proc = subprocess.run(cmd, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, check=False)
     return proc.returncode
 
 
