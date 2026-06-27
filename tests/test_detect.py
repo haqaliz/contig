@@ -72,6 +72,30 @@ def test_missing_fai_is_missing_index() -> None:
     assert any(".fai" in e for e in d.evidence)
 
 
+def test_missing_bai_is_missing_index() -> None:
+    events = [TaskEvent(process="SAMTOOLS", status="FAILED", exit=1)]
+    log = 'samtools index: failed to open "aln.bam.bai": No such file or directory'
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "missing_index"
+    assert any(".bai" in e for e in d.evidence)
+
+
+def test_missing_tbi_is_missing_index() -> None:
+    events = [TaskEvent(process="BCFTOOLS", status="FAILED", exit=1)]
+    log = "[E::idx_load] Could not load the index calls.vcf.gz.tbi: No such file or directory"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "missing_index"
+    assert any(".tbi" in e for e in d.evidence)
+
+
+def test_missing_csi_is_missing_index() -> None:
+    events = [TaskEvent(process="BCFTOOLS", status="FAILED", exit=1)]
+    log = "Failed to open calls.vcf.gz.csi: No such file or directory"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "missing_index"
+    assert any(".csi" in e for e in d.evidence)
+
+
 def test_missing_genome_fasta_is_missing_reference() -> None:
     events = [TaskEvent(process="ALIGN", status="FAILED", exit=1)]
     log = "Error: No such file or directory: /data/genome.fasta"
