@@ -4,6 +4,19 @@ All notable changes to Contig are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims for
 [semantic versioning](https://semver.org/) once it reaches 1.0.
 
+## [0.4.0] - 2026-06-27
+
+### Added
+
+- Turnkey cross-tool concordance (follow-on to C1): `contig verify <run>
+  --concordance-auto --bam <bam> --ref <ref>` runs a second variant caller
+  (bcftools) on the BAM and reference to produce an independent call set, then
+  corroborates the run's primary VCF against it. The second caller is behind an
+  injectable seam, so it is never executed in CI; a missing binary, missing input,
+  or caller failure prints a clear skip note (never a false pass) and never changes
+  the exit code. Mutually exclusive with `--concordance-vcf`. Reuses the existing
+  concordance machinery; germline only.
+
 ## [0.3.0] - 2026-06-26
 
 ### Added
