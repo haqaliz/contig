@@ -935,9 +935,9 @@ def test_ceiling_giveup_is_captured_in_pending_corpus(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_parse_missing_fai_returns_relative_token():
-    # The canonical fai_load evidence line → relative filename token.
+    # The canonical fai_load evidence line → relative filename token with ext tuple.
     from contig.models import Diagnosis
-    from contig.self_heal import _parse_missing_fai
+    from contig.self_heal import _parse_missing_index
 
     d = Diagnosis(
         failure_class="missing_index",
@@ -947,13 +947,13 @@ def test_parse_missing_fai_returns_relative_token():
         ],
         confidence=0.95,
     )
-    assert _parse_missing_fai(d) == "reference.fasta.fai"
+    assert _parse_missing_index(d) == ("reference.fasta.fai", ".fai")
 
 
 def test_parse_missing_fai_returns_absolute_token():
     # An absolute-path token must be returned verbatim.
     from contig.models import Diagnosis
-    from contig.self_heal import _parse_missing_fai
+    from contig.self_heal import _parse_missing_index
 
     d = Diagnosis(
         failure_class="missing_index",
@@ -961,13 +961,13 @@ def test_parse_missing_fai_returns_absolute_token():
         evidence=["Could not open /data/ref.fa.fai: No such file or directory"],
         confidence=0.9,
     )
-    assert _parse_missing_fai(d) == "/data/ref.fa.fai"
+    assert _parse_missing_index(d) == ("/data/ref.fa.fai", ".fai")
 
 
 def test_parse_missing_fai_returns_none_when_no_fai_token():
-    # Evidence with no whitespace-free token ending in .fai → None.
+    # Evidence with no whitespace-free token ending in a supported extension → None.
     from contig.models import Diagnosis
-    from contig.self_heal import _parse_missing_fai
+    from contig.self_heal import _parse_missing_index
 
     d = Diagnosis(
         failure_class="missing_index",
@@ -975,14 +975,14 @@ def test_parse_missing_fai_returns_none_when_no_fai_token():
         evidence=["Error: index file is missing"],
         confidence=0.7,
     )
-    assert _parse_missing_fai(d) is None
+    assert _parse_missing_index(d) is None
 
 
 def test_fai_build_command_strips_fai_suffix():
-    # _fai_build_command("reference.fasta.fai") → ["samtools", "faidx", "reference.fasta"]
-    from contig.self_heal import _fai_build_command
+    # _index_build_command("reference.fasta.fai", ".fai") → ["samtools", "faidx", "reference.fasta"]
+    from contig.self_heal import _index_build_command
 
-    assert _fai_build_command("reference.fasta.fai") == [
+    assert _index_build_command("reference.fasta.fai", ".fai") == [
         "samtools",
         "faidx",
         "reference.fasta",
@@ -991,9 +991,9 @@ def test_fai_build_command_strips_fai_suffix():
 
 def test_fai_build_command_strips_fai_suffix_absolute():
     # Works with absolute paths too.
-    from contig.self_heal import _fai_build_command
+    from contig.self_heal import _index_build_command
 
-    assert _fai_build_command("/data/ref.fa.fai") == [
+    assert _index_build_command("/data/ref.fa.fai", ".fai") == [
         "samtools",
         "faidx",
         "/data/ref.fa",
@@ -1005,7 +1005,7 @@ def test_parse_missing_fai_ignores_trailing_suffix_token():
     # name) must NOT be truncated to a bogus ".fai" path — the boundary regex
     # rejects it, so with no real .fai token present we get None.
     from contig.models import Diagnosis
-    from contig.self_heal import _parse_missing_fai
+    from contig.self_heal import _parse_missing_index
 
     d = Diagnosis(
         failure_class="missing_index",
@@ -1013,14 +1013,14 @@ def test_parse_missing_fai_ignores_trailing_suffix_token():
         evidence=["staging touched ref.fasta.fai_backup before the failure"],
         confidence=0.5,
     )
-    assert _parse_missing_fai(d) is None
+    assert _parse_missing_index(d) is None
 
 
 def test_parse_missing_fai_canonical_colon_line_still_yields_fai():
     # The canonical "...fai:" evidence line must still parse cleanly to the path
     # (the colon is a token boundary, not part of the path).
     from contig.models import Diagnosis
-    from contig.self_heal import _parse_missing_fai
+    from contig.self_heal import _parse_missing_index
 
     d = Diagnosis(
         failure_class="missing_index",
@@ -1030,7 +1030,7 @@ def test_parse_missing_fai_canonical_colon_line_still_yields_fai():
         ],
         confidence=0.95,
     )
-    assert _parse_missing_fai(d) == "reference.fasta.fai"
+    assert _parse_missing_index(d) == ("reference.fasta.fai", ".fai")
 
 
 # ---------------------------------------------------------------------------
@@ -1145,3 +1145,198 @@ def test_self_heal_unparseable_index_path_fails_honestly(tmp_path):
     assert record.verdict == "fail"
     assert calls["n"] == 0  # builder never called
     assert state["n"] == 1  # no re-run
+
+
+# ---------------------------------------------------------------------------
+# New index-family unit tests: parse per kind + build command per kind
+# ---------------------------------------------------------------------------
+
+_BAI_LOG = 'samtools index: failed to open "aln.bam.bai": No such file or directory'
+_TBI_LOG = "[E::idx_load] Could not load the index calls.vcf.gz.tbi: No such file or directory"
+_CSI_LOG = "Failed to open calls.vcf.gz.csi: No such file or directory"
+_DETERMINISM_LOG = "samtools index: aln.bam.bai missing for aln.bam: No such file or directory"
+
+
+def test_parse_missing_index_returns_bai_token():
+    # .bai token: samtools index failure line.
+    from contig.models import Diagnosis
+    from contig.self_heal import _parse_missing_index
+
+    d = Diagnosis(
+        failure_class="missing_index",
+        root_cause="bai not found",
+        evidence=[_BAI_LOG],
+        confidence=0.95,
+    )
+    assert _parse_missing_index(d) == ("aln.bam.bai", ".bai")
+
+
+def test_parse_missing_index_returns_tbi_token():
+    # .tbi token: tabix index load failure line.
+    from contig.models import Diagnosis
+    from contig.self_heal import _parse_missing_index
+
+    d = Diagnosis(
+        failure_class="missing_index",
+        root_cause="tbi not found",
+        evidence=[_TBI_LOG],
+        confidence=0.95,
+    )
+    assert _parse_missing_index(d) == ("calls.vcf.gz.tbi", ".tbi")
+
+
+def test_parse_missing_index_returns_csi_token():
+    # .csi token: generic open failure line.
+    from contig.models import Diagnosis
+    from contig.self_heal import _parse_missing_index
+
+    d = Diagnosis(
+        failure_class="missing_index",
+        root_cause="csi not found",
+        evidence=[_CSI_LOG],
+        confidence=0.95,
+    )
+    assert _parse_missing_index(d) == ("calls.vcf.gz.csi", ".csi")
+
+
+def test_parse_missing_index_determinism_picks_bai_token():
+    # AC5: evidence line naming both aln.bam.bai and aln.bam → .bai token wins
+    # (aln.bam ends in .bam which is not a supported extension, so .bai is selected).
+    from contig.models import Diagnosis
+    from contig.self_heal import _parse_missing_index
+
+    d = Diagnosis(
+        failure_class="missing_index",
+        root_cause="bai missing",
+        evidence=[_DETERMINISM_LOG],
+        confidence=0.95,
+    )
+    assert _parse_missing_index(d) == ("aln.bam.bai", ".bai")
+
+
+def test_index_build_command_bai():
+    # AC2: .bai → samtools index <source>
+    from contig.self_heal import _index_build_command
+
+    assert _index_build_command("aln.bam.bai", ".bai") == ["samtools", "index", "aln.bam"]
+
+
+def test_index_build_command_tbi():
+    # AC2: .tbi → tabix -p vcf <source>
+    from contig.self_heal import _index_build_command
+
+    assert _index_build_command("calls.vcf.gz.tbi", ".tbi") == [
+        "tabix",
+        "-p",
+        "vcf",
+        "calls.vcf.gz",
+    ]
+
+
+def test_index_build_command_csi():
+    # AC2: .csi → bcftools index <source>
+    from contig.self_heal import _index_build_command
+
+    assert _index_build_command("calls.vcf.gz.csi", ".csi") == [
+        "bcftools",
+        "index",
+        "calls.vcf.gz",
+    ]
+
+
+def test_index_build_command_bai_absolute():
+    # AC2: absolute .bai path strips suffix correctly.
+    from contig.self_heal import _index_build_command
+
+    assert _index_build_command("/data/aln.bam.bai", ".bai") == [
+        "samtools",
+        "index",
+        "/data/aln.bam",
+    ]
+
+
+# --- End-to-end heal tests parameterized over .bai / .tbi / .csi ---
+
+
+@pytest.mark.parametrize(
+    "log_line, index_filename, expected_argv",
+    [
+        (
+            _BAI_LOG,
+            "aln.bam.bai",
+            ["samtools", "index", "aln.bam"],
+        ),
+        (
+            _TBI_LOG,
+            "calls.vcf.gz.tbi",
+            ["tabix", "-p", "vcf", "calls.vcf.gz"],
+        ),
+        (
+            _CSI_LOG,
+            "calls.vcf.gz.csi",
+            ["bcftools", "index", "calls.vcf.gz"],
+        ),
+    ],
+)
+def test_self_heal_builds_missing_index_and_retries_per_kind(
+    tmp_path, log_line, index_filename, expected_argv
+):
+    # AC1: fail-then-succeed for each of .bai/.tbi/.csi; outcome, argv, counts all correct.
+    state = {"n": 0}
+    calls = {"n": 0, "cmd": None}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, TRACE_INDEX, log_line)
+            return 1
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    def index_builder(cmd, cwd):
+        calls["n"] += 1
+        calls["cmd"] = cmd
+        (Path(cwd) / index_filename).write_text("idx")
+        return 0
+
+    record = _heal(tmp_path, executor, auto_approve=True, index_builder=index_builder)
+    assert RunSummary.from_events(record.events).succeeded is True
+    last = record.repair_history[-1]
+    assert last.outcome == "built_index_and_retried"
+    assert last.patch.operation == {"build_index": True}
+    assert state["n"] == 2  # re-run happened
+    assert calls["n"] == 1  # exactly one build
+    assert calls["cmd"] == expected_argv
+
+
+@pytest.mark.parametrize(
+    "log_line, index_filename",
+    [
+        (_BAI_LOG, "aln.bam.bai"),
+        (_TBI_LOG, "calls.vcf.gz.tbi"),
+        (_CSI_LOG, "calls.vcf.gz.csi"),
+    ],
+)
+def test_self_heal_failed_index_build_fails_honestly_per_kind(
+    tmp_path, log_line, index_filename
+):
+    # AC3: a non-zero build → index_build_failed, index path in detail, no retry.
+    state = {"n": 0}
+    calls = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        _write(trace_path, TRACE_INDEX, log_line)
+        return 1
+
+    def index_builder(cmd, cwd):
+        calls["n"] += 1
+        return 1
+
+    record = _heal(tmp_path, executor, auto_approve=True, index_builder=index_builder)
+    last = record.repair_history[-1]
+    assert last.outcome == "index_build_failed"
+    assert last.detail is not None and index_filename in last.detail
+    assert record.verdict == "fail"
+    assert calls["n"] == 1
+    assert state["n"] == 1  # no re-run after failed build

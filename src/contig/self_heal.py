@@ -48,34 +48,53 @@ CEILING_TIME_H = 72
 # fix is offered as a choice rather than a take-it-or-leave-it confirm (contract D).
 _AMBIGUOUS_CONFIDENCE = 0.5
 
-# Matches a whitespace-free token that ends in ".fai" (relative or absolute path).
-# The lookahead pins the token end (whitespace, end-of-line, or a trailing
-# punctuation mark) so a longer token like "ref.fasta.fai_backup" is not
-# mis-parsed as "ref.fasta.fai".
-_FAI_TOKEN_RE = re.compile(r"\S+\.fai(?=\s|$|[:,;])")
+# Matches a non-whitespace, non-quote token ending in one of the supported
+# single-file index extensions (relative or absolute path).  The character
+# class [^\s"']+ excludes leading quote characters so a path printed inside
+# double-quotes (e.g. `"aln.bam.bai"`) is extracted without the surrounding
+# quotes.  The lookahead pins the token end (whitespace, end-of-line, or a
+# trailing punctuation mark including quotes) so a longer token like
+# "ref.fasta.fai_backup" is NOT mis-parsed as "ref.fasta.fai".
+_INDEX_TOKEN_RE = re.compile(r"""[^\s"']+\.(fai|bai|tbi|csi)(?=\s|$|[:,;"'])""")
 
 
-def _parse_missing_fai(diagnosis: Diagnosis) -> str | None:
-    """Scan diagnosis.evidence for the first whitespace-free token ending in '.fai'.
+def _parse_missing_index(diagnosis: Diagnosis) -> tuple[str, str] | None:
+    """Scan diagnosis.evidence for the first token ending in a supported index extension.
 
-    Returns the token verbatim (relative or absolute), or None if none is found.
-    Pure — no I/O.
+    Scans evidence lines in order and returns the FIRST match as
+    ``(token, "." + ext)``, e.g. ``("aln.bam.bai", ".bai")``.
+    Returns None if no supported token is found.  Pure — no I/O.
     """
     for line in diagnosis.evidence:
-        m = _FAI_TOKEN_RE.search(line)
+        m = _INDEX_TOKEN_RE.search(line)
         if m:
-            return m.group()
+            return m.group(), "." + m.group(1)
     return None
 
 
-def _fai_build_command(fai_path: str) -> list[str]:
-    """Return the samtools command to build the FASTA index for fai_path.
+def _index_build_command(index_path: str, ext: str) -> list[str]:
+    """Return the command to build the index at index_path.
 
-    Strips exactly the trailing '.fai' to derive the FASTA filename.
+    Strips exactly the trailing index suffix to derive the source file, then
+    dispatches to the correct tool:
+
+      .fai → ["samtools", "faidx", <fasta>]
+      .bai → ["samtools", "index", <bam>]
+      .tbi → ["tabix", "-p", "vcf", <vcf.gz>]
+      .csi → ["bcftools", "index", <vcf.gz>]
+
     Pure — no I/O.
     """
-    fasta = fai_path.removesuffix(".fai")
-    return ["samtools", "faidx", fasta]
+    source = index_path.removesuffix(ext)
+    if ext == ".fai":
+        return ["samtools", "faidx", source]
+    if ext == ".bai":
+        return ["samtools", "index", source]
+    if ext == ".tbi":
+        return ["tabix", "-p", "vcf", source]
+    if ext == ".csi":
+        return ["bcftools", "index", source]
+    raise ValueError(f"Unsupported index extension: {ext}")
 
 
 def _write_status(run_dir: Path, state: str) -> None:
@@ -381,10 +400,11 @@ def _apply_patch_and_maybe_build(
 
     - A non-build patch applies normally and returns ``(default_outcome, None, True)``
       — the loop should retry.
-    - A ``build_index`` reference patch parses the missing ``.fai`` from the
-      diagnosis and runs the builder. Branches honestly:
+    - A ``build_index`` reference patch parses the missing index path from the
+      diagnosis (supports .fai/.bai/.tbi/.csi) and runs the builder. Branches
+      honestly:
         * unparseable path → ``("index_unresolvable", <detail>, False)`` (give up).
-        * non-zero build    → ``("index_build_failed", <detail naming .fai>, False)``.
+        * non-zero build    → ``("index_build_failed", <detail naming path>, False)``.
         * success           → ``("built_index_and_retried", None, True)`` (retry).
 
     The build IS the fix (apply_patch is a no-op for build_index), so the re-run
@@ -393,8 +413,8 @@ def _apply_patch_and_maybe_build(
     target, params = apply_patch(target, patch, params, ceiling=ceiling)
     if not (patch.kind == "reference" and patch.operation.get("build_index")):
         return target, params, default_outcome, None, True
-    fai = _parse_missing_fai(diagnosis)
-    if fai is None:
+    parsed = _parse_missing_index(diagnosis)
+    if parsed is None:
         return (
             target,
             params,
@@ -402,13 +422,14 @@ def _apply_patch_and_maybe_build(
             "Could not parse a missing index path from the failure.",
             False,
         )
-    rc = index_builder(_fai_build_command(fai), run_dir)
+    index_path, ext = parsed
+    rc = index_builder(_index_build_command(index_path, ext), run_dir)
     if rc != 0:
         return (
             target,
             params,
             "index_build_failed",
-            f"Building the index for {fai} failed (exit {rc}).",
+            f"Building the index for {index_path} failed (exit {rc}).",
             False,
         )
     return target, params, "built_index_and_retried", None, True
