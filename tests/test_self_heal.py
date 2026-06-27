@@ -931,10 +931,10 @@ def test_ceiling_giveup_is_captured_in_pending_corpus(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Pure parse helpers: _parse_missing_fai and _fai_build_command
+# Pure parse helpers: _parse_missing_index and _index_build_command
 # ---------------------------------------------------------------------------
 
-def test_parse_missing_fai_returns_relative_token():
+def test_parse_missing_index_returns_relative_token():
     # The canonical fai_load evidence line → relative filename token with ext tuple.
     from contig.models import Diagnosis
     from contig.self_heal import _parse_missing_index
@@ -950,7 +950,7 @@ def test_parse_missing_fai_returns_relative_token():
     assert _parse_missing_index(d) == ("reference.fasta.fai", ".fai")
 
 
-def test_parse_missing_fai_returns_absolute_token():
+def test_parse_missing_index_returns_absolute_token():
     # An absolute-path token must be returned verbatim.
     from contig.models import Diagnosis
     from contig.self_heal import _parse_missing_index
@@ -964,7 +964,7 @@ def test_parse_missing_fai_returns_absolute_token():
     assert _parse_missing_index(d) == ("/data/ref.fa.fai", ".fai")
 
 
-def test_parse_missing_fai_returns_none_when_no_fai_token():
+def test_parse_missing_index_returns_none_when_no_fai_token():
     # Evidence with no whitespace-free token ending in a supported extension → None.
     from contig.models import Diagnosis
     from contig.self_heal import _parse_missing_index
@@ -978,7 +978,7 @@ def test_parse_missing_fai_returns_none_when_no_fai_token():
     assert _parse_missing_index(d) is None
 
 
-def test_fai_build_command_strips_fai_suffix():
+def test_index_build_command_strips_fai_suffix():
     # _index_build_command("reference.fasta.fai", ".fai") → ["samtools", "faidx", "reference.fasta"]
     from contig.self_heal import _index_build_command
 
@@ -989,7 +989,7 @@ def test_fai_build_command_strips_fai_suffix():
     ]
 
 
-def test_fai_build_command_strips_fai_suffix_absolute():
+def test_index_build_command_strips_fai_suffix_absolute():
     # Works with absolute paths too.
     from contig.self_heal import _index_build_command
 
@@ -1000,7 +1000,7 @@ def test_fai_build_command_strips_fai_suffix_absolute():
     ]
 
 
-def test_parse_missing_fai_ignores_trailing_suffix_token():
+def test_parse_missing_index_ignores_trailing_suffix_token():
     # A token that merely *starts* with "<...>.fai" but continues (e.g. a backup
     # name) must NOT be truncated to a bogus ".fai" path — the boundary regex
     # rejects it, so with no real .fai token present we get None.
@@ -1016,7 +1016,7 @@ def test_parse_missing_fai_ignores_trailing_suffix_token():
     assert _parse_missing_index(d) is None
 
 
-def test_parse_missing_fai_canonical_colon_line_still_yields_fai():
+def test_parse_missing_index_canonical_colon_line_still_yields_fai():
     # The canonical "...fai:" evidence line must still parse cleanly to the path
     # (the colon is a token boundary, not part of the path).
     from contig.models import Diagnosis

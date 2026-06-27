@@ -72,11 +72,20 @@ def _parse_missing_index(diagnosis: Diagnosis) -> tuple[str, str] | None:
     return None
 
 
+# Table-driven index builder: adding a new index kind is a one-row change.
+_INDEX_BUILD: dict[str, Callable[[str], list[str]]] = {
+    ".fai": lambda src: ["samtools", "faidx", src],
+    ".bai": lambda src: ["samtools", "index", src],
+    ".tbi": lambda src: ["tabix", "-p", "vcf", src],
+    ".csi": lambda src: ["bcftools", "index", src],
+}
+
+
 def _index_build_command(index_path: str, ext: str) -> list[str]:
     """Return the command to build the index at index_path.
 
     Strips exactly the trailing index suffix to derive the source file, then
-    dispatches to the correct tool:
+    dispatches to the correct tool via the ``_INDEX_BUILD`` table:
 
       .fai → ["samtools", "faidx", <fasta>]
       .bai → ["samtools", "index", <bam>]
@@ -86,15 +95,10 @@ def _index_build_command(index_path: str, ext: str) -> list[str]:
     Pure — no I/O.
     """
     source = index_path.removesuffix(ext)
-    if ext == ".fai":
-        return ["samtools", "faidx", source]
-    if ext == ".bai":
-        return ["samtools", "index", source]
-    if ext == ".tbi":
-        return ["tabix", "-p", "vcf", source]
-    if ext == ".csi":
-        return ["bcftools", "index", source]
-    raise ValueError(f"Unsupported index extension: {ext}")
+    builder = _INDEX_BUILD.get(ext)
+    if builder is None:
+        raise ValueError(f"unsupported index extension: {ext}")
+    return builder(source)
 
 
 def _write_status(run_dir: Path, state: str) -> None:
