@@ -8,6 +8,19 @@ All notable changes to Contig are recorded here. The format follows
 
 ### Added
 
+- Self-heal a missing index (capability C2, missing-index slice): a `missing_index`
+  failure is now actually recovered instead of re-run unchanged. When the
+  `build_index` repair is applied, the loop parses the missing index path from the
+  diagnosis, builds it (this slice: a missing FASTA `.fai` via `samtools faidx`
+  through a new injectable `IndexBuilder` seam), and retries — recording a
+  `built_index_and_retried` `RepairStep`. If the index path can't be parsed or the
+  build itself fails, the loop gives up honestly (`index_unresolvable` /
+  `index_build_failed` with a `RepairStep.detail` naming the path) — an honest FAIL,
+  never a false pass. The build is bounded (one per applied patch, within
+  `max_attempts`), runs on the user's compute (no raw-read egress), and is fully
+  covered by injected-builder/executor tests (no real `samtools`/pipeline run). Other
+  index kinds (`.bai`, `.tbi`/`.csi`, `.dict`, STAR/BWA) are deferred to follow-on
+  cases on the same seam.
 - Bounded resource-aware self-heal retry (capability C2, resource-aware slice): the
   `oom` and `time_limit` repairs now scale memory/walltime only up to an absolute
   ceiling (defaults 128 GB / 72 h, code-overridable via `self_heal_run`'s
