@@ -1,50 +1,63 @@
-# concordance-autorun (turnkey cross-tool concordance)
+# resource-aware-retry (bounded resource-aware self-heal retry)
 
-Source: no GitHub issue. Inline brief, owner `aliz`, branch `feat/concordance-autorun/aliz`.
-Origin: follow-on slice to C1 (CAPABILITY_ROADMAP.md), which shipped in v0.2.0.
+Source: no GitHub issue. Inline brief, owner `aliz`, branch `feat/resource-aware-retry/aliz`.
+Origin: first slice of capability C2 (self-heal breadth + auto resource-scaling),
+`docs/technical/CAPABILITY_ROADMAP.md:94-124`. Picked by `contig-next` as the
+highest-leverage next feature after v0.4.0 closed C1's turnkey follow-on.
 
 ## Brief
 
-C1 cross-tool concordance shipped a deterministic metric, but the user must
-**supply** the second call set themselves (`contig verify --concordance-vcf
-<vcf>`). This slice makes concordance **turnkey**: Contig runs a second,
-independent variant caller (for example `bcftools call`) on the same input as the
-primary germline run, then compares the two call sets with the existing
-concordance machinery, with no user-supplied VCF.
+C2's headline item is resource-aware retry: when a process fails out-of-memory,
+retry it with **scaled memory within a bounded ceiling**; when walltime is
+exceeded, scale time; record the scaling as a structured patch with its rationale
+and expected signal; and bound the whole thing with a retry budget that provably
+converges.
 
-Reuses what C1 shipped: `verification/concordance.py` (`parse_vcf`,
-`genotype_concordance`, `concordance_results`, `evaluate_concordance`). The new
-work is producing the second VCF by executing a tool, and wiring that into the
-verify/run path.
+Today the `oom` and `time_limit` repairs already exist but as **one-shot**
+multipliers: OOM proposes `{"multiply": {"memory": 2}}` (`repair.py:16-34`) and the
+self-heal loop is globally capped by `max_attempts=3` (`self_heal.py:315`). What is
+missing — and what this slice adds:
+
+- A bounded resource **ceiling** so scaling can't grow without limit.
+- **Progressive** scaling that converges across attempts (not a fixed re-double
+  that may overshoot or never reach the needed size within the attempt budget).
+- The structured patch carrying its scaling **rationale + expected_signal**.
+- A dedicated **budget test** proving the auto-scale loop terminates.
+- Capture of the recovered case into the failure-and-fix corpus (moat #2 fuel).
 
 ## Why it is the moat
 
-Completes the concordance story into something usable without manual prep, and
-keeps capturing cross-tool agreement data. Still Layer 2 (run and verify), not
-Layer 1.
+Unattended-completion rate is the Phase-1 headline reliability metric
+(`ROADMAP.md:101`, `CAPABILITY_ROADMAP.md:100-102`). OOM is one of the named top-5
+failure modes (`ROADMAP.md:56`). Incumbents only do mechanical OOM resubmit; none
+records a structured, rationale-bearing scaling patch (`FEATURES.md:64`, Terra
+row). Every recovered failure also seeds the detector corpus. Stays entirely Layer
+2 (run + self-heal), never Layer 1.
 
-## The wrinkle (key design tension)
+## The caveat (hardening, not greenfield)
 
-Executing a real second caller (bcftools) introduces a **tool/runtime dependency
-and nondeterminism** into a path that has been deterministic and test-only so far.
-The whole engine's test suite runs with no tool execution and no network. So slice
-1 must make the second-caller execution **pluggable / injectable**, so tests use a
-fake caller (or a recorded VCF) and never actually shell out, while real runs use
-bcftools. Mirrors how the executor is injected in `runner.py`.
+OOM/walltime **detection** already exists (`detect.py:42-50` for oom; time_limit
+likewise), and the loop is already bounded by `max_attempts=3`. This slice must
+treat detection as present and scope strictly to the **scaling / ceiling /
+convergence** layer — do not re-implement detection or the outer loop.
 
 ## Scope guardrails (CLAUDE.md / FEATURES.md)
 
-- No raw-read egress; the second caller runs on the user's compute.
-- Concordance stays at most WARN, corroboration not ground truth, unverified on no
-  shared sites. No clinical claim.
-- Test-first; no real tool execution in tests.
+- No raw-read egress; retries run on the user's compute.
+- Self-heal stays bounded and logged; the budget must provably terminate.
+- Test-first; no real pipeline/tool execution in tests (inject fakes per the
+  existing `Executor` seam in `runner.py`).
 
 ## Open questions for the interview
 
-- Which second caller to standardize on (bcftools call is light and ubiquitous;
-  DeepVariant is heavier). Likely bcftools for slice 1.
-- Where it runs: a new `contig verify --concordance` (auto) flag, or inside the
-  run pipeline after a germline run finishes. Probably a CLI flag first.
-- The injection seam for the second caller so tests never execute it.
-- What inputs the second caller needs (the aligned BAM + reference) and whether a
-  finished germline run bundle carries them.
+- Ceiling policy: absolute cap (e.g. memory <= N GB, walltime <= T h) vs a multiple
+  of the original request (e.g. <= 8x). And whether the ceiling is per-process or
+  global.
+- Progression: geometric (2x, 4x, 8x) capped at the ceiling, or jump-to-ceiling on
+  the last attempt.
+- What happens at the ceiling: give up with a clear "needs bigger box" message
+  (never a false PASS) vs pause for human approval.
+- Whether the scaled value is informed by the trace's peak RSS (already parsed into
+  `RunRecord.resource_usage`) or purely multiplicative.
+- Does this live only in the self-heal repair path, or also surface a structured
+  `expected_signal` the verdict/report can show.

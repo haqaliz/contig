@@ -229,6 +229,7 @@ class RepairStep(BaseModel):
     diagnosis: Diagnosis
     patch: Patch | None = None
     outcome: str
+    detail: str | None = None
 
 
 class RunRecord(BaseModel):

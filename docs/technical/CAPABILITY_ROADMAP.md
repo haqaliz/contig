@@ -93,6 +93,15 @@ verification-divergence cases.
 
 ## C2. Self-heal breadth plus auto resource-scaling  ·  months 2 to 3
 
+**Shipped (resource-aware slice):** OOM/walltime retries now scale only up to a
+bounded absolute ceiling (defaults 128 GB / 72 h) and give up honestly with a
+`gave_up_at_ceiling` outcome + a `RepairStep.detail` message when the resource is
+already at its cap; a bounded retry budget that provably terminates. **Deferred to
+later C2 slices:** peak-RSS-informed scaling (needs a refactor — `resource_usage`
+is only populated at finalize, after the patch decision), and the wider failure
+catalog (missing/stale index, reference/build mismatch, format conversion, pin
+conflict).
+
 Expand the failure-mode catalog and repair strategies well past the current set,
 and make repairs resource-aware. This is the most directly "gets better with
 better models" surface and the richest corpus fuel.
@@ -257,7 +266,7 @@ above a threshold; a deliberately worse detector is flagged as a regression.
 | ID | Capability | Window | Leverage |
 |----|-----------|--------|----------|
 | C1 | Cross-tool concordance verification | SHIPPED v0.2.0 | Verdict trust, novel primitive (germline slice; auto-run second caller deferred) |
-| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 | Unattended-completion rate, corpus fuel |
+| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware slice shipped; wider catalog + peak-RSS pending) | Unattended-completion rate, corpus fuel |
 | C3 | Biological-plausibility verification | SHIPPED v0.3.0 | Verdict gets smarter about biology (germline Ti/Tv, het/hom; other assays deferred) |
 | C4 | New assay: somatic variant calling | M4 to M5 | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 | Kills a silent-failure class, deepens reproduce |

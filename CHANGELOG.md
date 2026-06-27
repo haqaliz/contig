@@ -4,6 +4,21 @@ All notable changes to Contig are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims for
 [semantic versioning](https://semver.org/) once it reaches 1.0.
 
+## [Unreleased]
+
+### Added
+
+- Bounded resource-aware self-heal retry (capability C2, resource-aware slice): the
+  `oom` and `time_limit` repairs now scale memory/walltime only up to an absolute
+  ceiling (defaults 128 GB / 72 h, code-overridable via `self_heal_run`'s
+  `resource_ceiling`). When the scaled resource is already at its ceiling and the
+  failure recurs, the loop gives up honestly with a distinct `gave_up_at_ceiling`
+  outcome and a `RepairStep.detail` message naming the resource and the cap — an
+  honest FAIL, never a false pass — and the case is still captured to the failure
+  corpus. A scale that would overshoot is clamped to the cap; a pre-existing request
+  already above the cap is never shrunk. Engine-wide (all assays); deterministic and
+  fully covered by injected-executor tests (no real pipeline run).
+
 ## [0.4.0] - 2026-06-27
 
 ### Added

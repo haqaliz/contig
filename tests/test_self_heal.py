@@ -297,6 +297,89 @@ def test_self_heal_resume_passes_resume_on_first_execute(tmp_path):
     assert "-resume" in seen["cmd"]
 
 
+# ---------------------------------------------------------------------------
+# Ceiling-clamp + never-shrink tests (Task 1: resource-aware-retry)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_patch_clamps_memory_to_ceiling():
+    # 96 GB * 2 = 192 GB, but ceiling is 128 GB -> clamped to 128 GB
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"memory": 2}},
+        rationale="OOM retry",
+        risk="safe",
+        expected_signal="no OOM exit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"memory": "96.GB"},
+    )
+    result, _ = apply_patch(target, patch, ceiling={"memory": 128, "time": 72})
+    assert result.resource_limits["memory"] == "128.GB"
+
+
+def test_apply_patch_clamps_time_to_ceiling():
+    # 48 h * 2 = 96 h, but ceiling is 72 h -> clamped to 72 h
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"time": 2}},
+        rationale="timeout retry",
+        risk="safe",
+        expected_signal="pipeline completes within time limit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"time": "48.h"},
+    )
+    result, _ = apply_patch(target, patch, ceiling={"memory": 128, "time": 72})
+    assert result.resource_limits["time"] == "72.h"
+
+
+def test_apply_patch_does_not_shrink_oversized_request():
+    # Current allocation (256 GB) already exceeds the ceiling (128 GB).
+    # The never-shrink rule must keep it at 256 GB, not reduce it to 128 GB.
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"memory": 2}},
+        rationale="OOM retry",
+        risk="safe",
+        expected_signal="no OOM exit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"memory": "256.GB"},
+    )
+    result, _ = apply_patch(target, patch, ceiling={"memory": 128, "time": 72})
+    assert result.resource_limits["memory"] == "256.GB"
+
+
+def test_apply_patch_scales_normally_below_ceiling():
+    # 8 GB * 2 = 16 GB, well below ceiling of 128 GB -> normal scale, no clamp.
+    # Uses the default ceiling=None path to prove built-in defaults (128/72) apply.
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"memory": 2}},
+        rationale="OOM retry",
+        risk="safe",
+        expected_signal="no OOM exit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"memory": "8.GB"},
+    )
+    result, _ = apply_patch(target, patch)  # ceiling=None -> uses CEILING_MEMORY_GB=128
+    assert result.resource_limits["memory"] == "16.GB"
+
+
 def test_self_heal_first_execute_has_no_resume_by_default(tmp_path):
     seen = {}
 
@@ -725,3 +808,114 @@ def test_self_heal_choice_missing_index_defaults_to_rejected(tmp_path):
     record = _heal(tmp_path, _index_executor(), poll=poll, propose=_two_candidates)
     assert record.repair_history[-1].outcome == "invalid_choice_rejected"
     assert RunSummary.from_events(record.events).succeeded is False
+
+
+# --- Task 2: at-ceiling give-up (resource-aware-retry) --------------------------
+
+TRACE_TIME_LIMIT = _trace("FAILED", 1)  # time limit detected from log text, not exit code
+
+
+def test_gives_up_at_memory_ceiling(tmp_path):
+    # Start with memory already at the ceiling; OOM on every attempt.
+    # The loop must give up IMMEDIATELY (before scaling) with gave_up_at_ceiling.
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_OOM, "out of memory exit 137")
+        return 1
+
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir=str(tmp_path / "w"),
+        resource_limits={"memory": "128.GB"},
+    )
+    record = _heal(tmp_path, executor, target=target)
+    last = record.repair_history[-1]
+    assert last.outcome == "gave_up_at_ceiling"
+    assert last.detail is not None
+    assert "memory" in last.detail
+    assert "128" in last.detail
+    assert record.verdict == "fail"
+
+
+def test_gives_up_at_time_ceiling(tmp_path):
+    # Start with time already at the ceiling; time limit on every attempt.
+    # The loop must give up IMMEDIATELY with gave_up_at_ceiling.
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_TIME_LIMIT, "Pipeline terminated due to time limit")
+        return 1
+
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir=str(tmp_path / "w"),
+        resource_limits={"time": "72.h"},
+    )
+    record = _heal(tmp_path, executor, target=target)
+    last = record.repair_history[-1]
+    assert last.outcome == "gave_up_at_ceiling"
+    assert last.detail is not None
+    assert "time" in last.detail.lower()
+    assert "72" in last.detail
+    assert record.verdict == "fail"
+
+
+def test_persistent_oom_terminates(tmp_path):
+    # Persistent OOM with a low ceiling (16 GB). After the first retry bumps
+    # memory to 16 GB, the loop must give up via the ceiling — not max_attempts.
+    attempts_made = {"n": 0}
+
+    def executor(cmd, trace_path):
+        attempts_made["n"] += 1
+        _write(trace_path, TRACE_OOM, "out of memory exit 137")
+        return 1
+
+    record = _heal(
+        tmp_path,
+        executor,
+        max_attempts=10,
+        resource_ceiling={"memory": 16, "time": 72},
+    )
+    # Must terminate (no infinite loop) and the ceiling must be the stop reason.
+    last = record.repair_history[-1]
+    assert last.outcome == "gave_up_at_ceiling"
+    # Well short of max_attempts=10: default 8 GB -> 16 GB on first retry -> ceiling
+    assert attempts_made["n"] < 10
+
+
+def test_oom_recovers_below_ceiling_unchanged(tmp_path):
+    # OOM once (low starting memory, well below the 128 GB cap), then succeeds.
+    # Task 2 must not break normal recovery below the ceiling.
+    state = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, TRACE_OOM, "out of memory exit 137")
+            return 1
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor)  # default 8 GB << 128 GB ceiling
+    assert record.verdict != "fail"  # recovered (unverified or pass, not fail)
+    patched = [s for s in record.repair_history if s.outcome == "patched_and_retried"]
+    assert len(patched) >= 1
+
+
+def test_ceiling_giveup_is_captured_in_pending_corpus(tmp_path):
+    # When the loop gives up at the ceiling, the failure must still be captured
+    # to the pending corpus (the existing append_case path runs before the patch
+    # decision, so give-up-at-ceiling is included automatically).
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_OOM, "out of memory exit 137")
+        return 1
+
+    pending_path = tmp_path / "my_corpus.jsonl"
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir=str(tmp_path / "w"),
+        resource_limits={"memory": "128.GB"},
+    )
+    _heal(tmp_path, executor, target=target, pending_corpus=pending_path)
+    pending = load_corpus(pending_path)
+    assert len(pending) >= 1
