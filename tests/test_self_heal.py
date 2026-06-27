@@ -447,9 +447,12 @@ def test_self_heal_approve_applies_patch_and_records_approved_outcome(tmp_path):
     def poll(run_dir, timeout_sec):
         return {"decision": "approve", "decided_at": "2026-06-22T00:00:00+00:00"}
 
-    record = _heal(tmp_path, executor, poll=poll)
+    # The gated patch here is a build_index reference patch, so approving it now
+    # builds the index (fake builder) before the retry: the recorded outcome is
+    # built_index_and_retried.
+    record = _heal(tmp_path, executor, poll=poll, index_builder=lambda cmd, cwd: 0)
     assert RunSummary.from_events(record.events).succeeded is True
-    assert record.repair_history[0].outcome == "approved_and_retried"
+    assert record.repair_history[0].outcome == "built_index_and_retried"
     # the pending file is cleared once decided
     assert not (tmp_path / "runs" / "r" / "pending_approval.json").exists()
     final = json.loads((tmp_path / "runs" / "r" / "status.json").read_text())
@@ -485,8 +488,9 @@ def test_self_heal_auto_approve_applies_gated_patch_without_pending(tmp_path):
         _write(trace_path, TRACE_OK, "done")
         return 0
 
-    record = _heal(tmp_path, executor, auto_approve=True)
-    assert record.repair_history[0].outcome == "approved_and_retried"
+    record = _heal(tmp_path, executor, auto_approve=True, index_builder=lambda cmd, cwd: 0)
+    # The build_index gated patch is built then retried under --auto-approve.
+    assert record.repair_history[0].outcome == "built_index_and_retried"
     # auto-approve never writes a pending request (non-interactive path)
     assert not (tmp_path / "runs" / "r" / "pending_approval.json").exists()
 
@@ -616,6 +620,7 @@ def test_self_heal_applied_param_patch_reaches_the_rerun_command(tmp_path):
     assert RunSummary.from_events(record.events).succeeded is True
     assert record.repair_history[0].diagnosis.failure_class == "bad_param"
     assert record.repair_history[0].patch.kind == "param"
+    assert record.repair_history[0].outcome == "approved_and_retried"
     # the param patch reached the retry command (a real --key value pair)
     assert "--validate_params" in seen["cmd"]
     assert "False" in seen["cmd"]
@@ -764,10 +769,14 @@ def test_self_heal_chosen_option_is_applied_and_reaches_the_rerun(tmp_path):
     def poll(run_dir, timeout_sec):
         return {"decision": "approve", "choice": 1, "decided_at": "2026-06-22T00:00:00+00:00"}
 
-    record = _heal(tmp_path, executor, poll=poll, propose=_two_candidates)
+    record = _heal(
+        tmp_path, executor, poll=poll, propose=_two_candidates,
+        index_builder=lambda cmd, cwd: 0,
+    )
     assert RunSummary.from_events(record.events).succeeded is True
     step = record.repair_history[0]
-    assert step.outcome == "chose_and_retried"
+    # Choice 1 is the build_index option: it builds (fake builder) then retries.
+    assert step.outcome == "built_index_and_retried"
     # the applied patch is the chosen option, not the best-ranked default
     assert step.patch.operation == {"build_index": True}
     assert not (tmp_path / "runs" / "r" / "pending_approval.json").exists()
@@ -919,3 +928,220 @@ def test_ceiling_giveup_is_captured_in_pending_corpus(tmp_path):
     _heal(tmp_path, executor, target=target, pending_corpus=pending_path)
     pending = load_corpus(pending_path)
     assert len(pending) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Pure parse helpers: _parse_missing_fai and _fai_build_command
+# ---------------------------------------------------------------------------
+
+def test_parse_missing_fai_returns_relative_token():
+    # The canonical fai_load evidence line → relative filename token.
+    from contig.models import Diagnosis
+    from contig.self_heal import _parse_missing_fai
+
+    d = Diagnosis(
+        failure_class="missing_index",
+        root_cause="fai not found",
+        evidence=[
+            "[E::fai_load] Failed to open the index reference.fasta.fai: No such file or directory"
+        ],
+        confidence=0.95,
+    )
+    assert _parse_missing_fai(d) == "reference.fasta.fai"
+
+
+def test_parse_missing_fai_returns_absolute_token():
+    # An absolute-path token must be returned verbatim.
+    from contig.models import Diagnosis
+    from contig.self_heal import _parse_missing_fai
+
+    d = Diagnosis(
+        failure_class="missing_index",
+        root_cause="fai not found",
+        evidence=["Could not open /data/ref.fa.fai: No such file or directory"],
+        confidence=0.9,
+    )
+    assert _parse_missing_fai(d) == "/data/ref.fa.fai"
+
+
+def test_parse_missing_fai_returns_none_when_no_fai_token():
+    # Evidence with no whitespace-free token ending in .fai → None.
+    from contig.models import Diagnosis
+    from contig.self_heal import _parse_missing_fai
+
+    d = Diagnosis(
+        failure_class="missing_index",
+        root_cause="some index issue",
+        evidence=["Error: index file is missing"],
+        confidence=0.7,
+    )
+    assert _parse_missing_fai(d) is None
+
+
+def test_fai_build_command_strips_fai_suffix():
+    # _fai_build_command("reference.fasta.fai") → ["samtools", "faidx", "reference.fasta"]
+    from contig.self_heal import _fai_build_command
+
+    assert _fai_build_command("reference.fasta.fai") == [
+        "samtools",
+        "faidx",
+        "reference.fasta",
+    ]
+
+
+def test_fai_build_command_strips_fai_suffix_absolute():
+    # Works with absolute paths too.
+    from contig.self_heal import _fai_build_command
+
+    assert _fai_build_command("/data/ref.fa.fai") == [
+        "samtools",
+        "faidx",
+        "/data/ref.fa",
+    ]
+
+
+def test_parse_missing_fai_ignores_trailing_suffix_token():
+    # A token that merely *starts* with "<...>.fai" but continues (e.g. a backup
+    # name) must NOT be truncated to a bogus ".fai" path — the boundary regex
+    # rejects it, so with no real .fai token present we get None.
+    from contig.models import Diagnosis
+    from contig.self_heal import _parse_missing_fai
+
+    d = Diagnosis(
+        failure_class="missing_index",
+        root_cause="x",
+        evidence=["staging touched ref.fasta.fai_backup before the failure"],
+        confidence=0.5,
+    )
+    assert _parse_missing_fai(d) is None
+
+
+def test_parse_missing_fai_canonical_colon_line_still_yields_fai():
+    # The canonical "...fai:" evidence line must still parse cleanly to the path
+    # (the colon is a token boundary, not part of the path).
+    from contig.models import Diagnosis
+    from contig.self_heal import _parse_missing_fai
+
+    d = Diagnosis(
+        failure_class="missing_index",
+        root_cause="fai not found",
+        evidence=[
+            "[E::fai_load] Failed to open the index reference.fasta.fai: No such file or directory"
+        ],
+        confidence=0.95,
+    )
+    assert _parse_missing_fai(d) == "reference.fasta.fai"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: build a missing .fai and retry (spec AC1–AC6)
+# ---------------------------------------------------------------------------
+
+# The canonical samtools fai_load failure: names the missing reference.fasta.fai.
+_FAI_LOG = (
+    "[E::fai_load] Failed to open the index reference.fasta.fai: "
+    "No such file or directory"
+)
+
+
+def _fai_executor(state, *, succeed_on_retry=True):
+    """Fail attempt 1 with a missing-.fai log; (optionally) succeed on retry."""
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, TRACE_INDEX, _FAI_LOG)
+            return 1
+        if not succeed_on_retry:
+            _write(trace_path, TRACE_INDEX, _FAI_LOG)
+            return 1
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+    return executor
+
+
+def _building_builder(calls, *, rc=0):
+    """Fake IndexBuilder: records argv, creates the .fai in cwd, returns rc."""
+
+    def index_builder(cmd, cwd):
+        calls["n"] += 1
+        calls["cmd"] = cmd
+        if rc == 0:
+            # mirror samtools faidx writing <fasta>.fai next to the fasta
+            (Path(cwd) / "reference.fasta.fai").write_text("idx")
+        return rc
+    return index_builder
+
+
+def test_self_heal_builds_missing_fai_and_retries(tmp_path):
+    # AC1/AC5: a missing .fai is built and the pipeline re-runs to success.
+    state = {"n": 0}
+    calls = {"n": 0}
+    record = _heal(
+        tmp_path,
+        _fai_executor(state),
+        auto_approve=True,
+        index_builder=_building_builder(calls),
+    )
+    assert RunSummary.from_events(record.events).succeeded is True
+    last = record.repair_history[-1]
+    assert last.outcome == "built_index_and_retried"
+    assert last.patch.operation == {"build_index": True}
+    assert state["n"] == 2  # the re-run actually happened
+    assert calls["n"] == 1  # exactly one build
+
+
+def test_self_heal_builder_invoked_with_samtools_faidx(tmp_path):
+    # AC2: the builder is called with the exact samtools argv derived from evidence.
+    state = {"n": 0}
+    calls = {"n": 0}
+    _heal(
+        tmp_path,
+        _fai_executor(state),
+        auto_approve=True,
+        index_builder=_building_builder(calls),
+    )
+    assert calls["cmd"] == ["samtools", "faidx", "reference.fasta"]
+
+
+def test_self_heal_failed_index_build_fails_honestly(tmp_path):
+    # AC3: a non-zero build ends in an honest FAIL with no extra retry.
+    state = {"n": 0}
+    calls = {"n": 0}
+    record = _heal(
+        tmp_path,
+        _fai_executor(state),
+        auto_approve=True,
+        index_builder=_building_builder(calls, rc=1),
+    )
+    last = record.repair_history[-1]
+    assert last.outcome == "index_build_failed"
+    assert last.detail is not None and "reference.fasta.fai" in last.detail
+    assert record.verdict == "fail"
+    assert calls["n"] == 1  # builder ran once
+    assert state["n"] == 1  # executor was NOT re-run after the failed build
+
+
+def test_self_heal_unparseable_index_path_fails_honestly(tmp_path):
+    # AC4: a missing_index diagnosis with no parseable .fai token gives up honestly.
+    # "index" + "not found" triggers missing_index in detect.py with no path token.
+    state = {"n": 0}
+    calls = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        _write(trace_path, TRACE_INDEX, "ERROR: index file not found")
+        return 1
+
+    record = _heal(
+        tmp_path,
+        executor,
+        auto_approve=True,
+        index_builder=_building_builder(calls),
+    )
+    last = record.repair_history[-1]
+    assert last.diagnosis.failure_class == "missing_index"
+    assert last.outcome == "index_unresolvable"
+    assert record.verdict == "fail"
+    assert calls["n"] == 0  # builder never called
+    assert state["n"] == 1  # no re-run

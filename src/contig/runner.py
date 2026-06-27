@@ -71,6 +71,11 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
 # fake that writes a canned trace, so the parse/assemble/bundle path stays real.
 Executor = Callable[[list[str], Path], int]
 
+# An index builder runs an auxiliary build command (e.g. `samtools faidx ref`)
+# in the given cwd and returns its exit code. The default shells out; tests
+# inject a fake that creates the index file, so no real tool runs in CI.
+IndexBuilder = Callable[[list[str], Path], int]
+
 
 class PipelineExecutionError(RuntimeError):
     """Raised when the workflow manager exits nonzero (DETECT, ARCHITECTURE §5.1).
@@ -96,6 +101,19 @@ def default_executor(cmd: list[str], trace_path: Path) -> int:
         proc = subprocess.run(
             cmd, cwd=trace_path.parent, stdout=log, stderr=subprocess.STDOUT, check=False
         )
+    return proc.returncode
+
+
+def default_index_builder(cmd: list[str], cwd: Path) -> int:
+    """Run an auxiliary index-build command (e.g. ``samtools faidx ref``) in cwd.
+
+    Tees combined stdout+stderr to run.log (appending), so the build output is
+    captured alongside the pipeline log that default_executor wrote. Returns the
+    process exit code. Tests inject a fake builder so no real tool runs in CI.
+    """
+    log_path = Path(cwd) / "run.log"
+    with open(log_path, "ab") as log:
+        proc = subprocess.run(cmd, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, check=False)
     return proc.returncode
 
 
