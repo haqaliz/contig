@@ -1,78 +1,82 @@
-# resource-aware-retry — Phase 2 understanding
+# Understanding: self-heal-index-family
 
-Graphify-first code map, confirmed by reading the worktree. File:line against
-`feat/resource-aware-retry/aliz`.
+Phase-2 dig note (grounded in a code map of this worktree). File:line refs are to
+`src/contig/` unless noted. This slice **extends** the just-shipped `.fai` missing-index
+self-heal to the rest of the single-file index family.
 
 ## What the work is really asking
 
-Make the self-heal loop's `oom` and `time_limit` repairs **bounded and
-convergent**: scale the failed process's memory/time up to a **ceiling**, never
-past it, with a retry budget that provably terminates, and record the scaling
-honestly. This is the first slice of C2 (`CAPABILITY_ROADMAP.md:94-124`).
+The `.fai` slice already built the whole machine: the injectable `IndexBuilder` seam,
+the gated apply-and-build helper, the honest outcome vocabulary, and the corpus seed.
+This slice only has to **generalize the three `.fai`-specific spots** so the same loop
+recovers `.bai`, `.tbi`/`.csi`, and (caveat below) `.dict`.
 
-## The single most important finding (reframes the slice)
+## What already exists (do NOT rebuild)
 
-**Progressive scaling already happens implicitly; the missing piece is the
-ceiling + convergence, not the progression.**
+- **Seam.** `IndexBuilder = Callable[[list[str], Path], int]` (`runner.py:77`),
+  `default_index_builder` shells out and tees to run.log (`runner.py:107-117`).
+- **Gated apply-and-build helper.** `_apply_patch_and_maybe_build`
+  (`self_heal.py:367-414`) parses the path, calls the builder, and branches the
+  outcome. Already factored into a single helper invoked at every gated-apply site
+  (the M4a requirement of the prior slice).
+- **Outcome vocabulary.** `index_unresolvable` / `index_build_failed` /
+  `built_index_and_retried` recorded at `self_heal.py:401/410/414`; `RepairStep.outcome`
+  is a free `str` (`models.py:225`), so new outcomes need no model change.
+- **Repair proposal is already index-agnostic.** `repair.py:56-65` proposes
+  `Patch(kind="reference", operation={"build_index": True}, risk="needs_confirmation")`
+  — no extension hard-wired.
+- **Detector keys on `.fai .bai .tbi .csi`** (`detect.py:168`), confidence 0.85.
+- **Corpus.** One golden `missing_index` case in
+  `src/contig/data/detector_corpus.jsonl` (the `.fai`/`fai_load` line).
+- **Test pattern.** `tests/test_self_heal.py:1047-1147` — `_fai_executor` (fail-then-
+  succeed) + `_building_builder` (records argv, creates the index file, returns rc);
+  four tests cover build-and-retry, exact argv, failed-build, and unparseable-path.
 
-- `apply_patch` (`self_heal.py:259-300`) multiplies the **current** target's
-  `resource_limits` each attempt, and `current_target` is carried forward across
-  the loop (`self_heal.py:508` -> next `run_pipeline` at `:342`). So OOM at attempt 1
-  takes memory 16->32 GB, OOM at attempt 2 takes 32->64 GB, etc. -- geometric already.
-- What is genuinely absent: (a) any **ceiling** so the value can't grow without
-  limit; (b) a **give-up-at-ceiling** path so the loop doesn't burn its remaining
-  budget re-running the same too-small (or absurdly-large) size; (c) a **structured
-  record** that the scaling hit/honored the ceiling; (d) a **test** proving the
-  loop terminates.
+## The actual gap (the three `.fai`-specific spots to generalize)
 
-So slice 1 ~= "add a bounded resource ceiling to `apply_patch` resource scaling,
-clamp to it, stop scaling when already at it, and prove termination."
+1. **Token regex** `_FAI_TOKEN_RE = re.compile(r"\S+\.fai(?=\s|$|[:,;])")`
+   (`self_heal.py:55`) — only matches `.fai`.
+2. **Parse** `_parse_missing_fai(diagnosis)` (`self_heal.py:58-68`) — returns a `.fai`
+   path only; must return the path *and which extension* so the build can dispatch.
+3. **Command** `_fai_build_command(fai_path)` (`self_heal.py:71-78`) — hardcodes
+   `["samtools","faidx", strip(".fai")]`; must become an extension→command table.
 
-## Affected areas (precise)
+`_apply_patch_and_maybe_build` (`:396`, `:405`) calls these two functions; the variable
+`fai` and the `.fai`-specific detail strings (`:411`) generalize with them.
 
-| Area | File:line | Role today |
-|---|---|---|
-| OOM/time_limit detection | `detect.py:42-64` | Returns `Diagnosis(failure_class="oom"\|"time_limit")`. **Do not touch.** |
-| Patch proposal | `repair.py:16-35` | Hardcodes `{"multiply": {"memory": 2}}` / `{"multiply": {"time": 2}}`, `risk="safe"`. Takes only `diagnosis` (no attempt/ceiling state). |
-| Patch application | `self_heal.py:259-300` (`apply_patch`) | Interprets `multiply`, `_lead_number` x factor, writes `"{n}.GB"`/`"{n}.h"` into `ExecutionTarget.resource_limits`. **No ceiling.** Primary insertion point. |
-| Loop + budget | `self_heal.py:303-514` | `max_attempts=3` bounds it; applies patch at `:508`; records each step `:509-513`; stashes failed attempt to pending corpus `:364-377`. |
-| Config emission | `nfconfig.py:59-68` | `process.resourceLimits = [ memory: 16.GB, cpus: 2, time: 24.h ]`; keys exactly `memory`/`cpus`/`time`; units GB/unitless/h. |
-| Models | `models.py` | `Patch` (`:211`, untyped `operation` dict), `Diagnosis` (`:202`), `RepairStep` (`:225`, `outcome: str`), `FailureClass` (`:182`), `TaskResource` (`:118`), `RunRecord.resource_usage` (`:254`). |
-| Executor seam | `runner.py:72,230,252` | `Executor = Callable[[list[str], Path], int]`; injectable into `run_pipeline(executor=...)`. Tests inject a fake that OOMs then succeeds. |
+## The path→command table (the design decision for the interview)
 
-## Contradiction / blocker surfaced (must shape scope)
+| Ext | Source derivation | Build command | Wrinkle |
+|---|---|---|---|
+| `.fai` | strip `.fai` → FASTA | `samtools faidx <fasta>` | (shipped) |
+| `.bai` | strip `.bai` → `<x.bam>` | `samtools index <x.bam>` | assumes `x.bam.bai` form; bare `x.bai` (GATK) is rarer |
+| `.tbi` | strip `.tbi` → `<x.vcf.gz>` | `tabix -p vcf <x.vcf.gz>` | needs a preset; `-p vcf` is the dominant case |
+| `.csi` | strip `.csi` → `<x.vcf.gz>` | `bcftools index <x.vcf.gz>` | **ambiguous**: `.csi` is also a coord-sorted BAM index (`samtools index -c`) |
+| `.dict` | NOT a suffix strip (`ref.fasta`→`ref.dict`) | `samtools dict <ref.fasta> -o <ref.dict>` | **detector change required** + source-FASTA resolution is non-trivial |
 
-**Peak-RSS-informed scaling is NOT feasible in this slice without a refactor.**
-`resource_usage` (peak_rss_mb per task) is only populated in `_finalize()`
-(`self_heal.py:541`), which runs *after* the patch decision. At the
-`PipelineExecutionError` catch point (`:360-378`) `exc.record` has events but **no**
-`resource_usage`. So "read peak RSS and scale to fit" requires either populating
-`exc.record.resource_usage` before raising in `run_pipeline`, or parsing the trace
-at catch time. Recommend: **slice 1 is purely multiplicative + ceiling** (stays
-deterministic, no readback); peak-RSS-informed scaling is a deferred follow-on with
-a named refactor. Flag this in the PRD, don't paper over it.
+## Caveats / decisions to settle (Phase 3)
 
-## Design tensions for the interview
+- **C1 — `.dict` is materially harder.** It is (a) absent from the detector keyword list
+  (`detect.py:168`), so detection must be extended this slice if `.dict` is in scope —
+  the prior slice deliberately kept detection unchanged; and (b) its source FASTA is not
+  a suffix strip (`ref.dict` ↔ `ref.fasta`/`ref.fa`, ambiguous). **Recommendation:**
+  ship `.bai`/`.tbi`/`.csi` (zero detector change, clean suffix derivation) and treat
+  `.dict` as either a stretch goal in this slice or an explicit further follow-on.
+- **C2 — `.csi` command choice.** Lean VCF (`bcftools index`) since `.tbi/.csi` are
+  overwhelmingly VCF/tabix in nf-core flows; note the BAM-`.csi` case as out of scope.
+- **C3 — STAR/BWA directory indexes** stay deferred (multi-file/dir shape, not a single
+  parsed path). Single-file indexes only.
+- **C4 — Stale-index detection** stays out of scope; detector catches fully-missing only.
+- **C5 — Corpus.** Seed one golden case per new kind (per the brief) into
+  `detector_corpus.jsonl`; keep the detector eval green.
+- **C6 — Surface footprint.** Match the `.fai` slice: `repair_history` +
+  `repair_progress.jsonl` only; no dashboard/report rendering this slice.
 
-1. **Where the ceiling lives.** `propose_patches(diagnosis)` has no attempt/ceiling
-   context. Cleanest: enforce the ceiling in `apply_patch` (it already owns the
-   numeric mutation), passing a ceiling policy in. Patch stays declarative.
-2. **Ceiling policy.** Absolute caps (memory <= N GB, time <= T h) vs a multiple of
-   the original request (<= 8x). Absolute is simpler to reason about and to surface
-   ("needs a bigger box than 128 GB"); a multiple needs the original remembered.
-3. **At-ceiling behaviour.** When the next scale would exceed the cap: clamp to the
-   cap and try once more, then on the *next* OOM at the cap, **give up with a clear
-   message** (a new outcome / `expected_signal`), never a false PASS. Don't keep
-   retrying the same capped size.
-4. **Budget/termination.** `max_attempts=3` already bounds it; the new test must
-   prove that even with scaling, the loop terminates (no infinite re-scale), and
-   that a clamp-then-give-up path is taken at the ceiling.
-5. **Structured record.** Surface the scaling outcome (scaled / clamped-to-ceiling /
-   gave-up-at-ceiling) on the `RepairStep`/patch so the dashboard and corpus label
-   it. Decide whether this needs a new `RepairStep` field or fits `outcome: str`.
+## Guardrails check (CLAUDE.md)
 
-## Guardrails honoured
-
-Layer 2 only (run + self-heal), no raw-read egress, bounded + logged self-heal,
-test-first with the injected `Executor` (no real Nextflow/tool execution). No
-Layer-1 drift.
+Layer 2 (run + self-heal) only; no Layer-1 authoring. No raw-read egress — builds run on
+the user's compute through the injected seam. Bounded by the existing `max_attempts`
+(one build per missing-index path). Test-first via the injected builder/executor fakes;
+no real samtools/tabix/bcftools/Nextflow in CI. Gets better as base models improve (a
+smarter diagnoser flows through the same bounded build-and-retry). No contradictions
+found between the brief and the code; the one nuance is `.dict` (C1).

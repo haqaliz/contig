@@ -8,6 +8,19 @@ All notable changes to Contig are recorded here. The format follows
 
 ### Added
 
+- Self-heal the rest of the single-file index family (capability C2, missing-index
+  follow-on): the `missing_index` self-heal now builds and retries a missing `.bai`
+  (`samtools index`), `.tbi` (`tabix -p vcf`), and `.csi` (`bcftools index`), not just a
+  `.fai`. The parser now returns the missing path and its extension, and a table maps each
+  extension to its build command on the existing injectable `IndexBuilder` seam; the
+  honest give-ups (`index_unresolvable` / `index_build_failed`) and the
+  `built_index_and_retried` outcome are unchanged, as is the detector (it already
+  classified these). One golden corpus case per new kind is seeded. Still single-file
+  indexes only — `.dict` (needs a detector change and non-trivial source-FASTA
+  resolution), the BAM/CRAM form of `.csi`, and directory-shaped STAR/BWA indexes remain
+  deferred. Bounded by `max_attempts`, runs on the user's compute (no raw-read egress),
+  fully covered by injected-builder/executor tests (no real `samtools`/`tabix`/`bcftools`/
+  pipeline run).
 - Self-heal a missing index (capability C2, missing-index slice): a `missing_index`
   failure is now actually recovered instead of re-run unchanged. When the
   `build_index` repair is applied, the loop parses the missing index path from the
@@ -18,9 +31,9 @@ All notable changes to Contig are recorded here. The format follows
   `index_build_failed` with a `RepairStep.detail` naming the path) — an honest FAIL,
   never a false pass. The build is bounded (one per applied patch, within
   `max_attempts`), runs on the user's compute (no raw-read egress), and is fully
-  covered by injected-builder/executor tests (no real `samtools`/pipeline run). Other
-  index kinds (`.bai`, `.tbi`/`.csi`, `.dict`, STAR/BWA) are deferred to follow-on
-  cases on the same seam.
+  covered by injected-builder/executor tests (no real `samtools`/pipeline run).
+  (`.bai`, `.tbi`, and `.csi` are added in the follow-on entry above; `.dict` and
+  STAR/BWA remain deferred.)
 - Bounded resource-aware self-heal retry (capability C2, resource-aware slice): the
   `oom` and `time_limit` repairs now scale memory/walltime only up to an absolute
   ceiling (defaults 128 GB / 72 h, code-overridable via `self_heal_run`'s

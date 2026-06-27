@@ -1,72 +1,56 @@
-# self-heal-missing-index (real recovery from a missing/stale index)
+# self-heal-index-family (extend missing-index recovery to the rest of the single-file index family)
 
-Source: no GitHub issue. Inline brief, owner `aliz`, branch
-`feat/self-heal-missing-index/aliz`. Origin: the explicitly-named next slice of
-capability **C2** (self-heal breadth), `docs/technical/CAPABILITY_ROADMAP.md:94-132`,
-called out as a later C2 slice in the resource-aware-retry PRD Out-of-Scope
-(`docs/planning/resource-aware-retry/prd.md:186-188`). Picked by `contig-next` as
-the highest-leverage unblocked feature after the resource-aware-retry slice closed.
+- **Type:** feat
+- **Id/slug:** self-heal-index-family
+- **Owner:** aliz
+- **Branch:** feat/self-heal-index-family/aliz
+- **Source:** inline brief (no GitHub issue; handed off from `contig-next`)
 
 ## Brief
 
-Make Contig's self-heal actually recover from a **missing or stale index** instead
-of a no-op re-run. It is unblocked (unlike peak-RSS scaling, which needs a
-`resource_usage` refactor).
+Extend the just-shipped missing-index self-heal so the `IndexBuilder` seam recovers
+the rest of the **single-file** index family — `.bai` (`samtools index`), `.tbi`/`.csi`
+(`tabix -p vcf` / `bcftools index`), and `.dict` (`samtools dict`) — by generalizing
+the missing-path parse and the path→build-command mapping that today only handles
+`.fai`.
 
-### The gap
+Build test-first against the existing fake-builder/executor pattern (no real
+samtools/tabix or Nextflow run in CI), record `built_index_and_retried` on success and
+the honest `index_unresolvable`/`index_build_failed` give-ups on failure, and seed a
+golden corpus case per new kind.
 
-- `repair.py:56-64` already proposes a `kind="reference", operation={"build_index":
-  True}` patch for the `missing_index` FailureClass.
-- But `self_heal.py:293-295` notes a reference patch *without* `set_param` "stays
-  re-run only (unchanged params)" — i.e. today the index is never built, so the
-  retry just fails again the same way. The scaffolding (FailureClass + patch
-  proposal) exists but the repair is hollow.
+Explicitly scope OUT directory-shaped STAR/BWA indexes (different multi-file shape —
+leave deferred) and stale-index detection (the detector only catches fully-missing
+today). Stay Layer-2, bounded by `max_attempts`, no raw-read egress.
 
-### What to build
+## Provenance / why this is next (from contig-next ranking)
 
-- Implement the `build_index` operation in `apply_patch` (`self_heal.py`) as an
-  **auxiliary prep action** — build/regenerate the missing index, then retry —
-  rather than the config mutations the loop does today. (New patch *action shape*:
-  running a command, not mutating config.)
-- Confirm `detect.py` actually emits the `missing_index` FailureClass from real log
-  signatures; seed a corpus case for it.
-- Keep it deterministic and CI-safe behind the injected `Executor` (no real
-  tool/Nextflow runs), test-first, mirroring `tests/test_self_heal.py`.
+- Immediate follow-on slice of the `.fai`-via-`samtools faidx` slice that just shipped
+  on a new injectable `IndexBuilder` seam (CHANGELOG Unreleased).
+- `docs/technical/CAPABILITY_ROADMAP.md:103-109` explicitly lists "the rest of the
+  missing-index family (`.bai`, `.tbi`/`.csi`, `.dict`, STAR/BWA) … on the same seam"
+  as deferred next.
+- The detector already keys on `.fai .bai .tbi .csi`
+  (`docs/planning/self-heal-missing-index/understanding.md:22-26`), so detection is done;
+  only the build-command mapping + path-parse generalization is new.
+- Moves the headline reliability metric (unattended-completion rate, ROADMAP Phase 1)
+  and each new kind is a golden corpus case (moat #2 compounding).
 
-## Why it is the moat
+## Known caveats to settle in the dig
 
-Raises the headline reliability metric — unattended-completion rate
-(`CAPABILITY_ROADMAP.md:110-111`). Each recovered mode seeds a golden corpus case
-(moat #2), and the diagnosis path gets better as base models improve. Incumbents do
-mechanical resubmit only; none builds the missing artifact and retries. Stays
-entirely Layer 2 (run + self-heal), never Layer 1.
-
-## The caveat (nearest feasibility risk)
-
-`build_index` is currently a no-op re-run (`self_heal.py:293-295`). Making it real
-introduces a new patch *action shape* (run a command to build the index before
-retry), unlike the existing config-mutation patches. Need to decide which indices,
-and how to build them in a tool-agnostic, injectable, CI-safe way. Must confirm
-`detect.py` classifies `missing_index` from real log signatures.
-
-## Scope guardrails (CLAUDE.md / FEATURES.md)
-
-- No raw-read egress; the index build runs on the user's compute.
-- Self-heal stays bounded and logged; reuse the existing `max_attempts` bound.
-- Test-first; no real pipeline/tool execution in tests (inject fakes per the
-  existing `Executor` seam in `runner.py`).
+1. STAR/BWA indexes are directory-shaped (multi-file), not a single path parsed from
+   the diagnosis — keep deferred; this slice is single-file-index only.
+2. Detection covers fully-missing only ("no such file"); stale-index detection/repair
+   is out of scope (`docs/planning/self-heal-missing-index/understanding.md:63-66`).
 
 ## Open questions for the interview
 
-- Which indices are in scope (FASTA `.fai`, BWA/STAR index, `.dict`, tabix `.tbi`,
-  BAM `.bai`)? Start with one, or a small declared set?
-- How is the index built — a tool command via the `Executor`, or by letting the
-  pipeline regenerate it (e.g. clearing a stale index / flipping a param)? The
-  former is a new action shape; the latter may reuse the existing config-mutation
-  path.
-- "Missing" vs "stale": is stale-index detection in scope, or only fully-missing?
-- How is the build command resolved without raw tool execution in tests — a typed
-  build step the injected `Executor` fulfils?
-- What does the seeded corpus case look like (log signature → `missing_index`)?
-- Does anything need to surface in the report/verdict, or is `repair_history` +
-  JSONL the whole footprint this slice (mirroring the resource-aware-retry slice)?
+- Exact build-command mapping per extension (`.bai` → `samtools index <bam>`;
+  `.tbi` → `tabix -p vcf <vcf.gz>`; `.csi` → `bcftools index <vcf.gz>` or
+  `tabix --csi`; `.dict` → `samtools dict <ref.fasta> -o <ref.dict>`). Confirm the
+  argument shapes against how the `.fai` builder is invoked today.
+- Does the path-parse generalization need per-extension regexes, or does the existing
+  `.fai` parse already capture an arbitrary missing path?
+- One golden corpus case per kind, or a single representative? (Brief leans: per kind.)
+- Surface footprint: `repair_history` + `repair_progress.jsonl` only (like the `.fai`
+  slice), or also a report/verdict line? (Lean: match the `.fai` slice.)

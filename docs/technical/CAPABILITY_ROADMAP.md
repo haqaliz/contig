@@ -98,15 +98,17 @@ bounded absolute ceiling (defaults 128 GB / 72 h) and give up honestly with a
 `gave_up_at_ceiling` outcome + a `RepairStep.detail` message when the resource is
 already at its cap; a bounded retry budget that provably terminates.
 **Shipped (missing-index slice):** a `missing_index` failure now actually builds the
-missing index and retries (this slice: a FASTA `.fai` via `samtools faidx` through a
-new injectable `IndexBuilder` seam), recording `built_index_and_retried`, and gives
-up honestly (`index_unresolvable` / `index_build_failed`) on an unparseable path or a
-failed build — never a false pass. **Deferred to
+missing index and retries through a new injectable `IndexBuilder` seam — first a FASTA
+`.fai` via `samtools faidx`, then (follow-on) the rest of the **single-file** family:
+`.bai` via `samtools index`, `.tbi` via `tabix -p vcf`, and `.csi` via `bcftools index`,
+dispatched by an extension→command table. Each records `built_index_and_retried` and
+gives up honestly (`index_unresolvable` / `index_build_failed`) on an unparseable path or
+a failed build — never a false pass; one golden corpus case is seeded per kind. **Deferred to
 later C2 slices:** peak-RSS-informed scaling (needs a refactor — `resource_usage`
-is only populated at finalize, after the patch decision); the rest of the
-missing-index family (`.bai`, `.tbi`/`.csi`, `.dict`, STAR/BWA, plus stale-index
-detection) on the same seam; and the wider failure catalog (reference/build
-mismatch, format conversion, pin conflict).
+is only populated at finalize, after the patch decision); the still-missing index kinds
+(`.dict` — needs a detector change plus source-FASTA resolution; the BAM/CRAM form of
+`.csi`; directory-shaped STAR/BWA indexes; plus stale-index detection) on the same seam;
+and the wider failure catalog (reference/build mismatch, format conversion, pin conflict).
 
 Expand the failure-mode catalog and repair strategies well past the current set,
 and make repairs resource-aware. This is the most directly "gets better with
@@ -272,7 +274,7 @@ above a threshold; a deliberately worse detector is flagged as a regression.
 | ID | Capability | Window | Leverage |
 |----|-----------|--------|----------|
 | C1 | Cross-tool concordance verification | SHIPPED v0.2.0 | Verdict trust, novel primitive (germline slice; auto-run second caller deferred) |
-| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + missing-index `.fai` slices shipped; rest of index family, peak-RSS, wider catalog pending) | Unattended-completion rate, corpus fuel |
+| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi` shipped; `.dict`/STAR-BWA, peak-RSS, wider catalog pending) | Unattended-completion rate, corpus fuel |
 | C3 | Biological-plausibility verification | SHIPPED v0.3.0 | Verdict gets smarter about biology (germline Ti/Tv, het/hom; other assays deferred) |
 | C4 | New assay: somatic variant calling | M4 to M5 | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 | Kills a silent-failure class, deepens reproduce |
