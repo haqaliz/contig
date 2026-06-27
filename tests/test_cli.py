@@ -1324,11 +1324,14 @@ def test_run_auto_approve_applies_gated_patch(tmp_path, monkeypatch):
         return 0
 
     monkeypatch.setattr("contig.cli.default_executor", executor)
+    # The missing-index gated patch now builds the .fai before retry; inject a
+    # fake builder so no real samtools runs, and expect the build outcome.
+    monkeypatch.setattr("contig.cli.default_index_builder", lambda cmd, cwd: 0)
     result = runner.invoke(
         app, ["run", "--run-id", "aa", "--runs-dir", str(tmp_path), "--auto-approve"]
     )
     assert result.exit_code == 0
-    assert "approved_and_retried" in result.output
+    assert "built_index_and_retried" in result.output
 
 
 def test_eval_detector_scores_the_shipped_corpus(tmp_path):

@@ -29,8 +29,10 @@ from contig.notify import emit_event
 from contig.repair import propose_patches
 from contig.runner import (
     Executor,
+    IndexBuilder,
     PipelineExecutionError,
     default_executor,
+    default_index_builder,
     read_run_log,
     read_task_errors,
     run_pipeline,
@@ -47,7 +49,10 @@ CEILING_TIME_H = 72
 _AMBIGUOUS_CONFIDENCE = 0.5
 
 # Matches a whitespace-free token that ends in ".fai" (relative or absolute path).
-_FAI_TOKEN_RE = re.compile(r"\S+\.fai")
+# The lookahead pins the token end (whitespace, end-of-line, or a trailing
+# punctuation mark) so a longer token like "ref.fasta.fai_backup" is not
+# mis-parsed as "ref.fasta.fai".
+_FAI_TOKEN_RE = re.compile(r"\S+\.fai(?=\s|$|[:,;])")
 
 
 def _parse_missing_fai(diagnosis: Diagnosis) -> str | None:
@@ -316,8 +321,11 @@ def apply_patch(
     - `param`: merge `set_param` (its concrete key/value swap) into the pipeline
       params so the corrected parameter reaches the re-run's command.
     - `reference`: merge `set_param` (the reference swap, e.g. igenomes_ignore)
-      into the params. A reference patch WITHOUT set_param (a build_index /
-      resolve_reference signal) is re-run only: the re-run itself is the fix.
+      into the params. A reference patch WITHOUT set_param leaves params
+      unchanged here. A `build_index` reference patch is handled one level up by
+      `_apply_patch_and_maybe_build` (which actually builds the index — that build
+      IS the fix); `apply_patch` itself stays a no-op for it, so the re-run picks
+      up the freshly built index.
     - `env`: merge the operation into the target's backend_options (string-coerced
       so it rides into the generated config / re-run target).
     - `code`/`retry`: change nothing. The re-run itself is the fix.
@@ -356,6 +364,56 @@ def apply_patch(
     return target, params
 
 
+def _apply_patch_and_maybe_build(
+    target: ExecutionTarget,
+    patch: Patch,
+    params: dict[str, object],
+    *,
+    diagnosis: Diagnosis,
+    run_dir: Path,
+    index_builder: IndexBuilder,
+    ceiling: dict[str, int] | None,
+    default_outcome: str,
+) -> tuple[ExecutionTarget, dict[str, object], str, str | None, bool]:
+    """Apply a gated patch, and if it's a build_index reference patch, build it.
+
+    Returns ``(target, params, outcome, detail, continue_)``:
+
+    - A non-build patch applies normally and returns ``(default_outcome, None, True)``
+      — the loop should retry.
+    - A ``build_index`` reference patch parses the missing ``.fai`` from the
+      diagnosis and runs the builder. Branches honestly:
+        * unparseable path → ``("index_unresolvable", <detail>, False)`` (give up).
+        * non-zero build    → ``("index_build_failed", <detail naming .fai>, False)``.
+        * success           → ``("built_index_and_retried", None, True)`` (retry).
+
+    The build IS the fix (apply_patch is a no-op for build_index), so the re-run
+    picks up the freshly built index from ``run_dir``.
+    """
+    target, params = apply_patch(target, patch, params, ceiling=ceiling)
+    if not (patch.kind == "reference" and patch.operation.get("build_index")):
+        return target, params, default_outcome, None, True
+    fai = _parse_missing_fai(diagnosis)
+    if fai is None:
+        return (
+            target,
+            params,
+            "index_unresolvable",
+            "Could not parse a missing index path from the failure.",
+            False,
+        )
+    rc = index_builder(_fai_build_command(fai), run_dir)
+    if rc != 0:
+        return (
+            target,
+            params,
+            "index_build_failed",
+            f"Building the index for {fai} failed (exit {rc}).",
+            False,
+        )
+    return target, params, "built_index_and_retried", None, True
+
+
 def self_heal_run(
     *,
     pipeline: str,
@@ -366,6 +424,7 @@ def self_heal_run(
     runs_dir,
     run_id: str,
     executor: Executor = default_executor,
+    index_builder: IndexBuilder = default_index_builder,
     params: dict[str, object] | None = None,
     nextflow_version: str | None = None,
     max_attempts: int = 3,
@@ -467,12 +526,24 @@ def self_heal_run(
                 # --auto-approve is non-interactive: it always takes the best-ranked
                 # gated fix, so there is no choice to make even when ambiguous.
                 if auto_approve:
-                    current_target, current_params = apply_patch(current_target, gated, current_params, ceiling=resource_ceiling)
+                    current_target, current_params, outcome, detail, cont = (
+                        _apply_patch_and_maybe_build(
+                            current_target, gated, current_params,
+                            diagnosis=diagnosis, run_dir=run_dir,
+                            index_builder=index_builder, ceiling=resource_ceiling,
+                            default_outcome="approved_and_retried",
+                        )
+                    )
                     _record_attempt(
                         run_dir,
                         repair_history,
-                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated, outcome="approved_and_retried"),
+                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated, outcome=outcome, detail=detail),
                     )
+                    if not cont:
+                        return _finalize(
+                            exc.record, repair_history, run_dir,
+                            runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                        )
                     attempt += 1
                     continue
 
@@ -495,13 +566,25 @@ def self_heal_run(
 
                     chosen = _validated_choice(candidates, decision, choice)
                     if chosen is not None:
-                        current_target, current_params = apply_patch(current_target, chosen, current_params, ceiling=resource_ceiling)
+                        current_target, current_params, outcome, detail, cont = (
+                            _apply_patch_and_maybe_build(
+                                current_target, chosen, current_params,
+                                diagnosis=diagnosis, run_dir=run_dir,
+                                index_builder=index_builder, ceiling=resource_ceiling,
+                                default_outcome="chose_and_retried",
+                            )
+                        )
                         _write_status(run_dir, "running")
                         _record_attempt(
                             run_dir,
                             repair_history,
-                            RepairStep(attempt=attempt, diagnosis=diagnosis, patch=chosen, outcome="chose_and_retried"),
+                            RepairStep(attempt=attempt, diagnosis=diagnosis, patch=chosen, outcome=outcome, detail=detail),
                         )
+                        if not cont:
+                            return _finalize(
+                                exc.record, repair_history, run_dir,
+                                runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                            )
                         attempt += 1
                         continue
 
@@ -531,13 +614,25 @@ def self_heal_run(
                 decision = (result or {}).get("decision") if result else None
 
                 if decision == "approve":
-                    current_target, current_params = apply_patch(current_target, gated, current_params, ceiling=resource_ceiling)
+                    current_target, current_params, outcome, detail, cont = (
+                        _apply_patch_and_maybe_build(
+                            current_target, gated, current_params,
+                            diagnosis=diagnosis, run_dir=run_dir,
+                            index_builder=index_builder, ceiling=resource_ceiling,
+                            default_outcome="approved_and_retried",
+                        )
+                    )
                     _write_status(run_dir, "running")
                     _record_attempt(
                         run_dir,
                         repair_history,
-                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated, outcome="approved_and_retried"),
+                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated, outcome=outcome, detail=detail),
                     )
+                    if not cont:
+                        return _finalize(
+                            exc.record, repair_history, run_dir,
+                            runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                        )
                     attempt += 1
                     continue
 

@@ -63,7 +63,7 @@ from contig.verification.second_caller import (
     run_bcftools_caller,
 )
 from contig.verification.structural import manifest_for
-from contig.runner import PipelineExecutionError, default_executor
+from contig.runner import PipelineExecutionError, default_executor, default_index_builder
 from contig.samplesheet import fastq_paths, parse_samplesheet, validate_samplesheet
 from contig.lifecycle import (
     CancelError,
@@ -424,6 +424,7 @@ def _dispatch_run(
             runs_dir=runs_dir,
             run_id=run_id,
             executor=default_executor,
+            index_builder=default_index_builder,
             params=params or None,
             max_attempts=max_attempts,
             assay=assay_for_pipeline(effective_pipeline) or "rnaseq",
