@@ -919,3 +919,73 @@ def test_ceiling_giveup_is_captured_in_pending_corpus(tmp_path):
     _heal(tmp_path, executor, target=target, pending_corpus=pending_path)
     pending = load_corpus(pending_path)
     assert len(pending) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Pure parse helpers: _parse_missing_fai and _fai_build_command
+# ---------------------------------------------------------------------------
+
+def test_parse_missing_fai_returns_relative_token():
+    # The canonical fai_load evidence line → relative filename token.
+    from contig.models import Diagnosis
+    from contig.self_heal import _parse_missing_fai
+
+    d = Diagnosis(
+        failure_class="missing_index",
+        root_cause="fai not found",
+        evidence=[
+            "[E::fai_load] Failed to open the index reference.fasta.fai: No such file or directory"
+        ],
+        confidence=0.95,
+    )
+    assert _parse_missing_fai(d) == "reference.fasta.fai"
+
+
+def test_parse_missing_fai_returns_absolute_token():
+    # An absolute-path token must be returned verbatim.
+    from contig.models import Diagnosis
+    from contig.self_heal import _parse_missing_fai
+
+    d = Diagnosis(
+        failure_class="missing_index",
+        root_cause="fai not found",
+        evidence=["Could not open /data/ref.fa.fai: No such file or directory"],
+        confidence=0.9,
+    )
+    assert _parse_missing_fai(d) == "/data/ref.fa.fai"
+
+
+def test_parse_missing_fai_returns_none_when_no_fai_token():
+    # Evidence with no whitespace-free token ending in .fai → None.
+    from contig.models import Diagnosis
+    from contig.self_heal import _parse_missing_fai
+
+    d = Diagnosis(
+        failure_class="missing_index",
+        root_cause="some index issue",
+        evidence=["Error: index file is missing"],
+        confidence=0.7,
+    )
+    assert _parse_missing_fai(d) is None
+
+
+def test_fai_build_command_strips_fai_suffix():
+    # _fai_build_command("reference.fasta.fai") → ["samtools", "faidx", "reference.fasta"]
+    from contig.self_heal import _fai_build_command
+
+    assert _fai_build_command("reference.fasta.fai") == [
+        "samtools",
+        "faidx",
+        "reference.fasta",
+    ]
+
+
+def test_fai_build_command_strips_fai_suffix_absolute():
+    # Works with absolute paths too.
+    from contig.self_heal import _fai_build_command
+
+    assert _fai_build_command("/data/ref.fa.fai") == [
+        "samtools",
+        "faidx",
+        "/data/ref.fa",
+    ]

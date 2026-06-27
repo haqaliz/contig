@@ -24,7 +24,7 @@ from contig.bundle import compute_output_checksums, write_bundle
 from contig.corpus import append_case, failure_case_from_run
 from contig.detect import diagnose_failure
 from contig.events import parse_resource_usage_file
-from contig.models import ExecutionTarget, Patch, RepairStep, RunRecord, RunSummary
+from contig.models import Diagnosis, ExecutionTarget, Patch, RepairStep, RunRecord, RunSummary
 from contig.notify import emit_event
 from contig.repair import propose_patches
 from contig.runner import (
@@ -45,6 +45,32 @@ CEILING_TIME_H = 72
 # A diagnosis below this confidence is treated as ambiguous: even a single gated
 # fix is offered as a choice rather than a take-it-or-leave-it confirm (contract D).
 _AMBIGUOUS_CONFIDENCE = 0.5
+
+# Matches a whitespace-free token that ends in ".fai" (relative or absolute path).
+_FAI_TOKEN_RE = re.compile(r"\S+\.fai")
+
+
+def _parse_missing_fai(diagnosis: Diagnosis) -> str | None:
+    """Scan diagnosis.evidence for the first whitespace-free token ending in '.fai'.
+
+    Returns the token verbatim (relative or absolute), or None if none is found.
+    Pure — no I/O.
+    """
+    for line in diagnosis.evidence:
+        m = _FAI_TOKEN_RE.search(line)
+        if m:
+            return m.group()
+    return None
+
+
+def _fai_build_command(fai_path: str) -> list[str]:
+    """Return the samtools command to build the FASTA index for fai_path.
+
+    Strips exactly the trailing '.fai' to derive the FASTA filename.
+    Pure — no I/O.
+    """
+    fasta = fai_path.removesuffix(".fai")
+    return ["samtools", "faidx", fasta]
 
 
 def _write_status(run_dir: Path, state: str) -> None:

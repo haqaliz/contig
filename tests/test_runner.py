@@ -528,3 +528,25 @@ def test_run_pipeline_snakemake_writes_a_config_only_for_nextflow(tmp_path):
     # The snakemake engine does not consume a nextflow.config, so none is written.
     _run_snake(tmp_path, SNAKE_STATS_OK)
     assert not (tmp_path / "runs" / "snake-001" / "nextflow.config").exists()
+
+
+# ---------------------------------------------------------------------------
+# IndexBuilder seam: default_index_builder
+# ---------------------------------------------------------------------------
+
+def test_default_index_builder_returns_zero_for_success(tmp_path):
+    import sys
+    from contig.runner import default_index_builder
+
+    rc = default_index_builder([sys.executable, "-c", ""], tmp_path)
+    assert rc == 0
+
+
+def test_default_index_builder_returns_nonzero_for_failure(tmp_path):
+    import sys
+    from contig.runner import default_index_builder
+
+    rc = default_index_builder(
+        [sys.executable, "-c", "import sys; sys.exit(3)"], tmp_path
+    )
+    assert rc == 3
