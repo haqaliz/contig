@@ -113,6 +113,35 @@ def test_successful_run_with_good_qc_reads_pass(tmp_path):
     assert record.verdict == "pass"
 
 
+DUP_HIGH_MQC = '{"report_general_stats_data":[{"S1":{"percent_duplication":95.0}}]}'
+
+
+def test_discover_qc_emits_rnaseq_plausibility_for_rnaseq_assay(tmp_path):
+    # An RNA-seq run with a MultiQC report carrying percent_duplication above the
+    # warn band (95.0 > 80.0) must emit a duplication_rate:<sample> warn result.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "multiqc_data.json").write_text(DUP_HIGH_MQC)
+
+    results = _discover_qc(run_dir, assay="rnaseq")
+    checks = {r.check: r for r in results}
+    assert "duplication_rate:S1" in checks
+    assert checks["duplication_rate:S1"].status == "warn"
+
+
+def test_discover_qc_does_not_emit_rnaseq_plausibility_for_non_rnaseq_assay(tmp_path):
+    # A non-rnaseq assay (e.g. variant_calling) must NOT get RNA-seq plausibility
+    # checks, even when a MultiQC report is present — strict assay gate.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "multiqc_data.json").write_text(DUP_HIGH_MQC)
+
+    results = _discover_qc(run_dir, assay="variant_calling")
+    checks = [r.check for r in results]
+    assert not any(c.startswith("duplication_rate:") for c in checks)
+    assert not any(c.startswith("rrna_contamination:") for c in checks)
+
+
 _VCF_HEADER = (
     "##fileformat=VCFv4.2\n"
     "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n"

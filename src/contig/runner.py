@@ -27,6 +27,8 @@ from contig.events import parse_trace_file
 from contig.models import ExecutionTarget, QCResult, RunRecord, TaskEvent
 from contig.nfconfig import generate_nextflow_config
 from contig.snakemake import build_snakemake_command, parse_snakemake_stats_file
+from contig.verification.qc_ingest import parse_multiqc_general_stats_file
+from contig.verification.rnaseq_plausibility import evaluate_rnaseq_plausibility
 from contig.verification.rule_pack import rule_pack_for
 from contig.verification.run_qc import evaluate_run_qc
 from contig.verification.structural import evaluate_structural, manifest_for
@@ -64,6 +66,13 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
         vcfs = sorted(p for p in run_dir.rglob(pattern) if p.is_file())
         if vcfs:
             results.extend(evaluate_variant_plausibility(vcfs[0]))
+    # RNA-seq biological-plausibility checks (capability C3, RNA-seq slice, Phase 3).
+    # Gated: only when the assay is rnaseq AND a MultiQC report was found. One extra
+    # parse of the same JSON is intentional — mirrors the germline path independently
+    # re-locating the VCF so the two gates stay self-contained.
+    if assay == "rnaseq" and multiqc is not None:
+        metrics = parse_multiqc_general_stats_file(multiqc)
+        results.extend(evaluate_rnaseq_plausibility(metrics))
     return results
 
 # An executor runs the Nextflow argv and is responsible for the trace file
