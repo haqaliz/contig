@@ -123,6 +123,8 @@ def test_methods_igenomes_reference_names_genome_key():
     text = render_methods(_record(reference_identity=ri))
     # "iGenomes" is the stable marker for the reference clause
     assert "iGenomes" in text
+    # genome key must appear
+    assert "GRCh38" in text
     # no bare empty hash artefact
     assert "sha256 None" not in text
     assert "(sha256 )" not in text
