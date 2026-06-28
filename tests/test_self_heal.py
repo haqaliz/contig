@@ -1340,3 +1340,40 @@ def test_self_heal_failed_index_build_fails_honestly_per_kind(
     assert record.verdict == "fail"
     assert calls["n"] == 1
     assert state["n"] == 1  # no re-run after failed build
+
+
+# ---------------------------------------------------------------------------
+# Task 3: reference identity captured on every finalized record
+# ---------------------------------------------------------------------------
+
+
+def test_self_heal_finalize_populates_reference_identity_explicit(tmp_path):
+    # A successful run whose params carry fasta+gtf (pointing at real tmp_path
+    # files) must finalize with reference_identity populated in "explicit" mode.
+    fasta = tmp_path / "ref.fa"
+    gtf = tmp_path / "ref.gtf"
+    fasta.write_bytes(b">chr1\nACGT\n")
+    gtf.write_bytes(b"# gtf\n")
+
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(
+        tmp_path,
+        executor,
+        params={"fasta": str(fasta), "gtf": str(gtf)},
+    )
+    assert record.reference_identity is not None
+    assert record.reference_identity.mode == "explicit"
+
+
+def test_self_heal_finalize_reference_identity_none_when_no_reference_keys(tmp_path):
+    # A successful run whose params carry NO reference keys (no genome, fasta, gtf)
+    # must leave reference_identity as None.
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor, params={"input": "sheet.csv"})
+    assert record.reference_identity is None
