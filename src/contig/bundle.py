@@ -11,7 +11,7 @@ import json
 import os
 from pathlib import Path
 
-from contig.models import RunRecord, sha256_file
+from contig.models import ReferenceIdentity, RunRecord, sha256_file
 
 # The env var that, when set to a hex or base64 Ed25519 private key, makes
 # write_bundle emit a detached signature sidecar next to the record. Absent or
@@ -71,6 +71,40 @@ def compute_input_checksums(paths: list[str | Path]) -> dict[str, str]:
             raise ValueError(f"duplicate input basename {name!r}; inputs must have unique names")
         checksums[name] = sha256_file(p)
     return checksums
+
+
+def compute_reference_identity(params):
+    """Derive reference identity from a run's parameters.
+
+    Explicit mode (--fasta/--gtf): record the paths and their sha256. iGenomes mode
+    (--genome KEY): record the key only — the pipeline downloads the files, so Contig
+    has no local path to hash. No reference keys → None (e.g. Snakemake runs).
+    A missing/unreadable local reference degrades to a None checksum, never a crash
+    and never a fabricated hash.
+    """
+    if not params:
+        return None
+    genome = params.get("genome")
+    fasta = params.get("fasta")
+    gtf = params.get("gtf")
+    if genome:
+        return ReferenceIdentity(mode="igenomes", genome=str(genome))
+    if not fasta and not gtf:
+        return None
+
+    def _hash(p):
+        try:
+            return sha256_file(p) if p and Path(p).is_file() else None
+        except OSError:
+            return None
+
+    return ReferenceIdentity(
+        mode="explicit",
+        fasta=str(fasta) if fasta else None,
+        gtf=str(gtf) if gtf else None,
+        fasta_sha256=_hash(fasta),
+        gtf_sha256=_hash(gtf),
+    )
 
 
 def compute_output_checksums(results_dir: str | Path) -> dict[str, str]:

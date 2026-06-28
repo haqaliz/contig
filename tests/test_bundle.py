@@ -7,6 +7,7 @@ import pytest
 from contig.bundle import (
     compute_input_checksums,
     compute_output_checksums,
+    compute_reference_identity,
     load_bundle,
     write_bundle,
 )
@@ -204,3 +205,73 @@ def test_signature_sidecar_does_not_sign_itself(tmp_path, monkeypatch):
     payload = json.loads((tmp_path / "signature.json").read_text())
     loaded = load_bundle(tmp_path)
     assert verify_signature(loaded, payload["signature"], payload["public_key"]) is True
+
+
+# --- compute_reference_identity (provenance capture: reference genome) ----------
+
+def test_compute_reference_identity_explicit_mode(tmp_path):
+    fa = tmp_path / "genome.fa"
+    gtf = tmp_path / "annotation.gtf"
+    fa.write_bytes(b"ACGT" * 100)
+    gtf.write_bytes(b"# GTF header\n")
+
+    result = compute_reference_identity({"fasta": str(fa), "gtf": str(gtf)})
+
+    assert result is not None
+    assert result.mode == "explicit"
+    assert result.fasta == str(fa)
+    assert result.gtf == str(gtf)
+    assert result.fasta_sha256 == sha256_file(fa)
+    assert result.gtf_sha256 == sha256_file(gtf)
+
+
+def test_compute_reference_identity_igenomes_mode():
+    result = compute_reference_identity({"genome": "GRCh38"})
+
+    assert result is not None
+    assert result.mode == "igenomes"
+    assert result.genome == "GRCh38"
+    assert result.fasta_sha256 is None
+    assert result.gtf_sha256 is None
+
+
+def test_compute_reference_identity_no_reference_returns_none():
+    result = compute_reference_identity({"outdir": "/x", "input": "/y"})
+
+    assert result is None
+
+
+def test_compute_reference_identity_missing_explicit_file_degrades_gracefully(tmp_path):
+    gtf = tmp_path / "annotation.gtf"
+    gtf.write_bytes(b"# GTF header\n")
+
+    result = compute_reference_identity(
+        {"fasta": str(tmp_path / "nope.fa"), "gtf": str(gtf)}
+    )
+
+    assert result is not None
+    assert result.fasta_sha256 is None
+    assert result.gtf_sha256 == sha256_file(gtf)
+
+
+def test_compute_reference_identity_deterministic(tmp_path):
+    fa = tmp_path / "genome.fa"
+    gtf = tmp_path / "annotation.gtf"
+    fa.write_bytes(b"TTGCAA" * 50)
+    gtf.write_bytes(b"# stable bytes\n")
+    params = {"fasta": str(fa), "gtf": str(gtf)}
+
+    first = compute_reference_identity(params)
+    second = compute_reference_identity(params)
+
+    assert first is not None
+    assert second is not None
+    assert first.fasta_sha256 == second.fasta_sha256
+
+
+def test_compute_reference_identity_empty_params_returns_none():
+    assert compute_reference_identity({}) is None
+
+
+def test_compute_reference_identity_none_params_returns_none():
+    assert compute_reference_identity(None) is None
