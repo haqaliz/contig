@@ -7,6 +7,7 @@ from contig.models import (
     ExecutionTarget,
     Patch,
     QCResult,
+    ReferenceIdentity,
     RepairStep,
     RunRecord,
     TaskEvent,
@@ -400,6 +401,72 @@ def test_html_report_shows_provenance_input_and_output_checksums() -> None:
     html = render_run_report_html(_full_record())
     assert "abc123" in html  # an input checksum
     assert "00ff11" in html  # an output checksum
+
+
+def test_html_report_shows_reference_identity_section_for_explicit_mode() -> None:
+    fasta_sha = "a" * 64
+    gtf_sha = "b" * 64
+    record = RunRecord(
+        run_id="r-ref-explicit",
+        pipeline="nf-core/rnaseq",
+        pipeline_revision="3.26.0",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="STAR", status="COMPLETED", exit=0)],
+        reference_identity=ReferenceIdentity(
+            mode="explicit",
+            fasta="/data/GRCh38.fa",
+            gtf="/data/genes.gtf",
+            fasta_sha256=fasta_sha,
+            gtf_sha256=gtf_sha,
+        ),
+    )
+    html = render_run_report_html(record)
+    # Section heading must be present
+    assert "Reference identity" in html
+    # Fasta and gtf paths visible
+    assert "/data/GRCh38.fa" in html
+    assert "/data/genes.gtf" in html
+    # Checksums must appear
+    assert fasta_sha[:16] in html
+    assert gtf_sha[:16] in html
+
+
+def test_html_report_shows_reference_identity_section_for_igenomes_mode() -> None:
+    record = RunRecord(
+        run_id="r-ref-igenomes",
+        pipeline="nf-core/rnaseq",
+        pipeline_revision="3.26.0",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="STAR", status="COMPLETED", exit=0)],
+        reference_identity=ReferenceIdentity(
+            mode="igenomes",
+            genome="GRCh38",
+        ),
+    )
+    html = render_run_report_html(record)
+    # Section heading must be present
+    assert "Reference identity" in html
+    # Genome key must appear
+    assert "GRCh38" in html
+    # No blank hash cell — iGenomes shows "downloaded by pipeline" instead
+    assert "downloaded by pipeline" in html
+    assert "<td></td>" not in html
+
+
+def test_html_report_omits_reference_identity_section_when_none() -> None:
+    record = RunRecord(
+        run_id="r-ref-none",
+        pipeline="nf-core/rnaseq",
+        pipeline_revision="3.26.0",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="STAR", status="COMPLETED", exit=0)],
+        reference_identity=None,
+    )
+    html = render_run_report_html(record)
+    assert "Reference identity" not in html
 
 
 def test_html_report_escapes_user_text() -> None:
