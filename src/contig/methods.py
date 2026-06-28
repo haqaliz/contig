@@ -9,6 +9,8 @@ researcher can paste into a manuscript.
 
 from __future__ import annotations
 
+import os
+
 from contig.models import RunRecord
 from contig.registry import assay_for_pipeline
 
@@ -47,6 +49,32 @@ def _provenance_clause(record: RunRecord) -> str:
     if not parts:
         return ""
     return " Execution was pinned to " + " and ".join(parts) + "."
+
+
+def _reference_clause(record: RunRecord) -> str:
+    """A clause describing the reference genome used, if recorded; empty string otherwise."""
+    ri = record.reference_identity
+    if ri is None:
+        return ""
+    if ri.mode == "igenomes":
+        key = ri.genome or "unknown"
+        return (
+            f" The analysis was run against the iGenomes {key} reference"
+            " (downloaded by the pipeline)."
+        )
+    # explicit mode
+    fasta_base = os.path.basename(ri.fasta) if ri.fasta else "unknown"
+    gtf_base = os.path.basename(ri.gtf) if ri.gtf else "unknown"
+    sha_snippet = ri.fasta_sha256[:12] if ri.fasta_sha256 else None
+    if sha_snippet:
+        return (
+            f" The analysis was run against reference FASTA {fasta_base}"
+            f" (sha256 {sha_snippet}...) and annotation {gtf_base}."
+        )
+    return (
+        f" The analysis was run against reference FASTA {fasta_base}"
+        f" and annotation {gtf_base}."
+    )
 
 
 def _qc_clause(record: RunRecord) -> str:
@@ -89,6 +117,7 @@ def render_methods(record: RunRecord) -> str:
     paragraph = (
         opening
         + _params_clause(record)
+        + _reference_clause(record)
         + _provenance_clause(record)
         + _qc_clause(record)
     )
