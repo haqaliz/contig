@@ -148,9 +148,18 @@ het/hom ratios) already existed in `VARIANT_RULE_PACK` but were dormant because
 their metrics were never ingested. `verification/variant_metrics.py` now computes
 `ts_tv` and `het_hom` from the run's VCF and feeds them to the verdict on a path
 independent of MultiQC, capped at WARN (corroboration, not a clinical claim), with
-`unverified` when a ratio is uncomputable. **Deferred:** rRNA (RNA-seq), doublet
-rate (single-cell), coverage-from-VCF, multi-sample, and FAIL severity until the
-bands are calibrated on real data.
+`unverified` when a ratio is uncomputable.
+
+**Shipped (RNA-seq slice, Unreleased).** The plausibility axis now extends to bulk
+RNA-seq: a `RNASEQ_PLAUSIBILITY_PACK` with two WARN-capped checks — `duplication_rate`
+(`percent_duplication`) and `rrna_contamination` (`percent_rRNA`) — evaluated by
+`verification/rnaseq_plausibility.py`, which emits `unverified` (never PASS) when a
+metric is absent from the run's ingested MultiQC, wired into `_discover_qc` gated to
+`assay == "rnaseq"`. Metric slugs/bands are best-effort and uncalibrated; the
+UNVERIFIED-when-absent guarantee absorbs a wrong/missing slug. **Deferred:**
+gene-body-coverage evenness (needs a new RSeQC compute path), doublet rate
+(single-cell), sex-check, coverage-from-VCF, multi-sample, and FAIL severity until
+the bands are calibrated on real data.
 
 Deepen the verdict scientifically with **assay-aware sanity checks** that encode
 what a biologically reasonable result looks like, beyond generic QC thresholds.

@@ -482,3 +482,80 @@ def test_mag_goal_routes_through_registry_to_pack_that_fires_pass_and_fail():
     assert healthy and all(r.status == "pass" for r in healthy)
     broken = evaluate({"BAD": _healthy_mag_sample() | {"contamination": 50.0}}, pack)
     assert any(r.status == "fail" for r in broken)
+
+
+# --- RNA-seq biological-plausibility pack (C3 slice, Phase 1) ------------------
+
+
+def test_rnaseq_plausibility_pack_is_importable():
+    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK
+
+    assert RNASEQ_PLAUSIBILITY_PACK
+
+
+def test_rnaseq_plausibility_pack_covers_duplication_and_rrna():
+    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK
+
+    checks = {r["check"] for r in RNASEQ_PLAUSIBILITY_PACK}
+    assert "duplication_rate" in checks
+    assert "rrna_contamination" in checks
+
+
+def test_rnaseq_plausibility_pack_rules_have_warn_above():
+    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK
+
+    for rule in RNASEQ_PLAUSIBILITY_PACK:
+        assert "warn_above" in rule, f"{rule['check']!r} missing warn_above"
+
+
+def test_rnaseq_plausibility_pack_rules_have_no_fail_keys():
+    # WARN-cap guarantee: no fail_below / fail_above in the plausibility pack.
+    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK
+
+    for rule in RNASEQ_PLAUSIBILITY_PACK:
+        assert "fail_below" not in rule, f"{rule['check']!r} has forbidden fail_below"
+        assert "fail_above" not in rule, f"{rule['check']!r} has forbidden fail_above"
+
+
+def test_rnaseq_plausibility_duplication_below_band_is_pass():
+    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK, _status_for
+
+    rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "duplication_rate")
+    assert _status_for(30.0, rule) == "pass"
+
+
+def test_rnaseq_plausibility_duplication_above_band_is_warn():
+    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK, _status_for
+
+    rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "duplication_rate")
+    assert _status_for(95.0, rule) == "warn"
+
+
+def test_rnaseq_plausibility_duplication_never_fails():
+    # Even a value far above the band must not return "fail" (WARN-cap guarantee).
+    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK, _status_for
+
+    rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "duplication_rate")
+    assert _status_for(99999.0, rule) != "fail"
+
+
+def test_rnaseq_plausibility_rrna_below_band_is_pass():
+    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK, _status_for
+
+    rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "rrna_contamination")
+    assert _status_for(5.0, rule) == "pass"
+
+
+def test_rnaseq_plausibility_rrna_above_band_is_warn():
+    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK, _status_for
+
+    rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "rrna_contamination")
+    assert _status_for(50.0, rule) == "warn"
+
+
+def test_rnaseq_plausibility_rrna_never_fails():
+    # Even a value far above the band must not return "fail" (WARN-cap guarantee).
+    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK, _status_for
+
+    rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "rrna_contamination")
+    assert _status_for(99999.0, rule) != "fail"

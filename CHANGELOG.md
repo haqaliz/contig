@@ -6,6 +6,24 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- RNA-seq biological-plausibility verification (capability C3, RNA-seq slice):
+  extends the germline plausibility verdict to bulk RNA-seq. Two WARN-capped checks
+  — `duplication_rate` (`percent_duplication`) and `rrna_contamination`
+  (`percent_rRNA`) — live in a new `RNASEQ_PLAUSIBILITY_PACK` and are evaluated by
+  `evaluate_rnaseq_plausibility`, which mirrors the germline pattern: present metrics
+  are scored via the shared rule evaluator, and a metric absent from a sample's
+  ingested MultiQC yields `unverified` (`value=None`, never a false pass), capped at
+  WARN (corroboration, not a clinical claim). Wired into `_discover_qc` gated to
+  `assay == "rnaseq"` with a MultiQC report present; other assays are unchanged. The
+  metric slugs and bands are best-effort, uncalibrated engineering defaults — the
+  UNVERIFIED-when-absent guarantee absorbs a wrong/missing slug. Deferred:
+  gene-body-coverage evenness (needs a new RSeQC compute path), FAIL severity until
+  bands are calibrated, and the single-cell/sex-check slices. Tests-only (no detector
+  corpus change — plausibility is not a `FailureClass`); fully covered by synthetic
+  metric fixtures (no real nf-core run in CI).
+
 ## [0.5.0] - 2026-06-28
 
 ### Added

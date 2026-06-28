@@ -228,6 +228,28 @@ MAG_RULE_PACK: list[dict] = [
 ]
 
 
+# RNA-seq biological-plausibility checks (capability C3, RNA-seq slice).
+# WARN-capped (no fail_*): bands are illustrative, tunable engineering defaults,
+# NOT biological claims, uncalibrated on real data. Metric slugs are the
+# best-effort nf-core/rnaseq MultiQC general-stats keys (UNVERIFIED-when-absent
+# absorbs a wrong/missing slug — see evaluate_rnaseq_plausibility). Scale 0-100,
+# matching METHYLSEQ_RULE_PACK's percent_duplication usage.
+RNASEQ_PLAUSIBILITY_PACK: list[dict] = [
+    {
+        "check": "duplication_rate",
+        "metric": "percent_duplication",   # Picard MarkDuplicates; slug unverified
+        "warn_above": 80.0,                # lenient: RNA-seq tolerates high dup
+        "message": "fraction of alignments flagged as duplicates",
+    },
+    {
+        "check": "rrna_contamination",
+        "metric": "percent_rRNA",          # featureCounts rRNA biotype; slug unverified
+        "warn_above": 10.0,                # high => poor rRNA depletion
+        "message": "fraction of reads assigned to the rRNA biotype",
+    },
+]
+
+
 _RULE_PACKS: dict[str, list[dict]] = {
     "rnaseq": RNASEQ_RULE_PACK,
     "variant_calling": VARIANT_RULE_PACK,
