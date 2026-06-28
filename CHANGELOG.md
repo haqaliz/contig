@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-28
+
 ### Added
 
 - Self-heal the rest of the single-file index family (capability C2, missing-index
