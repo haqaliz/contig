@@ -135,3 +135,21 @@ def test_methods_none_reference_omits_reference_clause():
     text = render_methods(_record(reference_identity=None))
     assert "reference FASTA" not in text
     assert "iGenomes" not in text
+
+
+def test_methods_explicit_reference_degraded_no_checksums():
+    """Explicit mode with no checksums: fasta basename appears, no sha256 reference
+    fragment (the parenthesised '(sha256 ...)' clause), and no bare 'None' hash."""
+    ri = ReferenceIdentity(
+        mode="explicit",
+        fasta="/data/GRCh38.fa",
+        gtf="/data/genes.gtf",
+        fasta_sha256=None,
+        gtf_sha256=None,
+    )
+    # Use a record without container digests so no other sha256 values bleed in.
+    text = render_methods(_record(reference_identity=ri, container_digests={}))
+    assert "GRCh38.fa" in text
+    # The reference clause must not emit a sha256 snippet when the hash is absent.
+    assert "sha256" not in text
+    assert "None" not in text

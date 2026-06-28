@@ -432,6 +432,34 @@ def test_html_report_shows_reference_identity_section_for_explicit_mode() -> Non
     assert gtf_sha[:16] in html
 
 
+def test_html_report_shows_reference_identity_explicit_degraded_no_checksums() -> None:
+    # Explicit mode where the files existed but could not be hashed: fasta path
+    # must appear in the report; the "fasta sha256" row must be omitted entirely
+    # (not rendered as "None").
+    record = RunRecord(
+        run_id="r-ref-degraded",
+        pipeline="nf-core/rnaseq",
+        pipeline_revision="3.26.0",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="STAR", status="COMPLETED", exit=0)],
+        reference_identity=ReferenceIdentity(
+            mode="explicit",
+            fasta="/data/GRCh38.fa",
+            gtf="/data/genes.gtf",
+            fasta_sha256=None,
+            gtf_sha256=None,
+        ),
+    )
+    html = render_run_report_html(record)
+    # Section heading present
+    assert "Reference identity" in html
+    # Fasta path visible
+    assert "/data/GRCh38.fa" in html
+    # The sha256 row label must be absent when the hash is None
+    assert "fasta sha256" not in html
+
+
 def test_html_report_shows_reference_identity_section_for_igenomes_mode() -> None:
     record = RunRecord(
         run_id="r-ref-igenomes",

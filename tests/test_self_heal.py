@@ -1366,6 +1366,8 @@ def test_self_heal_finalize_populates_reference_identity_explicit(tmp_path):
     )
     assert record.reference_identity is not None
     assert record.reference_identity.mode == "explicit"
+    assert record.reference_identity.fasta_sha256 is not None
+    assert record.reference_identity.gtf_sha256 is not None
 
 
 def test_self_heal_finalize_reference_identity_none_when_no_reference_keys(tmp_path):

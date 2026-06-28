@@ -73,7 +73,9 @@ def compute_input_checksums(paths: list[str | Path]) -> dict[str, str]:
     return checksums
 
 
-def compute_reference_identity(params):
+def compute_reference_identity(
+    params: dict[str, object] | None,
+) -> ReferenceIdentity | None:
     """Derive reference identity from a run's parameters.
 
     Explicit mode (--fasta/--gtf): record the paths and their sha256. iGenomes mode

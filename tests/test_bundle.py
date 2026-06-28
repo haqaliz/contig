@@ -267,6 +267,7 @@ def test_compute_reference_identity_deterministic(tmp_path):
     assert first is not None
     assert second is not None
     assert first.fasta_sha256 == second.fasta_sha256
+    assert first.gtf_sha256 == second.gtf_sha256
 
 
 def test_compute_reference_identity_empty_params_returns_none():
