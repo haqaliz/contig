@@ -221,7 +221,24 @@ cases.
 
 ---
 
-## C5. Reference and input-data integrity  ·  month 5
+## C5. Reference and input-data integrity  ·  month 5  ·  capture slice SHIPPED (Unreleased)
+
+**Shipped (capture slice — slice 1 of N).** A run now records its **reference
+identity** into provenance: a new `ReferenceIdentity` model captured at finalize from
+the run's parameters and serialized into `run_record.json`. Explicit mode
+(`--fasta`/`--gtf`) records the paths plus their `sha256`; iGenomes mode
+(`--genome KEY`) records the key and marks checksums unavailable (the pipeline
+downloads those files, so a run is never failed over an unhashable/missing reference —
+the checksum degrades to `None`, never a fabricated hash). Rendered in `contig methods`
+and the HTML provenance panel. Capture-only: no QC/verdict or exit-code change; nf-core
+only (Snakemake carries no reference keys → identity absent, section omitted). This is
+the dependency groundwork for the mismatch detector below and for C2's reference/build-
+mismatch repair (`missing_reference` is already a `FailureClass`). **Deferred to later
+C5 slices:** the pre-flight **mismatch detector** (contig-naming / assembly-signature
+comparison — the meaty, riskier part); **known-sites** capture (not visible to Contig
+today: nf-core config assets, not CLI params — needs a `--known-sites` design);
+**annotation/GTF version** resolution (no reliable source — left null, not fabricated);
+and **RO-Crate** export of the identity.
 
 Make reference assets first-class and reproducibility-grade: pin, verify, and
 record the genome build, annotation version, and known-sites resources, and
@@ -286,7 +303,7 @@ above a threshold; a deliberately worse detector is flagged as a regression.
 | C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi` shipped; `.dict`/STAR-BWA, peak-RSS, wider catalog pending) | Unattended-completion rate, corpus fuel |
 | C3 | Biological-plausibility verification | SHIPPED v0.3.0 | Verdict gets smarter about biology (germline Ti/Tv, het/hom; other assays deferred) |
 | C4 | New assay: somatic variant calling | M4 to M5 | Breadth, depth-first, new corpus |
-| C5 | Reference and input-data integrity | M5 | Kills a silent-failure class, deepens reproduce |
+| C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
 | C6 | Eval flywheel as a continuous loop | M6 | Compounding accuracy from real runs |
 
 **One-line mantra:** make every verdict harder to fool, recover more failures
