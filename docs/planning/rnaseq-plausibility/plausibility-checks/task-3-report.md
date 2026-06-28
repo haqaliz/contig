@@ -73,4 +73,4 @@ No detector-eval or corpus changes (plausibility is not a `FailureClass`).
 
 ## Commit SHA
 
-(filled in after commit)
+`8496b90` — feat(verify): emit RNA-seq plausibility checks from _discover_qc
