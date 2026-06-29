@@ -288,6 +288,48 @@ def test_launch_manifest_serializes_is_test_profile_into_json():
     assert "outdir" not in data and "work_dir" not in data
 
 
+def test_reference_identity_round_trips_via_json():
+    from contig.models import ReferenceIdentity
+
+    identity = ReferenceIdentity(
+        mode="explicit",
+        fasta="ref.fa",
+        gtf="genes.gtf",
+        fasta_sha256="a" * 64,
+        gtf_sha256="b" * 64,
+    )
+    restored = ReferenceIdentity.model_validate_json(identity.model_dump_json())
+    assert restored.mode == "explicit"
+    assert restored.fasta == "ref.fa"
+    assert restored.gtf == "genes.gtf"
+    assert restored.fasta_sha256 == "a" * 64
+    assert restored.gtf_sha256 == "b" * 64
+
+
+def test_run_record_reference_identity_defaults_to_none():
+    record = _minimal_record([_qc("pass")], events=[_OK_TASK])
+    assert record.reference_identity is None
+
+
+def test_run_record_with_reference_identity_round_trips_via_json():
+    from contig.models import ReferenceIdentity
+
+    identity = ReferenceIdentity(
+        mode="explicit",
+        fasta="ref.fa",
+        gtf="genes.gtf",
+        fasta_sha256="a" * 64,
+        gtf_sha256="b" * 64,
+    )
+    record = _minimal_record([_qc("pass")], events=[_OK_TASK])
+    record2 = record.model_copy(update={"reference_identity": identity})
+    restored = RunRecord.model_validate_json(record2.model_dump_json())
+    assert restored.reference_identity is not None
+    assert restored.reference_identity.mode == "explicit"
+    assert restored.reference_identity.fasta == "ref.fa"
+    assert restored.reference_identity.gtf_sha256 == "b" * 64
+
+
 def test_run_record_repair_history_defaults_empty_and_accepts_steps():
     from contig.models import RepairStep
 

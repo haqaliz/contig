@@ -177,6 +177,24 @@ class Plan(BaseModel):
     warnings: list[str] = []
 
 
+# --- Reference identity (ARCHITECTURE §7; capability C5 slice 1) ---------------
+# Captures which reference genome a run used so provenance records are fully
+# reproducible. This is capture-only: no mismatch detection, no version
+# resolution, no known-sites — those belong to later slices.
+
+
+class ReferenceIdentity(BaseModel):
+    """The reference genome a run consumed, for provenance capture."""
+
+    mode: Literal["igenomes", "explicit"]
+    genome: str | None = None              # iGenomes key (mode == "igenomes")
+    fasta: str | None = None               # reference path (mode == "explicit")
+    gtf: str | None = None
+    fasta_sha256: str | None = None        # None when unavailable
+    gtf_sha256: str | None = None
+    annotation_version: str | None = None  # null this slice (no fabrication)
+
+
 # --- Self-healing loop (ARCHITECTURE §5) ---------------------------------------
 
 FailureClass = Literal[
@@ -253,6 +271,7 @@ class RunRecord(BaseModel):
     output_checksums: dict[str, str] = {}
     repair_history: list[RepairStep] = []
     resource_usage: list[TaskResource] = []
+    reference_identity: ReferenceIdentity | None = None
 
     @computed_field  # serialized into run_record.json so the dashboard reads it directly
     @property

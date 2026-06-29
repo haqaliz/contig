@@ -8,6 +8,25 @@ All notable changes to Contig are recorded here. The format follows
 
 ### Added
 
+- Reference-identity provenance (capability C5, capture slice — slice 1 of N): a run
+  now records *which genome and annotation it ran against*, deepening the reproduce
+  guarantee beyond pinned tools/params to the reference data itself. A new
+  `ReferenceIdentity` model is captured at finalize from the run's parameters and
+  serialized into `run_record.json`: explicit mode (`--fasta`/`--gtf`) records the
+  paths plus their `sha256`; iGenomes mode (`--genome KEY`) records the key only and
+  marks checksums unavailable — the pipeline downloads those files, so Contig has no
+  local path to hash, and a run is never failed over an unhashable/missing reference
+  (the checksum degrades to `None`, never a fabricated or zero hash). The identity is
+  rendered in `contig methods` and the HTML provenance panel (iGenomes shows the key
+  as pipeline-downloaded, never a blank hash). Capture-only: no QC/verdict change, no
+  exit-code change. **Deferred:** the pre-flight reference/build **mismatch detector**
+  (the next C5 slice, where the real feasibility risk lives), known-sites capture
+  (not visible to Contig today — nf-core config assets, not CLI params),
+  annotation/GTF version resolution (no reliable source — left null, not fabricated),
+  and RO-Crate export of the identity. nf-core only (Snakemake runs carry no reference
+  keys → identity is absent and the section is omitted cleanly). Hashes run on the
+  user's compute (no raw-read egress); fully covered by synthetic fixtures (no real
+  nf-core run in CI).
 - RNA-seq biological-plausibility verification (capability C3, RNA-seq slice):
   extends the germline plausibility verdict to bulk RNA-seq. Two WARN-capped checks
   — `duplication_rate` (`percent_duplication`) and `rrna_contamination`

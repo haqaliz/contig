@@ -319,6 +319,28 @@ def render_run_report_html(
     parts.append("<h3>Output checksums</h3>")
     parts.append(f"<table><tbody>{_provenance_rows(record.output_checksums)}</tbody></table>")
 
+    # Reference identity — genome used by the run, with provenance.
+    if record.reference_identity is not None:
+        ri = record.reference_identity
+        parts.append("<h3>Reference identity</h3>")
+        ri_rows: dict[str, object] = {"mode": ri.mode}
+        if ri.mode == "igenomes":
+            if ri.genome is not None:
+                ri_rows["genome"] = ri.genome
+            ri_rows["checksums"] = "downloaded by pipeline"
+        else:  # explicit
+            if ri.fasta is not None:
+                ri_rows["fasta"] = ri.fasta
+            if ri.gtf is not None:
+                ri_rows["gtf"] = ri.gtf
+            if ri.fasta_sha256 is not None:
+                ri_rows["fasta sha256"] = ri.fasta_sha256
+            if ri.gtf_sha256 is not None:
+                ri_rows["gtf sha256"] = ri.gtf_sha256
+            if ri.annotation_version is not None:
+                ri_rows["annotation version"] = ri.annotation_version
+        parts.append(f"<table><tbody>{_provenance_rows(ri_rows)}</tbody></table>")
+
     # Signature provenance (the key and algorithm the verdict was signed under).
     if signature_status and signature_status.get("signed"):
         parts.append("<h2>Signature</h2>")
