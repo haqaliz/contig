@@ -445,6 +445,7 @@ def _apply_patch_and_maybe_build(
     diagnosis: Diagnosis,
     run_dir: Path,
     index_builder: IndexBuilder,
+    built_paths: set[str],
     ceiling: dict[str, int] | None,
     default_outcome: str,
 ) -> tuple[ExecutionTarget, dict[str, object], str, str | None, bool]:
@@ -460,8 +461,13 @@ def _apply_patch_and_maybe_build(
         * unparseable path  → ``("index_unresolvable", <detail>, False)`` (give up).
         * unresolvable source (deriver returns None — e.g. a .dict with no FASTA
           companion on disk) → ``("index_unresolvable", <detail naming path>, False)``.
+        * already built this run (``index_path in built_paths``) → give up:
+          ``("index_build_failed", "Already rebuilt …; failure persists.", False)``.
         * non-zero build    → ``("index_build_failed", <detail naming path>, False)``.
         * success           → ``("built_index_and_retried", None, True)`` (retry).
+
+    ``built_paths`` is the set of index paths already built in THIS run; it
+    bounds the loop to at most one build per distinct index path.
 
     The build IS the fix (apply_patch is a no-op for build_index), so the re-run
     picks up the freshly built index from ``run_dir``.
@@ -479,6 +485,18 @@ def _apply_patch_and_maybe_build(
             False,
         )
     index_path, ext = parsed
+    if index_path in built_paths:
+        # We already built this exact index once this run and the failure came
+        # back the same way (e.g. a wrong reference masquerading as a missing
+        # dict). Rebuilding it again can't help — give up honestly instead of
+        # burning the remaining attempts on identical rebuilds.
+        return (
+            target,
+            params,
+            "index_build_failed",
+            f"Already rebuilt {index_path}; failure persists.",
+            False,
+        )
     cmd = _index_build_command(index_path, ext, run_dir)
     if cmd is None:
         return (
@@ -488,6 +506,7 @@ def _apply_patch_and_maybe_build(
             f"Could not resolve a source to build {index_path}.",
             False,
         )
+    built_paths.add(index_path)
     rc = index_builder(cmd, run_dir)
     if rc != 0:
         return (
@@ -538,6 +557,9 @@ def self_heal_run(
     current_params = dict(params or {})
     current_target = target
     repair_history: list[RepairStep] = []
+    # Index paths already built this run: bounds the loop to one build per path,
+    # so a wrong-reference masquerade can't trigger a rebuild every attempt.
+    built_paths: set[str] = set()
     attempt = 1
 
     while True:
@@ -616,7 +638,8 @@ def self_heal_run(
                         _apply_patch_and_maybe_build(
                             current_target, gated, current_params,
                             diagnosis=diagnosis, run_dir=run_dir,
-                            index_builder=index_builder, ceiling=resource_ceiling,
+                            index_builder=index_builder, built_paths=built_paths,
+                            ceiling=resource_ceiling,
                             default_outcome="approved_and_retried",
                         )
                     )
@@ -656,7 +679,8 @@ def self_heal_run(
                             _apply_patch_and_maybe_build(
                                 current_target, chosen, current_params,
                                 diagnosis=diagnosis, run_dir=run_dir,
-                                index_builder=index_builder, ceiling=resource_ceiling,
+                                index_builder=index_builder, built_paths=built_paths,
+                            ceiling=resource_ceiling,
                                 default_outcome="chose_and_retried",
                             )
                         )
@@ -704,7 +728,8 @@ def self_heal_run(
                         _apply_patch_and_maybe_build(
                             current_target, gated, current_params,
                             diagnosis=diagnosis, run_dir=run_dir,
-                            index_builder=index_builder, ceiling=resource_ceiling,
+                            index_builder=index_builder, built_paths=built_paths,
+                            ceiling=resource_ceiling,
                             default_outcome="approved_and_retried",
                         )
                     )

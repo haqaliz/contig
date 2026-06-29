@@ -1277,6 +1277,49 @@ def test_self_heal_failed_dict_build_fails_honestly(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Phase 5: build each missing index at most once per run (termination guard)
+# ---------------------------------------------------------------------------
+
+
+def test_self_heal_dict_build_once_then_honest_give_up(tmp_path):
+    # A wrong-reference masquerading as a missing dict: the build succeeds (rc 0)
+    # but the re-run keeps failing the same way. We must build ONCE and give up
+    # honestly, NOT rebuild on every attempt up to max_attempts.
+    (tmp_path / "genome.fasta").write_text("ref")
+    state = {"n": 0}
+    calls = {"n": 0, "cmd": None}
+    record = _heal(
+        tmp_path,
+        _dict_executor(state, _dict_log_for(tmp_path), succeed_on_retry=False),
+        auto_approve=True,
+        index_builder=_dict_building_builder(calls),
+        max_attempts=3,
+    )
+    assert calls["n"] == 1  # built exactly once, not once per attempt
+    last = record.repair_history[-1]
+    assert last.outcome == "index_build_failed"
+    assert last.detail is not None
+    assert "already rebuilt" in last.detail.lower()
+    assert "failure persists" in last.detail.lower()
+    assert record.verdict == "fail"
+
+
+def test_self_heal_fai_happy_path_unaffected_by_build_once_guard(tmp_path):
+    # Non-regression: the guard must not perturb a single-build success.
+    state = {"n": 0}
+    calls = {"n": 0}
+    record = _heal(
+        tmp_path,
+        _fai_executor(state),
+        auto_approve=True,
+        index_builder=_building_builder(calls),
+    )
+    assert RunSummary.from_events(record.events).succeeded is True
+    assert calls["n"] == 1  # one build, then success — unchanged
+    assert record.repair_history[-1].outcome == "built_index_and_retried"
+
+
+# ---------------------------------------------------------------------------
 # New index-family unit tests: parse per kind + build command per kind
 # ---------------------------------------------------------------------------
 
