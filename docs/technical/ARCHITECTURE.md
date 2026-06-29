@@ -268,6 +268,7 @@ A `RunRecord` pins:
 - **Inputs:** content hashes (e.g. SHA-256) of every input file + the sample sheet; never the files themselves leave the data plane.
 - **Pipeline:** nf-core pipeline name **and exact revision/commit**, or the full generated Nextflow/Snakemake source.
 - **Parameters:** the fully-resolved param set (after all auto-repairs), as JSON.
+- **Reference identity:** which genome/annotation the run executed against — for an explicit reference, the FASTA/GTF paths plus their SHA-256; for an iGenomes key, the key (the pipeline downloads those files, so there is no local path to hash, and a run is never failed over an unhashable/missing reference — the checksum degrades to absent, never a fabricated hash). Captured at finalize and rendered in `contig methods` and the provenance panel. *(Capture only today; a pre-flight reference/build-**mismatch** check, known-sites capture, and an annotation-version string are deferred — see C5 in [`CAPABILITY_ROADMAP.md`](CAPABILITY_ROADMAP.md).)*
 - **Environment:** every container **image digest** (not just tag) and/or the locked Conda env; the workflow-manager version; Contig's own version.
 - **Compute context:** `ExecutionTarget`, resource settings, and any random **seeds**.
 - **The full repair history:** the ordered detect→diagnose→patch chain that produced the final revision.
