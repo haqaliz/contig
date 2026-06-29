@@ -978,22 +978,22 @@ def test_parse_missing_index_returns_none_when_no_fai_token():
     assert _parse_missing_index(d) is None
 
 
-def test_index_build_command_strips_fai_suffix():
-    # _index_build_command("reference.fasta.fai", ".fai") → ["samtools", "faidx", "reference.fasta"]
+def test_index_build_command_strips_fai_suffix(tmp_path):
+    # _index_build_command("reference.fasta.fai", ".fai", run_dir) → ["samtools", "faidx", "reference.fasta"]
     from contig.self_heal import _index_build_command
 
-    assert _index_build_command("reference.fasta.fai", ".fai") == [
+    assert _index_build_command("reference.fasta.fai", ".fai", tmp_path) == [
         "samtools",
         "faidx",
         "reference.fasta",
     ]
 
 
-def test_index_build_command_strips_fai_suffix_absolute():
+def test_index_build_command_strips_fai_suffix_absolute(tmp_path):
     # Works with absolute paths too.
     from contig.self_heal import _index_build_command
 
-    assert _index_build_command("/data/ref.fa.fai", ".fai") == [
+    assert _index_build_command("/data/ref.fa.fai", ".fai", tmp_path) == [
         "samtools",
         "faidx",
         "/data/ref.fa",
@@ -1258,18 +1258,23 @@ def test_parse_missing_index_determinism_picks_bai_token():
     assert _parse_missing_index(d) == ("aln.bam.bai", ".bai")
 
 
-def test_index_build_command_bai():
-    # AC2: .bai → samtools index <source>
+def test_index_build_command_bai(tmp_path):
+    # AC2: .bai → samtools index <source>. Regression guard across the
+    # (index_path, ext, run_dir) signature: suffix-strip kinds ignore run_dir.
     from contig.self_heal import _index_build_command
 
-    assert _index_build_command("aln.bam.bai", ".bai") == ["samtools", "index", "aln.bam"]
+    assert _index_build_command("aln.bam.bai", ".bai", tmp_path) == [
+        "samtools",
+        "index",
+        "aln.bam",
+    ]
 
 
-def test_index_build_command_tbi():
+def test_index_build_command_tbi(tmp_path):
     # AC2: .tbi → tabix -p vcf <source>
     from contig.self_heal import _index_build_command
 
-    assert _index_build_command("calls.vcf.gz.tbi", ".tbi") == [
+    assert _index_build_command("calls.vcf.gz.tbi", ".tbi", tmp_path) == [
         "tabix",
         "-p",
         "vcf",
@@ -1277,26 +1282,134 @@ def test_index_build_command_tbi():
     ]
 
 
-def test_index_build_command_csi():
+def test_index_build_command_csi(tmp_path):
     # AC2: .csi → bcftools index <source>
     from contig.self_heal import _index_build_command
 
-    assert _index_build_command("calls.vcf.gz.csi", ".csi") == [
+    assert _index_build_command("calls.vcf.gz.csi", ".csi", tmp_path) == [
         "bcftools",
         "index",
         "calls.vcf.gz",
     ]
 
 
-def test_index_build_command_bai_absolute():
+def test_index_build_command_bai_absolute(tmp_path):
     # AC2: absolute .bai path strips suffix correctly.
     from contig.self_heal import _index_build_command
 
-    assert _index_build_command("/data/aln.bam.bai", ".bai") == [
+    assert _index_build_command("/data/aln.bam.bai", ".bai", tmp_path) == [
         "samtools",
         "index",
         "/data/aln.bam",
     ]
+
+
+# --- .dict source-deriver unit tests (filesystem-probing) ---
+
+
+def test_resolve_dict_source_finds_fasta(tmp_path):
+    # /dir/genome.dict with /dir/genome.fasta on disk → resolves the fasta.
+    # run_dir is irrelevant for an absolute .dict path.
+    from contig.self_heal import _resolve_dict_source
+
+    (tmp_path / "genome.fasta").write_text("ref")
+    dict_path = str(tmp_path / "genome.dict")
+    assert _resolve_dict_source(dict_path, ".dict", tmp_path / "elsewhere") == str(
+        tmp_path / "genome.fasta"
+    )
+
+
+def test_resolve_dict_source_priority_prefers_fasta(tmp_path):
+    # All four companions present → .fasta wins (fixed priority order).
+    from contig.self_heal import _resolve_dict_source
+
+    for ext in (".fasta", ".fa", ".fasta.gz", ".fa.gz"):
+        (tmp_path / f"genome{ext}").write_text("ref")
+    dict_path = str(tmp_path / "genome.dict")
+    assert _resolve_dict_source(dict_path, ".dict", tmp_path) == str(
+        tmp_path / "genome.fasta"
+    )
+
+
+def test_resolve_dict_source_priority_falls_through_to_fa(tmp_path):
+    # .fasta absent → next in priority (.fa) is chosen over .fasta.gz.
+    from contig.self_heal import _resolve_dict_source
+
+    (tmp_path / "genome.fa").write_text("ref")
+    (tmp_path / "genome.fasta.gz").write_text("ref")
+    dict_path = str(tmp_path / "genome.dict")
+    assert _resolve_dict_source(dict_path, ".dict", tmp_path) == str(
+        tmp_path / "genome.fa"
+    )
+
+
+def test_resolve_dict_source_absolute_probes_own_parent(tmp_path):
+    # Absolute-safe: the fasta sits beside the .dict, NOT in run_dir.
+    from contig.self_heal import _resolve_dict_source
+
+    refdir = tmp_path / "ref"
+    refdir.mkdir()
+    (refdir / "genome.fasta").write_text("ref")
+    rundir = tmp_path / "run"
+    rundir.mkdir()
+    dict_path = str(refdir / "genome.dict")
+    assert _resolve_dict_source(dict_path, ".dict", rundir) == str(
+        refdir / "genome.fasta"
+    )
+
+
+def test_resolve_dict_source_relative_probes_run_dir(tmp_path):
+    # A relative .dict path probes run_dir for the companion fasta.
+    from contig.self_heal import _resolve_dict_source
+
+    (tmp_path / "genome.fa").write_text("ref")
+    assert _resolve_dict_source("genome.dict", ".dict", tmp_path) == "genome.fa"
+
+
+def test_resolve_dict_source_strips_file_uri(tmp_path):
+    # A leading file:// scheme is stripped before Path math.
+    from contig.self_heal import _resolve_dict_source
+
+    refdir = tmp_path / "ref"
+    refdir.mkdir()
+    (refdir / "genome.fasta").write_text("ref")
+    dict_uri = "file://" + str(refdir / "genome.dict")
+    assert _resolve_dict_source(dict_uri, ".dict", tmp_path) == str(
+        refdir / "genome.fasta"
+    )
+
+
+def test_resolve_dict_source_none_when_no_fasta(tmp_path):
+    # No companion on disk → None (signals unresolvable to the orchestration).
+    from contig.self_heal import _resolve_dict_source
+
+    assert (
+        _resolve_dict_source(str(tmp_path / "genome.dict"), ".dict", tmp_path) is None
+    )
+
+
+def test_index_build_command_dict(tmp_path):
+    # AC: .dict → samtools dict -o <dict> <resolved-fasta>; output is the missing
+    # .dict path itself, input is the resolved FASTA.
+    from contig.self_heal import _index_build_command
+
+    (tmp_path / "genome.fasta").write_text("ref")
+    dict_path = str(tmp_path / "genome.dict")
+    assert _index_build_command(dict_path, ".dict", tmp_path) == [
+        "samtools",
+        "dict",
+        "-o",
+        dict_path,
+        str(tmp_path / "genome.fasta"),
+    ]
+
+
+def test_index_build_command_dict_unresolvable(tmp_path):
+    # No FASTA companion → None (the orchestration turns this into
+    # index_unresolvable).
+    from contig.self_heal import _index_build_command
+
+    assert _index_build_command(str(tmp_path / "genome.dict"), ".dict", tmp_path) is None
 
 
 # --- End-to-end heal tests parameterized over .bai / .tbi / .csi ---

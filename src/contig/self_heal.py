@@ -73,33 +73,82 @@ def _parse_missing_index(diagnosis: Diagnosis) -> tuple[str, str] | None:
     return None
 
 
-# Table-driven index builder: adding a new index kind is a one-row change.
-_INDEX_BUILD: dict[str, Callable[[str], list[str]]] = {
-    ".fai": lambda src: ["samtools", "faidx", src],
-    ".bai": lambda src: ["samtools", "index", src],
-    ".tbi": lambda src: ["tabix", "-p", "vcf", src],
-    ".csi": lambda src: ["bcftools", "index", src],
+# How to find the *source* an index is built from, given the index path. Most
+# kinds just strip the index suffix; .dict must probe the filesystem for a
+# companion FASTA (its source is not the indexed-path-minus-suffix).
+#   (index_path, ext, run_dir) -> source path, or None if unresolvable.
+SourceDeriver = Callable[[str, str, Path], "str | None"]
+
+
+def _strip_suffix(index_path: str, ext: str, run_dir: Path) -> str | None:
+    """Pure suffix-strip deriver for .fai/.bai/.tbi/.csi. Ignores run_dir."""
+    return index_path.removesuffix(ext)
+
+
+# FASTA companions a GATK sequence dictionary may sit beside, in priority order.
+# Named once so a future kind can reuse the list.
+_DICT_FASTA_EXTS = (".fasta", ".fa", ".fasta.gz", ".fa.gz")
+
+
+def _resolve_dict_source(index_path: str, ext: str, run_dir: Path) -> str | None:
+    """Resolve the source FASTA for a missing GATK ``.dict``.
+
+    Replaces the ``.dict`` suffix with the first EXISTING of ``.fasta``, ``.fa``,
+    ``.fasta.gz``, ``.fa.gz`` (priority order), looked up relative to the
+    ``.dict`` path's OWN parent directory (absolute-safe). A relative ``.dict``
+    is probed under ``run_dir``. A leading ``file://`` scheme (some GATK builds
+    print a URI) is stripped first. Returns the resolved FASTA path, or None if
+    no companion exists. Unlike the suffix-strip derivers this one touches the
+    filesystem.
+    """
+    raw = index_path.removeprefix("file://")
+    p = Path(raw)
+    base_parent, stem = p.parent, p.name[: -len(ext)]
+    for cand_ext in _DICT_FASTA_EXTS:
+        cand = base_parent / f"{stem}{cand_ext}"
+        probe = cand if cand.is_absolute() else Path(run_dir) / cand
+        if probe.exists():
+            return str(cand)
+    return None
+
+
+# Table-driven index builder: ``{ext: (derive_source, build_argv)}``. Adding a
+# new index kind is a one-row change. The argv builder takes ``(src, idx)`` —
+# suffix-strip kinds ignore ``idx``; ``.dict`` needs it (the output IS the
+# missing index path).
+_INDEX_BUILD: dict[str, tuple[SourceDeriver, Callable[[str, str], list[str]]]] = {
+    ".fai": (_strip_suffix, lambda src, idx: ["samtools", "faidx", src]),
+    ".bai": (_strip_suffix, lambda src, idx: ["samtools", "index", src]),
+    ".tbi": (_strip_suffix, lambda src, idx: ["tabix", "-p", "vcf", src]),
+    ".csi": (_strip_suffix, lambda src, idx: ["bcftools", "index", src]),
+    ".dict": (_resolve_dict_source, lambda src, idx: ["samtools", "dict", "-o", idx, src]),
 }
 
 
-def _index_build_command(index_path: str, ext: str) -> list[str]:
-    """Return the command to build the index at index_path.
+def _index_build_command(index_path: str, ext: str, run_dir: Path) -> list[str] | None:
+    """Return the command to build the index at index_path, or None if its
+    source cannot be resolved.
 
-    Strips exactly the trailing index suffix to derive the source file, then
-    dispatches to the correct tool via the ``_INDEX_BUILD`` table:
+    Consults the ``_INDEX_BUILD`` table: the deriver finds the source the index
+    is built from, then the argv builder dispatches to the correct tool:
 
-      .fai → ["samtools", "faidx", <fasta>]
-      .bai → ["samtools", "index", <bam>]
-      .tbi → ["tabix", "-p", "vcf", <vcf.gz>]
-      .csi → ["bcftools", "index", <vcf.gz>]
+      .fai  → ["samtools", "faidx", <fasta>]
+      .bai  → ["samtools", "index", <bam>]
+      .tbi  → ["tabix", "-p", "vcf", <vcf.gz>]
+      .csi  → ["bcftools", "index", <vcf.gz>]
+      .dict → ["samtools", "dict", "-o", <ref.dict>, <resolved-fasta>]
 
-    Pure — no I/O.
+    Suffix-strip kinds are pure; the ``.dict`` deriver probes the filesystem and
+    returns None (→ this returns None) when no companion FASTA exists.
     """
-    source = index_path.removesuffix(ext)
-    builder = _INDEX_BUILD.get(ext)
-    if builder is None:
+    entry = _INDEX_BUILD.get(ext)
+    if entry is None:
         raise ValueError(f"unsupported index extension: {ext}")
-    return builder(source)
+    deriver, argv_fn = entry
+    source = deriver(index_path, ext, run_dir)
+    if source is None:
+        return None
+    return argv_fn(source, index_path)
 
 
 def _write_status(run_dir: Path, state: str) -> None:
@@ -428,7 +477,7 @@ def _apply_patch_and_maybe_build(
             False,
         )
     index_path, ext = parsed
-    rc = index_builder(_index_build_command(index_path, ext), run_dir)
+    rc = index_builder(_index_build_command(index_path, ext, run_dir), run_dir)
     if rc != 0:
         return (
             target,
