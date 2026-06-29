@@ -1148,6 +1148,135 @@ def test_self_heal_unparseable_index_path_fails_honestly(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Phase 4: build a missing GATK .dict and retry (G1–G3)
+# ---------------------------------------------------------------------------
+
+
+def _dict_log_for(tmp_path):
+    """A GATK missing-sequence-dictionary line naming paths under tmp_path, so
+    the filesystem-probing deriver can resolve a FASTA the test actually creates.
+    The /work/ref/... canonical path would NOT resolve here on purpose.
+    """
+    return (
+        f"A USER ERROR has occurred: Fasta dict file {tmp_path}/genome.dict for "
+        f"reference {tmp_path}/genome.fasta does not exist. Please build it using "
+        f"e.g. picard CreateSequenceDictionary or samtools dict."
+    )
+
+
+def _dict_executor(state, dict_log, *, succeed_on_retry=True):
+    """Fail attempt 1 with a missing-.dict log; (optionally) succeed on retry."""
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, TRACE_INDEX, dict_log)
+            return 1
+        if not succeed_on_retry:
+            _write(trace_path, TRACE_INDEX, dict_log)
+            return 1
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    return executor
+
+
+def _dict_building_builder(calls, *, rc=0):
+    """Fake IndexBuilder for .dict: records argv, writes the .dict at the -o
+    target (cmd[3]), returns rc. cmd is None only when the source is unresolvable
+    — in which case the orchestration must never call us."""
+
+    def index_builder(cmd, cwd):
+        calls["n"] += 1
+        calls["cmd"] = cmd
+        if rc == 0 and cmd is not None:
+            Path(cmd[3]).write_text("dict")
+        return rc
+
+    return index_builder
+
+
+def test_self_heal_builds_missing_dict_and_retries(tmp_path):
+    # G1: a missing .dict is built (samtools dict) and the pipeline re-runs to success.
+    (tmp_path / "genome.fasta").write_text("ref")
+    state = {"n": 0}
+    calls = {"n": 0, "cmd": None}
+    record = _heal(
+        tmp_path,
+        _dict_executor(state, _dict_log_for(tmp_path)),
+        auto_approve=True,
+        index_builder=_dict_building_builder(calls),
+    )
+    assert RunSummary.from_events(record.events).succeeded is True
+    last = record.repair_history[-1]
+    assert last.outcome == "built_index_and_retried"
+    assert last.patch.operation == {"build_index": True}
+    assert state["n"] == 2  # the re-run actually happened
+    assert calls["n"] == 1  # exactly one build
+
+
+def test_self_heal_dict_builder_invoked_with_samtools_dict(tmp_path):
+    # G3: the builder is called with the exact samtools dict argv — output is the
+    # missing .dict path, input is the resolved FASTA.
+    (tmp_path / "genome.fasta").write_text("ref")
+    state = {"n": 0}
+    calls = {"n": 0, "cmd": None}
+    _heal(
+        tmp_path,
+        _dict_executor(state, _dict_log_for(tmp_path)),
+        auto_approve=True,
+        index_builder=_dict_building_builder(calls),
+    )
+    assert calls["cmd"] == [
+        "samtools",
+        "dict",
+        "-o",
+        f"{tmp_path}/genome.dict",
+        f"{tmp_path}/genome.fasta",
+    ]
+
+
+def test_self_heal_dict_unresolvable_source_fails_honestly(tmp_path):
+    # G2: a missing-.dict failure with NO FASTA companion on disk → the deriver
+    # returns None → index_unresolvable, verdict FAIL, builder never called.
+    state = {"n": 0}
+    calls = {"n": 0, "cmd": None}
+    record = _heal(
+        tmp_path,
+        _dict_executor(state, _dict_log_for(tmp_path)),
+        auto_approve=True,
+        index_builder=_dict_building_builder(calls),
+    )
+    last = record.repair_history[-1]
+    assert last.diagnosis.failure_class == "missing_index"
+    assert last.outcome == "index_unresolvable"
+    assert last.detail is not None and f"{tmp_path}/genome.dict" in last.detail
+    assert record.verdict == "fail"
+    assert calls["n"] == 0  # builder never called
+    assert state["n"] == 1  # no re-run
+
+
+def test_self_heal_failed_dict_build_fails_honestly(tmp_path):
+    # G2: a resolvable source but a non-zero build → index_build_failed, the
+    # .dict path in detail, verdict FAIL, no re-run.
+    (tmp_path / "genome.fasta").write_text("ref")
+    state = {"n": 0}
+    calls = {"n": 0, "cmd": None}
+    record = _heal(
+        tmp_path,
+        _dict_executor(state, _dict_log_for(tmp_path)),
+        auto_approve=True,
+        index_builder=_dict_building_builder(calls, rc=1),
+    )
+    last = record.repair_history[-1]
+    assert last.outcome == "index_build_failed"
+    assert last.detail is not None and f"{tmp_path}/genome.dict" in last.detail
+    assert record.verdict == "fail"
+    assert calls["n"] == 1  # builder ran once
+    assert state["n"] == 1  # no re-run after the failed build
+
+
+# ---------------------------------------------------------------------------
 # New index-family unit tests: parse per kind + build command per kind
 # ---------------------------------------------------------------------------
 

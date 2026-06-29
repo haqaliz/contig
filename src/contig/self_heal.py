@@ -455,9 +455,11 @@ def _apply_patch_and_maybe_build(
     - A non-build patch applies normally and returns ``(default_outcome, None, True)``
       — the loop should retry.
     - A ``build_index`` reference patch parses the missing index path from the
-      diagnosis (supports .fai/.bai/.tbi/.csi) and runs the builder. Branches
-      honestly:
-        * unparseable path → ``("index_unresolvable", <detail>, False)`` (give up).
+      diagnosis (supports .fai/.bai/.tbi/.csi/.dict) and runs the builder.
+      Branches honestly:
+        * unparseable path  → ``("index_unresolvable", <detail>, False)`` (give up).
+        * unresolvable source (deriver returns None — e.g. a .dict with no FASTA
+          companion on disk) → ``("index_unresolvable", <detail naming path>, False)``.
         * non-zero build    → ``("index_build_failed", <detail naming path>, False)``.
         * success           → ``("built_index_and_retried", None, True)`` (retry).
 
@@ -477,7 +479,16 @@ def _apply_patch_and_maybe_build(
             False,
         )
     index_path, ext = parsed
-    rc = index_builder(_index_build_command(index_path, ext, run_dir), run_dir)
+    cmd = _index_build_command(index_path, ext, run_dir)
+    if cmd is None:
+        return (
+            target,
+            params,
+            "index_unresolvable",
+            f"Could not resolve a source to build {index_path}.",
+            False,
+        )
+    rc = index_builder(cmd, run_dir)
     if rc != 0:
         return (
             target,
