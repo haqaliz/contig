@@ -6,6 +6,42 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Self-heal a missing GATK **sequence dictionary** (`.dict`) (capability C2,
+  self-heal breadth — the next single-file kind on the shipped index-build seam,
+  serving the germline assay where GATK/Picard refuse to run without a `.dict`
+  beside the reference). When a run fails with a missing-`.dict` signature, the
+  engine now resolves the source FASTA, builds the dictionary with
+  `samtools dict -o <ref.dict> <ref.fa>` through the existing injectable
+  `IndexBuilder` seam, and retries — recording `built_index_and_retried`. `.dict`
+  is the first kind whose build input is **not** the indexed path minus its suffix
+  (the dictionary `ref.dict` is built from a *companion* `ref.fasta`/`ref.fa`/
+  `ref.fasta.gz`/`ref.fa.gz`), so the build table was generalized to
+  `{ext: (derive_source, build_argv)}`: the four existing kinds keep a pure
+  suffix-strip deriver (unchanged), while `.dict` uses a filesystem-probing deriver
+  that resolves the companion FASTA relative to the dictionary's **own parent**
+  directory (absolute-safe), tolerates a leading `file://` scheme some GATK builds
+  print, and gives up honestly with `index_unresolvable` when no companion exists —
+  never guessing a build target. The detector gained a **narrow** sequence-dictionary
+  branch: GATK's wording is *"…Fasta dict file …/ref.dict … does not exist…"*, and
+  `does not exist` is deliberately **not** in the generic missing-file keyword set,
+  so the branch requires both a `.dict` token **and** an absence phrase — keeping a
+  genuine wrong-reference/contig mismatch (a different, deferred failure class) from
+  being misread as a buildable missing dict. A new **build-once-per-path** guard
+  bounds the loop: an index path already built this run is not rebuilt, so a
+  wrong-reference masquerading as a missing dict gives up after one build instead of
+  burning the retry budget on identical rebuilds (a tightening that applies to every
+  index kind). A failed `samtools dict` (non-zero exit) still gives up with
+  `index_build_failed`; the verdict reduction and the near-zero false-pass guarantee
+  are unchanged. One `missing-index-dict` golden case joins the detector corpus
+  (detector eval stays 100%). Local, deterministic, no raw-read egress (the dict is
+  built from a local FASTA on the user's compute); fully covered by injected
+  builder/executor fixtures — no real `samtools`/GATK/nf-core run in CI. **Deferred
+  (unchanged):** the BAM/CRAM form of `.csi`, directory-shaped STAR/BWA indexes,
+  stale-index detection, and the C2 reference/build-*mismatch* repair (wrong
+  reference, not a buildable missing dict).
+
 ## [0.7.0] - 2026-06-29
 
 ### Added

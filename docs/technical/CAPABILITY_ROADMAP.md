@@ -103,12 +103,25 @@ missing index and retries through a new injectable `IndexBuilder` seam — first
 `.bai` via `samtools index`, `.tbi` via `tabix -p vcf`, and `.csi` via `bcftools index`,
 dispatched by an extension→command table. Each records `built_index_and_retried` and
 gives up honestly (`index_unresolvable` / `index_build_failed`) on an unparseable path or
-a failed build — never a false pass; one golden corpus case is seeded per kind. **Deferred to
-later C2 slices:** peak-RSS-informed scaling (needs a refactor — `resource_usage`
+a failed build — never a false pass; one golden corpus case is seeded per kind.
+**Shipped (`.dict` slice — Unreleased):** a missing GATK **sequence dictionary** (`ref.dict`)
+is now built with `samtools dict -o <ref.dict> <ref.fa>` and retried — the first kind
+whose build input is **not** the indexed path minus its suffix (the dictionary is built
+from a *companion* FASTA), so the table was generalized to `{ext: (derive_source,
+build_argv)}`: the four prior kinds keep a pure suffix-strip deriver, while `.dict` uses a
+filesystem-probing deriver that resolves the companion (`.fasta`/`.fa`/`.fasta.gz`/`.fa.gz`)
+relative to the dictionary's own parent dir (absolute-safe), tolerates a `file://` URI, and
+returns `index_unresolvable` when no companion exists. The detector gained a **narrow**
+sequence-dictionary branch keyed on a `.dict` token **plus** an absence phrase (GATK's
+"does not exist" is deliberately not in the generic missing-file set), so a wrong-reference
+contig mismatch is not misread as a buildable missing dict. A new **build-once-per-path**
+guard bounds the loop so a wrong-reference masquerade gives up after one build rather than
+exhausting the retry budget. One `missing-index-dict` golden case is seeded.
+**Deferred to later C2 slices:** peak-RSS-informed scaling (needs a refactor — `resource_usage`
 is only populated at finalize, after the patch decision); the still-missing index kinds
-(`.dict` — needs a detector change plus source-FASTA resolution; the BAM/CRAM form of
-`.csi`; directory-shaped STAR/BWA indexes; plus stale-index detection) on the same seam;
-and the wider failure catalog (reference/build mismatch, format conversion, pin conflict).
+(the BAM/CRAM form of `.csi`; directory-shaped STAR/BWA indexes; plus stale-index
+detection) on the same seam; and the wider failure catalog (reference/build mismatch,
+format conversion, pin conflict).
 
 Expand the failure-mode catalog and repair strategies well past the current set,
 and make repairs resource-aware. This is the most directly "gets better with
@@ -300,7 +313,7 @@ above a threshold; a deliberately worse detector is flagged as a regression.
 | ID | Capability | Window | Leverage |
 |----|-----------|--------|----------|
 | C1 | Cross-tool concordance verification | SHIPPED v0.2.0 | Verdict trust, novel primitive (germline slice; auto-run second caller deferred) |
-| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi` shipped; `.dict`/STAR-BWA, peak-RSS, wider catalog pending) | Unattended-completion rate, corpus fuel |
+| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; STAR-BWA, peak-RSS, wider catalog pending) | Unattended-completion rate, corpus fuel |
 | C3 | Biological-plausibility verification | SHIPPED v0.3.0 | Verdict gets smarter about biology (germline Ti/Tv, het/hom; other assays deferred) |
 | C4 | New assay: somatic variant calling | M4 to M5 | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
