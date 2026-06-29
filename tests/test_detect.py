@@ -183,6 +183,45 @@ def test_failed_task_with_real_exit_code_is_not_platform_unsupported() -> None:
     assert d.failure_class != "platform_unsupported"
 
 
+_GATK_MISSING_DICT_LOG = (
+    "A USER ERROR has occurred: Fasta dict file /work/ref/genome.dict for "
+    "reference /work/ref/genome.fasta does not exist. Please build it using "
+    "e.g. picard CreateSequenceDictionary or samtools dict."
+)
+
+
+def test_missing_gatk_dict_is_missing_index() -> None:
+    # GATK reports a missing sequence dictionary with "does not exist" wording,
+    # which is NOT in the generic notfound tuple, so a targeted branch must catch it.
+    events = [TaskEvent(process="GATK4_HAPLOTYPECALLER", status="FAILED", exit=1)]
+    d = diagnose_failure(events, log_text=_GATK_MISSING_DICT_LOG)
+    assert d.failure_class == "missing_index"
+    assert any(".dict" in e for e in d.evidence)
+
+
+def test_missing_gatk_dict_is_missing_index_not_missing_reference() -> None:
+    # The canonical dict log mentions .fasta/reference too; it must classify as
+    # missing_index (the dict is what's absent), never missing_reference.
+    events = [TaskEvent(process="GATK4_HAPLOTYPECALLER", status="FAILED", exit=1)]
+    d = diagnose_failure(events, log_text=_GATK_MISSING_DICT_LOG)
+    assert d.failure_class == "missing_index"
+    assert d.failure_class != "missing_reference"
+
+
+def test_contig_mismatch_is_not_missing_index_dict() -> None:
+    # A wrong-reference / contig-mismatch line mentions .fasta/reference but has
+    # NO absence phrase ("does not exist"/"not found"). It is a different, deferred
+    # failure class and the narrow dict branch must not swallow it.
+    events = [TaskEvent(process="GATK4_HAPLOTYPECALLER", status="FAILED", exit=1)]
+    log = (
+        "A USER ERROR has occurred: Input files reference and reads have "
+        "incompatible contigs. The reference /work/ref/genome.fasta has contig "
+        "'chr1' but the reads use '1'."
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class != "missing_index"
+
+
 def test_benign_fai_mention_is_not_missing_index() -> None:
     # "samtools faidx genome.fasta" creates genome.fasta.fai, a SUCCESSFUL op.
     # A bare .fai mention (no "not found" context) must not trigger missing_index.

@@ -175,6 +175,28 @@ def diagnose_failure(events: list[TaskEvent], log_text: str) -> Diagnosis:
             confidence=0.85,
         )
 
+    # GATK reports a missing sequence dictionary as "Fasta dict file ... does not
+    # exist", and "does not exist" is deliberately NOT in the first-stage notfound
+    # tuple above (adding it there would over-trigger). So we need a targeted branch.
+    # It stays NARROW on purpose: a line must carry BOTH a .dict token AND an
+    # absence phrase. A wrong-reference / contig-mismatch line mentions .fasta or
+    # "reference" but no absence phrase, so it is left for that different (deferred)
+    # failure class rather than being swallowed here.
+    dict_absent = [
+        line
+        for line in _matching_lines(
+            log_text, ("does not exist", "not found", "no such file", "missing")
+        )
+        if _has_any(line, (".dict",))
+    ]
+    if dict_absent:
+        return Diagnosis(
+            failure_class="missing_index",
+            root_cause="A required sequence dictionary is missing.",
+            evidence=dict_absent,
+            confidence=0.85,
+        )
+
     nosuchfile_lines = _matching_lines(log_text, ("no such file or directory",))
     ref_tokens = (".fasta", ".fa", ".gtf", ".gff", "reference", "genome")
     ref_lines = [line for line in nosuchfile_lines if _has_any(line, ref_tokens)]
