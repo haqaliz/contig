@@ -6,6 +6,36 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-29
+
+### Added
+
+- Pre-flight reference-consistency check (capability C5, slice 2 — the mismatch
+  detector that the v0.6.0 reference-identity *capture* slice was groundwork for): a
+  `contig run` on real data with an explicit `--fasta`/`--gtf` is now refused before
+  launch when the FASTA and GTF use **disjoint contig naming** (the notorious `chr1`
+  in the FASTA vs `1` in the GTF), which otherwise runs to "success" and silently
+  produces an empty count matrix that passes structural QC. The new
+  `verification`-adjacent `reference_check` module parses the FASTA `>` headers and
+  the GTF column 1 (both gzip-transparent, streamed) and applies a **disjoint-only**
+  rule: a mismatch is reported only when the two contig-name sets are both non-empty
+  and share *no* element — any overlap (including a GTF that is a strict subset of the
+  FASTA, e.g. a partial/scaffold reference) passes, and an empty/unparseable file is
+  treated as uncomparable and passes, so the check never produces a false refusal.
+  The message names a deterministic sorted sample of each side and the `chr`-prefix
+  asymmetry. The gate lives at the single launch chokepoint (`_dispatch_run`), so it
+  protects both the CLI and the dashboard (which spawns the CLI); iGenomes
+  (`--genome KEY`) runs carry no local files and skip cleanly. An honest escape hatch,
+  `--allow-reference-mismatch`, proceeds anyway (still printing the warning) and is
+  recorded in the launch manifest so `rerun`/`resume` reproduce the original intent
+  faithfully (legacy manifests default to off). Local, deterministic, no network, no
+  raw-read egress; fully covered by synthetic `tmp_path` fixtures (no nf-core run in
+  CI). **Deferred:** the harder sample-data-vs-reference assembly-signature comparison
+  (raw FASTQ has no contig naming and the finished bundle carries no aligned BAM),
+  known-sites/BED-vs-reference consistency, GTF annotation-version resolution, seeding
+  a `reference_mismatch` corpus class, and the C2 reference/build-mismatch *repair*
+  this detector now feeds.
+
 ## [0.6.0] - 2026-06-29
 
 ### Added
@@ -186,5 +216,6 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.7.0]: https://github.com/haqaliz/contig/releases/tag/v0.7.0
 [0.6.0]: https://github.com/haqaliz/contig/releases/tag/v0.6.0
 [0.1.0]: https://github.com/haqaliz/contig/releases/tag/v0.1.0
