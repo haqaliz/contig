@@ -55,6 +55,7 @@ from contig.planner import PlanningError
 from contig.planner import plan as build_plan
 from contig.progress import read_progress, render_progress
 from contig.reference import ReferenceError, resolve_reference
+from contig.reference_check import check_reference_consistency
 from contig.registry import assay_for_pipeline
 from contig.report import render_explain, render_run_report, render_run_report_html
 from contig.verification.concordance import evaluate_concordance
@@ -217,6 +218,7 @@ def run(
     max_memory: str = typer.Option(None, "--max-memory", help="Cap per-process memory (e.g. '6.GB'), needed to fit nf-core on a laptop."),
     max_cpus: int = typer.Option(None, "--max-cpus", help="Cap per-process CPUs."),
     max_attempts: int = typer.Option(3, "--max-attempts", help="Max self-heal attempts."),
+    allow_reference_mismatch: bool = typer.Option(False, "--allow-reference-mismatch", help="Proceed even if the FASTA and GTF use disjoint contig naming (almost always a mistake)."),
     auto_approve: bool = typer.Option(False, "--auto-approve", help="Apply gated patches without waiting (non-interactive/CI)."),
     approval_timeout: float = typer.Option(1800, "--approval-timeout", help="Seconds to wait for a human approval before stopping."),
     notify: str = typer.Option(None, "--notify", help="Webhook URL to POST run lifecycle events to (http/https)."),
@@ -250,6 +252,7 @@ def run(
         max_memory=max_memory,
         max_cpus=max_cpus,
         max_attempts=max_attempts,
+        allow_reference_mismatch=allow_reference_mismatch,
         auto_approve=auto_approve,
         approval_timeout=approval_timeout,
         notify=notify,
@@ -276,6 +279,7 @@ def _dispatch_run(
     max_memory: str | None,
     max_cpus: int | None,
     max_attempts: int,
+    allow_reference_mismatch: bool = False,
     opt: list[str] | None = None,
     engine: str = "nextflow",
     snakefile: str | None = None,
@@ -381,6 +385,27 @@ def _dispatch_run(
             except ReferenceError as exc:
                 typer.echo(f"Reference error: {exc}", err=True)
                 raise typer.Exit(code=1)
+            # Pre-flight the explicit reference: a FASTA/GTF pair whose contig
+            # naming is disjoint (e.g. FASTA 'chr1' vs GTF '1') silently yields an
+            # empty count matrix, so refuse before spending compute unless the user
+            # overrides. iGenomes (--genome) has no fasta/gtf here, so it is skipped.
+            if "fasta" in params and "gtf" in params:
+                problems = check_reference_consistency(params["fasta"], params["gtf"])
+                if problems:
+                    prefix = (
+                        "⚠ Reference mismatch (proceeding, --allow-reference-mismatch):"
+                        if allow_reference_mismatch
+                        else "Reference mismatch:"
+                    )
+                    typer.echo(prefix, err=True)
+                    for problem in problems:
+                        typer.echo(f"  - {problem}", err=True)
+                    if not allow_reference_mismatch:
+                        typer.echo(
+                            "  Pass --allow-reference-mismatch to override if this is intentional.",
+                            err=True,
+                        )
+                        raise typer.Exit(code=1)
             # Absolutize the sheet: Nextflow runs with cwd=run_dir, so a relative
             # --input would fail nf-core's "file does not exist" validation.
             params["input"] = str(Path(input).resolve())
@@ -408,6 +433,7 @@ def _dispatch_run(
         max_memory=max_memory,
         max_cpus=max_cpus,
         max_attempts=max_attempts,
+        allow_reference_mismatch=allow_reference_mismatch,
         created_at=datetime.now(timezone.utc).isoformat(),
     )
     manifest_dir = Path(runs_dir) / run_id
@@ -498,6 +524,7 @@ def rerun(
         max_memory=manifest.max_memory,
         max_cpus=manifest.max_cpus,
         max_attempts=manifest.max_attempts,
+        allow_reference_mismatch=manifest.allow_reference_mismatch,
     )
 
 
@@ -1086,6 +1113,7 @@ def resume(
         max_memory=manifest.max_memory,
         max_cpus=manifest.max_cpus,
         max_attempts=manifest.max_attempts,
+        allow_reference_mismatch=manifest.allow_reference_mismatch,
         resume=True,
     )
 

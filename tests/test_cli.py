@@ -579,6 +579,130 @@ def test_rerun_rejects_manifest_input_that_no_longer_exists(tmp_path, monkeypatc
     assert result.exit_code != 0
 
 
+def _write_disjoint_reference(tmp_path):
+    """A FASTA (chr1,chr2) / GTF (1,2) pair whose contig naming is disjoint."""
+    fasta = tmp_path / "ref.fa"
+    fasta.write_text(">chr1 Homo sapiens\nACGT\n>chr2\nTTTT\n")
+    gtf = tmp_path / "ref.gtf"
+    gtf.write_text(
+        "#!genome-build GRCh38\n"
+        "1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g1\"\n"
+        "2\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g2\"\n"
+    )
+    return fasta, gtf
+
+
+def _write_overlapping_reference(tmp_path):
+    """A FASTA (chr1,chr2) / GTF (chr1) pair that shares a contig (legitimate)."""
+    fasta = tmp_path / "ref.fa"
+    fasta.write_text(">chr1\nACGT\n>chr2\nTTTT\n")
+    gtf = tmp_path / "ref.gtf"
+    gtf.write_text("chr1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g1\"\n")
+    return fasta, gtf
+
+
+def test_run_refuses_disjoint_reference_without_launching(tmp_path, monkeypatch):
+    # A real-data run with an explicit --fasta/--gtf whose contig naming is
+    # disjoint is refused at pre-flight: non-zero exit, the mismatch named, no
+    # launch.json written, and the self-heal loop never entered (AC6).
+    sheet = _make_sheet(tmp_path)
+    fasta, gtf = _write_disjoint_reference(tmp_path)
+    healed = {"n": 0}
+
+    def heal_spy(*args, **kwargs):
+        healed["n"] += 1
+        raise AssertionError("self_heal_run must not run on a refused reference")
+
+    monkeypatch.setattr("contig.cli.self_heal_run", heal_spy)
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "rm", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf)],
+    )
+    assert result.exit_code != 0
+    assert "Reference mismatch" in result.output
+    assert "no shared contig" in result.output
+    assert healed["n"] == 0  # the pipeline never launched
+    assert not (tmp_path / "runs" / "rm" / "launch.json").exists()
+
+
+def test_run_allow_reference_mismatch_proceeds_and_persists_flag(tmp_path, monkeypatch):
+    # --allow-reference-mismatch converts the refuse into a proceed (warning
+    # printed); the override is persisted in launch.json (AC7).
+    sheet = _make_sheet(tmp_path)
+    fasta, gtf = _write_disjoint_reference(tmp_path)
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "ov", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf),
+         "--allow-reference-mismatch"],
+    )
+    assert result.exit_code == 0
+    manifest = json.loads((tmp_path / "runs" / "ov" / "launch.json").read_text())
+    assert manifest["allow_reference_mismatch"] is True
+    assert (tmp_path / "runs" / "ov" / "run_record.json").exists()
+
+
+def test_run_overlapping_reference_is_unaffected(tmp_path, monkeypatch):
+    # A legitimate reference (shared contig) launches unchanged (regression guard).
+    sheet = _make_sheet(tmp_path)
+    fasta, gtf = _write_overlapping_reference(tmp_path)
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "okref", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf)],
+    )
+    assert result.exit_code == 0
+    assert "Reference mismatch" not in result.output
+    manifest = json.loads((tmp_path / "runs" / "okref" / "launch.json").read_text())
+    assert manifest["allow_reference_mismatch"] is False
+
+
+def test_rerun_with_allowed_mismatch_stays_bypassed(tmp_path, monkeypatch):
+    # A manifest carrying allow_reference_mismatch=true reproduces faithfully: the
+    # rerun against the same disjoint pair stays bypassed and proceeds (AC7).
+    sheet = _make_sheet(tmp_path)
+    fasta, gtf = _write_disjoint_reference(tmp_path)
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(
+        app,
+        ["run", "--run-id", "origmm", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf),
+         "--allow-reference-mismatch"],
+    )
+    result = runner.invoke(
+        app,
+        ["rerun", "origmm", "--runs-dir", str(tmp_path / "runs"), "--new-run-id", "copymm"],
+    )
+    assert result.exit_code == 0
+    new_manifest = json.loads((tmp_path / "runs" / "copymm" / "launch.json").read_text())
+    assert new_manifest["allow_reference_mismatch"] is True
+    assert (tmp_path / "runs" / "copymm" / "run_record.json").exists()
+
+
+def test_legacy_manifest_without_flag_defaults_to_false(tmp_path):
+    # A launch.json written before the field existed must still load, defaulting
+    # the override to False (Pydantic default).
+    from contig.models import LaunchManifest
+
+    manifest = LaunchManifest.model_validate_json(
+        json.dumps(
+            {
+                "run_id": "legacy",
+                "pipeline": "nf-core/rnaseq",
+                "revision": "3.26.0",
+                "profiles": ["docker"],
+                "backend": "local",
+                "container_runtime": "docker",
+                "created_at": "2026-06-22T00:00:00+00:00",
+            }
+        )
+    )
+    assert manifest.allow_reference_mismatch is False
+
+
 def _write_progress_dir(runs_dir, run_id, state, trace, repair=None):
     import json
 

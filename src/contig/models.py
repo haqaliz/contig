@@ -316,6 +316,10 @@ class LaunchManifest(BaseModel):
     max_memory: str | None = None
     max_cpus: int | None = None
     max_attempts: int = 3
+    # Whether the disjoint FASTA/GTF pre-flight gate was overridden for this run.
+    # Persisted so a reproduce (`rerun`) is faithful to the original's intent;
+    # defaults False so a legacy launch.json (written before this field) stays valid.
+    allow_reference_mismatch: bool = False
     created_at: str
 
     @computed_field  # serialized so the dashboard reads it without re-deriving
