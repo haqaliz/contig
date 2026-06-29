@@ -1,75 +1,87 @@
-# reference-mismatch-detector (pre-flight reference-consistency check)
+# self-heal-dict-index (GATK sequence-dictionary self-heal)
 
 - **Type:** feat
-- **Id/slug:** reference-mismatch-detector
+- **Id/slug:** self-heal-dict-index
 - **Owner:** aliz
-- **Branch:** feat/reference-mismatch-detector/aliz
+- **Branch:** feat/self-heal-dict-index/aliz
 - **Source:** inline brief (no GitHub issue; handed off from `contig-next`)
+- **Capability:** C2 (self-heal breadth) — next slice on the shipped single-file
+  index-build seam.
 
 ## Brief (from the contig-next handoff)
 
-Build the **C5 reference/build mismatch detector, slice 2** — a pre-flight check
-that catches a mismatched reference before a run silently produces empty output.
+Add the GATK sequence-dictionary (`.dict`) kind to the shipped single-file self-heal
+index family. When a run fails with a missing-`.dict` signature (GATK/Picard "no
+sequence dictionary" / "fasta.dict not found"), the engine should resolve the source
+FASTA, build the dictionary (`samtools dict -o ref.dict ref.fa`, behind the existing
+injectable `IndexBuilder` seam at `src/contig/self_heal.py:77`), and retry — recording
+`built_index_and_retried`, and giving up honestly (`index_unresolvable` /
+`index_build_failed`) on an unresolvable source or failed build, never a false pass.
 
-Scope this first slice to **reference-internal consistency**: compare the FASTA
-contig naming (`>` headers) against the GTF contig naming (column 1) on
-explicit-`--fasta`/`--gtf` runs, and refuse or WARN with the exact mismatch named
-(e.g. "FASTA uses `chr1`, GTF uses `1`"), reusing the `ReferenceIdentity` capture
-that shipped in v0.6.0. Test-first, deterministic, local-only, no network;
-iGenomes (`--genome KEY`) cleanly skips since there are no local files to inspect.
+Two touch points:
+- **Detector change** (`src/contig/detect.py:168` recognizes `.fai`/`.bai`/`.tbi`/`.csi`
+  today — add `.dict`).
+- **New entry** in the `_INDEX_BUILD_COMMANDS` extension→command table
+  (`src/contig/self_heal.py:77`).
 
-**Caveat to carry into the dig:** the harder "sample data vs reference"
-assembly-signature comparison is out of scope here and must stay deferred — raw
-FASTQ has no contig naming and the finished bundle does not carry the aligned BAM
-(it lives in Nextflow `work/`, not `results/`), so there is no reliable
-sample-side signature at pre-flight. Do not let the slice drift into it.
+Test-first with injected-builder/executor fixtures and one seeded golden corpus case
+(mirror the `missing-index-tbi` case in `data/detector_corpus.jsonl`); no real
+`samtools` or pipeline run in CI.
+
+## Caveat to dig on FIRST (the key design risk)
+
+`.dict` source-FASTA resolution differs from every shipped kind. For `.fai`/`.tbi`/
+`.bai`/`.csi`, the build input is the named file with the index suffix *stripped*
+(`ref.fa.fai` → `samtools faidx ref.fa`; `calls.vcf.gz.tbi` → `tabix calls.vcf.gz`).
+For `.dict`, the missing file is `ref.dict` but the build input is `ref.fa` /
+`ref.fasta` / `ref.fa.gz` — a **different base file** reached by *replacing* the
+`.dict` extension, not stripping a suffix. Confirm whether the current derivation
+assumes "strip the index suffix" and therefore needs a new resolution branch for
+`.dict`, and where the FASTA candidate-extension list should live. Do not let the
+slice ship a `.dict` builder that feeds it `ref.dict` as the source.
 
 ## Why this was picked (contig-next ranking)
 
-- It is the named next C5 slice; its dependency (the reference-identity **capture**
-  slice) shipped in v0.6.0 — `ReferenceIdentity` already holds the FASTA/GTF paths
-  this detector reads. (`docs/technical/CAPABILITY_ROADMAP.md:224-241`)
-- Kills a notorious silent-failure class: "a run 'succeeds' against the wrong
-  genome." A FASTA/GTF naming mismatch yields empty quantification that passes
-  structural checks — the "make every verdict harder to fool" framing.
-  (`CAPABILITY_ROADMAP.md:247-251`)
-- Clean, testable, deterministic, local-only slice; seeds reference-mismatch corpus
-  cases and feeds C2's deferred reference/build-mismatch repair (`missing_reference`
-  is already a `FailureClass`). (`CAPABILITY_ROADMAP.md:109-111`)
+- It is the explicitly-named next slice on a shipped seam
+  (`CAPABILITY_ROADMAP.md:108-111`: "`.dict` — needs a detector change plus
+  source-FASTA resolution"); not invented.
+- Deepens the strongest self-heal surface — raises unattended-completion rate (the
+  headline reliability metric) and seeds a golden corpus case. Serves the
+  already-shipped germline assay (GATK requires a sequence dictionary).
+- Unblocked, low-risk, single-file (matches the shipped `IndexBuilder` seam) vs.
+  directory-shaped STAR/BWA or the murkier C2 reference-mismatch repair.
 
 ## Open questions for the interview
 
-- **Where does the check run?** A pre-flight hook before launch (preferred — catches
-  it before compute is wasted), vs a verify-time check. Confirm the existing
-  pre-flight surface (`reference.py`, planner/launch path) and where to attach.
-- **Severity & gating:** refuse (hard error, block launch) vs WARN-and-proceed?
-  Likely refuse on a clear naming-scheme mismatch, since it guarantees empty output;
-  confirm.
-- **What exactly is compared:** the set/style of contig names (e.g. `chr`-prefixed
-  vs not), or full set membership (FASTA has `{chr1..chrM}`, GTF references `1`)?
-  Define the mismatch rule precisely and conservatively (avoid false positives on
-  legitimate partial references / scaffolds).
-- **Parsing scope:** read only FASTA `>` headers and GTF column 1; handle gzipped
-  FASTA/GTF (`.fa.gz`, `.gtf.gz`); bound the read (don't slurp whole files).
-- **Reuse:** does this consume the shipped `ReferenceIdentity` (paths already
-  resolved/captured), or re-resolve paths from params? Prefer reuse.
-- **iGenomes skip:** `--genome KEY` → no local files → clean skip with a note.
-- **Eval data:** emit a reference-mismatch case into the corpus when caught?
-  Confirm the `FailureClass`/corpus shape (`missing_reference` exists; is a new
-  class needed, e.g. `reference_mismatch`?).
+- **Source-FASTA resolution mechanism** (the caveat above): new `.dict`-specific
+  branch vs. generalizing the existing derivation. Where does the FASTA
+  candidate-extension list (`.fa`/`.fasta`/`.fa.gz`/`.fasta.gz`) live, and what if
+  none of the candidates exist on disk → `index_unresolvable`?
+- **Build command:** `samtools dict -o <out.dict> <ref.fa>` (matches the `samtools`
+  family already used for `.fai`) vs. `gatk`/`picard CreateSequenceDictionary`.
+  Prefer `samtools dict` for consistency with the shipped seam; confirm.
+- **Detector signature(s):** which exact log lines classify a missing `.dict` as
+  `missing_index` (GATK "A USER ERROR has occurred: ... .dict", Picard
+  "CreateSequenceDictionary", "Could not read sequence dictionary")? Keep
+  conservative to avoid mis-classifying a genuine *reference-mismatch* (wrong
+  contigs) as a buildable missing dict.
+- **Corpus seed:** one `missing-index-dict` case mirroring `missing-index-tbi`;
+  reuse `FailureClass.missing_index` (no new class).
+- **Output path:** does `.dict` sit beside the FASTA as `ref.dict` or `ref.fa.dict`?
+  GATK/Picard convention is `ref.dict` (replace extension); the build `-o` must match
+  what the pipeline looks for. Pin this against the detector's extracted path.
 
 ## Guardrails (CLAUDE.md)
 
-- **Layer 2 only** (verify/pre-flight). In scope.
-- **No raw-read egress** — reads only reference files (FASTA headers, GTF col 1),
-  all local.
-- **No correctness over-claiming** — name the exact mismatch; never fabricate.
-- **Test-first.**
+- **Layer 2 only** (self-heal/execution). In scope.
+- **No raw-read egress** — builds an index from a local FASTA on the user's compute.
+- **No correctness over-claiming** — honest `index_unresolvable`/`index_build_failed`
+  give-up; never a false `built_index_and_retried`.
+- **Test-first**; injected builder/executor, no real `samtools` in CI.
 
-## Out of scope (deferred next slices)
+## Out of scope (deferred — do not drift)
 
-- Sample-data-vs-reference assembly-signature comparison (needs the aligned BAM /
-  has no FASTQ signal).
-- Known-sites / BED vs reference consistency.
-- Annotation/GTF *version* resolution.
-- The C2 reference/build-mismatch *repair* (this slice only detects).
+- Directory-shaped STAR/BWA indexes (break the single-file seam shape).
+- BAM/CRAM form of `.csi`; stale-index detection.
+- Reference/build-*mismatch* repair (wrong reference, not a missing buildable index).
+- Peak-RSS-informed resource scaling.

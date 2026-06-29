@@ -1155,6 +1155,20 @@ _BAI_LOG = 'samtools index: failed to open "aln.bam.bai": No such file or direct
 _TBI_LOG = "[E::idx_load] Could not load the index calls.vcf.gz.tbi: No such file or directory"
 _CSI_LOG = "Failed to open calls.vcf.gz.csi: No such file or directory"
 _DETERMINISM_LOG = "samtools index: aln.bam.bai missing for aln.bam: No such file or directory"
+# The canonical GATK4 missing-sequence-dictionary USER ERROR, as emitted under
+# nf-core/sarek. Names BOTH the missing .dict and the source .fasta; the parser
+# must extract the .dict token (the path GATK looked for and could not find).
+_DICT_LOG = (
+    "A USER ERROR has occurred: Fasta dict file /work/ref/genome.dict for "
+    "reference /work/ref/genome.fasta does not exist. Please build it using "
+    "e.g. picard CreateSequenceDictionary or samtools dict."
+)
+# Some GATK builds print the path as a file:// URI; the parser captures it
+# verbatim (URI form) and the deriver strips the scheme later (Phase 3).
+_DICT_LOG_FILE_URI = (
+    "A USER ERROR has occurred: Fasta dict file file:///work/ref/genome.dict "
+    "does not exist."
+)
 
 
 def test_parse_missing_index_returns_bai_token():
@@ -1197,6 +1211,36 @@ def test_parse_missing_index_returns_csi_token():
         confidence=0.95,
     )
     assert _parse_missing_index(d) == ("calls.vcf.gz.csi", ".csi")
+
+
+def test_parse_missing_index_returns_dict_token():
+    # .dict token: GATK missing-sequence-dictionary USER ERROR. The line also
+    # names genome.fasta, but the .dict path is the one to extract.
+    from contig.models import Diagnosis
+    from contig.self_heal import _parse_missing_index
+
+    d = Diagnosis(
+        failure_class="missing_index",
+        root_cause="sequence dictionary missing",
+        evidence=[_DICT_LOG],
+        confidence=0.85,
+    )
+    assert _parse_missing_index(d) == ("/work/ref/genome.dict", ".dict")
+
+
+def test_parse_missing_index_returns_dict_token_file_uri():
+    # file:// wrinkle: the captured token keeps the URI scheme; the deriver
+    # strips it in Phase 3.
+    from contig.models import Diagnosis
+    from contig.self_heal import _parse_missing_index
+
+    d = Diagnosis(
+        failure_class="missing_index",
+        root_cause="sequence dictionary missing",
+        evidence=[_DICT_LOG_FILE_URI],
+        confidence=0.85,
+    )
+    assert _parse_missing_index(d) == ("file:///work/ref/genome.dict", ".dict")
 
 
 def test_parse_missing_index_determinism_picks_bai_token():

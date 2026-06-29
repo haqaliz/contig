@@ -49,13 +49,14 @@ CEILING_TIME_H = 72
 _AMBIGUOUS_CONFIDENCE = 0.5
 
 # Matches a non-whitespace, non-quote token ending in one of the supported
-# single-file index extensions (relative or absolute path).  The character
-# class [^\s"']+ excludes leading quote characters so a path printed inside
-# double-quotes (e.g. `"aln.bam.bai"`) is extracted without the surrounding
-# quotes.  The lookahead pins the token end (whitespace, end-of-line, or a
-# trailing punctuation mark including quotes) so a longer token like
-# "ref.fasta.fai_backup" is NOT mis-parsed as "ref.fasta.fai".
-_INDEX_TOKEN_RE = re.compile(r"""[^\s"']+\.(fai|bai|tbi|csi)(?=\s|$|[:,;"'])""")
+# single-file index extensions (.fai/.bai/.tbi/.csi/.dict; relative or absolute
+# path, and `.dict` may arrive as a file:// URI which the deriver strips later).
+# The character class [^\s"']+ excludes leading quote characters so a path
+# printed inside double-quotes (e.g. `"aln.bam.bai"`) is extracted without the
+# surrounding quotes.  The lookahead pins the token end (whitespace,
+# end-of-line, or a trailing punctuation mark including quotes) so a longer
+# token like "ref.fasta.fai_backup" is NOT mis-parsed as "ref.fasta.fai".
+_INDEX_TOKEN_RE = re.compile(r"""[^\s"']+\.(fai|bai|tbi|csi|dict)(?=\s|$|[:,;"'])""")
 
 
 def _parse_missing_index(diagnosis: Diagnosis) -> tuple[str, str] | None:
