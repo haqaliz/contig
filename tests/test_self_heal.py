@@ -298,6 +298,63 @@ def test_self_heal_resume_passes_resume_on_first_execute(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# _finalize / harmonized_reference_direction breadcrumb tests
+# ---------------------------------------------------------------------------
+
+def test_finalize_harmonized_direction_adds_warn_breadcrumb(tmp_path):
+    # When harmonized_reference_direction is set, _finalize enriches the record:
+    # reference_identity.harmonized=True, a WARN QCResult is appended, and the
+    # run verdict is capped at "warn" even when all pipeline tasks succeeded.
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(
+        tmp_path,
+        executor,
+        params={"fasta": "/fake/ref.fa", "gtf": "/fake/ref.gtf"},
+        harmonized_reference_direction="add_chr",
+    )
+
+    assert record.reference_identity is not None
+    assert record.reference_identity.harmonized is True
+    assert record.reference_identity.harmonized_direction == "add_chr"
+    assert record.harmonized_reference_direction == "add_chr"
+
+    warn_checks = [r for r in record.qc_results if r.check == "reference_harmonized"]
+    assert len(warn_checks) == 1
+    assert warn_checks[0].status == "warn"
+    assert warn_checks[0].kind == "structural"
+    assert "add_chr" in warn_checks[0].message
+
+    # The WARN check caps the verdict at "warn" — never "pass" for a harmonized run.
+    assert record.verdict == "warn"
+
+
+def test_finalize_no_harmonized_direction_leaves_identity_unchanged(tmp_path):
+    # When harmonized_reference_direction is None (default), _finalize must not
+    # touch reference_identity.harmonized and must not append a warn check.
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(
+        tmp_path,
+        executor,
+        params={"fasta": "/fake/ref.fa", "gtf": "/fake/ref.gtf"},
+        # harmonized_reference_direction omitted (defaults to None)
+    )
+
+    assert record.reference_identity is not None
+    assert record.reference_identity.harmonized is False
+    assert record.reference_identity.harmonized_direction is None
+    assert record.harmonized_reference_direction is None
+
+    warn_checks = [r for r in record.qc_results if r.check == "reference_harmonized"]
+    assert len(warn_checks) == 0
+
+
+# ---------------------------------------------------------------------------
 # Ceiling-clamp + never-shrink tests (Task 1: resource-aware-retry)
 # ---------------------------------------------------------------------------
 
