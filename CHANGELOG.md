@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-01
+
 ### Added
 
 - Self-heal a **chr-prefix GTF naming mismatch** between the FASTA and GTF references
@@ -285,6 +287,7 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.9.0]: https://github.com/haqaliz/contig/releases/tag/v0.9.0
 [0.7.0]: https://github.com/haqaliz/contig/releases/tag/v0.7.0
 [0.6.0]: https://github.com/haqaliz/contig/releases/tag/v0.6.0
 [0.1.0]: https://github.com/haqaliz/contig/releases/tag/v0.1.0
