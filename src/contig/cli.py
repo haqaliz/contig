@@ -56,6 +56,7 @@ from contig.planner import plan as build_plan
 from contig.progress import read_progress, render_progress
 from contig.reference import ReferenceError, resolve_reference
 from contig.reference_check import check_reference_consistency
+from contig.reference_harmonize import harmonize_gtf, plan_harmonization
 from contig.registry import assay_for_pipeline
 from contig.report import render_explain, render_run_report, render_run_report_html
 from contig.verification.concordance import evaluate_concordance
@@ -369,6 +370,7 @@ def _dispatch_run(
 
     params: dict[str, object] = {}
     input_paths: list = []
+    harmonized_direction: str | None = None
     # The --input/reference/--outdir plumbing is nf-core specific (a samplesheet, a
     # reference, the pipeline --outdir flag). The snakemake foundation pass drives
     # its inputs and outputs from the Snakefile itself, so it skips this block.
@@ -387,25 +389,47 @@ def _dispatch_run(
                 raise typer.Exit(code=1)
             # Pre-flight the explicit reference: a FASTA/GTF pair whose contig
             # naming is disjoint (e.g. FASTA 'chr1' vs GTF '1') silently yields an
-            # empty count matrix, so refuse before spending compute unless the user
-            # overrides. iGenomes (--genome) has no fasta/gtf here, so it is skipped.
+            # empty count matrix. If a safe chr-prefix transform can resolve the
+            # mismatch, harmonize the GTF and proceed. Only refuse (or bypass with
+            # --allow-reference-mismatch) for a genuinely non-harmonizable pair.
+            # iGenomes (--genome) has no fasta/gtf here, so it is skipped.
             if "fasta" in params and "gtf" in params:
                 problems = check_reference_consistency(params["fasta"], params["gtf"])
                 if problems:
-                    prefix = (
-                        "⚠ Reference mismatch (proceeding, --allow-reference-mismatch):"
-                        if allow_reference_mismatch
-                        else "Reference mismatch:"
-                    )
-                    typer.echo(prefix, err=True)
-                    for problem in problems:
-                        typer.echo(f"  - {problem}", err=True)
-                    if not allow_reference_mismatch:
+                    hplan = plan_harmonization(params["fasta"], params["gtf"])
+                    if hplan is not None:
+                        # Safe chr-prefix harmonization: rewrite the GTF and proceed.
+                        # Harmonize-first even when --allow-reference-mismatch is set —
+                        # harmonizing is strictly safer than running against a mismatch.
+                        harmonized_path = (
+                            Path(runs_dir) / run_id / "harmonized" / Path(params["gtf"]).name
+                        )
+                        harmonized_path.parent.mkdir(parents=True, exist_ok=True)
+                        harmonize_gtf(params["gtf"], hplan.direction, harmonized_path)
                         typer.echo(
-                            "  Pass --allow-reference-mismatch to override if this is intentional.",
+                            f"⚙ Reference harmonized: GTF seqnames {hplan.direction} "
+                            f"to match the FASTA. Proceeding.",
                             err=True,
                         )
-                        raise typer.Exit(code=1)
+                        harmonized_direction = hplan.direction
+                        params["gtf"] = str(harmonized_path.resolve())
+                        # DO NOT Exit — proceed with the harmonized file.
+                    else:
+                        # Genuine wrong-assembly (non-harmonizable): keep existing behavior.
+                        prefix = (
+                            "⚠ Reference mismatch (proceeding, --allow-reference-mismatch):"
+                            if allow_reference_mismatch
+                            else "Reference mismatch:"
+                        )
+                        typer.echo(prefix, err=True)
+                        for problem in problems:
+                            typer.echo(f"  - {problem}", err=True)
+                        if not allow_reference_mismatch:
+                            typer.echo(
+                                "  Pass --allow-reference-mismatch to override if this is intentional.",
+                                err=True,
+                            )
+                            raise typer.Exit(code=1)
             # Absolutize the sheet: Nextflow runs with cwd=run_dir, so a relative
             # --input would fail nf-core's "file does not exist" validation.
             params["input"] = str(Path(input).resolve())
@@ -429,11 +453,12 @@ def _dispatch_run(
         input=params.get("input") if input else None,
         genome=genome,
         fasta=fasta,
-        gtf=gtf,
+        gtf=gtf,  # ORIGINAL path — reproduce re-enters dispatch and re-derives harmonization
         max_memory=max_memory,
         max_cpus=max_cpus,
         max_attempts=max_attempts,
         allow_reference_mismatch=allow_reference_mismatch,
+        harmonized_reference=bool(harmonized_direction),
         created_at=datetime.now(timezone.utc).isoformat(),
     )
     manifest_dir = Path(runs_dir) / run_id
@@ -458,6 +483,7 @@ def _dispatch_run(
             auto_approve=auto_approve,
             approval_timeout=approval_timeout,
             notify_webhook=notify,
+            harmonized_reference_direction=harmonized_direction,
         )
     except ConfigGenerationError as exc:
         typer.echo(f"Cannot configure the '{backend}' backend: {exc}", err=True)
