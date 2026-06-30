@@ -9,3 +9,6 @@ dist/
 /runs/
 /_realdata/
 .claude/worktrees/
+
+# SDD subagent scratch (briefs, reports, ledger)
+.superpowers/
