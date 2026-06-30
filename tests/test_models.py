@@ -330,6 +330,98 @@ def test_run_record_with_reference_identity_round_trips_via_json():
     assert restored.reference_identity.gtf_sha256 == "b" * 64
 
 
+# ---------------------------------------------------------------------------
+# Task B: harmonization provenance fields
+# ---------------------------------------------------------------------------
+
+def test_launch_manifest_round_trips_with_harmonized_reference_true():
+    """harmonized_reference=True survives a JSON round-trip."""
+    import json
+    from contig.models import LaunchManifest
+
+    manifest = LaunchManifest(
+        run_id="run-2",
+        pipeline="nf-core/rnaseq",
+        revision="3.26.0",
+        profiles=["docker"],
+        backend="local",
+        container_runtime="docker",
+        input="/abs/sheet.csv",
+        max_attempts=3,
+        created_at="2026-06-30T00:00:00+00:00",
+        harmonized_reference=True,
+    )
+    restored = LaunchManifest.model_validate_json(manifest.model_dump_json())
+    assert restored.harmonized_reference is True
+
+
+def test_launch_manifest_legacy_json_without_harmonized_reference_defaults_false():
+    """A legacy launch.json that has no harmonized_reference field still loads."""
+    import json
+    from contig.models import LaunchManifest
+
+    legacy_json = json.dumps({
+        "run_id": "run-legacy",
+        "pipeline": "nf-core/rnaseq",
+        "revision": "3.26.0",
+        "profiles": ["docker"],
+        "backend": "local",
+        "container_runtime": "docker",
+        "input": None,
+        "max_attempts": 3,
+        "created_at": "2026-06-30T00:00:00+00:00",
+    })
+    manifest = LaunchManifest.model_validate_json(legacy_json)
+    assert manifest.harmonized_reference is False
+
+
+def test_reference_identity_round_trips_with_harmonization_fields():
+    """harmonized=True and harmonized_direction='add_chr' survive a JSON round-trip."""
+    from contig.models import ReferenceIdentity
+
+    identity = ReferenceIdentity(
+        mode="explicit",
+        fasta="ref.fa",
+        gtf="genes.gtf",
+        harmonized=True,
+        harmonized_direction="add_chr",
+    )
+    restored = ReferenceIdentity.model_validate_json(identity.model_dump_json())
+    assert restored.harmonized is True
+    assert restored.harmonized_direction == "add_chr"
+
+
+def test_reference_identity_legacy_json_without_harmonization_fields_defaults():
+    """A legacy ReferenceIdentity JSON without harmonization fields still loads."""
+    import json
+    from contig.models import ReferenceIdentity
+
+    legacy_json = json.dumps({
+        "mode": "explicit",
+        "fasta": "ref.fa",
+        "gtf": "genes.gtf",
+    })
+    identity = ReferenceIdentity.model_validate_json(legacy_json)
+    assert identity.harmonized is False
+    assert identity.harmonized_direction is None
+
+
+def test_run_record_accepts_and_round_trips_harmonized_reference_direction():
+    """harmonized_reference_direction='add_chr' survives a JSON round-trip."""
+    from contig.models import RunRecord
+
+    record = _minimal_record([_qc("pass")], events=[_OK_TASK])
+    record2 = record.model_copy(update={"harmonized_reference_direction": "add_chr"})
+    restored = RunRecord.model_validate_json(record2.model_dump_json())
+    assert restored.harmonized_reference_direction == "add_chr"
+
+
+def test_run_record_harmonized_reference_direction_defaults_to_none():
+    """A RunRecord without harmonized_reference_direction defaults to None."""
+    record = _minimal_record([_qc("pass")], events=[_OK_TASK])
+    assert record.harmonized_reference_direction is None
+
+
 def test_run_record_repair_history_defaults_empty_and_accepts_steps():
     from contig.models import RepairStep
 

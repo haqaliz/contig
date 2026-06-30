@@ -580,7 +580,7 @@ def test_rerun_rejects_manifest_input_that_no_longer_exists(tmp_path, monkeypatc
 
 
 def _write_disjoint_reference(tmp_path):
-    """A FASTA (chr1,chr2) / GTF (1,2) pair whose contig naming is disjoint."""
+    """A FASTA (chr1,chr2) / GTF (1,2) chr-asymmetric pair — auto-harmonizable."""
     fasta = tmp_path / "ref.fa"
     fasta.write_text(">chr1 Homo sapiens\nACGT\n>chr2\nTTTT\n")
     gtf = tmp_path / "ref.gtf"
@@ -588,6 +588,22 @@ def _write_disjoint_reference(tmp_path):
         "#!genome-build GRCh38\n"
         "1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g1\"\n"
         "2\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g2\"\n"
+    )
+    return fasta, gtf
+
+
+def _write_wrong_assembly_reference(tmp_path):
+    """A FASTA (chr1,chr2) / GTF (scaffold_1,scaffold_2) pair — genuinely disjoint.
+
+    Adding 'chr' to the GTF seqnames yields chr_scaffold_{1,2} which does not
+    intersect {chr1,chr2}, so plan_harmonization returns None (non-harmonizable).
+    """
+    fasta = tmp_path / "ref.fa"
+    fasta.write_text(">chr1\nACGT\n>chr2\nTTTT\n")
+    gtf = tmp_path / "ref.gtf"
+    gtf.write_text(
+        "scaffold_1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g1\"\n"
+        "scaffold_2\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g2\"\n"
     )
     return fasta, gtf
 
@@ -602,11 +618,11 @@ def _write_overlapping_reference(tmp_path):
 
 
 def test_run_refuses_disjoint_reference_without_launching(tmp_path, monkeypatch):
-    # A real-data run with an explicit --fasta/--gtf whose contig naming is
-    # disjoint is refused at pre-flight: non-zero exit, the mismatch named, no
-    # launch.json written, and the self-heal loop never entered (AC6).
+    # A genuine wrong-assembly pair (non-harmonizable: adding 'chr' to scaffold
+    # names doesn't match the FASTA) is refused at pre-flight: non-zero exit, the
+    # mismatch named, no launch.json written, and the self-heal loop never entered.
     sheet = _make_sheet(tmp_path)
-    fasta, gtf = _write_disjoint_reference(tmp_path)
+    fasta, gtf = _write_wrong_assembly_reference(tmp_path)
     healed = {"n": 0}
 
     def heal_spy(*args, **kwargs):
@@ -627,10 +643,11 @@ def test_run_refuses_disjoint_reference_without_launching(tmp_path, monkeypatch)
 
 
 def test_run_allow_reference_mismatch_proceeds_and_persists_flag(tmp_path, monkeypatch):
-    # --allow-reference-mismatch converts the refuse into a proceed (warning
-    # printed); the override is persisted in launch.json (AC7).
+    # For a non-harmonizable wrong-assembly pair, --allow-reference-mismatch
+    # converts the refuse into a proceed (warning printed); the override is
+    # persisted in launch.json (AC7), no harmonization is done.
     sheet = _make_sheet(tmp_path)
-    fasta, gtf = _write_disjoint_reference(tmp_path)
+    fasta, gtf = _write_wrong_assembly_reference(tmp_path)
     monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
     result = runner.invoke(
         app,
@@ -641,6 +658,8 @@ def test_run_allow_reference_mismatch_proceeds_and_persists_flag(tmp_path, monke
     assert result.exit_code == 0
     manifest = json.loads((tmp_path / "runs" / "ov" / "launch.json").read_text())
     assert manifest["allow_reference_mismatch"] is True
+    assert manifest["harmonized_reference"] is False  # no harmonization for wrong-assembly
+    assert manifest["gtf"] == str(gtf)  # original path unchanged
     assert (tmp_path / "runs" / "ov" / "run_record.json").exists()
 
 
@@ -662,9 +681,10 @@ def test_run_overlapping_reference_is_unaffected(tmp_path, monkeypatch):
 
 def test_rerun_with_allowed_mismatch_stays_bypassed(tmp_path, monkeypatch):
     # A manifest carrying allow_reference_mismatch=true reproduces faithfully: the
-    # rerun against the same disjoint pair stays bypassed and proceeds (AC7).
+    # rerun against the same non-harmonizable wrong-assembly pair stays bypassed
+    # and proceeds with the original GTF, no harmonization (AC7).
     sheet = _make_sheet(tmp_path)
-    fasta, gtf = _write_disjoint_reference(tmp_path)
+    fasta, gtf = _write_wrong_assembly_reference(tmp_path)
     monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
     runner.invoke(
         app,
@@ -679,7 +699,133 @@ def test_rerun_with_allowed_mismatch_stays_bypassed(tmp_path, monkeypatch):
     assert result.exit_code == 0
     new_manifest = json.loads((tmp_path / "runs" / "copymm" / "launch.json").read_text())
     assert new_manifest["allow_reference_mismatch"] is True
+    assert new_manifest["harmonized_reference"] is False  # wrong-assembly, no harmonization
     assert (tmp_path / "runs" / "copymm" / "run_record.json").exists()
+
+
+def test_run_chr_asymmetric_harmonizes_and_proceeds(tmp_path, monkeypatch):
+    # A chr-prefix asymmetric pair (FASTA chr1/chr2, GTF 1/2) is auto-harmonized:
+    # the run does NOT exit(1), launch.json records harmonized_reference=True and
+    # preserves the ORIGINAL gtf path, a harmonized file is written under the run
+    # dir, and stderr carries the "harmonized" note.
+    sheet = _make_sheet(tmp_path)
+    fasta, gtf = _write_disjoint_reference(tmp_path)
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "harm", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf)],
+    )
+    assert result.exit_code == 0, f"Expected 0, got {result.exit_code}: {result.output}"
+    assert "harmonized" in result.output.lower()
+    manifest = json.loads((tmp_path / "runs" / "harm" / "launch.json").read_text())
+    assert manifest["harmonized_reference"] is True
+    assert manifest["gtf"] == str(gtf)  # ORIGINAL path, not scratch
+    harmonized_dir = tmp_path / "runs" / "harm" / "harmonized"
+    assert harmonized_dir.exists() and any(harmonized_dir.iterdir())
+    assert (tmp_path / "runs" / "harm" / "run_record.json").exists()
+
+
+def test_run_chr_asymmetric_with_allow_flag_still_harmonizes(tmp_path, monkeypatch):
+    # Even when --allow-reference-mismatch is set, a chr-asymmetric pair is
+    # harmonized (harmonize-first is safer; the flag is the override only for the
+    # non-harmonizable wrong-assembly case).
+    sheet = _make_sheet(tmp_path)
+    fasta, gtf = _write_disjoint_reference(tmp_path)
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "harmflag", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf),
+         "--allow-reference-mismatch"],
+    )
+    assert result.exit_code == 0
+    manifest = json.loads((tmp_path / "runs" / "harmflag" / "launch.json").read_text())
+    assert manifest["harmonized_reference"] is True
+    assert manifest["allow_reference_mismatch"] is True
+    assert manifest["gtf"] == str(gtf)  # ORIGINAL path
+    harmonized_dir = tmp_path / "runs" / "harmflag" / "harmonized"
+    assert harmonized_dir.exists() and any(harmonized_dir.iterdir())
+
+
+def test_rerun_from_harmonized_manifest_re_derives_harmonization(tmp_path, monkeypatch):
+    # rerun from a manifest with harmonized_reference=True re-enters _dispatch_run
+    # with the ORIGINAL gtf paths and re-derives the harmonization (reproduce =
+    # reproduce the decision). The reproduced run also harmonizes.
+    sheet = _make_sheet(tmp_path)
+    fasta, gtf = _write_disjoint_reference(tmp_path)
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(
+        app,
+        ["run", "--run-id", "orighrm", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf)],
+    )
+    orig_manifest = json.loads(
+        (tmp_path / "runs" / "orighrm" / "launch.json").read_text()
+    )
+    assert orig_manifest["harmonized_reference"] is True  # sanity check
+    result = runner.invoke(
+        app,
+        ["rerun", "orighrm", "--runs-dir", str(tmp_path / "runs"), "--new-run-id", "copyhrm"],
+    )
+    assert result.exit_code == 0
+    new_manifest = json.loads((tmp_path / "runs" / "copyhrm" / "launch.json").read_text())
+    assert new_manifest["harmonized_reference"] is True  # re-derives harmonization
+    assert new_manifest["gtf"] == str(gtf)  # still the ORIGINAL path
+    harmonized_dir = tmp_path / "runs" / "copyhrm" / "harmonized"
+    assert harmonized_dir.exists() and any(harmonized_dir.iterdir())
+    assert (tmp_path / "runs" / "copyhrm" / "run_record.json").exists()
+
+
+def test_run_harmonize_post_check_fails_refuses(tmp_path, monkeypatch):
+    # GUARD: when harmonize_gtf writes a file that STILL fails check_reference_consistency
+    # the engine must discard the attempt and refuse with Exit(1) — never proceed
+    # believing it harmonized when it didn't.
+    sheet = _make_sheet(tmp_path)
+    fasta, gtf = _write_disjoint_reference(tmp_path)
+
+    def broken_harmonize(gtf_path, direction, out_path):
+        # Copy the ORIGINAL (unmodified) seqnames — harmonization silently no-ops.
+        import shutil
+        shutil.copy(str(gtf_path), str(out_path))
+        from pathlib import Path
+        return Path(out_path)
+
+    monkeypatch.setattr("contig.cli.harmonize_gtf", broken_harmonize)
+    # Also mock the executor so that if (incorrectly) self_heal_run is reached,
+    # it does not hang trying to invoke Nextflow; the test is still RED pre-fix
+    # because exit_code == 0 when the guard is absent.
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "guardfail", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf)],
+    )
+    assert result.exit_code != 0, f"Expected non-zero exit, got 0. Output: {result.output}"
+    assert "mismatch" in result.output.lower()
+    # launch.json must NOT record harmonized_reference=True (it may not exist at all
+    # because Exit(1) is raised before the manifest is written).
+    manifest_path = tmp_path / "runs" / "guardfail" / "launch.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text())
+        assert manifest["harmonized_reference"] is False
+
+
+def test_run_harmonize_post_check_succeeds_proceeds(tmp_path, monkeypatch):
+    # Normal post-check path: harmonize_gtf resolves the mismatch, post-check passes,
+    # the run proceeds and launch.json records harmonized_reference=True.
+    sheet = _make_sheet(tmp_path)
+    fasta, gtf = _write_disjoint_reference(tmp_path)
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "guardok", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf)],
+    )
+    assert result.exit_code == 0, f"Expected 0, got {result.exit_code}: {result.output}"
+    manifest = json.loads((tmp_path / "runs" / "guardok" / "launch.json").read_text())
+    assert manifest["harmonized_reference"] is True
+    assert manifest["gtf"] == str(gtf)
 
 
 def test_legacy_manifest_without_flag_defaults_to_false(tmp_path):

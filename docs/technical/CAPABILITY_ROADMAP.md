@@ -117,11 +117,27 @@ sequence-dictionary branch keyed on a `.dict` token **plus** an absence phrase (
 contig mismatch is not misread as a buildable missing dict. A new **build-once-per-path**
 guard bounds the loop so a wrong-reference masquerade gives up after one build rather than
 exhausting the retry budget. One `missing-index-dict` golden case is seeded.
+**Shipped (chr-prefix GTF harmonization slice — Unreleased):** the reference/build-mismatch
+**repair** for an unambiguous `chr`-prefix asymmetry (FASTA `chr1…` vs GTF `1…`, or vice
+versa) now ships at pre-flight. `plan_harmonization` (a pure decision function) checks that
+one side is entirely chr-prefixed while the other is entirely bare, and that after a uniform
+`chr`-add or `chr`-strip the two contig sets intersect; only then does `harmonize_gtf`
+stream-rewrite column 1 of the GTF into `<run_id>/harmonized/<name>` (user's original file
+untouched) and allow the run to proceed. A wrong-assembly case — where the transform still
+leaves two disjoint sets — is still refused. The decision is recorded in the launch manifest
+(`harmonized_reference: bool`) and in `ReferenceIdentity` (`.harmonized`,
+`.harmonized_direction`); `rerun`/`resume` re-derive it by re-entering `_dispatch_run` with
+the original GTF path (no scratch path baked into the manifest). A WARN-level
+`reference_harmonized` QC breadcrumb is appended in `_finalize` so the rewrite is visible in
+every verdict surface. Built on top of the C5 mismatch detector (v0.7.0), which detected and
+refused this class of mismatch; it now also repairs it.
 **Deferred to later C2 slices:** peak-RSS-informed scaling (needs a refactor — `resource_usage`
 is only populated at finalize, after the patch decision); the still-missing index kinds
 (the BAM/CRAM form of `.csi`; directory-shaped STAR/BWA indexes; plus stale-index
-detection) on the same seam; and the wider failure catalog (reference/build mismatch,
-format conversion, pin conflict).
+detection) on the same seam; and the wider failure catalog — the assembly-signature form of
+reference/build mismatch (no sample-side contig signal in raw FASTQ or finished bundle),
+per-contig name mapping (e.g., `chrM`↔`MT`), known-sites/GTF-version consistency, a runtime
+`reference_mismatch` detector-corpus case, format conversion, and pin conflict.
 
 Expand the failure-mode catalog and repair strategies well past the current set,
 and make repairs resource-aware. This is the most directly "gets better with
@@ -313,7 +329,7 @@ above a threshold; a deliberately worse detector is flagged as a regression.
 | ID | Capability | Window | Leverage |
 |----|-----------|--------|----------|
 | C1 | Cross-tool concordance verification | SHIPPED v0.2.0 | Verdict trust, novel primitive (germline slice; auto-run second caller deferred) |
-| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; STAR-BWA, peak-RSS, wider catalog pending) | Unattended-completion rate, corpus fuel |
+| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; STAR-BWA, peak-RSS, assembly-signature + wider catalog pending) | Unattended-completion rate, corpus fuel |
 | C3 | Biological-plausibility verification | SHIPPED v0.3.0 | Verdict gets smarter about biology (germline Ti/Tv, het/hom; other assays deferred) |
 | C4 | New assay: somatic variant calling | M4 to M5 | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |

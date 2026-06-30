@@ -24,7 +24,7 @@ from contig.bundle import compute_output_checksums, compute_reference_identity, 
 from contig.corpus import append_case, failure_case_from_run
 from contig.detect import diagnose_failure
 from contig.events import parse_resource_usage_file
-from contig.models import Diagnosis, ExecutionTarget, Patch, RepairStep, RunRecord, RunSummary
+from contig.models import Diagnosis, ExecutionTarget, Patch, QCResult, RepairStep, RunRecord, RunSummary
 from contig.notify import emit_event
 from contig.repair import propose_patches
 from contig.runner import (
@@ -542,6 +542,7 @@ def self_heal_run(
     propose: Callable[..., list[Patch]] = propose_patches,
     notify_webhook: str | None = None,
     resource_ceiling: dict[str, int] | None = None,
+    harmonized_reference_direction: str | None = None,
 ) -> RunRecord:
     """Run a pipeline and auto-recover from recoverable failures, logging the chain.
 
@@ -581,6 +582,7 @@ def self_heal_run(
             return _finalize(
                 record, repair_history, run_dir,
                 runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                harmonized_reference_direction=harmonized_reference_direction,
             )
         except PipelineExecutionError as exc:
             events = exc.record.events if exc.record else []
@@ -616,6 +618,7 @@ def self_heal_run(
                     return _finalize(
                         exc.record, repair_history, run_dir,
                         runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                        harmonized_reference_direction=harmonized_reference_direction,
                     )
 
                 candidates = _gated_candidates(patches)
@@ -629,6 +632,7 @@ def self_heal_run(
                     return _finalize(
                         exc.record, repair_history, run_dir,
                         runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                        harmonized_reference_direction=harmonized_reference_direction,
                     )
 
                 # --auto-approve is non-interactive: it always takes the best-ranked
@@ -652,6 +656,7 @@ def self_heal_run(
                         return _finalize(
                             exc.record, repair_history, run_dir,
                             runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                            harmonized_reference_direction=harmonized_reference_direction,
                         )
                     attempt += 1
                     continue
@@ -694,6 +699,7 @@ def self_heal_run(
                             return _finalize(
                                 exc.record, repair_history, run_dir,
                                 runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                                harmonized_reference_direction=harmonized_reference_direction,
                             )
                         attempt += 1
                         continue
@@ -707,6 +713,7 @@ def self_heal_run(
                     return _finalize(
                         exc.record, repair_history, run_dir,
                         runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                        harmonized_reference_direction=harmonized_reference_direction,
                     )
 
                 # The unambiguous single gated patch: a binary confirm gate.
@@ -743,6 +750,7 @@ def self_heal_run(
                         return _finalize(
                             exc.record, repair_history, run_dir,
                             runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                            harmonized_reference_direction=harmonized_reference_direction,
                         )
                     attempt += 1
                     continue
@@ -756,6 +764,7 @@ def self_heal_run(
                 return _finalize(
                     exc.record, repair_history, run_dir,
                     runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                    harmonized_reference_direction=harmonized_reference_direction,
                 )
 
             if attempt >= max_attempts:
@@ -767,6 +776,7 @@ def self_heal_run(
                 return _finalize(
                     exc.record, repair_history, run_dir,
                     runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                    harmonized_reference_direction=harmonized_reference_direction,
                 )
 
             block = _resource_ceiling_block(diagnosis, current_target, resource_ceiling)
@@ -775,7 +785,8 @@ def self_heal_run(
                     RepairStep(attempt=attempt, diagnosis=diagnosis, patch=safe,
                                outcome="gave_up_at_ceiling", detail=block))
                 return _finalize(exc.record, repair_history, run_dir,
-                    runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook)
+                    runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                    harmonized_reference_direction=harmonized_reference_direction)
 
             current_target, current_params = apply_patch(current_target, safe, current_params, ceiling=resource_ceiling)
             _record_attempt(
@@ -794,6 +805,7 @@ def _finalize(
     runs_dir,
     run_id: str,
     webhook: str | None = None,
+    harmonized_reference_direction: str | None = None,
 ) -> RunRecord:
     """Attach the repair history to the final record, persist it, and notify.
 
@@ -809,6 +821,20 @@ def _finalize(
     record.repair_history = repair_history
     record.output_checksums = compute_output_checksums(_results_dir(record, run_dir))
     record.reference_identity = compute_reference_identity(record.parameters)
+    if harmonized_reference_direction and record.reference_identity is not None:
+        record.harmonized_reference_direction = harmonized_reference_direction
+        record.reference_identity.harmonized = True
+        record.reference_identity.harmonized_direction = harmonized_reference_direction
+        record.qc_results.append(QCResult(
+            kind="structural",
+            check="reference_harmonized",
+            status="warn",
+            message=(
+                f"Reference GTF seqnames were harmonized "
+                f"({harmonized_reference_direction}) to match the FASTA before the run. "
+                f"Confirm the reference was correct."
+            ),
+        ))
     trace_path = Path(run_dir) / "trace.txt"
     if trace_path.exists():
         record.resource_usage = parse_resource_usage_file(trace_path)

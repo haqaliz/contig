@@ -1,87 +1,109 @@
-# self-heal-dict-index (GATK sequence-dictionary self-heal)
+# self-heal-reference-mismatch (C2 reference/build-mismatch repair)
 
 - **Type:** feat
-- **Id/slug:** self-heal-dict-index
+- **Id/slug:** self-heal-reference-mismatch
 - **Owner:** aliz
-- **Branch:** feat/self-heal-dict-index/aliz
+- **Branch:** feat/self-heal-reference-mismatch/aliz
 - **Source:** inline brief (no GitHub issue; handed off from `contig-next`)
-- **Capability:** C2 (self-heal breadth) — next slice on the shipped single-file
-  index-build seam.
+- **Capability:** C2 (self-heal breadth) — the reference/build-mismatch *repair* that
+  the v0.7.0 contig-naming *detector* (C5 slice 2) and v0.6.0 reference-identity
+  *capture* (C5 slice 1) were groundwork for.
 
 ## Brief (from the contig-next handoff)
 
-Add the GATK sequence-dictionary (`.dict`) kind to the shipped single-file self-heal
-index family. When a run fails with a missing-`.dict` signature (GATK/Picard "no
-sequence dictionary" / "fasta.dict not found"), the engine should resolve the source
-FASTA, build the dictionary (`samtools dict -o ref.dict ref.fa`, behind the existing
-injectable `IndexBuilder` seam at `src/contig/self_heal.py:77`), and retry — recording
-`built_index_and_retried`, and giving up honestly (`index_unresolvable` /
-`index_build_failed`) on an unresolvable source or failed build, never a false pass.
+Build the **C2 reference/build-mismatch repair** — the self-heal that the shipped
+v0.7.0 contig-naming *detector* and v0.6.0 reference-identity *capture* were
+groundwork for.
 
-Two touch points:
-- **Detector change** (`src/contig/detect.py:168` recognizes `.fai`/`.bai`/`.tbi`/`.csi`
-  today — add `.dict`).
-- **New entry** in the `_INDEX_BUILD_COMMANDS` extension→command table
-  (`src/contig/self_heal.py:77`).
+Today a disjoint-contig-naming mismatch (`chr1` in the FASTA vs `1` in the GTF) is
+only *refused* at the pre-flight gate (`_dispatch_run`); this slice turns that
+refusal into an autonomous recovery by **harmonizing seqnames** when the mismatch is
+an unambiguous `chr`-prefix asymmetry, recording the harmonization in provenance,
+then proceeding — and seeding a new `reference_mismatch` golden corpus case.
 
-Test-first with injected-builder/executor fixtures and one seeded golden corpus case
-(mirror the `missing-index-tbi` case in `data/detector_corpus.jsonl`); no real
-`samtools` or pipeline run in CI.
+Critical scope guard: harmonization is the *only* honest repair for a naming
+mismatch; a genuine wrong-assembly mismatch has no safe repair and must keep refusing
+(never fabricate or guess a genome), and the sample-data-vs-reference
+assembly-signature path stays deferred because the finished bundle carries no aligned
+BAM.
+
+Test-first against the detector's existing synthetic FASTA/GTF fixtures — no real
+nf-core run in CI.
 
 ## Caveat to dig on FIRST (the key design risk)
 
-`.dict` source-FASTA resolution differs from every shipped kind. For `.fai`/`.tbi`/
-`.bai`/`.csi`, the build input is the named file with the index suffix *stripped*
-(`ref.fa.fai` → `samtools faidx ref.fa`; `calls.vcf.gz.tbi` → `tabix calls.vcf.gz`).
-For `.dict`, the missing file is `ref.dict` but the build input is `ref.fa` /
-`ref.fasta` / `ref.fa.gz` — a **different base file** reached by *replacing* the
-`.dict` extension, not stripping a suffix. Confirm whether the current derivation
-assumes "strip the index suffix" and therefore needs a new resolution branch for
-`.dict`, and where the FASTA candidate-extension list should live. Do not let the
-slice ship a `.dict` builder that feeds it `ref.dict` as the source.
+The repair must be **honest and conservative**. Two questions drive the design:
+
+1. **What is a *safe* harmonization?** Only an unambiguous `chr`-prefix asymmetry
+   (one side has `chr1, chr2, …`, the other `1, 2, …`) where adding/stripping the
+   `chr` prefix makes the two contig-name sets *match*. If after a candidate
+   harmonization the sets still do not match (a genuine different-assembly mismatch),
+   there is NO safe repair — keep refusing. Never fabricate or download a genome.
+
+2. **Which side do we rewrite, and where does the rewritten file go?** Rewriting the
+   GTF seqnames vs the FASTA headers; writing the harmonized copy to a worktree/run
+   scratch path (never mutating the user's original reference in place); recording the
+   harmonization in the launch manifest + provenance so `rerun`/`resume` reproduce the
+   harmonized intent faithfully.
+
+## Pre-dig facts (to confirm in Phase 2)
+
+- The v0.7.0 detector lives in a `reference_check` module and gates at the single
+  launch chokepoint `_dispatch_run`, with an `--allow-reference-mismatch` escape hatch
+  recorded in the launch manifest (CHANGELOG.md:51-75). The repair plugs in HERE, not
+  on a runtime-failure path.
+- `missing_reference` is already a `FailureClass` (CAPABILITY_ROADMAP.md:258). Confirm
+  whether `reference_mismatch` should be a new `FailureClass` or reuse an existing one,
+  and that v0.7.0 did NOT seed a corpus class for it (CHANGELOG.md:74-75).
+- The detector already distinguishes the disjoint-but-`chr`-asymmetric case (it names
+  "the `chr`-prefix asymmetry" in its message) — that is the signal the repair keys on.
 
 ## Why this was picked (contig-next ranking)
 
-- It is the explicitly-named next slice on a shipped seam
-  (`CAPABILITY_ROADMAP.md:108-111`: "`.dict` — needs a detector change plus
-  source-FASTA resolution"); not invented.
-- Deepens the strongest self-heal surface — raises unattended-completion rate (the
-  headline reliability metric) and seeds a golden corpus case. Serves the
-  already-shipped germline assay (GATK requires a sequence dictionary).
-- Unblocked, low-risk, single-file (matches the shipped `IndexBuilder` seam) vs.
-  directory-shaped STAR/BWA or the murkier C2 reference-mismatch repair.
+- Both prerequisites shipped **specifically to enable it**: reference-identity capture
+  (v0.6.0) and the pre-flight contig-naming detector (v0.7.0). Named as the next slice
+  across three planning files (`reference-mismatch-detector/prd.md:136`,
+  `self-heal-dict-index/prd.md:169`, `_card/understanding.md:84`; CHANGELOG.md:74-75).
+- Converts a *detected* notorious silent-failure class into an *autonomously
+  recovered* one — recover more failures without a human; raises the Phase-1
+  unattended-completion metric. Seeds a new `reference_mismatch` corpus class
+  (moat #2 compounding).
+- Unblocked, unlike STAR/BWA directory indexes (shape-blocked), peak-RSS (refactor
+  blocker), and assembly-signature/concordance auto-discovery (no aligned BAM in the
+  bundle) — all agent-confirmed blocked.
 
 ## Open questions for the interview
 
-- **Source-FASTA resolution mechanism** (the caveat above): new `.dict`-specific
-  branch vs. generalizing the existing derivation. Where does the FASTA
-  candidate-extension list (`.fa`/`.fasta`/`.fa.gz`/`.fasta.gz`) live, and what if
-  none of the candidates exist on disk → `index_unresolvable`?
-- **Build command:** `samtools dict -o <out.dict> <ref.fa>` (matches the `samtools`
-  family already used for `.fai`) vs. `gatk`/`picard CreateSequenceDictionary`.
-  Prefer `samtools dict` for consistency with the shipped seam; confirm.
-- **Detector signature(s):** which exact log lines classify a missing `.dict` as
-  `missing_index` (GATK "A USER ERROR has occurred: ... .dict", Picard
-  "CreateSequenceDictionary", "Could not read sequence dictionary")? Keep
-  conservative to avoid mis-classifying a genuine *reference-mismatch* (wrong
-  contigs) as a buildable missing dict.
-- **Corpus seed:** one `missing-index-dict` case mirroring `missing-index-tbi`;
-  reuse `FailureClass.missing_index` (no new class).
-- **Output path:** does `.dict` sit beside the FASTA as `ref.dict` or `ref.fa.dict`?
-  GATK/Picard convention is `ref.dict` (replace extension); the build `-o` must match
-  what the pipeline looks for. Pin this against the detector's extracted path.
+- **Repair trigger model:** auto-harmonize-and-proceed by default, or
+  propose-and-require-approval (this is a self-heal that mutates reference inputs —
+  risk tier)? Interaction with the existing `--allow-reference-mismatch` escape hatch.
+- **Safe-harmonization predicate:** exact rule for "unambiguous `chr`-prefix
+  asymmetry"; what about `MT`/`chrM`, scaffold/`GL...` contigs, and partial-overlap
+  (subset) references the detector already passes?
+- **Which file is rewritten** (GTF vs FASTA), the streamed/gzip-transparent rewrite,
+  and the scratch output location (never in-place).
+- **Provenance/manifest:** how the harmonization is recorded so `rerun`/`resume`
+  reproduce it; what `RepairStep`/outcome name (mirror `built_index_and_retried` →
+  e.g. `harmonized_reference_and_proceeded`); honest give-up name when no safe
+  harmonization exists.
+- **Corpus seed:** one `reference-mismatch` case; new `FailureClass` vs reuse.
 
 ## Guardrails (CLAUDE.md)
 
-- **Layer 2 only** (self-heal/execution). In scope.
-- **No raw-read egress** — builds an index from a local FASTA on the user's compute.
-- **No correctness over-claiming** — honest `index_unresolvable`/`index_build_failed`
-  give-up; never a false `built_index_and_retried`.
-- **Test-first**; injected builder/executor, no real `samtools` in CI.
+- **Layer 2 only** (self-heal/execution/verification). In scope.
+- **No raw-read egress** — harmonization rewrites a local reference annotation on the
+  user's compute; nothing leaves the machine.
+- **No correctness over-claiming** — harmonize ONLY an unambiguous naming asymmetry;
+  a genuine wrong-assembly mismatch keeps refusing honestly. Record the harmonization,
+  never claim correctness beyond "names harmonized."
+- **Test-first**; synthetic `tmp_path` FASTA/GTF fixtures, no real nf-core run in CI.
 
 ## Out of scope (deferred — do not drift)
 
-- Directory-shaped STAR/BWA indexes (break the single-file seam shape).
-- BAM/CRAM form of `.csi`; stale-index detection.
-- Reference/build-*mismatch* repair (wrong reference, not a missing buildable index).
-- Peak-RSS-informed resource scaling.
+- **Sample-data-vs-reference assembly-signature** comparison/repair — blocked: raw
+  FASTQ / the finished bundle carry no sample-side contig signal
+  (`reference-mismatch-detector/prd.md:130-132`).
+- Fabricating, guessing, or downloading a "matching" genome for a true wrong-assembly
+  mismatch — there is no safe repair; refuse.
+- Known-sites/BED-vs-reference consistency; GTF annotation-version resolution.
+- STAR/BWA directory indexes; BAM/CRAM `.csi`; stale-index; peak-RSS scaling.

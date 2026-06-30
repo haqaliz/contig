@@ -6,6 +6,37 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Self-heal a **chr-prefix GTF naming mismatch** between the FASTA and GTF references
+  (capability C2, reference/build-mismatch repair — first slice): when a `contig run`
+  on real data is blocked at pre-flight by a disjoint contig-naming mismatch that is an
+  unambiguous `chr`-prefix asymmetry (FASTA uses `chr1 …` while the GTF uses `1 …`, or
+  vice versa), the engine now **auto-harmonizes** the GTF seqnames — a uniform `chr`-add
+  or `chr`-strip applied to column 1 only, stream-written to
+  `<runs_dir>/<run_id>/harmonized/<name>` — and **proceeds** with the harmonized copy,
+  rather than refusing at pre-flight. The user's original GTF is never mutated. The
+  transform is first validated by `plan_harmonization`: (a) one side must be entirely
+  chr-prefixed while the other is entirely bare, and (b) after the transform the two
+  contig sets must share at least one name. If either condition fails — a genuine
+  wrong-assembly — the run is still refused, never a fabricated genome. The decision is
+  recorded in the launch manifest (`harmonized_reference: bool`) and, when `_finalize`
+  receives a non-null `harmonized_reference_direction`, in the run's `ReferenceIdentity`
+  (`.harmonized = True`, `.harmonized_direction`). A WARN-level `reference_harmonized` QC
+  breadcrumb is appended to `qc_results` so the rewrite is visible in every report and
+  verdict surface. `rerun` and `resume` both re-enter `_dispatch_run` with the original
+  (un-harmonized) GTF path, so the harmonization decision is re-derived from scratch —
+  faithfully reproducible without baking a scratch file path into the manifest. Built on
+  top of the C5 pre-flight mismatch detector shipped in v0.7.0, which classified and
+  refused this chr-asymmetry class; it now also repairs it. Local, deterministic, no
+  raw-read egress; fully covered by synthetic FASTA/GTF fixtures (no real nf-core run in
+  CI). **Deferred:** the sample-data-vs-reference **assembly-signature** comparison/repair
+  (raw FASTQ carries no contig naming and the finished bundle contains no aligned BAM, so
+  there is no sample-side contig signal to compare at this stage); per-contig name mapping
+  for ambiguous cases (e.g., `chrM`↔`MT`); known-sites/GTF-version consistency; and a
+  runtime `reference_mismatch` `FailureClass`/detector-corpus case — eval capture is
+  provenance-only in this slice.
+
 ## [0.8.0] - 2026-06-30
 
 ### Added
