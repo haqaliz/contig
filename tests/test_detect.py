@@ -231,6 +231,51 @@ def test_benign_fai_mention_is_not_missing_index() -> None:
     assert d.failure_class != "missing_index"
 
 
+# --- STAR / BWA aligner index (missing or version-incompatible) ----------------
+
+
+def test_star_missing_genome_file_is_missing_index() -> None:
+    # STAR opens genomeParameters.txt first; an absent/partial index surfaces
+    # as this "could not open genome file" FATAL ERROR line.
+    events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=1)]
+    log = (
+        "EXITING because of FATAL ERROR: could not open genome file "
+        "/work/idx/genomeParameters.txt"
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "missing_index"
+    assert any("genomeParameters.txt" in e for e in d.evidence)
+
+
+def test_star_incompatible_genome_version_is_missing_index() -> None:
+    events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=1)]
+    log = (
+        "EXITING because of FATAL ERROR: Genome version: 20201 is INCOMPATIBLE "
+        "with running STAR version: 2.7.5a_2020-06-29\n"
+        "SOLUTION: please re-generate genome from scratch with STAR >= 2.5"
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "missing_index"
+    assert any("INCOMPATIBLE" in e for e in d.evidence)
+
+
+def test_bwa_missing_index_is_missing_index() -> None:
+    events = [TaskEvent(process="BWA_MEM", status="FAILED", exit=1)]
+    log = "[E::bwa_idx_load_from_disk] fail to locate the index files"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "missing_index"
+    assert any("bwa_idx_load_from_disk" in e for e in d.evidence)
+
+
+def test_wrong_reference_contig_mismatch_is_not_missing_index() -> None:
+    # A wrong-reference / contig-mismatch line must NOT be swallowed by the new
+    # STAR/BWA missing-index branches (it is a different, deferred class).
+    events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=1)]
+    log = "ERROR: Contig 'chr1' not found in the reference dictionary /work/ref/genome.fasta"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class != "missing_index"
+
+
 # --- broader failure classes for common nf-core failures (contract D) ----------
 
 
