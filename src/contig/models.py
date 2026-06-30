@@ -193,6 +193,8 @@ class ReferenceIdentity(BaseModel):
     fasta_sha256: str | None = None        # None when unavailable
     gtf_sha256: str | None = None
     annotation_version: str | None = None  # null this slice (no fabrication)
+    harmonized: bool = False
+    harmonized_direction: str | None = None
 
 
 # --- Self-healing loop (ARCHITECTURE §5) ---------------------------------------
@@ -272,6 +274,7 @@ class RunRecord(BaseModel):
     repair_history: list[RepairStep] = []
     resource_usage: list[TaskResource] = []
     reference_identity: ReferenceIdentity | None = None
+    harmonized_reference_direction: str | None = None
 
     @computed_field  # serialized into run_record.json so the dashboard reads it directly
     @property
@@ -320,6 +323,7 @@ class LaunchManifest(BaseModel):
     # Persisted so a reproduce (`rerun`) is faithful to the original's intent;
     # defaults False so a legacy launch.json (written before this field) stays valid.
     allow_reference_mismatch: bool = False
+    harmonized_reference: bool = False
     created_at: str
 
     @computed_field  # serialized so the dashboard reads it without re-deriving
