@@ -288,3 +288,28 @@ class TestHarmonizeGtf:
         result = harmonize_gtf(gtf, "add_chr", out)
         assert result == out
         assert isinstance(result, Path)
+
+    # --- whitespace-padded seqname (strip-parity with gtf_contigs) -----------
+
+    def test_closed_loop_add_chr_whitespace_seqname(self, tmp_path):
+        """GTF seqname with leading/trailing whitespace (' 1 ') is still harmonized
+        to match FASTA 'chr1': the closed loop holds even for whitespace-padded col1."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2"))
+        # seqnames have leading space — a malformed but real-world edge case
+        gtf_text = " 1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g1\"\n"
+        gtf_text += " 2\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g2\"\n"
+        gtf = _write(tmp_path / "genes.gtf", gtf_text)
+        out = tmp_path / "harmonized.gtf"
+        harmonize_gtf(gtf, "add_chr", out)
+        assert check_reference_consistency(fa, out) == []
+
+    def test_closed_loop_strip_chr_whitespace_seqname(self, tmp_path):
+        """GTF seqname with leading whitespace (' chr1') is still harmonized
+        to match bare FASTA '1': the closed loop holds in both directions."""
+        fa = _write(tmp_path / "ref.fa", _fasta("1", "2"))
+        gtf_text = " chr1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g1\"\n"
+        gtf_text += " chr2\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g2\"\n"
+        gtf = _write(tmp_path / "genes.gtf", gtf_text)
+        out = tmp_path / "harmonized.gtf"
+        harmonize_gtf(gtf, "strip_chr", out)
+        assert check_reference_consistency(fa, out) == []

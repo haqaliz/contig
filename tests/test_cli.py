@@ -777,6 +777,57 @@ def test_rerun_from_harmonized_manifest_re_derives_harmonization(tmp_path, monke
     assert (tmp_path / "runs" / "copyhrm" / "run_record.json").exists()
 
 
+def test_run_harmonize_post_check_fails_refuses(tmp_path, monkeypatch):
+    # GUARD: when harmonize_gtf writes a file that STILL fails check_reference_consistency
+    # the engine must discard the attempt and refuse with Exit(1) — never proceed
+    # believing it harmonized when it didn't.
+    sheet = _make_sheet(tmp_path)
+    fasta, gtf = _write_disjoint_reference(tmp_path)
+
+    def broken_harmonize(gtf_path, direction, out_path):
+        # Copy the ORIGINAL (unmodified) seqnames — harmonization silently no-ops.
+        import shutil
+        shutil.copy(str(gtf_path), str(out_path))
+        from pathlib import Path
+        return Path(out_path)
+
+    monkeypatch.setattr("contig.cli.harmonize_gtf", broken_harmonize)
+    # Also mock the executor so that if (incorrectly) self_heal_run is reached,
+    # it does not hang trying to invoke Nextflow; the test is still RED pre-fix
+    # because exit_code == 0 when the guard is absent.
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "guardfail", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf)],
+    )
+    assert result.exit_code != 0, f"Expected non-zero exit, got 0. Output: {result.output}"
+    assert "mismatch" in result.output.lower()
+    # launch.json must NOT record harmonized_reference=True (it may not exist at all
+    # because Exit(1) is raised before the manifest is written).
+    manifest_path = tmp_path / "runs" / "guardfail" / "launch.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text())
+        assert manifest["harmonized_reference"] is False
+
+
+def test_run_harmonize_post_check_succeeds_proceeds(tmp_path, monkeypatch):
+    # Normal post-check path: harmonize_gtf resolves the mismatch, post-check passes,
+    # the run proceeds and launch.json records harmonized_reference=True.
+    sheet = _make_sheet(tmp_path)
+    fasta, gtf = _write_disjoint_reference(tmp_path)
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "guardok", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf)],
+    )
+    assert result.exit_code == 0, f"Expected 0, got {result.exit_code}: {result.output}"
+    manifest = json.loads((tmp_path / "runs" / "guardok" / "launch.json").read_text())
+    assert manifest["harmonized_reference"] is True
+    assert manifest["gtf"] == str(gtf)
+
+
 def test_legacy_manifest_without_flag_defaults_to_false(tmp_path):
     # A launch.json written before the field existed must still load, defaulting
     # the override to False (Pydantic default).

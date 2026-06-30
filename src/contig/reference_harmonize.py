@@ -151,7 +151,11 @@ def harmonize_gtf(gtf_path, direction: HarmonizationDirection, out_path) -> Path
                 continue
 
             col1, rest = line.split("\t", 1)
-            new_col1 = _apply(col1, direction)
+            # Strip the token to match the boundary that gtf_contigs uses
+            # (.strip() on field0), so a malformed GTF with leading/trailing
+            # whitespace on the seqname is transformed consistently with what
+            # the detector sees.  Columns 2+ (rest) remain byte-identical.
+            new_col1 = _apply(col1.strip(), direction)
             fh_out.write(new_col1 + "\t" + rest + ending)
 
     return out_path

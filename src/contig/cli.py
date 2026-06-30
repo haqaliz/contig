@@ -406,16 +406,36 @@ def _dispatch_run(
                         )
                         harmonized_path.parent.mkdir(parents=True, exist_ok=True)
                         harmonize_gtf(params["gtf"], hplan.direction, harmonized_path)
-                        typer.echo(
-                            f"⚙ Reference harmonized: GTF seqnames {hplan.direction} "
-                            f"to match the FASTA. Proceeding.",
-                            err=True,
+                        # POST-CONDITION GUARD: re-verify the harmonized file actually
+                        # resolved the mismatch.  Should never trigger for valid inputs,
+                        # but guarantees the engine never proceeds believing it harmonized
+                        # when it actually didn't ("never manufacture a silent wrong result").
+                        post_problems = check_reference_consistency(
+                            params["fasta"], str(harmonized_path.resolve())
                         )
-                        harmonized_direction = hplan.direction
-                        params["gtf"] = str(harmonized_path.resolve())
-                        # DO NOT Exit — proceed with the harmonized file.
-                    else:
-                        # Genuine wrong-assembly (non-harmonizable): keep existing behavior.
+                        if not post_problems:
+                            # Mismatch resolved — proceed with the harmonized file.
+                            typer.echo(
+                                f"⚙ Reference harmonized: GTF seqnames {hplan.direction} "
+                                f"to match the FASTA. Proceeding.",
+                                err=True,
+                            )
+                            harmonized_direction = hplan.direction
+                            params["gtf"] = str(harmonized_path.resolve())
+                            # DO NOT Exit — proceed with the harmonized file.
+                        else:
+                            # Guard triggered: harmonization did NOT resolve the mismatch.
+                            # Discard the scratch file and fall through to the refuse/allow
+                            # path with the ORIGINAL problems and GTF.
+                            typer.echo(
+                                "⚠ Harmonization was attempted but did not resolve the "
+                                "reference mismatch; reverting to the original GTF.",
+                                err=True,
+                            )
+                            hplan = None  # signal fall-through to the refuse/allow path
+                    if hplan is None:
+                        # Genuine wrong-assembly (non-harmonizable, or guard triggered):
+                        # keep existing behavior.
                         prefix = (
                             "⚠ Reference mismatch (proceeding, --allow-reference-mismatch):"
                             if allow_reference_mismatch
