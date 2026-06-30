@@ -1729,6 +1729,233 @@ def test_self_heal_failed_index_build_fails_honestly_per_kind(
 
 
 # ---------------------------------------------------------------------------
+# STAR directory-index self-heal: build into scratch from params + redirect
+# ---------------------------------------------------------------------------
+
+# STAR opens genomeParameters.txt first; a missing/partial index surfaces here,
+# naming the failing genomeDir. The version-incompatible line carries NO path.
+_STAR_MISSING_LOG = (
+    "EXITING because of FATAL ERROR: could not open genome file "
+    "/user/idx/genomeParameters.txt"
+)
+_STAR_VERSION_LOG = (
+    "EXITING because of FATAL ERROR: Genome version: 20201 is INCOMPATIBLE "
+    "with running STAR version: 2.7.5a_2020-06-29\n"
+    "SOLUTION: please re-generate genome from scratch with STAR >= 2.5"
+)
+
+
+def _star_executor(state, log, *, succeed_on_retry=True):
+    """Fail attempt 1 with a STAR index log; (optionally) succeed on retry."""
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, TRACE_INDEX, log)
+            return 1
+        if not succeed_on_retry:
+            _write(trace_path, TRACE_INDEX, log)
+            return 1
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    return executor
+
+
+def _star_building_builder(calls, *, rc=0, empty=False):
+    """Fake STAR IndexBuilder: records argv, creates the --genomeDir scratch dir
+    and (unless ``empty``) a fake core file inside it, returns rc."""
+
+    def index_builder(cmd, cwd):
+        calls["n"] += 1
+        calls["cmd"] = cmd
+        genome_dir = Path(cmd[cmd.index("--genomeDir") + 1])
+        genome_dir.mkdir(parents=True, exist_ok=True)
+        if rc == 0 and not empty:
+            (genome_dir / "Genome").write_text("idx")
+        return rc
+
+    return index_builder
+
+
+def _star_scratch(tmp_path):
+    return str((tmp_path / "runs" / "r").resolve() / "healed_index" / "star")
+
+
+def test_self_heal_builds_missing_star_index_and_redirects(tmp_path):
+    # STAR missing: rebuild into run-scoped scratch, redirect star_index, retry.
+    state = {"n": 0}
+    calls = {"n": 0, "cmd": None}
+    record = _heal(
+        tmp_path,
+        _star_executor(state, _STAR_MISSING_LOG),
+        auto_approve=True,
+        index_builder=_star_building_builder(calls),
+        params={
+            "star_index": "/user/idx",
+            "fasta": "/ref/genome.fa",
+            "gtf": "/ref/genes.gtf",
+        },
+    )
+    assert RunSummary.from_events(record.events).succeeded is True
+    last = record.repair_history[-1]
+    assert last.outcome == "built_index_and_retried"
+    assert state["n"] == 2  # the re-run actually happened
+    assert calls["n"] == 1  # exactly one build
+    scratch = _star_scratch(tmp_path)
+    cmd = calls["cmd"]
+    assert cmd[0] == "STAR"
+    for tok in (
+        "--runMode",
+        "genomeGenerate",
+        "--genomeDir",
+        scratch,
+        "--genomeFastaFiles",
+        "/ref/genome.fa",
+        "--sjdbGTFfile",
+        "/ref/genes.gtf",
+    ):
+        assert tok in cmd
+    # the retried run was redirected at the freshly built scratch index
+    assert record.parameters.get("star_index") == scratch
+
+
+def test_self_heal_star_version_incompatible_redirects_without_touching_user_index(tmp_path):
+    # The version-incompatible line has NO path: the failing genomeDir must come
+    # from params["star_index"], and the user's intact index is never overwritten.
+    user_idx = tmp_path / "user_idx"
+    user_idx.mkdir()
+    (user_idx / "SAindex").write_text("original")
+    state = {"n": 0}
+    calls = {"n": 0, "cmd": None}
+    record = _heal(
+        tmp_path,
+        _star_executor(state, _STAR_VERSION_LOG),
+        auto_approve=True,
+        index_builder=_star_building_builder(calls),
+        params={"star_index": str(user_idx), "fasta": "/ref/genome.fa"},
+    )
+    assert RunSummary.from_events(record.events).succeeded is True
+    assert record.repair_history[-1].outcome == "built_index_and_retried"
+    scratch = _star_scratch(tmp_path)
+    assert record.parameters.get("star_index") == scratch
+    assert calls["cmd"][calls["cmd"].index("--genomeDir") + 1] == scratch
+    # the user's supplied index dir is untouched
+    assert (user_idx / "SAindex").read_text() == "original"
+
+
+def test_self_heal_star_build_without_gtf_omits_sjdb(tmp_path):
+    # No gtf in params → argv omits --sjdbGTFfile and the build still heals.
+    state = {"n": 0}
+    calls = {"n": 0, "cmd": None}
+    record = _heal(
+        tmp_path,
+        _star_executor(state, _STAR_MISSING_LOG),
+        auto_approve=True,
+        index_builder=_star_building_builder(calls),
+        params={"star_index": "/user/idx", "fasta": "/ref/genome.fa"},
+    )
+    assert record.repair_history[-1].outcome == "built_index_and_retried"
+    assert "--sjdbGTFfile" not in calls["cmd"]
+    assert "--genomeFastaFiles" in calls["cmd"]
+
+
+def test_self_heal_star_missing_fasta_is_unresolvable(tmp_path):
+    # No fasta to build from → index_unresolvable, builder never called, no re-run.
+    state = {"n": 0}
+    calls = {"n": 0, "cmd": None}
+    record = _heal(
+        tmp_path,
+        _star_executor(state, _STAR_MISSING_LOG),
+        auto_approve=True,
+        index_builder=_star_building_builder(calls),
+        params={"star_index": "/user/idx"},
+    )
+    last = record.repair_history[-1]
+    assert last.outcome == "index_unresolvable"
+    assert record.verdict == "fail"
+    assert calls["n"] == 0
+    assert state["n"] == 1
+
+
+def test_self_heal_star_unresolvable_dir_is_unresolvable(tmp_path):
+    # Version log (no path) AND no star_index param → the genomeDir can't be
+    # resolved at all → index_unresolvable, builder never called.
+    state = {"n": 0}
+    calls = {"n": 0, "cmd": None}
+    record = _heal(
+        tmp_path,
+        _star_executor(state, _STAR_VERSION_LOG),
+        auto_approve=True,
+        index_builder=_star_building_builder(calls),
+        params={"fasta": "/ref/genome.fa"},
+    )
+    last = record.repair_history[-1]
+    assert last.outcome == "index_unresolvable"
+    assert record.verdict == "fail"
+    assert calls["n"] == 0
+    assert state["n"] == 1
+
+
+def test_self_heal_star_build_nonzero_fails_honestly(tmp_path):
+    # A non-zero STAR build → index_build_failed, no re-run.
+    state = {"n": 0}
+    calls = {"n": 0, "cmd": None}
+    record = _heal(
+        tmp_path,
+        _star_executor(state, _STAR_MISSING_LOG),
+        auto_approve=True,
+        index_builder=_star_building_builder(calls, rc=2),
+        params={"star_index": "/user/idx", "fasta": "/ref/genome.fa"},
+    )
+    last = record.repair_history[-1]
+    assert last.outcome == "index_build_failed"
+    assert record.verdict == "fail"
+    assert calls["n"] == 1
+    assert state["n"] == 1
+
+
+def test_self_heal_star_build_empty_dir_fails_honestly(tmp_path):
+    # rc 0 but the scratch dir is empty (no index produced) → index_build_failed.
+    state = {"n": 0}
+    calls = {"n": 0, "cmd": None}
+    record = _heal(
+        tmp_path,
+        _star_executor(state, _STAR_MISSING_LOG),
+        auto_approve=True,
+        index_builder=_star_building_builder(calls, empty=True),
+        params={"star_index": "/user/idx", "fasta": "/ref/genome.fa"},
+    )
+    last = record.repair_history[-1]
+    assert last.outcome == "index_build_failed"
+    assert record.verdict == "fail"
+    assert calls["n"] == 1
+    assert state["n"] == 1
+
+
+def test_self_heal_star_build_once_then_honest_give_up(tmp_path):
+    # Build succeeds (rc 0) but the re-run keeps failing the same way: build the
+    # genomeDir ONCE, then give up honestly rather than rebuild every attempt.
+    state = {"n": 0}
+    calls = {"n": 0, "cmd": None}
+    record = _heal(
+        tmp_path,
+        _star_executor(state, _STAR_MISSING_LOG, succeed_on_retry=False),
+        auto_approve=True,
+        index_builder=_star_building_builder(calls),
+        params={"star_index": "/user/idx", "fasta": "/ref/genome.fa"},
+        max_attempts=3,
+    )
+    assert calls["n"] == 1  # built exactly once, not once per attempt
+    last = record.repair_history[-1]
+    assert last.outcome == "index_build_failed"
+    assert last.detail is not None
+    assert "already rebuilt" in last.detail.lower()
+    assert "failure persists" in last.detail.lower()
+    assert record.verdict == "fail"
+
+
+# ---------------------------------------------------------------------------
 # Task 3: reference identity captured on every finalized record
 # ---------------------------------------------------------------------------
 
