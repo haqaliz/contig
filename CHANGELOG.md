@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-30
+
 ### Added
 
 - Self-heal a missing GATK **sequence dictionary** (`.dict`) (capability C2,
