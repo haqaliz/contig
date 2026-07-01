@@ -153,6 +153,13 @@ def test_shipped_seed_corpus_loads_and_detector_scores_it():
     assert report.accuracy == 1.0
 
 
+def test_shipped_corpus_has_bwamem2_missing_index_case():
+    cases = load_corpus(default_corpus_path())
+    case = next((c for c in cases if c.case_id == "missing-index-bwamem2"), None)
+    assert case is not None
+    assert case.expected_class == "missing_index"
+
+
 def test_evaluate_detector_reports_per_class_precision_and_recall():
     # Two cases truly "oom"; detector gets one right (the real OOM) and labels the
     # signal-less one "tool_crash". So for oom: support 2, predicted 1, hit 1.

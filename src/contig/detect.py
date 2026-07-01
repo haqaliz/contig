@@ -243,6 +243,24 @@ def diagnose_failure(events: list[TaskEvent], log_text: str) -> Diagnosis:
             confidence=0.85,
         )
 
+    # bwa-mem2's index loader (FMI_search.cpp) prints this exact line then
+    # exit(EXIT_FAILURE) when a sidecar is missing/truncated/version-incompatible.
+    # The message is generic ("Unable to open the file"), so gate on the
+    # bwa-mem2-only sidecar token `.bwt.2bit.64` to stay narrow: a wrong-reference
+    # line carries neither token, and classic bwa keeps its own branch above.
+    bwamem2_missing_lines = [
+        line
+        for line in _matching_lines(log_text, ("unable to open the file",))
+        if _has_any(line, ("bwt.2bit.64",))
+    ]
+    if bwamem2_missing_lines:
+        return Diagnosis(
+            failure_class="missing_index",
+            root_cause="bwa-mem2's index is missing, incomplete, or incompatible.",
+            evidence=bwamem2_missing_lines,
+            confidence=0.85,
+        )
+
     nosuchfile_lines = _matching_lines(log_text, ("no such file or directory",))
     ref_tokens = (".fasta", ".fa", ".gtf", ".gff", "reference", "genome")
     ref_lines = [line for line in nosuchfile_lines if _has_any(line, ref_tokens)]
