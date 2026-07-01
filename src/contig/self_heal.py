@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -497,6 +498,16 @@ def _build_star_index(
       * non-zero build                → ``index_build_failed``
       * rc 0 but empty scratch dir    → ``index_build_failed`` (no index produced)
       * success                       → ``built_index_and_retried`` (redirected)
+
+    Bounded to ONE build per run: both the failing genomeDir AND the scratch
+    path are added to ``built_paths`` on build. The version-incompatible error
+    carries no path, so a SECOND such failure resolves its failing genomeDir
+    from ``params["star_index"]`` — which, after a successful build, IS the
+    scratch path. Recognizing the scratch path as already-built closes that
+    loophole: it gives up honestly instead of rebuilding into the same scratch
+    dir a second time. The scratch dir is also wiped fresh (``rmtree`` then
+    ``mkdir``) before each build so leftover residue can never masquerade as
+    this build's output in the non-empty success gate.
     """
     failing_dir = parsed_path or str(params.get("star_index") or "")
     if not failing_dir:
@@ -525,6 +536,9 @@ def _build_star_index(
             False,
         )
     scratch = Path(run_dir) / "healed_index" / "star"
+    # Fresh scratch dir: wipe any residue (e.g. from a stale prior state) so the
+    # non-empty success gate below reflects only THIS build's output.
+    shutil.rmtree(scratch, ignore_errors=True)
     scratch.mkdir(parents=True, exist_ok=True)
     argv = [
         "STAR",
@@ -538,7 +552,11 @@ def _build_star_index(
     gtf = params.get("gtf")
     if gtf:
         argv += ["--sjdbGTFfile", str(gtf)]
+    # Bound the rebuild to ONE per run: mark both the failing genomeDir and the
+    # scratch dir as built, so a second failure whose failing_dir resolves to
+    # the scratch path (post-redirect) is recognized as already-built too.
     built_paths.add(failing_dir)
+    built_paths.add(str(scratch))
     rc = index_builder(argv, run_dir)
     if rc != 0:
         return (
@@ -557,7 +575,35 @@ def _build_star_index(
             False,
         )
     params["star_index"] = str(scratch)
-    return target, params, "built_index_and_retried", None, True
+    version = _read_star_genome_version(scratch)
+    detail = (
+        f"Built STAR index (genome version {version}) into {scratch}."
+        if version
+        else f"Built STAR index into {scratch}."
+    )
+    return target, params, "built_index_and_retried", detail, True
+
+
+def _read_star_genome_version(scratch: Path) -> str | None:
+    """Best-effort read of the ``versionGenome`` value from a freshly-built
+    STAR index's ``genomeParameters.txt`` (S1, OQ1).
+
+    Tolerant of a tab- or space-separated line (``versionGenome\\t2.7.4a`` or
+    ``versionGenome 2.7.4a``). Returns None — never raises — when the file is
+    absent, unreadable, or carries no ``versionGenome`` line: a missing version
+    must never fail the heal.
+    """
+    try:
+        text = (scratch / "genomeParameters.txt").read_text()
+    except OSError:
+        return None
+    for line in text.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2 and parts[0] == "versionGenome":
+            version = parts[1].strip()
+            if version:
+                return version
+    return None
 
 
 def _apply_patch_and_maybe_build(
