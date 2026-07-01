@@ -1,112 +1,85 @@
-# self-heal-dir-index (C2 self-heal breadth — directory-shaped STAR/BWA index build)
+# Card: feat self-heal-bwa-mem2-index
 
-- **Type:** feat
-- **Id/slug:** self-heal-dir-index
-- **Owner:** aliz
-- **Branch:** feat/self-heal-dir-index/aliz
-- **Source:** inline brief (no GitHub issue; handed off from `contig-next`)
-- **Capability:** C2 (self-heal breadth) — the next missing-index kind on the shipped
-  `IndexBuilder` seam, after the single-file family (`.fai/.bai/.tbi/.csi/.dict`).
+- **Type:** feat · **Owner:** aliz · **Branch:** `feat/self-heal-bwa-mem2-index/aliz`
+- **Source:** no GitHub issue — **inline brief** handed off from `contig-next` (2026-07-01).
+- **Capability:** C2 (self-heal breadth) — the next aligner-index kind on the shipped
+  `IndexBuilder` seam, after the STAR directory-index slice (v0.10.0).
 
 ## Brief (from the contig-next handoff)
 
-Extend the C2 self-heal `IndexBuilder` seam to recover a missing or incomplete
-**directory-shaped** index — STAR (via `STAR --runMode genomeGenerate`) and BWA
-(via `bwa index`) — the next slice after the single-file index family
-(`.fai/.bai/.tbi/.csi/.dict`) shipped through v0.8.0.
-
-The detector must recognize a missing/incomplete STAR/BWA *index directory*
-distinctly from the single-file missing-index signatures and from a
-wrong-reference masquerade. The build deriver must resolve the FASTA (and GTF,
-for STAR) and emit a directory rather than a suffix-stripped file — so the build
-table `{ext: (derive_source, build_argv)}` and the build-once-per-path guard need
-a directory-shaped analog.
-
-Stay test-first with an injected `IndexBuilder`/executor (no real STAR/BWA/nf-core
-run in CI), record `built_index_and_retried` on success and give up honestly
-(`index_unresolvable` / `index_build_failed`) — never a false pass — and seed one
-golden corpus case per kind.
+Extend the C2 `IndexBuilder` self-heal seam (shipped through v0.10.0 for STAR
+directory indexes and the single-file `.fai/.bai/.tbi/.csi/.dict` family) to a
+missing/incompatible **bwa-mem2** aligner index on an nf-core/sarek run, since sarek
+defaults to bwa-mem2 and is the live redirect target that classic BWA lacked. Reuse
+the suffix-strip deriver (bwa-mem2 is sidecar-file-shaped beside the FASTA, not
+directory-shaped like STAR), add the net-new bwa-mem2 failure signature to the
+detector plus one golden corpus case, and record `built_index_and_retried` with
+honest `index_unresolvable`/`index_build_failed` give-ups — all test-first with an
+injected builder, no real bwa-mem2 in CI.
 
 ## ⚠️ Caveat to dig on FIRST (the key feasibility/design risk)
 
-**The prior `_card` (self-heal-reference-mismatch) explicitly listed "STAR/BWA
-directory indexes" as `shape-blocked` and "agent-confirmed blocked" (old
-issue.md:71/109).** Our pick treats it as *unblocked-but-harder*. **Phase 2 must
-resolve this contradiction before any PRD work:**
+**Does a bwa-mem2 missing-index failure actually surface at runtime, or does
+nf-core/sarek silently auto-build a missing index?** Phase 2 must resolve this before
+any PRD work:
 
-1. **Is it a real blocker or just unimplemented shape complexity?** "Shape-blocked"
-   most plausibly meant: the seam's build table is keyed on a file *extension* and a
-   *suffix-strip* deriver that emits a single file — a directory-shaped index has no
-   extension and no suffix to strip. That is a generalization task, not a hard
-   blocker. Confirm by reading the seam (`runner.py` `IndexBuilder`, the build table,
-   the build-once-per-path guard) and the detector's missing-index parser.
-2. **Does the failure actually surface recoverably?** nf-core/rnaseq builds the STAR
-   index itself when none is given; the recoverable "missing index" case is when a
-   user passes `--star_index <path>` (or BWA index prefix) that is absent or
-   incomplete. Confirm the real failure signature STAR/BWA emit, and that it is
-   distinguishable from the single-file signatures and from a wrong-reference
-   masquerade.
-3. **Build-target shape.** `STAR --runMode genomeGenerate --genomeDir <dir>
-   --genomeFastaFiles <fa> --sjdbGTFfile <gtf>` needs FASTA **plus** GTF and emits a
-   *directory*; `bwa index <fa>` emits sidecar files next to the FASTA. These are two
-   different shapes — confirm both before committing to one build-table generalization.
-
-If the dig confirms a genuine blocker (not just shape complexity), STOP and
-re-recommend via `contig-next` rather than forcing the slice.
+1. **If sarek auto-builds a fully-missing index**, then the recoverable live case is a
+   **user-supplied incompatible/partial/corrupt** bwa-mem2 index (mirroring STAR's
+   shipped *version-incompatible* path, which is the robust live case with iGenomes /
+   user-supplied indexes). Scope the slice to that case.
+2. **Confirm the exact bwa-mem2 runtime error string** for the detector — it is
+   net-new; no bwa-mem2 signature exists in `src/` today (classic BWA's
+   `[E::bwa_idx_load_from_disk]` is detector-only). It must be narrow enough not to
+   swallow a wrong-reference masquerade.
+3. **Confirm the bwa-mem2 sidecar set**: `.0123 / .amb / .ann / .bwt.2bit.64 / .pac`
+   beside the FASTA — distinct from classic BWA (`.amb/.ann/.bwt/.pac/.sa`) and **NOT
+   interchangeable**. The success check is "all bwa-mem2 sidecars present + non-empty".
 
 ## Pre-dig facts (confirm in Phase 2)
 
-- The single-file index family is shipped through v0.8.0: `.fai` (`samtools faidx`),
-  `.bai` (`samtools index`), `.tbi` (`tabix -p vcf`), `.csi` (`bcftools index`),
-  `.dict` (`samtools dict`, companion-FASTA deriver) — `CHANGELOG.md:46-78`,
-  `CAPABILITY_ROADMAP.md:98-119`.
-- The build table was generalized to `{ext: (derive_source, build_argv)}` for `.dict`
-  (the first non-suffix-strip deriver) — `CHANGELOG.md:52-61`. Directory-shaped is the
-  next generalization on the same table.
-- Outcomes: `built_index_and_retried` on success; `index_unresolvable` /
-  `index_build_failed` on honest give-up; build-once-per-path guard bounds the loop
-  (`CHANGELOG.md:62-78`).
-- Named as still-missing on "the same seam": `CAPABILITY_ROADMAP.md:138-139`.
+- v0.10.0 shipped STAR directory-index build+redirect and **deferred** "bwa-mem2 index
+  set + aligner-mismatch heal"; classic BWA is detector+corpus-only because "no default
+  supported pipeline invokes classic `bwa index`" — `CHANGELOG.md` 0.10.0,
+  `docs/technical/CAPABILITY_ROADMAP.md:149-158`.
+- bwa-mem2 IS the live target: nf-core/sarek defaults to it —
+  `docs/planning/self-heal-dir-index/understanding.md:37-38`.
+- bwa-mem2 is sidecar-file-shaped (FASTA = index path minus suffix → the existing
+  `_strip_suffix` deriver reuses, unlike STAR which needed reference-threading) —
+  `understanding.md:37-43`.
+- Build table is `{ext: (derive_source, build_argv)}`; outcomes `built_index_and_retried`
+  / `index_unresolvable` / `index_build_failed`; build-once-per-path guard bounds the loop.
 
 ## Why this was picked (contig-next ranking)
 
-- Named, unblocked (pending dig) next slice on a shipped seam; single-file family done
-  through v0.8.0.
-- Highest moat-leverage on both axes: C2 is "the most directly gets-better-with-better-
-  models surface and the richest corpus fuel" (`CAPABILITY_ROADMAP.md:143-144`).
-  A recovered STAR-index failure raises unattended-completion (Phase 1 gate metric,
-  `ROADMAP.md:101,108`) **and** seeds a golden detector-corpus case (moat #2).
-- Targets the lead ICP: STAR is the RNA-seq aligner; RNA-seq DE is the chosen wedge
-  assay with the largest non-programmer TAM (`ROADMAP.md:49`).
+- The genuinely-unblocked next slice of the just-shipped v0.10.0 work: classic BWA was
+  deferred only for lack of a live target, and bwa-mem2 supplies exactly that (sarek
+  default). Rule 6 (follow-on of shipped work) + rule 4 (unblocked, clear testable slice).
+- Highest moat-leverage: C2 is "the most directly gets-better-with-better-models surface
+  and the richest corpus fuel" (`CAPABILITY_ROADMAP.md:160-166`); a recovered failure
+  raises unattended-completion (Phase-1 headline metric) and seeds a golden corpus case.
 
 ## Open questions for the interview
 
-- **Scope:** STAR + BWA both this slice, or STAR first (highest RNA-seq value) and BWA
-  follow-on? (Two different build-target shapes — dir vs sidecars-next-to-FASTA.)
-- **Incomplete vs missing:** does the slice handle a *partially built* index directory
-  (some files present), or only a fully-absent one? Detection differs.
-- **GTF resolution for STAR:** STAR's `genomeGenerate` wants `--sjdbGTFfile`; how is the
-  GTF resolved at repair time (the chr-prefix harmonization in v0.9.0 already touches
-  GTF resolution — reuse that path?).
-- **Build-once-per-path guard** for a directory target (the guard is keyed on a path
-  today — confirm it keys cleanly on a directory).
-- **Corpus seed:** one golden case per kind (STAR, BWA); reuse the existing
-  missing-index `FailureClass` (the detector already classifies missing-index) or a
-  new one?
+- **Missing vs incompatible/partial:** which bwa-mem2 index states does the slice heal
+  (fully-missing, version/format-incompatible, partial)? Depends on caveat #1.
+- **Reference threading:** bwa-mem2's FASTA comes from suffix-strip, so it should NOT
+  need the STAR reference-threading plumbing — confirm the deriver signature suffices.
+- **Aligner-mismatch (classic-bwa vs bwa-mem2):** in or out of this slice? (Deferred by
+  the v0.10.0 note; likely out.)
+- **Corpus seed:** reuse the `missing_index` `FailureClass` (rebuild is the heal) vs a
+  new member — leaning reuse, mirroring STAR.
 
-## Guardrails (CLAUDE.md)
+## Guardrails (CLAUDE.md) — clean
 
-- **Layer 2 only** (self-heal/execution). In scope.
-- **No raw-read egress** — the index is built from a local FASTA/GTF on the user's
-  compute; nothing leaves the machine.
-- **No correctness over-claiming** — build only when the source FASTA (and GTF) is
-  resolvable; give up honestly otherwise. Never a false pass.
-- **Test-first**; injected `IndexBuilder`/executor fixtures, no real
-  STAR/BWA/nf-core run in CI.
+- **Layer 2 only** (self-heal/execution). No Layer-1 drift.
+- **No raw-read egress** — index built locally from the user's FASTA.
+- **No correctness over-claiming** — build only when the source FASTA resolves; honest
+  give-up (`index_unresolvable`/`index_build_failed`); never a false pass.
+- **Test-first** — injected `IndexBuilder`/executor fixtures; no real bwa-mem2 in CI.
 
 ## Out of scope (deferred — do not drift)
 
-- BAM/CRAM form of `.csi`; stale-index detection (could be a follow-on, not this slice).
-- Peak-RSS-informed resource scaling (separate C2 slice, refactor-blocked).
-- Assembly-signature reference mismatch (blocked: no sample-side contig signal).
+- Classic-BWA build/redirect (no live target); the classic-vs-mem2 **aligner-mismatch**
+  heal; corrupt/partial STAR index signature; BAM/CRAM `.csi`; peak-RSS scaling.
+- Assembly-signature reference mismatch (no sample-side contig signal).
 - Building Layer 1 (NL → workflow) — not the product.
