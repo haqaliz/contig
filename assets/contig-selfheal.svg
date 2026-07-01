@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="372" viewBox="0 0 880 372" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace">
+  <defs>
+    <style>
+      .b   { font-size: 15px; }
+      .lbl { fill: #8b949e; }
+      .txt { fill: #e6edf3; }
+      .grn { fill: #3fb950; }
+      .yel { fill: #d29922; }
+      .cyn { fill: #39c5cf; }
+      .red { fill: #f85149; }
+      .mut { fill: #6e7681; }
+      .bold{ font-weight: 700; }
+    </style>
+  </defs>
+
+  <rect x="0.5" y="0.5" width="879" height="371" rx="12" fill="#0d1117" stroke="#30363d"/>
+  <path d="M0 12 a12 12 0 0 1 12 -12 h856 a12 12 0 0 1 12 12 v32 h-880 z" fill="#161b22"/>
+  <circle cx="24" cy="22" r="6" fill="#f85149"/>
+  <circle cx="44" cy="22" r="6" fill="#d29922"/>
+  <circle cx="64" cy="22" r="6" fill="#3fb950"/>
+  <text x="440" y="27" text-anchor="middle" class="b mut">contig — self-heal: rebuild a stale index</text>
+
+  <g class="b">
+    <text x="24" y="84"><tspan class="grn">$ </tspan><tspan class="txt">contig run --run-id rnaseq-demo --input samplesheet.csv --genome GRCh38</tspan></text>
+
+    <text x="24" y="120"><tspan class="yel">⚠ </tspan><tspan class="lbl">run        </tspan><tspan class="txt">STAR_ALIGN failed — index incompatible with STAR 2.7.11</tspan></text>
+    <text x="24" y="150"><tspan class="cyn">⌕ </tspan><tspan class="lbl">diagnose   </tspan><tspan class="txt">missing_index · rebuild the index from the reference</tspan></text>
+    <text x="24" y="180"><tspan class="cyn">↻ </tspan><tspan class="lbl">self-heal  </tspan><tspan class="txt">STAR --runMode genomeGenerate → run-scoped scratch index</tspan></text>
+    <text x="24" y="210"><tspan class="grn">✓ </tspan><tspan class="lbl">retry      </tspan><tspan class="txt">redirected at rebuilt index → </tspan><tspan class="grn">built_index_and_retried</tspan></text>
+    <text x="24" y="240"><tspan class="grn">✓ </tspan><tspan class="lbl">verify     </tspan><tspan class="txt">alignment 95.8%  ·  assignment 90.4%  ·  replicates ok</tspan></text>
+
+    <rect x="24" y="274" width="78" height="30" rx="6" fill="#196c2e"/>
+    <text x="63" y="295" text-anchor="middle" class="b bold grn">PASS</text>
+    <text x="116" y="295"><tspan class="txt">verified result · </tspan><tspan class="lbl">index rebuilt from your FASTA, never mutated</tspan></text>
+
+    <text x="24" y="340"><tspan class="grn">$ </tspan><tspan class="mut">contig show rnaseq-demo   # diagnosis + repair chain + provenance</tspan></text>
+  </g>
+</svg>

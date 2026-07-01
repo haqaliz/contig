@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="342" viewBox="0 0 880 342" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace">
+  <defs>
+    <style>
+      .b   { font-size: 15px; }
+      .lbl { fill: #8b949e; }
+      .txt { fill: #e6edf3; }
+      .grn { fill: #3fb950; }
+      .yel { fill: #d29922; }
+      .cyn { fill: #39c5cf; }
+      .red { fill: #f85149; }
+      .mut { fill: #6e7681; }
+      .bold{ font-weight: 700; }
+    </style>
+  </defs>
+
+  <rect x="0.5" y="0.5" width="879" height="341" rx="12" fill="#0d1117" stroke="#30363d"/>
+  <path d="M0 12 a12 12 0 0 1 12 -12 h856 a12 12 0 0 1 12 12 v32 h-880 z" fill="#161b22"/>
+  <circle cx="24" cy="22" r="6" fill="#f85149"/>
+  <circle cx="44" cy="22" r="6" fill="#d29922"/>
+  <circle cx="64" cy="22" r="6" fill="#3fb950"/>
+  <text x="440" y="27" text-anchor="middle" class="b mut">contig — gets better as it runs</text>
+
+  <g class="b">
+    <text x="24" y="84"><tspan class="grn">$ </tspan><tspan class="txt">contig eval-detector --history</tspan></text>
+
+    <text x="24" y="120"><tspan class="grn">✓ </tspan><tspan class="lbl">accuracy   </tspan><tspan class="grn">0.80 → 0.90 → 1.00</tspan><tspan class="txt">  across 3 corpus versions</tspan></text>
+    <text x="24" y="150"><tspan class="cyn">▸ </tspan><tspan class="lbl">by-class   </tspan><tspan class="txt">oom · missing_index · disk_full · … 23 cases correct</tspan></text>
+
+    <text x="24" y="192"><tspan class="grn">$ </tspan><tspan class="txt">contig corpus-promote --run rnaseq-demo</tspan></text>
+    <text x="24" y="228"><tspan class="cyn">↻ </tspan><tspan class="lbl">promote    </tspan><tspan class="txt">real failure → reviewed → </tspan><tspan class="grn">golden corpus (+1)</tspan></text>
+    <text x="24" y="258"><tspan class="cyn">▸ </tspan><tspan class="lbl">coverage   </tspan><tspan class="txt">14 classes · 23 confirmed · 0 thin (&lt;3 cases)</tspan></text>
+
+    <rect x="24" y="292" width="512" height="30" rx="6" fill="#1b3049"/>
+    <text x="44" y="313"><tspan class="cyn bold">learns from real failures</tspan><tspan class="lbl"> · independent of any model</tspan></text>
+  </g>
+</svg>

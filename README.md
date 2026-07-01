@@ -20,7 +20,7 @@ Contig takes raw sequencing data all the way to a *verified, reproducible* answe
 
 <img src="assets/contig-demo.svg" alt="A Contig run: validate, plan, self-heal an out-of-memory failure, verify QC, and return a PASS verdict with a reproducible record." width="760" />
 
-<sub>A real run shape: validate → plan → <b>self-heal</b> an OOM failure → <b>verify</b> QC → honest <b>verdict</b> + reproducible record.</sub>
+<sub>A real run shape: validate → plan → <b>self-heal</b> an OOM failure → <b>verify</b> QC → <b>reproduce</b> bit-for-bit → honest <b>verdict</b>.</sub>
 
 </div>
 
@@ -37,6 +37,32 @@ Producing an end-to-end analysis from raw sequencing data needs a rare pairing o
 - 📈 **Gets better as it runs.** Every recovered failure becomes a labeled data point in a versioned failure corpus that compounds, independent of any single model, and a tracked accuracy trend shows the detector improving.
 - 🖥 **Watch and steer, or run headless.** A local dashboard streams live task progress and the self-heal feed, and lets you approve patches, cancel, resume, and reproduce runs; the same controls are CLI commands for scripts and servers.
 - ☁️ **Same run, laptop or cloud.** One command lands unchanged on Docker locally or AWS Batch in your own account, via Nextflow's native executors.
+
+---
+
+## 🎥 A closer look
+
+Four things no incumbent does, each a real command on your own compute.
+
+<div align="center">
+
+**Self-heal a broken step** — diagnose the failure, patch it, retry, unattended.
+
+<img src="assets/contig-selfheal.svg" alt="Contig self-heals a stale aligner index: STAR_ALIGN fails on an incompatible index, Contig diagnoses missing_index, rebuilds the index from the reference into a scratch dir, redirects the retry, and returns PASS." width="760" />
+
+**A verdict you can trust** — independent checks, honestly scoped per assay.
+
+<img src="assets/contig-verify.svg" alt="Contig verify shows a multi-layered verdict: QC thresholds, structural checks, cross-tool concordance against a second caller, biological plausibility (Ti/Tv, het/hom), and output-integrity re-hashing, all passing." width="760" />
+
+**Watch and steer, or run headless** — live progress and an approval gate for risky fixes.
+
+<img src="assets/contig-watch.svg" alt="Contig watch streams a live run: running state and elapsed time, a task progress bar, a self-heal attempt that needs approval, the run paused at the approval gate, and contig approve resuming it." width="760" />
+
+**Gets better as it runs** — every failure compounds into a versioned corpus.
+
+<img src="assets/contig-learn.svg" alt="Contig's learning loop: eval-detector accuracy trending 0.80 to 1.00 across corpus versions, corpus-promote adding a real failure to the golden corpus, and coverage across 14 classes, learned from real failures independent of any model." width="760" />
+
+</div>
 
 ---
 

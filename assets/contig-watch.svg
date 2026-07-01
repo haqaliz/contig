@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="342" viewBox="0 0 880 342" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace">
+  <defs>
+    <style>
+      .b   { font-size: 15px; }
+      .lbl { fill: #8b949e; }
+      .txt { fill: #e6edf3; }
+      .grn { fill: #3fb950; }
+      .yel { fill: #d29922; }
+      .cyn { fill: #39c5cf; }
+      .red { fill: #f85149; }
+      .mut { fill: #6e7681; }
+      .bold{ font-weight: 700; }
+    </style>
+  </defs>
+
+  <rect x="0.5" y="0.5" width="879" height="341" rx="12" fill="#0d1117" stroke="#30363d"/>
+  <path d="M0 12 a12 12 0 0 1 12 -12 h856 a12 12 0 0 1 12 12 v32 h-880 z" fill="#161b22"/>
+  <circle cx="24" cy="22" r="6" fill="#f85149"/>
+  <circle cx="44" cy="22" r="6" fill="#d29922"/>
+  <circle cx="64" cy="22" r="6" fill="#3fb950"/>
+  <text x="440" y="27" text-anchor="middle" class="b mut">contig — watch &amp; steer a live run</text>
+
+  <g class="b">
+    <text x="24" y="84"><tspan class="grn">$ </tspan><tspan class="txt">contig watch rnaseq-demo</tspan></text>
+
+    <text x="24" y="120"><tspan class="cyn">● </tspan><tspan class="lbl">running    </tspan><tspan class="txt">nf-core/rnaseq @ 3.26.0 · local · elapsed 04:12</tspan></text>
+    <text x="24" y="150"><tspan class="cyn">▸ </tspan><tspan class="lbl">tasks      </tspan><tspan class="grn">▓▓▓▓▓▓▓</tspan><tspan class="mut">░░░</tspan><tspan class="txt">  18/24 · 2 running</tspan></text>
+    <text x="24" y="180"><tspan class="cyn">↻ </tspan><tspan class="lbl">self-heal  </tspan><tspan class="txt">attempt 1: oom → resource patch · </tspan><tspan class="yel">risk: needs approval</tspan></text>
+    <text x="24" y="210"><tspan class="yel">⏸ </tspan><tspan class="lbl">paused     </tspan><tspan class="txt">awaiting your approval — 29:41 before timeout</tspan></text>
+
+    <text x="24" y="252"><tspan class="grn">$ </tspan><tspan class="txt">contig approve rnaseq-demo</tspan><tspan class="mut">   # or --reject</tspan></text>
+    <text x="24" y="288"><tspan class="grn">✓ </tspan><tspan class="lbl">resumed    </tspan><tspan class="txt">patch applied → run continues to a </tspan><tspan class="grn">verified verdict</tspan></text>
+  </g>
+</svg>
