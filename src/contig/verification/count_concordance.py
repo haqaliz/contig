@@ -160,3 +160,163 @@ def _spearman(xs: list[float], ys: list[float]) -> float | None:
         return None
     # Scrub IEEE dust so perfectly (anti-)correlated ranks land on exactly +/-1.0.
     return round(rho, 12)
+
+
+def _agrees(a: float, b: float) -> bool:
+    """A gene agrees when |a - b| / max(a, b, 1) <= _AGREEMENT_REL_TOL.
+
+    The max(a, b, 1) denominator makes two all-zero genes agree (diff 0), never
+    divides by zero, and damps tiny counts (1 vs 2 -> 0.5, correctly disagreeing).
+    """
+    return abs(a - b) / max(a, b, 1) <= _AGREEMENT_REL_TOL
+
+
+@dataclass(frozen=True)
+class CountConcordanceStats:
+    """The deterministic outcome of comparing two count matrices.
+
+    - shared: number of gene ids present in both matrices.
+    - rho: Spearman rank correlation over the shared genes, or None when it could
+      not be computed (< 2 shared genes or a constant count vector).
+    - fraction_agreeing: fraction of shared genes within the relative tolerance, or
+      None when there are no shared genes.
+    - overlap: |A∩B| / |A∪B| of gene ids, 0.0 when the union is empty.
+    """
+
+    shared: int
+    rho: float | None
+    fraction_agreeing: float | None
+    overlap: float
+
+
+def count_concordance(
+    matrix_a: str | os.PathLike, matrix_b: str | os.PathLike
+) -> CountConcordanceStats:
+    """Compare two count matrices over their shared genes; deterministic, reads only."""
+    a = parse_count_matrix(matrix_a)
+    b = parse_count_matrix(matrix_b)
+
+    keys_a = set(a)
+    keys_b = set(b)
+    shared_keys = keys_a & keys_b
+    union_keys = keys_a | keys_b
+
+    overlap = (len(shared_keys) / len(union_keys)) if union_keys else 0.0
+
+    # Sort so the paired vectors (and thus rho) are order-deterministic.
+    shared = sorted(shared_keys)
+    xs = [a[g] for g in shared]
+    ys = [b[g] for g in shared]
+
+    rho = _spearman(xs, ys) if shared else None
+
+    if shared:
+        agreeing = sum(1 for x, y in zip(xs, ys) if _agrees(x, y))
+        fraction_agreeing: float | None = agreeing / len(shared)
+    else:
+        fraction_agreeing = None
+
+    return CountConcordanceStats(
+        shared=len(shared_keys),
+        rho=rho,
+        fraction_agreeing=fraction_agreeing,
+        overlap=overlap,
+    )
+
+
+def concordance_results(
+    matrix_a: str | os.PathLike, matrix_b: str | os.PathLike
+) -> list[QCResult]:
+    """Emit the three count-concordance checks for a pair of matrices.
+
+    `spearman_concordance` and `fraction_agreeing` are WARN-capped (PASS at/above
+    0.90, WARN below), but UNVERIFIED (value=None) when fewer than
+    `_MIN_SHARED_GENES` genes are comparable — a correlation over 1-2 genes is
+    meaningless and could report a false PASS, so we must not claim one. `rho` can
+    also be None (a constant count vector), which is UNVERIFIED too. `gene_overlap`
+    is informational and ALWAYS PASS — a second matrix built on a subset annotation
+    legitimately overlaps poorly, so overlap must not cry wolf; the real signal lives
+    in the other two. All results carry kind "concordance". Messages name both
+    matrices by basename so the comparison is auditable.
+    """
+    stats = count_concordance(matrix_a, matrix_b)
+    name_a = Path(matrix_a).name
+    name_b = Path(matrix_b).name
+
+    too_few = stats.shared < _MIN_SHARED_GENES
+
+    # spearman_concordance
+    if too_few or stats.rho is None:
+        spearman_result = _concordance(
+            "spearman_concordance",
+            "unverified",
+            f"{name_a} and {name_b} share {stats.shared} comparable gene(s) "
+            f"(< {_MIN_SHARED_GENES} needed); too few to corroborate quantification "
+            "(concordance is not ground truth)",
+            value=None,
+            expected_range=f">= {_SPEARMAN_WARN_BELOW}",
+        )
+    else:
+        rho = round(stats.rho, 4)
+        status = "warn" if stats.rho < _SPEARMAN_WARN_BELOW else "pass"
+        spearman_result = _concordance(
+            "spearman_concordance",
+            status,
+            f"{name_a} vs {name_b}: per-gene rank correlation {rho} over "
+            f"{stats.shared} shared gene(s)",
+            value=rho,
+            expected_range=f">= {_SPEARMAN_WARN_BELOW}",
+        )
+
+    # fraction_agreeing
+    if too_few or stats.fraction_agreeing is None:
+        fraction_result = _concordance(
+            "fraction_agreeing",
+            "unverified",
+            f"{name_a} and {name_b} share {stats.shared} comparable gene(s) "
+            f"(< {_MIN_SHARED_GENES} needed); too few to corroborate quantification",
+            value=None,
+            expected_range=f">= {_FRACTION_AGREEING_WARN_BELOW}",
+        )
+    else:
+        fraction = round(stats.fraction_agreeing, 4)
+        status = (
+            "warn" if stats.fraction_agreeing < _FRACTION_AGREEING_WARN_BELOW else "pass"
+        )
+        fraction_result = _concordance(
+            "fraction_agreeing",
+            status,
+            f"{name_a} vs {name_b}: {fraction} of {stats.shared} shared gene(s) agree "
+            f"within {int(_AGREEMENT_REL_TOL * 100)}% relative tolerance",
+            value=fraction,
+            expected_range=f">= {_FRACTION_AGREEING_WARN_BELOW}",
+        )
+
+    # gene_overlap (informational, never WARN)
+    overlap = round(stats.overlap, 4)
+    overlap_result = _concordance(
+        "gene_overlap",
+        "pass",
+        f"{name_a} vs {name_b}: {stats.shared} shared gene(s); gene-id overlap "
+        f"{overlap} (informational context, not a verdict lever)",
+        value=overlap,
+        expected_range=None,
+    )
+
+    return [spearman_result, fraction_result, overlap_result]
+
+
+def evaluate_count_concordance(
+    primary: str | os.PathLike,
+    second: str | os.PathLike,
+    assay: str,
+) -> list[QCResult]:
+    """Assay-gated entry point: count concordance where the assay quantifies genes.
+
+    Returns the three `concordance_results` for an assay in
+    `_COUNT_CONCORDANCE_ASSAYS` (RNA-seq today), else an empty list. Gating here keeps
+    the caller (run_qc) from having to know which assays support count concordance.
+    """
+    if assay not in _COUNT_CONCORDANCE_ASSAYS:
+        return []
+    return concordance_results(primary, second)
