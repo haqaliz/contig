@@ -276,6 +276,23 @@ def test_wrong_reference_contig_mismatch_is_not_missing_index() -> None:
     assert d.failure_class != "missing_index"
 
 
+def test_bwamem2_unreadable_index_is_missing_index() -> None:
+    events = [TaskEvent(process="BWA_MEM2_MEM", status="FAILED", exit=1)]
+    log = "ERROR! Unable to open the file: /work/idx/genome.fasta.bwt.2bit.64"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "missing_index"
+    assert any("bwt.2bit.64" in e for e in d.evidence)
+
+
+def test_bwamem2_branch_does_not_swallow_wrong_reference() -> None:
+    # A wrong-reference / contig-mismatch line must NOT be swallowed by the new
+    # bwa-mem2 branch (it is a different, deferred class).
+    events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=1)]
+    log = "ERROR: Contig 'chr1' not found in the reference dictionary /work/ref/genome.fasta"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class != "missing_index"
+
+
 # --- broader failure classes for common nf-core failures (contract D) ----------
 
 
