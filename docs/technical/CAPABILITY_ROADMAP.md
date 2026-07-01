@@ -146,9 +146,20 @@ scratch path persisted). A classic BWA missing-index failure
 classified `missing_index` with a golden corpus case, but the **build/redirect is
 deferred** — no default supported pipeline invokes classic `bwa index` (sarek defaults to
 bwa-mem2; methyl-seq uses bwa-meth), so there is no live redirect target yet.
-**Deferred to later C2 slices:** classic-BWA index build/redirect (needs a supported
-`bwa index` target, e.g. sarek `--aligner bwa-mem`); bwa-mem2 index set + the
-classic-vs-mem2 aligner-mismatch heal; a corrupt/partial STAR index signature; peak-RSS-
+**Shipped (bwa-mem2 detector slice — v0.11.0):** a bwa-mem2 unreadable/incompatible index
+failure (`ERROR! Unable to open the file: <ref>.bwt.2bit.64`) is now **detected** and
+classified `missing_index` (previously an opaque `tool_crash`), via a narrow branch
+AND-guarded on the bwa-mem2-only `.bwt.2bit.64` sidecar token so it neither over-matches
+nor collides with the classic-BWA branch; one golden `missing-index-bwamem2` corpus case
+is seeded (detector guard stays 100%). Like classic BWA, the **build/redirect is deferred
+with no live trigger**: nf-core/sarek auto-builds a missing bwa-mem2 index, AWS-iGenomes
+ships a classic BWA index (not bwa-mem2), and Contig exposes no flag to supply a broken
+one — so the failure cannot be produced by a Contig-launched run today. The run ends in an
+honest FAIL (`index_unresolvable`), never a false pass.
+**Deferred to later C2 slices:** bwa-mem2 **build/redirect** (detection shipped v0.11.0;
+build blocked until a live trigger exists) and the classic-vs-mem2 aligner-mismatch heal;
+classic-BWA index build/redirect (needs a supported `bwa index` target, e.g. sarek
+`--aligner bwa-mem`); a corrupt/partial STAR index signature; peak-RSS-
 informed scaling (needs a refactor — `resource_usage` is only populated at finalize, after
 the patch decision); the still-missing single-file index kind (the BAM/CRAM form of
 `.csi`) plus stale-index detection on the same seam; and the wider failure catalog — the
@@ -347,7 +358,7 @@ above a threshold; a deliberately worse detector is flagged as a regression.
 | ID | Capability | Window | Leverage |
 |----|-----------|--------|----------|
 | C1 | Cross-tool concordance verification | SHIPPED v0.2.0 | Verdict trust, novel primitive (germline slice; auto-run second caller deferred) |
-| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; directory-shaped STAR index build+redirect shipped, classic BWA detector+corpus-only; bwa-mem2, peak-RSS, assembly-signature + wider catalog pending) | Unattended-completion rate, corpus fuel |
+| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); bwa-mem2/classic-BWA build+redirect, peak-RSS, assembly-signature + wider catalog pending) | Unattended-completion rate, corpus fuel |
 | C3 | Biological-plausibility verification | SHIPPED v0.3.0 | Verdict gets smarter about biology (germline Ti/Tv, het/hom; other assays deferred) |
 | C4 | New assay: somatic variant calling | M4 to M5 | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |

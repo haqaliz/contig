@@ -6,6 +6,31 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-01
+
+### Added
+
+- **Detect a bwa-mem2 unreadable/incompatible aligner index** (capability C2, self-heal
+  breadth — the detector half of the next aligner-index kind after STAR, v0.10.0). When
+  bwa-mem2 cannot read its index it prints `ERROR! Unable to open the file:
+  <ref>.bwt.2bit.64` and exits non-zero; the engine now **classifies** this as
+  `missing_index` (previously it degraded to an opaque `tool_crash`) via a new **narrow**
+  detector branch AND-guarded on bwa-mem2's own sidecar token `.bwt.2bit.64` plus the
+  `unable to open the file` phrase, so it can neither over-match a benign log line nor
+  collide with the classic-BWA `bwa_idx_load_from_disk` branch nor swallow a
+  wrong-reference. One golden `missing-index-bwamem2` corpus case is seeded (the
+  shipped-corpus detector guard stays at 100%, now 23/23), feeding the eval flywheel
+  (moat #2). The run still ends in an **honest FAIL** (`index_unresolvable`, verdict
+  `fail`) — never a false pass — because the parser cannot resolve a build target for
+  this signature. **Deferred (no live trigger — build/redirect intentionally not built):**
+  actually rebuilding the bwa-mem2 index. nf-core/sarek auto-builds a missing index,
+  AWS-iGenomes ships a classic BWA index (not bwa-mem2), and Contig exposes no flag to
+  supply a broken index — so a bwa-mem2 index failure cannot be produced by a
+  Contig-launched run today. This mirrors exactly how classic BWA shipped detector-only in
+  v0.10.0. Local, deterministic (pure case-insensitive string matching over the run's own
+  log; the corpus is a static asset), no raw-read egress; fully covered by injected
+  fixtures — no real bwa-mem2 run in CI.
+
 ## [0.10.0] - 2026-07-01
 
 ### Added
