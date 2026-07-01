@@ -216,6 +216,36 @@ def test_self_heal_bwa_missing_index_gives_up_unresolvable(tmp_path):
     assert calls["n"] == 0  # the builder is never invoked for an unparseable path
 
 
+def test_self_heal_bwamem2_missing_index_gives_up_unresolvable(tmp_path):
+    # bwa-mem2's unreadable-index signature (FMI_search's "Unable to open the
+    # file" gated on the .bwt.2bit.64 sidecar token) IS detected as
+    # missing_index, but its evidence line carries no parseable index path
+    # (no .fai/.bai/.tbi/.csi/.dict token, and not a STAR genomeDir signature),
+    # so _parse_missing_index returns None. Build support for this signature is
+    # deliberately deferred this slice: the loop must give up honestly with
+    # index_unresolvable — never fabricate a build, never a false pass.
+    calls = {"n": 0}
+
+    def index_builder(cmd, cwd):
+        calls["n"] += 1
+        return 0
+
+    def executor(cmd, trace_path):
+        _write(
+            trace_path,
+            TRACE_TOOL,
+            "ERROR! Unable to open the file: /work/idx/genome.fasta.bwt.2bit.64",
+        )
+        return 1
+
+    record = _heal(tmp_path, executor, auto_approve=True, index_builder=index_builder)
+    last = record.repair_history[-1]
+    assert last.diagnosis.failure_class == "missing_index"
+    assert last.outcome == "index_unresolvable"
+    assert record.verdict == "fail"
+    assert calls["n"] == 0  # the builder is never invoked for an unparseable path
+
+
 def test_self_heal_appends_repair_progress_line_per_attempt(tmp_path):
     # Each resolved self-heal attempt is appended to repair_progress.jsonl the
     # moment it resolves, so a live view can show attempts as they happen.
