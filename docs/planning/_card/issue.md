@@ -1,85 +1,46 @@
-# Card: feat self-heal-bwa-mem2-index
+# Card — feat/rnaseq-concordance
 
-- **Type:** feat · **Owner:** aliz · **Branch:** `feat/self-heal-bwa-mem2-index/aliz`
-- **Source:** no GitHub issue — **inline brief** handed off from `contig-next` (2026-07-01).
-- **Capability:** C2 (self-heal breadth) — the next aligner-index kind on the shipped
-  `IndexBuilder` seam, after the STAR directory-index slice (v0.10.0).
+**Type:** feat · **Owner:** aliz · **Branch:** `feat/rnaseq-concordance/aliz`
 
-## Brief (from the contig-next handoff)
+No GitHub issue — source is the inline brief carried from `contig-next` (2026-07-02).
 
-Extend the C2 `IndexBuilder` self-heal seam (shipped through v0.10.0 for STAR
-directory indexes and the single-file `.fai/.bai/.tbi/.csi/.dict` family) to a
-missing/incompatible **bwa-mem2** aligner index on an nf-core/sarek run, since sarek
-defaults to bwa-mem2 and is the live redirect target that classic BWA lacked. Reuse
-the suffix-strip deriver (bwa-mem2 is sidecar-file-shaped beside the FASTA, not
-directory-shaped like STAR), add the net-new bwa-mem2 failure signature to the
-detector plus one golden corpus case, and record `built_index_and_retried` with
-honest `index_unresolvable`/`index_build_failed` give-ups — all test-first with an
-injected builder, no real bwa-mem2 in CI.
+## Brief
 
-## ⚠️ Caveat to dig on FIRST (the key feasibility/design risk)
+Add one independent axis to the RNA-seq verdict: **cross-tool quantification
+concordance**, the RNA-seq slice of capability **C1** (germline shipped in v0.2.0;
+see `docs/technical/CAPABILITY_ROADMAP.md:70-71`).
 
-**Does a bwa-mem2 missing-index failure actually surface at runtime, or does
-nf-core/sarek silently auto-build a missing index?** Phase 2 must resolve this before
-any PRD work:
+Compute **per-gene Spearman rank correlation** and the **fraction of genes agreeing
+within a tolerance** between the run's primary count matrix and a second count
+matrix supplied via a new `contig verify --concordance-counts <matrix>` flag,
+emitting `kind="concordance"` QCResults that are **WARN-capped** (corroboration,
+not ground truth) and report **`unverified`** (never a false pass) when the two
+matrices share no comparable genes — mirroring the shipped germline
+`--concordance-vcf` path.
 
-1. **If sarek auto-builds a fully-missing index**, then the recoverable live case is a
-   **user-supplied incompatible/partial/corrupt** bwa-mem2 index (mirroring STAR's
-   shipped *version-incompatible* path, which is the robust live case with iGenomes /
-   user-supplied indexes). Scope the slice to that case.
-2. **Confirm the exact bwa-mem2 runtime error string** for the detector — it is
-   net-new; no bwa-mem2 signature exists in `src/` today (classic BWA's
-   `[E::bwa_idx_load_from_disk]` is detector-only). It must be narrow enough not to
-   swallow a wrong-reference masquerade.
-3. **Confirm the bwa-mem2 sidecar set**: `.0123 / .amb / .ann / .bwt.2bit.64 / .pac`
-   beside the FASTA — distinct from classic BWA (`.amb/.ann/.bwt/.pac/.sa`) and **NOT
-   interchangeable**. The success check is "all bwa-mem2 sidecars present + non-empty".
+Build **test-first** with synthetic count-matrix fixtures:
+- concordant pair → PASS with the metric reported,
+- divergent pair → WARN naming the metric and both quantifiers,
+- no shared genes → UNVERIFIED.
 
-## Pre-dig facts (confirm in Phase 2)
+No network, no raw-read egress.
 
-- v0.10.0 shipped STAR directory-index build+redirect and **deferred** "bwa-mem2 index
-  set + aligner-mismatch heal"; classic BWA is detector+corpus-only because "no default
-  supported pipeline invokes classic `bwa index`" — `CHANGELOG.md` 0.10.0,
-  `docs/technical/CAPABILITY_ROADMAP.md:149-158`.
-- bwa-mem2 IS the live target: nf-core/sarek defaults to it —
-  `docs/planning/self-heal-dir-index/understanding.md:37-38`.
-- bwa-mem2 is sidecar-file-shaped (FASTA = index path minus suffix → the existing
-  `_strip_suffix` deriver reuses, unlike STAR which needed reference-threading) —
-  `understanding.md:37-43`.
-- Build table is `{ext: (derive_source, build_argv)}`; outcomes `built_index_and_retried`
-  / `index_unresolvable` / `index_build_failed`; build-once-per-path guard bounds the loop.
+## Caveat to dig on first
 
-## Why this was picked (contig-next ranking)
+`src/contig/verification/concordance.py` is genotype/VCF-specific today — its own
+comment (`concordance.py:35-36`) even says "an RNA-seq quantification has no
+genotypes to agree on." So this is a **genuinely new count-concordance code path**
+(Spearman + fraction-within-tolerance over two count matrices), **not** a one-line
+`_CONCORDANCE_ASSAYS` addition, and that comment must be updated.
 
-- The genuinely-unblocked next slice of the just-shipped v0.10.0 work: classic BWA was
-  deferred only for lack of a live target, and bwa-mem2 supplies exactly that (sarek
-  default). Rule 6 (follow-on of shipped work) + rule 4 (unblocked, clear testable slice).
-- Highest moat-leverage: C2 is "the most directly gets-better-with-better-models surface
-  and the richest corpus fuel" (`CAPABILITY_ROADMAP.md:160-166`); a recovered failure
-  raises unattended-completion (Phase-1 headline metric) and seeds a golden corpus case.
+Honest scope for **slice 1**: the deterministic computation plus a user-supplied
+`--concordance-counts <matrix>` flag over the run's primary count matrix.
+**Auto-running a second quantifier** (e.g. Salmon vs STAR+featureCounts) is the
+**deferred follow-on**, exactly as the germline autorun followed one release later
+(v0.4.0).
 
-## Open questions for the interview
+## Guardrails (CLAUDE.md)
 
-- **Missing vs incompatible/partial:** which bwa-mem2 index states does the slice heal
-  (fully-missing, version/format-incompatible, partial)? Depends on caveat #1.
-- **Reference threading:** bwa-mem2's FASTA comes from suffix-strip, so it should NOT
-  need the STAR reference-threading plumbing — confirm the deriver signature suffices.
-- **Aligner-mismatch (classic-bwa vs bwa-mem2):** in or out of this slice? (Deferred by
-  the v0.10.0 note; likely out.)
-- **Corpus seed:** reuse the `missing_index` `FailureClass` (rebuild is the heal) vs a
-  new member — leaning reuse, mirroring STAR.
-
-## Guardrails (CLAUDE.md) — clean
-
-- **Layer 2 only** (self-heal/execution). No Layer-1 drift.
-- **No raw-read egress** — index built locally from the user's FASTA.
-- **No correctness over-claiming** — build only when the source FASTA resolves; honest
-  give-up (`index_unresolvable`/`index_build_failed`); never a false pass.
-- **Test-first** — injected `IndexBuilder`/executor fixtures; no real bwa-mem2 in CI.
-
-## Out of scope (deferred — do not drift)
-
-- Classic-BWA build/redirect (no live target); the classic-vs-mem2 **aligner-mismatch**
-  heal; corrupt/partial STAR index signature; BAM/CRAM `.csi`; peak-RSS scaling.
-- Assembly-signature reference mismatch (no sample-side contig signal).
-- Building Layer 1 (NL → workflow) — not the product.
+- Layer-2 only (verify/corroborate), never Layer-1 workflow authoring.
+- No raw-read egress; deterministic; synthetic fixtures (no real nf-core run in CI).
+- No over-claiming: WARN-cap, UNVERIFIED-never-PASS.
