@@ -1604,6 +1604,62 @@ def test_run_auto_approve_applies_gated_patch(tmp_path, monkeypatch):
     assert "built_index_and_retried" in result.output
 
 
+def test_run_star_heal_does_not_leak_scratch_path_into_manifest(tmp_path, monkeypatch):
+    # M13 guard: a STAR index rebuild redirects params["star_index"] to a
+    # run-scoped scratch path IN MEMORY only. launch.json is written BEFORE
+    # self_heal_run runs, from the ORIGINAL params, and star_index is not a
+    # manifest field at all — so reproduce must never bake the scratch path (or
+    # the healed_index dir) into the persisted manifest.
+    sheet = _make_sheet(tmp_path)
+    fasta, gtf = _write_overlapping_reference(tmp_path)
+    state = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        p = Path(trace_path)
+        if state["n"] == 1:
+            p.write_text(TRACE_FAIL)
+            (p.parent / "run.log").write_text(
+                "EXITING because of FATAL ERROR: could not open genome file "
+                "/user/idx/genomeParameters.txt"
+            )
+            return 1
+        p.write_text(TRACE_RUN_OK)
+        (p.parent / "results" / "multiqc").mkdir(parents=True, exist_ok=True)
+        (p.parent / "results" / "multiqc" / "multiqc_data.json").write_text(GOOD_MQC)
+        return 0
+
+    def index_builder(cmd, cwd):
+        genome_dir = Path(cmd[cmd.index("--genomeDir") + 1])
+        genome_dir.mkdir(parents=True, exist_ok=True)
+        (genome_dir / "Genome").write_text("idx")
+        return 0
+
+    monkeypatch.setattr("contig.cli.default_executor", executor)
+    monkeypatch.setattr("contig.cli.default_index_builder", index_builder)
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "starm", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf),
+         "--auto-approve"],
+    )
+    assert result.exit_code == 0
+    assert "built_index_and_retried" in result.output
+
+    scratch = str((tmp_path / "runs" / "starm").resolve() / "healed_index" / "star")
+    record = load_bundle(tmp_path / "runs" / "starm")
+    # sanity: the heal DID redirect the in-memory run params to the scratch dir
+    assert record.parameters.get("star_index") == scratch
+
+    manifest_text = (tmp_path / "runs" / "starm" / "launch.json").read_text()
+    assert scratch not in manifest_text
+    assert "healed_index" not in manifest_text
+    manifest = json.loads(manifest_text)
+    assert "star_index" not in manifest  # never a manifest field at all
+    assert manifest["fasta"] == str(fasta)  # ORIGINAL path, not scratch
+    assert manifest["gtf"] == str(gtf)  # ORIGINAL path, not scratch
+
+
 def test_eval_detector_scores_the_shipped_corpus(tmp_path):
     result = runner.invoke(app, ["eval-detector"])
     assert result.exit_code == 0

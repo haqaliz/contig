@@ -131,13 +131,31 @@ the original GTF path (no scratch path baked into the manifest). A WARN-level
 `reference_harmonized` QC breadcrumb is appended in `_finalize` so the rewrite is visible in
 every verdict surface. Built on top of the C5 mismatch detector (v0.7.0), which detected and
 refused this class of mismatch; it now also repairs it.
-**Deferred to later C2 slices:** peak-RSS-informed scaling (needs a refactor — `resource_usage`
-is only populated at finalize, after the patch decision); the still-missing index kinds
-(the BAM/CRAM form of `.csi`; directory-shaped STAR/BWA indexes; plus stale-index
-detection) on the same seam; and the wider failure catalog — the assembly-signature form of
-reference/build mismatch (no sample-side contig signal in raw FASTQ or finished bundle),
-per-contig name mapping (e.g., `chrM`↔`MT`), known-sites/GTF-version consistency, a runtime
-`reference_mismatch` detector-corpus case, format conversion, and pin conflict.
+**Shipped (STAR/BWA directory-index slice — Unreleased):** the missing-index family now
+extends past single-file indexes to a **directory-shaped aligner index**. A missing/aborted
+STAR index (`could not open genome file … genomeParameters.txt`) or a version-incompatible
+one (`Genome version … is INCOMPATIBLE with running STAR version`) is rebuilt with `STAR
+--runMode genomeGenerate` from the run's resolved FASTA(+GTF) into a run-scoped scratch dir
+(`<run_id>/healed_index/star`, the user's supplied index never mutated); the retried run is
+redirected at the scratch index via `params["star_index"]` and proceeds, recording
+`built_index_and_retried`. Bounded to one rebuild per run; honest `index_unresolvable` /
+`index_build_failed` give-ups; the STAR genome version is recorded in the repair step; and
+`rerun`/`resume` re-derive the heal from the original `fasta`/`gtf` manifest fields (no
+scratch path persisted). A classic BWA missing-index failure
+(`[E::bwa_idx_load_from_disk] fail to locate the index files`) is now detected and
+classified `missing_index` with a golden corpus case, but the **build/redirect is
+deferred** — no default supported pipeline invokes classic `bwa index` (sarek defaults to
+bwa-mem2; methyl-seq uses bwa-meth), so there is no live redirect target yet.
+**Deferred to later C2 slices:** classic-BWA index build/redirect (needs a supported
+`bwa index` target, e.g. sarek `--aligner bwa-mem`); bwa-mem2 index set + the
+classic-vs-mem2 aligner-mismatch heal; a corrupt/partial STAR index signature; peak-RSS-
+informed scaling (needs a refactor — `resource_usage` is only populated at finalize, after
+the patch decision); the still-missing single-file index kind (the BAM/CRAM form of
+`.csi`) plus stale-index detection on the same seam; and the wider failure catalog — the
+assembly-signature form of reference/build mismatch (no sample-side contig signal in raw
+FASTQ or finished bundle), per-contig name mapping (e.g., `chrM`↔`MT`), known-sites/GTF-
+version consistency, a runtime `reference_mismatch` detector-corpus case, format
+conversion, and pin conflict.
 
 Expand the failure-mode catalog and repair strategies well past the current set,
 and make repairs resource-aware. This is the most directly "gets better with
@@ -329,7 +347,7 @@ above a threshold; a deliberately worse detector is flagged as a regression.
 | ID | Capability | Window | Leverage |
 |----|-----------|--------|----------|
 | C1 | Cross-tool concordance verification | SHIPPED v0.2.0 | Verdict trust, novel primitive (germline slice; auto-run second caller deferred) |
-| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; STAR-BWA, peak-RSS, assembly-signature + wider catalog pending) | Unattended-completion rate, corpus fuel |
+| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; directory-shaped STAR index build+redirect shipped, classic BWA detector+corpus-only; bwa-mem2, peak-RSS, assembly-signature + wider catalog pending) | Unattended-completion rate, corpus fuel |
 | C3 | Biological-plausibility verification | SHIPPED v0.3.0 | Verdict gets smarter about biology (germline Ti/Tv, het/hom; other assays deferred) |
 | C4 | New assay: somatic variant calling | M4 to M5 | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |

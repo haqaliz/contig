@@ -12,3 +12,6 @@ dist/
 
 # SDD subagent scratch (briefs, reports, ledger)
 .superpowers/
+
+# SDD scratch ledger (not part of the deliverable)
+.superpowers/

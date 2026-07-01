@@ -1,109 +1,112 @@
-# self-heal-reference-mismatch (C2 reference/build-mismatch repair)
+# self-heal-dir-index (C2 self-heal breadth — directory-shaped STAR/BWA index build)
 
 - **Type:** feat
-- **Id/slug:** self-heal-reference-mismatch
+- **Id/slug:** self-heal-dir-index
 - **Owner:** aliz
-- **Branch:** feat/self-heal-reference-mismatch/aliz
+- **Branch:** feat/self-heal-dir-index/aliz
 - **Source:** inline brief (no GitHub issue; handed off from `contig-next`)
-- **Capability:** C2 (self-heal breadth) — the reference/build-mismatch *repair* that
-  the v0.7.0 contig-naming *detector* (C5 slice 2) and v0.6.0 reference-identity
-  *capture* (C5 slice 1) were groundwork for.
+- **Capability:** C2 (self-heal breadth) — the next missing-index kind on the shipped
+  `IndexBuilder` seam, after the single-file family (`.fai/.bai/.tbi/.csi/.dict`).
 
 ## Brief (from the contig-next handoff)
 
-Build the **C2 reference/build-mismatch repair** — the self-heal that the shipped
-v0.7.0 contig-naming *detector* and v0.6.0 reference-identity *capture* were
-groundwork for.
+Extend the C2 self-heal `IndexBuilder` seam to recover a missing or incomplete
+**directory-shaped** index — STAR (via `STAR --runMode genomeGenerate`) and BWA
+(via `bwa index`) — the next slice after the single-file index family
+(`.fai/.bai/.tbi/.csi/.dict`) shipped through v0.8.0.
 
-Today a disjoint-contig-naming mismatch (`chr1` in the FASTA vs `1` in the GTF) is
-only *refused* at the pre-flight gate (`_dispatch_run`); this slice turns that
-refusal into an autonomous recovery by **harmonizing seqnames** when the mismatch is
-an unambiguous `chr`-prefix asymmetry, recording the harmonization in provenance,
-then proceeding — and seeding a new `reference_mismatch` golden corpus case.
+The detector must recognize a missing/incomplete STAR/BWA *index directory*
+distinctly from the single-file missing-index signatures and from a
+wrong-reference masquerade. The build deriver must resolve the FASTA (and GTF,
+for STAR) and emit a directory rather than a suffix-stripped file — so the build
+table `{ext: (derive_source, build_argv)}` and the build-once-per-path guard need
+a directory-shaped analog.
 
-Critical scope guard: harmonization is the *only* honest repair for a naming
-mismatch; a genuine wrong-assembly mismatch has no safe repair and must keep refusing
-(never fabricate or guess a genome), and the sample-data-vs-reference
-assembly-signature path stays deferred because the finished bundle carries no aligned
-BAM.
+Stay test-first with an injected `IndexBuilder`/executor (no real STAR/BWA/nf-core
+run in CI), record `built_index_and_retried` on success and give up honestly
+(`index_unresolvable` / `index_build_failed`) — never a false pass — and seed one
+golden corpus case per kind.
 
-Test-first against the detector's existing synthetic FASTA/GTF fixtures — no real
-nf-core run in CI.
+## ⚠️ Caveat to dig on FIRST (the key feasibility/design risk)
 
-## Caveat to dig on FIRST (the key design risk)
+**The prior `_card` (self-heal-reference-mismatch) explicitly listed "STAR/BWA
+directory indexes" as `shape-blocked` and "agent-confirmed blocked" (old
+issue.md:71/109).** Our pick treats it as *unblocked-but-harder*. **Phase 2 must
+resolve this contradiction before any PRD work:**
 
-The repair must be **honest and conservative**. Two questions drive the design:
+1. **Is it a real blocker or just unimplemented shape complexity?** "Shape-blocked"
+   most plausibly meant: the seam's build table is keyed on a file *extension* and a
+   *suffix-strip* deriver that emits a single file — a directory-shaped index has no
+   extension and no suffix to strip. That is a generalization task, not a hard
+   blocker. Confirm by reading the seam (`runner.py` `IndexBuilder`, the build table,
+   the build-once-per-path guard) and the detector's missing-index parser.
+2. **Does the failure actually surface recoverably?** nf-core/rnaseq builds the STAR
+   index itself when none is given; the recoverable "missing index" case is when a
+   user passes `--star_index <path>` (or BWA index prefix) that is absent or
+   incomplete. Confirm the real failure signature STAR/BWA emit, and that it is
+   distinguishable from the single-file signatures and from a wrong-reference
+   masquerade.
+3. **Build-target shape.** `STAR --runMode genomeGenerate --genomeDir <dir>
+   --genomeFastaFiles <fa> --sjdbGTFfile <gtf>` needs FASTA **plus** GTF and emits a
+   *directory*; `bwa index <fa>` emits sidecar files next to the FASTA. These are two
+   different shapes — confirm both before committing to one build-table generalization.
 
-1. **What is a *safe* harmonization?** Only an unambiguous `chr`-prefix asymmetry
-   (one side has `chr1, chr2, …`, the other `1, 2, …`) where adding/stripping the
-   `chr` prefix makes the two contig-name sets *match*. If after a candidate
-   harmonization the sets still do not match (a genuine different-assembly mismatch),
-   there is NO safe repair — keep refusing. Never fabricate or download a genome.
+If the dig confirms a genuine blocker (not just shape complexity), STOP and
+re-recommend via `contig-next` rather than forcing the slice.
 
-2. **Which side do we rewrite, and where does the rewritten file go?** Rewriting the
-   GTF seqnames vs the FASTA headers; writing the harmonized copy to a worktree/run
-   scratch path (never mutating the user's original reference in place); recording the
-   harmonization in the launch manifest + provenance so `rerun`/`resume` reproduce the
-   harmonized intent faithfully.
+## Pre-dig facts (confirm in Phase 2)
 
-## Pre-dig facts (to confirm in Phase 2)
-
-- The v0.7.0 detector lives in a `reference_check` module and gates at the single
-  launch chokepoint `_dispatch_run`, with an `--allow-reference-mismatch` escape hatch
-  recorded in the launch manifest (CHANGELOG.md:51-75). The repair plugs in HERE, not
-  on a runtime-failure path.
-- `missing_reference` is already a `FailureClass` (CAPABILITY_ROADMAP.md:258). Confirm
-  whether `reference_mismatch` should be a new `FailureClass` or reuse an existing one,
-  and that v0.7.0 did NOT seed a corpus class for it (CHANGELOG.md:74-75).
-- The detector already distinguishes the disjoint-but-`chr`-asymmetric case (it names
-  "the `chr`-prefix asymmetry" in its message) — that is the signal the repair keys on.
+- The single-file index family is shipped through v0.8.0: `.fai` (`samtools faidx`),
+  `.bai` (`samtools index`), `.tbi` (`tabix -p vcf`), `.csi` (`bcftools index`),
+  `.dict` (`samtools dict`, companion-FASTA deriver) — `CHANGELOG.md:46-78`,
+  `CAPABILITY_ROADMAP.md:98-119`.
+- The build table was generalized to `{ext: (derive_source, build_argv)}` for `.dict`
+  (the first non-suffix-strip deriver) — `CHANGELOG.md:52-61`. Directory-shaped is the
+  next generalization on the same table.
+- Outcomes: `built_index_and_retried` on success; `index_unresolvable` /
+  `index_build_failed` on honest give-up; build-once-per-path guard bounds the loop
+  (`CHANGELOG.md:62-78`).
+- Named as still-missing on "the same seam": `CAPABILITY_ROADMAP.md:138-139`.
 
 ## Why this was picked (contig-next ranking)
 
-- Both prerequisites shipped **specifically to enable it**: reference-identity capture
-  (v0.6.0) and the pre-flight contig-naming detector (v0.7.0). Named as the next slice
-  across three planning files (`reference-mismatch-detector/prd.md:136`,
-  `self-heal-dict-index/prd.md:169`, `_card/understanding.md:84`; CHANGELOG.md:74-75).
-- Converts a *detected* notorious silent-failure class into an *autonomously
-  recovered* one — recover more failures without a human; raises the Phase-1
-  unattended-completion metric. Seeds a new `reference_mismatch` corpus class
-  (moat #2 compounding).
-- Unblocked, unlike STAR/BWA directory indexes (shape-blocked), peak-RSS (refactor
-  blocker), and assembly-signature/concordance auto-discovery (no aligned BAM in the
-  bundle) — all agent-confirmed blocked.
+- Named, unblocked (pending dig) next slice on a shipped seam; single-file family done
+  through v0.8.0.
+- Highest moat-leverage on both axes: C2 is "the most directly gets-better-with-better-
+  models surface and the richest corpus fuel" (`CAPABILITY_ROADMAP.md:143-144`).
+  A recovered STAR-index failure raises unattended-completion (Phase 1 gate metric,
+  `ROADMAP.md:101,108`) **and** seeds a golden detector-corpus case (moat #2).
+- Targets the lead ICP: STAR is the RNA-seq aligner; RNA-seq DE is the chosen wedge
+  assay with the largest non-programmer TAM (`ROADMAP.md:49`).
 
 ## Open questions for the interview
 
-- **Repair trigger model:** auto-harmonize-and-proceed by default, or
-  propose-and-require-approval (this is a self-heal that mutates reference inputs —
-  risk tier)? Interaction with the existing `--allow-reference-mismatch` escape hatch.
-- **Safe-harmonization predicate:** exact rule for "unambiguous `chr`-prefix
-  asymmetry"; what about `MT`/`chrM`, scaffold/`GL...` contigs, and partial-overlap
-  (subset) references the detector already passes?
-- **Which file is rewritten** (GTF vs FASTA), the streamed/gzip-transparent rewrite,
-  and the scratch output location (never in-place).
-- **Provenance/manifest:** how the harmonization is recorded so `rerun`/`resume`
-  reproduce it; what `RepairStep`/outcome name (mirror `built_index_and_retried` →
-  e.g. `harmonized_reference_and_proceeded`); honest give-up name when no safe
-  harmonization exists.
-- **Corpus seed:** one `reference-mismatch` case; new `FailureClass` vs reuse.
+- **Scope:** STAR + BWA both this slice, or STAR first (highest RNA-seq value) and BWA
+  follow-on? (Two different build-target shapes — dir vs sidecars-next-to-FASTA.)
+- **Incomplete vs missing:** does the slice handle a *partially built* index directory
+  (some files present), or only a fully-absent one? Detection differs.
+- **GTF resolution for STAR:** STAR's `genomeGenerate` wants `--sjdbGTFfile`; how is the
+  GTF resolved at repair time (the chr-prefix harmonization in v0.9.0 already touches
+  GTF resolution — reuse that path?).
+- **Build-once-per-path guard** for a directory target (the guard is keyed on a path
+  today — confirm it keys cleanly on a directory).
+- **Corpus seed:** one golden case per kind (STAR, BWA); reuse the existing
+  missing-index `FailureClass` (the detector already classifies missing-index) or a
+  new one?
 
 ## Guardrails (CLAUDE.md)
 
-- **Layer 2 only** (self-heal/execution/verification). In scope.
-- **No raw-read egress** — harmonization rewrites a local reference annotation on the
-  user's compute; nothing leaves the machine.
-- **No correctness over-claiming** — harmonize ONLY an unambiguous naming asymmetry;
-  a genuine wrong-assembly mismatch keeps refusing honestly. Record the harmonization,
-  never claim correctness beyond "names harmonized."
-- **Test-first**; synthetic `tmp_path` FASTA/GTF fixtures, no real nf-core run in CI.
+- **Layer 2 only** (self-heal/execution). In scope.
+- **No raw-read egress** — the index is built from a local FASTA/GTF on the user's
+  compute; nothing leaves the machine.
+- **No correctness over-claiming** — build only when the source FASTA (and GTF) is
+  resolvable; give up honestly otherwise. Never a false pass.
+- **Test-first**; injected `IndexBuilder`/executor fixtures, no real
+  STAR/BWA/nf-core run in CI.
 
 ## Out of scope (deferred — do not drift)
 
-- **Sample-data-vs-reference assembly-signature** comparison/repair — blocked: raw
-  FASTQ / the finished bundle carry no sample-side contig signal
-  (`reference-mismatch-detector/prd.md:130-132`).
-- Fabricating, guessing, or downloading a "matching" genome for a true wrong-assembly
-  mismatch — there is no safe repair; refuse.
-- Known-sites/BED-vs-reference consistency; GTF annotation-version resolution.
-- STAR/BWA directory indexes; BAM/CRAM `.csi`; stale-index; peak-RSS scaling.
+- BAM/CRAM form of `.csi`; stale-index detection (could be a follow-on, not this slice).
+- Peak-RSS-informed resource scaling (separate C2 slice, refactor-blocked).
+- Assembly-signature reference mismatch (blocked: no sample-side contig signal).
+- Building Layer 1 (NL → workflow) — not the product.

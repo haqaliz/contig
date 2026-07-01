@@ -197,6 +197,52 @@ def diagnose_failure(events: list[TaskEvent], log_text: str) -> Diagnosis:
             confidence=0.85,
         )
 
+    # STAR opens genomeParameters.txt first, so an absent/partial genome index
+    # surfaces as this exact FATAL ERROR line. Gated on the STAR-specific
+    # filename / phrase so it stays narrow (mirrors the .dict branch above).
+    star_missing_lines = _matching_lines(
+        log_text, ("genomeparameters.txt", "could not open genome file")
+    )
+    if star_missing_lines:
+        return Diagnosis(
+            failure_class="missing_index",
+            root_cause="STAR's genome index is missing or was not fully built.",
+            evidence=star_missing_lines,
+            confidence=0.85,
+        )
+
+    # STAR refuses to load a genome index built by an incompatible STAR
+    # version. Narrow on purpose: a line must carry BOTH "Genome version" AND
+    # "INCOMPATIBLE", so a generic version mention elsewhere is not swallowed.
+    star_version_lines = [
+        line
+        for line in _matching_lines(log_text, ("genome version",))
+        if _has_any(line, ("incompatible",))
+    ]
+    if star_version_lines:
+        return Diagnosis(
+            failure_class="missing_index",
+            root_cause="STAR's genome index was built with an incompatible STAR version.",
+            evidence=star_version_lines,
+            confidence=0.85,
+        )
+
+    # Classic bwa's index loader reports a missing index this way. Narrow on
+    # purpose: a line must carry BOTH the loader's function name AND the
+    # "fail to locate the index" phrase.
+    bwa_missing_lines = [
+        line
+        for line in _matching_lines(log_text, ("bwa_idx_load_from_disk",))
+        if _has_any(line, ("fail to locate the index",))
+    ]
+    if bwa_missing_lines:
+        return Diagnosis(
+            failure_class="missing_index",
+            root_cause="BWA's index files could not be located.",
+            evidence=bwa_missing_lines,
+            confidence=0.85,
+        )
+
     nosuchfile_lines = _matching_lines(log_text, ("no such file or directory",))
     ref_tokens = (".fasta", ".fa", ".gtf", ".gff", "reference", "genome")
     ref_lines = [line for line in nosuchfile_lines if _has_any(line, ref_tokens)]

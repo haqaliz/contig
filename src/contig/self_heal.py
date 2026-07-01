@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,18 +59,54 @@ _AMBIGUOUS_CONFIDENCE = 0.5
 # token like "ref.fasta.fai_backup" is NOT mis-parsed as "ref.fasta.fai".
 _INDEX_TOKEN_RE = re.compile(r"""[^\s"']+\.(fai|bai|tbi|csi|dict)(?=\s|$|[:,;"'])""")
 
+# STAR's missing-index FATAL ERROR names the failing genomeDir as the PARENT of
+# genomeParameters.txt; capture that directory token. The version-incompatible
+# error carries no path, so this simply does not match there.
+_STAR_GENOMEDIR_RE = re.compile(r"(\S+)/genomeParameters\.txt")
+
+
+def _is_star_signature(line: str) -> bool:
+    """True when an evidence line is a STAR (directory) genome-index failure.
+
+    Matches the missing-index phrasing (``genomeParameters.txt`` /
+    ``could not open genome file``) or the version-incompatible phrasing
+    (``Genome version`` AND ``INCOMPATIBLE`` on the same line).
+    """
+    low = line.lower()
+    if "genomeparameters.txt" in low or "could not open genome file" in low:
+        return True
+    return "genome version" in low and "incompatible" in low
+
 
 def _parse_missing_index(diagnosis: Diagnosis) -> tuple[str, str] | None:
-    """Scan diagnosis.evidence for the first token ending in a supported index extension.
+    """Scan diagnosis.evidence and classify the missing index as a kind.
 
-    Scans evidence lines in order and returns the FIRST match as
-    ``(token, "." + ext)``, e.g. ``("aln.bam.bai", ".bai")``.
-    Returns None if no supported token is found.  Pure — no I/O.
+    Returns ``(path, kind)`` where:
+
+    - For a single-file index token the kind is its extension
+      (``".fai"/".bai"/".tbi"/".csi"/".dict"``) and ``path`` is the token, e.g.
+      ``("aln.bam.bai", ".bai")``. Single-file tokens WIN: scanned first, so a
+      STAR signature never shadows them.
+    - For a STAR (directory) index the kind is ``"star"`` and ``path`` is the
+      failing genomeDir parsed from a ``could not open genome file
+      <DIR>/genomeParameters.txt`` line (the PARENT dir), or ``""`` when the
+      evidence carries no path (the version-incompatible line) — the build step
+      then resolves the genomeDir from ``params["star_index"]``.
+
+    Returns None if no supported index is found. Pure — no I/O.
     """
     for line in diagnosis.evidence:
         m = _INDEX_TOKEN_RE.search(line)
         if m:
             return m.group(), "." + m.group(1)
+    if any(_is_star_signature(line) for line in diagnosis.evidence):
+        genome_dir = ""
+        for line in diagnosis.evidence:
+            gm = _STAR_GENOMEDIR_RE.search(line)
+            if gm:
+                genome_dir = gm.group(1)
+                break
+        return genome_dir, "star"
     return None
 
 
@@ -437,6 +474,138 @@ def apply_patch(
     return target, params
 
 
+def _build_star_index(
+    target: ExecutionTarget,
+    params: dict[str, object],
+    *,
+    parsed_path: str,
+    run_dir: Path,
+    index_builder: IndexBuilder,
+    built_paths: set[str],
+) -> tuple[ExecutionTarget, dict[str, object], str, str | None, bool]:
+    """Rebuild a STAR genome index into a run-scoped scratch dir and redirect.
+
+    STAR's version-incompatible error carries NO path, so the failing genomeDir
+    is ``parsed_path`` (from the missing-index line) or, failing that,
+    ``params["star_index"]``. The build never touches the user's genomeDir: it
+    writes a fresh index under ``run_dir/healed_index/star`` and, on success,
+    redirects the retry by setting ``params["star_index"]`` to the scratch path.
+
+    Branches honestly (mirrors the single-file build outcomes):
+      * no resolvable genomeDir       → ``index_unresolvable``
+      * no fasta in params            → ``index_unresolvable``
+      * genomeDir already rebuilt     → ``index_build_failed`` (give up)
+      * non-zero build                → ``index_build_failed``
+      * rc 0 but empty scratch dir    → ``index_build_failed`` (no index produced)
+      * success                       → ``built_index_and_retried`` (redirected)
+
+    Bounded to ONE build per run: both the failing genomeDir AND the scratch
+    path are added to ``built_paths`` on build. The version-incompatible error
+    carries no path, so a SECOND such failure resolves its failing genomeDir
+    from ``params["star_index"]`` — which, after a successful build, IS the
+    scratch path. Recognizing the scratch path as already-built closes that
+    loophole: it gives up honestly instead of rebuilding into the same scratch
+    dir a second time. The scratch dir is also wiped fresh (``rmtree`` then
+    ``mkdir``) before each build so leftover residue can never masquerade as
+    this build's output in the non-empty success gate.
+    """
+    failing_dir = parsed_path or str(params.get("star_index") or "")
+    if not failing_dir:
+        return (
+            target,
+            params,
+            "index_unresolvable",
+            "Could not resolve the STAR genome index directory to rebuild.",
+            False,
+        )
+    fasta = params.get("fasta")
+    if not fasta:
+        return (
+            target,
+            params,
+            "index_unresolvable",
+            f"Could not resolve a FASTA to rebuild the STAR index {failing_dir}.",
+            False,
+        )
+    if failing_dir in built_paths:
+        return (
+            target,
+            params,
+            "index_build_failed",
+            f"Already rebuilt {failing_dir}; failure persists.",
+            False,
+        )
+    scratch = Path(run_dir) / "healed_index" / "star"
+    # Fresh scratch dir: wipe any residue (e.g. from a stale prior state) so the
+    # non-empty success gate below reflects only THIS build's output.
+    shutil.rmtree(scratch, ignore_errors=True)
+    scratch.mkdir(parents=True, exist_ok=True)
+    argv = [
+        "STAR",
+        "--runMode",
+        "genomeGenerate",
+        "--genomeDir",
+        str(scratch),
+        "--genomeFastaFiles",
+        str(fasta),
+    ]
+    gtf = params.get("gtf")
+    if gtf:
+        argv += ["--sjdbGTFfile", str(gtf)]
+    # Bound the rebuild to ONE per run: mark both the failing genomeDir and the
+    # scratch dir as built, so a second failure whose failing_dir resolves to
+    # the scratch path (post-redirect) is recognized as already-built too.
+    built_paths.add(failing_dir)
+    built_paths.add(str(scratch))
+    rc = index_builder(argv, run_dir)
+    if rc != 0:
+        return (
+            target,
+            params,
+            "index_build_failed",
+            f"Building the STAR index for {failing_dir} failed (exit {rc}).",
+            False,
+        )
+    if not (scratch.is_dir() and any(scratch.iterdir())):
+        return (
+            target,
+            params,
+            "index_build_failed",
+            f"The STAR index build for {failing_dir} produced no index.",
+            False,
+        )
+    params["star_index"] = str(scratch)
+    version = _read_star_genome_version(scratch)
+    detail = (
+        f"Built STAR index (genome version {version}) into {scratch}."
+        if version
+        else f"Built STAR index into {scratch}."
+    )
+    return target, params, "built_index_and_retried", detail, True
+
+
+def _read_star_genome_version(scratch: Path) -> str | None:
+    """Best-effort read of the ``versionGenome`` value from a freshly-built
+    STAR index's ``genomeParameters.txt`` (S1, OQ1).
+
+    Tolerant of a tab- or space-separated line (``versionGenome\\t2.7.4a`` or
+    ``versionGenome 2.7.4a``). Returns None — never raises — when the file is
+    absent, unreadable, or carries no ``versionGenome`` line: a missing version
+    must never fail the heal.
+    """
+    try:
+        text = (scratch / "genomeParameters.txt").read_text()
+    except OSError:
+        return None
+    for line in text.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2 and parts[0] == "versionGenome":
+            version = parts[1].strip()
+            if version:
+                return version
+    return None
+
+
 def _apply_patch_and_maybe_build(
     target: ExecutionTarget,
     patch: Patch,
@@ -484,7 +653,20 @@ def _apply_patch_and_maybe_build(
             "Could not parse a missing index path from the failure.",
             False,
         )
-    index_path, ext = parsed
+    index_path, kind = parsed
+    if kind == "star":
+        # STAR's index is a DIRECTORY; the version-incompatible failure has no
+        # path, so the genomeDir is resolved here (from params) and rebuilt into
+        # scratch with a redirect — not via the single-file _index_build_command.
+        return _build_star_index(
+            target,
+            params,
+            parsed_path=index_path,
+            run_dir=run_dir,
+            index_builder=index_builder,
+            built_paths=built_paths,
+        )
+    ext = kind
     if index_path in built_paths:
         # We already built this exact index once this run and the failure came
         # back the same way (e.g. a wrong reference masquerading as a missing
