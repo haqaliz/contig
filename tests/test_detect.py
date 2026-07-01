@@ -284,11 +284,14 @@ def test_bwamem2_unreadable_index_is_missing_index() -> None:
     assert any("bwt.2bit.64" in e for e in d.evidence)
 
 
-def test_bwamem2_branch_does_not_swallow_wrong_reference() -> None:
-    # A wrong-reference / contig-mismatch line must NOT be swallowed by the new
-    # bwa-mem2 branch (it is a different, deferred class).
-    events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=1)]
-    log = "ERROR: Contig 'chr1' not found in the reference dictionary /work/ref/genome.fasta"
+def test_bwamem2_generic_unable_to_open_without_index_token_is_not_missing_index() -> None:
+    # The bwa-mem2 branch matches on "unable to open the file" alone, but the
+    # AND-guard requires the bwt.2bit.64 sidecar token too. A generic
+    # "unable to open the file" line that references some non-index file must
+    # NOT be classified missing_index -- this proves the token is genuinely
+    # required, not just decorative.
+    events = [TaskEvent(process="SOME_PROC", status="FAILED", exit=1)]
+    log = "ERROR! Unable to open the file: /work/tmp/scratch.txt"
     d = diagnose_failure(events, log_text=log)
     assert d.failure_class != "missing_index"
 
