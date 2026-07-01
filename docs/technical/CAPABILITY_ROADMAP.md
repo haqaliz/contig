@@ -33,7 +33,7 @@ better base model should make each of these stronger, never redundant.
 
 ---
 
-## C1. Cross-tool concordance verification  ·  SHIPPED v0.2.0 (germline slice)
+## C1. Cross-tool concordance verification  ·  SHIPPED v0.2.0 (germline) + RNA-seq slice (Unreleased)
 
 **Shipped (slice 1) in v0.2.0.** The verdict gained a third axis alongside QC
 thresholds and structural checks: `verification/concordance.py` computes a
@@ -42,8 +42,22 @@ check, both `kind="concordance"`, surfaced via `contig verify --concordance-vcf
 <vcf>` and grouped in the text/HTML reports and the dashboard QC panel. Concordance
 is at most WARN (corroboration, not ground truth), never changes the verify exit
 code, and reports `unverified` (never a false pass) when the two call sets share no
-comparable site. **Deferred to a follow-on slice:** auto-running a second caller
-(today the user supplies the second VCF), RNA-seq and single-cell concordance, and
+comparable site.
+
+**Shipped (RNA-seq slice — Unreleased).** The concordance axis now extends to bulk
+RNA-seq quantification via a new `verification/count_concordance.py` and `contig
+verify --concordance-counts <matrix>`: the run's own gene-count matrix is corroborated
+against a user-supplied second matrix with a per-gene **Spearman rank correlation**
+(`spearman_concordance`, WARN below 0.90), a **fraction-agreeing** check (share of
+shared genes within a 10% relative tolerance, WARN below 0.90), and an
+**informational `gene_overlap`** (never WARN — a subset-annotation second matrix
+legitimately overlaps poorly). Same contract as germline: at most WARN, never changes
+the verify exit code, `unverified` (never a false pass) below 10 shared genes;
+mutually exclusive with the germline flags. The Spearman and the gzip-transparent,
+tolerant count-matrix parser are hand-rolled stdlib (no scipy/numpy added). **Deferred
+to a follow-on slice:** auto-running a second caller/quantifier (today the user
+supplies the second call set/matrix — mirrors the germline `--concordance-auto`
+follow-on in v0.4.0), single-cell concordance, a dashboard "corroborated by" line, and
 FAIL-severity once thresholds are calibrated on real data.
 
 The original framing, for reference: today the verdict rests on QC thresholds,
@@ -357,7 +371,7 @@ above a threshold; a deliberately worse detector is flagged as a regression.
 
 | ID | Capability | Window | Leverage |
 |----|-----------|--------|----------|
-| C1 | Cross-tool concordance verification | SHIPPED v0.2.0 | Verdict trust, novel primitive (germline slice; auto-run second caller deferred) |
+| C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap; auto-run second tool + single-cell deferred) |
 | C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); bwa-mem2/classic-BWA build+redirect, peak-RSS, assembly-signature + wider catalog pending) | Unattended-completion rate, corpus fuel |
 | C3 | Biological-plausibility verification | SHIPPED v0.3.0 | Verdict gets smarter about biology (germline Ti/Tv, het/hom; other assays deferred) |
 | C4 | New assay: somatic variant calling | M4 to M5 | Breadth, depth-first, new corpus |
