@@ -1294,6 +1294,140 @@ def test_verify_concordance_non_germline_assay_skips(tmp_path):
     assert "germline" in result.output.lower()
 
 
+# --- contig verify --concordance-counts (PRD C1, rnaseq cross-tool) ------------
+# A gene-count matrix: header row + >= 10 gene rows so the Spearman/agreeing checks
+# are VERIFIED (not gated to UNVERIFIED by the < 10-shared-genes guard).
+_COUNTS_PRIMARY = {f"ENSG{i:05d}": float(10 * (i + 1)) for i in range(12)}
+# Concordant: identical counts -> rho 1.0, all agree -> PASS.
+_COUNTS_CONCORDANT = dict(_COUNTS_PRIMARY)
+# Divergent: same gene ids, counts reversed -> rho -1.0 and most disagree -> WARN.
+_COUNTS_DIVERGENT = {
+    gene: count
+    for gene, count in zip(_COUNTS_PRIMARY, reversed(list(_COUNTS_PRIMARY.values())))
+}
+
+
+def _counts_tsv(counts):
+    """Render a gene-count matrix TSV: a header row then one row per gene."""
+    lines = ["gene_id\tgene_name\tS1"]
+    for gene, count in counts.items():
+        lines.append(f"{gene}\t{gene}_name\t{count}")
+    return "\n".join(lines) + "\n"
+
+
+def _write_rnaseq_run_with_counts(runs_dir, run_id, counts):
+    """An rnaseq run whose results/ holds a primary Salmon gene-count matrix."""
+    from contig.bundle import compute_output_checksums
+
+    run_dir = Path(runs_dir) / run_id
+    results = run_dir / "results"
+    results.mkdir(parents=True, exist_ok=True)
+    primary = results / "salmon.merged.gene_counts.tsv"
+    primary.write_text(_counts_tsv(counts))
+    record = RunRecord(
+        run_id=run_id,
+        pipeline="nf-core/rnaseq",  # rnaseq assay
+        pipeline_revision="3.26.0",
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_checksums={},
+        events=[TaskEvent(process="X", status="COMPLETED", exit=0)],
+        output_checksums=compute_output_checksums(results),
+    )
+    write_bundle(record, run_dir)
+    return run_dir
+
+
+def _write_second_counts(tmp_path, name, counts):
+    path = tmp_path / name
+    path.write_text(_counts_tsv(counts))
+    return path
+
+
+def test_verify_concordance_counts_emits_checks(tmp_path):
+    _write_rnaseq_run_with_counts(tmp_path, "r1", _COUNTS_PRIMARY)
+    concordant = _write_second_counts(tmp_path, "second_ok.tsv", _COUNTS_CONCORDANT)
+
+    ok = runner.invoke(
+        app,
+        ["verify", "r1", "--runs-dir", str(tmp_path), "--concordance-counts", str(concordant)],
+    )
+    assert ok.exit_code == 0
+    out = ok.output.lower()
+    assert "spearman_concordance" in out
+    assert "gene_overlap" in out
+    assert "pass" in out
+
+
+def test_verify_concordance_counts_at_most_warn_exit(tmp_path):
+    # The only issue is a divergent (WARN) concordance; outputs are unchanged, so
+    # there is no drift and no signature mismatch -> exit code must stay 0.
+    _write_rnaseq_run_with_counts(tmp_path, "r2", _COUNTS_PRIMARY)
+    divergent = _write_second_counts(tmp_path, "second_bad.tsv", _COUNTS_DIVERGENT)
+    result = runner.invoke(
+        app,
+        ["verify", "r2", "--runs-dir", str(tmp_path), "--concordance-counts", str(divergent)],
+    )
+    assert result.exit_code == 0
+    assert "warn" in result.output.lower()
+
+
+def test_verify_concordance_counts_json_includes_results(tmp_path):
+    _write_rnaseq_run_with_counts(tmp_path, "r3", _COUNTS_PRIMARY)
+    concordant = _write_second_counts(tmp_path, "second_ok.tsv", _COUNTS_CONCORDANT)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "r3",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-counts",
+            str(concordant),
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert "concordance" in data
+    checks = {r["check"] for r in data["concordance"]}
+    assert {"spearman_concordance", "fraction_agreeing", "gene_overlap"} <= checks
+
+
+def test_verify_concordance_counts_non_rnaseq_skips(tmp_path):
+    # A germline run with --concordance-counts: count concordance is only defined for
+    # rnaseq, so the command prints a clear note, does not crash, and (with clean
+    # outputs) the exit code stays 0.
+    _write_germline_run_with_vcf(tmp_path, "g_counts", _VCF_SITES_A)
+    second = _write_second_counts(tmp_path, "second.tsv", _COUNTS_PRIMARY)
+    result = runner.invoke(
+        app,
+        ["verify", "g_counts", "--runs-dir", str(tmp_path), "--concordance-counts", str(second)],
+    )
+    assert result.exit_code == 0
+    assert "rna-seq" in result.output.lower()
+
+
+def test_verify_concordance_flags_mutually_exclusive(tmp_path):
+    _write_rnaseq_run_with_counts(tmp_path, "r4", _COUNTS_PRIMARY)
+    concordant = _write_second_counts(tmp_path, "second_ok.tsv", _COUNTS_CONCORDANT)
+    vcf = _write_second_vcf(tmp_path, "second.vcf.gz", _VCF_SITES_A)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "r4",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-vcf",
+            str(vcf),
+            "--concordance-counts",
+            str(concordant),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "choose one" in result.output.lower()
+
+
 # --- contig verify --concordance-auto (PRD C1, second-caller seam) -------------
 # A fake second caller stands in for bcftools so CI never runs the real binary.
 # It writes a recorded second VCF under out_dir and returns that path, exactly the
