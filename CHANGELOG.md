@@ -6,6 +6,37 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Self-heal a **missing or version-incompatible STAR aligner index** (capability C2,
+  self-heal breadth — the next missing-index kind after the single-file family
+  `.fai`/`.bai`/`.tbi`/`.csi`/`.dict`, now covering **directory-shaped aligner indexes**):
+  when a run fails with either STAR's `could not open genome file …
+  genomeParameters.txt` (missing/aborted index) or `Genome version … is INCOMPATIBLE with
+  running STAR version` (stale index), the engine now **rebuilds** the index with `STAR
+  --runMode genomeGenerate` from the run's resolved FASTA (+ GTF, via
+  `params["fasta"]`/`params["gtf"]`) into a run-scoped scratch dir
+  (`<run_id>/healed_index/star`) — the user's supplied index is never mutated — and
+  **redirects** the retried run at the scratch index via `params["star_index"]`, recording
+  `built_index_and_retried`. Bounded to ONE rebuild per run: a new-reason failure on the
+  retry surfaces honestly rather than re-entering the builder or masking a pass. Honest
+  `index_unresolvable` (no resolvable FASTA/genome dir) and `index_build_failed`
+  (non-zero exit or an empty scratch dir) give-ups — never a false pass. The rebuilt
+  STAR genome version is read back from `genomeParameters.txt` and recorded in the repair
+  step's detail for provenance. `rerun`/`resume` re-derive the heal from the original
+  (un-redirected) `fasta`/`gtf` manifest fields — `star_index` is never a manifest field
+  and no scratch path is baked into `launch.json`, so reproduction is faithful. A classic
+  **BWA missing-index** failure (`[E::bwa_idx_load_from_disk] fail to locate the index
+  files`) is now also **detected** and classified `missing_index`, with a golden corpus
+  case — but the build/redirect is **deferred**: no default supported pipeline invokes
+  classic `bwa index` (sarek defaults to bwa-mem2; methyl-seq uses bwa-meth), so there is
+  currently no live target to redirect. Local, deterministic, no raw-read egress (the
+  index is built from a local FASTA/GTF on the user's own compute); fully covered by
+  injected builder/executor fixtures — no real STAR/BWA/nf-core run in CI. **Deferred:**
+  classic-BWA index build/redirect (would require a sarek `--aligner bwa-mem` target);
+  bwa-mem2 index set + aligner-mismatch heal; a corrupt/partial STAR index signature (N1);
+  directory-shaped BWA build (n/a while BWA stays detector-only).
+
 ## [0.9.0] - 2026-07-01
 
 ### Added
