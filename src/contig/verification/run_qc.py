@@ -11,6 +11,7 @@ from pathlib import Path
 
 from contig.models import QCResult
 from contig.verification.concordance import evaluate_concordance
+from contig.verification.count_concordance import evaluate_count_concordance
 from contig.verification.cross_sample import evaluate_cross_sample
 from contig.verification.qc_ingest import parse_multiqc_general_stats_file
 from contig.verification.rule_pack import RNASEQ_RULE_PACK, evaluate
@@ -57,11 +58,14 @@ def run_qc(
     metric fail. With no MultiQC and no manifest, an empty list means the caller
     honestly reports "unverified".
 
-    When `concordance=(primary_vcf, second_vcf)` is supplied, the cross-tool
-    concordance checks are appended, gated by `assay` (concordance is only defined
-    for germline variant calling today). `assay` is used ONLY for that gating; it
-    does not change metric or structural behavior. Absent `concordance`, the result
-    is byte-for-byte identical to before this parameter existed.
+    When `concordance=(primary, second)` is supplied, the cross-tool concordance
+    checks are appended, gated by `assay`: germline VCF genotype/site concordance for
+    variant calling, and RNA-seq gene-count concordance (Spearman / fraction-agreeing
+    / gene-overlap) for rnaseq. Each evaluator self-gates by assay, so exactly one
+    contributes for a given `assay` and no branching is needed here. `assay` is used
+    ONLY for that gating; it does not change metric or structural behavior. Absent
+    `concordance`, the result is byte-for-byte identical to before this parameter
+    existed.
     """
     run_path = Path(run_dir)
     results: list[QCResult] = []
@@ -77,7 +81,8 @@ def run_qc(
         results.extend(evaluate_against_manifest(outputs, manifest))
 
     if concordance is not None:
-        primary_vcf, second_vcf = concordance
-        results.extend(evaluate_concordance(primary_vcf, second_vcf, assay))
+        primary, second = concordance
+        results.extend(evaluate_concordance(primary, second, assay))
+        results.extend(evaluate_count_concordance(primary, second, assay))
 
     return results

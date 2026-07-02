@@ -60,6 +60,10 @@ from contig.reference_harmonize import harmonize_gtf, plan_harmonization
 from contig.registry import assay_for_pipeline
 from contig.report import render_explain, render_run_report, render_run_report_html
 from contig.verification.concordance import evaluate_concordance
+from contig.verification.count_concordance import (
+    _COUNT_MATRIX_GLOB,
+    evaluate_count_concordance,
+)
 from contig.verification.second_caller import (
     SecondCallerError,
     run_bcftools_caller,
@@ -672,6 +676,11 @@ def verify(
         "--ref",
         help="Reference FASTA for --concordance-auto's second caller.",
     ),
+    concordance_counts: str = typer.Option(
+        None,
+        "--concordance-counts",
+        help="A second gene-count matrix (TSV) to corroborate this RNA-seq run's quantification against.",
+    ),
 ) -> None:
     """Re-hash a finished run's outputs and report any drift from the record.
 
@@ -687,13 +696,18 @@ def verify(
     With --concordance-auto (plus --bam and --ref), Contig produces that second call
     set itself by running a second variant caller (bcftools) and corroborates the run
     against it; the same at-most-WARN, never-changes-exit contract applies.
+
+    With --concordance-counts, corroborate an RNA-seq run's gene-count matrix against a
+    second quantifier's matrix (PRD C1, rnaseq): the same at-most-WARN, never-changes-
+    exit contract applies. The three concordance flags are mutually exclusive.
     """
     if not _is_safe_run_id(run_id):
         typer.echo(f"Invalid run id: {run_id!r}", err=True)
         raise typer.Exit(code=1)
-    if concordance_vcf and concordance_auto:
+    if sum(bool(x) for x in (concordance_vcf, concordance_auto, concordance_counts)) > 1:
         typer.echo(
-            "Choose one of --concordance-vcf or --concordance-auto, not both.",
+            "Choose one of --concordance-vcf, --concordance-auto or "
+            "--concordance-counts, not more than one.",
             err=True,
         )
         raise typer.Exit(code=1)
@@ -710,6 +724,10 @@ def verify(
         concordance = _evaluate_run_concordance(record, runs_dir, run_id, concordance_vcf)
     elif concordance_auto:
         concordance = _evaluate_run_concordance_auto(record, runs_dir, run_id, bam, ref)
+    elif concordance_counts:
+        concordance = _evaluate_run_counts_concordance(
+            record, runs_dir, run_id, concordance_counts
+        )
     else:
         concordance = None
 
@@ -847,6 +865,52 @@ def _resolve_primary_vcf(record: RunRecord, runs_dir: str, run_id: str):
         )
         return None
     return primaries[0]
+
+
+def _resolve_primary_counts(record: RunRecord, runs_dir: str, run_id: str):
+    """Resolve an rnaseq run's primary gene-count matrix, or None with a skip note.
+
+    Gates the run's assay to rnaseq and finds its primary Salmon gene-count matrix by
+    globbing `_COUNT_MATRIX_GLOB` under the results dir (NOT the manifest's `required[0]`,
+    which is the `*.bam` alignment, not the count matrix). A non-rnaseq assay or a
+    missing matrix prints a clear note and returns None (never a crash, never a false
+    pass).
+    """
+    assay = assay_for_pipeline(record.pipeline)
+    if assay != "rnaseq":
+        typer.echo(
+            "Skipping concordance: count concordance is only defined for RNA-seq today "
+            f"(run {run_id} is {assay or record.pipeline})."
+        )
+        return None
+
+    results_dir = _results_dir_for(record, runs_dir, run_id)
+    primaries = sorted(
+        p for p in results_dir.rglob(_COUNT_MATRIX_GLOB) if p.is_file()
+    )
+    if not primaries:
+        typer.echo(
+            "Skipping concordance: no primary gene-count matrix "
+            f"({_COUNT_MATRIX_GLOB}) found for run {run_id}."
+        )
+        return None
+    return primaries[0]
+
+
+def _evaluate_run_counts_concordance(
+    record: RunRecord, runs_dir: str, run_id: str, counts_matrix: str
+) -> list:
+    """Count-concordance checks for an rnaseq run vs a second matrix, or [] with a note.
+
+    Resolves the run's primary gene-count matrix (gating to rnaseq) and corroborates
+    it against the provided second matrix. A non-rnaseq assay or a missing primary
+    matrix yields no checks. Returns the QCResult list so the caller surfaces it
+    without changing the exit code.
+    """
+    primary = _resolve_primary_counts(record, runs_dir, run_id)
+    if primary is None:
+        return []
+    return evaluate_count_concordance(primary, counts_matrix, assay="rnaseq")
 
 
 def _echo_concordance(concordance: list | None) -> None:

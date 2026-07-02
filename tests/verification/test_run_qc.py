@@ -204,6 +204,43 @@ def test_run_qc_includes_concordance_when_vcf_given(tmp_path):
     assert _record_with(div_results).verdict != "fail"
 
 
+def _write_count_matrix(path, rows):
+    """rows: list of (gene_id, count). Writes a header + one column TSV matrix."""
+    body = "gene_id\tsample1\n"
+    body += "".join(f"{gene}\t{count}\n" for (gene, count) in rows)
+    path.write_text(body)
+    return path
+
+
+def test_run_qc_includes_rnaseq_count_concordance(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    # A concordant pair: >= 10 shared genes with matching counts (not UNVERIFIED).
+    base_rows = [(f"gene{i}", (i + 1) * 100) for i in range(12)]
+    primary = _write_count_matrix(tmp_path / "primary.tsv", base_rows)
+    agree = _write_count_matrix(tmp_path / "agree.tsv", base_rows)
+
+    results = run_qc(run_dir, concordance=(primary, agree), assay="rnaseq")
+    assert any(r.check == "spearman_concordance" and r.kind == "concordance" for r in results)
+    assert _record_with(results).verdict in ("pass", "unverified")
+
+    # A divergent pair: same genes but a scrambled monotonic-breaking order so the
+    # Spearman rho drops below 0.90. Concordance can WARN but never FAIL a verdict.
+    scrambled = [500, 100, 1200, 300, 900, 200, 1100, 400, 800, 700, 1000, 600]
+    div_rows = [(f"gene{i}", scrambled[i]) for i in range(12)]
+    divergent = _write_count_matrix(tmp_path / "divergent.tsv", div_rows)
+
+    div_results = run_qc(run_dir, concordance=(primary, divergent), assay="rnaseq")
+    assert any(
+        r.check == "spearman_concordance" and r.kind == "concordance"
+        for r in div_results
+    )
+    spearman = next(r for r in div_results if r.check == "spearman_concordance")
+    assert spearman.value is not None and spearman.value < 0.90
+    assert _record_with(div_results).verdict != "fail"
+
+
 # Rows with both transitions and transversions plus a het and a hom-alt genotype,
 # so both plausibility metrics (ts_tv_ratio, het_hom_ratio) are computable.
 _PLAUSIBLE_ROWS = [

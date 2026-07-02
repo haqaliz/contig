@@ -6,6 +6,40 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **RNA-seq cross-tool quantification concordance** (capability C1, RNA-seq slice —
+  the second assay on the concordance axis after the germline slice shipped v0.2.0).
+  `contig verify <run> --concordance-counts <matrix>` now corroborates a bulk RNA-seq
+  run's own gene-count matrix against a **second, independent count matrix** supplied
+  by the user, emitting three `kind="concordance"` checks from a new
+  `verification/count_concordance.py`: `spearman_concordance` (per-gene **Spearman
+  rank correlation**, WARN below 0.90), `fraction_agreeing` (share of shared genes
+  whose summed counts agree within a 10% relative tolerance, WARN below 0.90), and
+  `gene_overlap` (**informational, never WARN** — a second matrix built on a
+  partial/subset annotation legitimately overlaps poorly, so overlap is context, not
+  a verdict lever). Like germline concordance it is **at most WARN** (corroboration,
+  not ground truth), **never changes the verify exit code**, and reports `unverified`
+  (never a false pass) when the two matrices share fewer than 10 comparable genes (a
+  Spearman over one or two genes is meaningless). The primary matrix is located by
+  globbing the rnaseq structural manifest's count pattern `*salmon.merged.gene_counts*`
+  (not the BAM); a non-rnaseq run, or a missing matrix, prints a clear skip note and
+  changes no exit code. `--concordance-counts` is mutually exclusive with the germline
+  `--concordance-vcf`/`--concordance-auto`. The Spearman and the count-matrix parser
+  are **hand-rolled, stdlib-only** (no scipy/numpy dependency added): average-rank tie
+  handling then Pearson of the ranks; the parser is gzip-transparent, sums counts
+  across sample columns per gene, tolerates any gene-id + numeric-column TSV (so a
+  STAR/featureCounts matrix can corroborate a Salmon one), skips the header row,
+  accumulates duplicate gene ids, and never divides by zero on all-zero genes. The
+  0.90 bands and 10% tolerance are **uncalibrated engineering defaults**, WARN-capped
+  and absorbed by the UNVERIFIED-when-too-few-genes guarantee. Local, deterministic,
+  no raw-read egress (operates on count matrices on the user's compute); fully covered
+  by synthetic TSV fixtures (no real nf-core run in CI). **Deferred:** auto-running a
+  second quantifier (Salmon vs STAR+featureCounts) behind an injectable seam — mirrors
+  how the germline autorun (`--concordance-auto`) followed the user-supplied slice one
+  release later (v0.4.0); single-cell concordance; a dashboard "corroborated by" line;
+  and FAIL severity until the bands are calibrated on real data.
+
 ## [0.11.0] - 2026-07-01
 
 ### Added
