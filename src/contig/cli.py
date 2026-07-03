@@ -70,7 +70,12 @@ from contig.verification.second_caller import (
 )
 from contig.verification.structural import manifest_for
 from contig.runner import PipelineExecutionError, default_executor, default_index_builder
-from contig.samplesheet import fastq_paths, parse_samplesheet, validate_samplesheet
+from contig.samplesheet import (
+    fastq_paths,
+    parse_samplesheet,
+    validate_samplesheet,
+    validate_somatic_samplesheet,
+)
 from contig.lifecycle import (
     CancelError,
     ResumeError,
@@ -399,6 +404,14 @@ def _dispatch_run(
                 typer.echo(f"  - {problem}", err=True)
             raise typer.Exit(code=1)
 
+    # Resolve the assay ONCE, BEFORE the sample-sheet gate so it can select the
+    # right validator: an explicit --assay wins (needed when two assays share a
+    # pipeline, e.g. somatic vs germline sarek); otherwise fall back to the legacy
+    # pipeline-derived assay, then "rnaseq". Persisted below on both the manifest
+    # (so rerun re-applies it) and the RunRecord (so methods/benchmark read it
+    # directly instead of re-deriving from the ambiguous pipeline string).
+    resolved_assay = assay or assay_for_pipeline(effective_pipeline) or "rnaseq"
+
     params: dict[str, object] = {}
     input_paths: list = []
     harmonized_direction: str | None = None
@@ -407,7 +420,13 @@ def _dispatch_run(
     # its inputs and outputs from the Snakefile itself, so it skips this block.
     if engine == "nextflow":
         if input:
-            issues = validate_samplesheet(input)
+            # Somatic runs validate the sarek tumor/normal paired shape; every
+            # other assay (incl. germline sarek) keeps the generic validator
+            # unchanged (M3, somatic-gated).
+            if resolved_assay == "somatic_variant_calling":
+                issues = validate_somatic_samplesheet(input)
+            else:
+                issues = validate_samplesheet(input)
             if issues:
                 typer.echo("Sample sheet is invalid:", err=True)
                 for issue in issues:
@@ -490,13 +509,6 @@ def _dispatch_run(
         outdir_path = Path(outdir) if outdir else Path(runs_dir) / run_id / "results"
         params["outdir"] = str(outdir_path.resolve())
     selected_profiles = profiles or ("docker" if input else "test,docker")
-
-    # Resolve the assay ONCE: an explicit --assay wins (needed when two assays
-    # share a pipeline, e.g. somatic vs germline sarek); otherwise fall back to the
-    # legacy pipeline-derived assay, then "rnaseq". Persisted on both the manifest
-    # (so rerun re-applies it) and the RunRecord (so methods/benchmark read it
-    # directly instead of re-deriving from the ambiguous pipeline string).
-    resolved_assay = assay or assay_for_pipeline(effective_pipeline) or "rnaseq"
 
     # Merge the resolved assay's declarative default_params into `params` BEFORE the
     # manifest is written and the run starts, so e.g. somatic sarek picks up
