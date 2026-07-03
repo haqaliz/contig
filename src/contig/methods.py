@@ -20,6 +20,7 @@ _ASSAY_LABEL: dict[str, str] = {
     "rnaseq": "bulk RNA-seq",
     "scrnaseq": "single-cell RNA-seq",
     "variant_calling": "germline short-variant calling",
+    "somatic_variant_calling": "somatic (tumor–normal) short-variant calling",
     "methylseq": "bisulfite methylation",
     "ampliseq": "16S/ITS amplicon",
     "mag": "shotgun metagenomics",
@@ -100,7 +101,10 @@ def render_methods(record: RunRecord) -> str:
     The wording is fixed and derived only from the record, so two runs with the
     same provenance produce the same paragraph (a stable, auditable artifact).
     """
-    assay = assay_for_pipeline(record.pipeline)
+    # Prefer the explicit assay carried on the record (it disambiguates assays
+    # that share a pipeline, e.g. somatic vs germline nf-core/sarek); fall back
+    # to the legacy pipeline-derived lookup for records without an assay.
+    assay = record.assay or assay_for_pipeline(record.pipeline)
     label = _ASSAY_LABEL.get(assay) if assay else None
 
     if label:
