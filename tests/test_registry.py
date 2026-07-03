@@ -249,3 +249,55 @@ def test_metagenome_goal_does_not_misroute_to_ampliseq():
 def test_amplicon_microbiome_goal_routes_to_ampliseq_not_mag():
     # a microbiome amplicon study is ampliseq even though both touch communities
     assert match_assay("16S amplicon microbiome survey") == "ampliseq"
+
+
+# --- somatic tumor/normal variant calling assay (M1) ---------------------------
+
+
+def test_registry_has_somatic_variant_calling_entry():
+    somatic = [e for e in REGISTRY if e.assay == "somatic_variant_calling"]
+    assert len(somatic) == 1
+    assert isinstance(somatic[0], PipelineEntry)
+    assert somatic[0].pipeline == "nf-core/sarek"
+
+
+def test_select_pipeline_returns_sarek_for_somatic():
+    entry = select_pipeline("somatic_variant_calling")
+    assert entry.pipeline == "nf-core/sarek"
+    assert entry.revision == "3.5.1"
+
+
+def test_match_assay_matches_somatic_tumor_normal_phrase():
+    assert match_assay("somatic tumor/normal variant calling") == "somatic_variant_calling"
+
+
+def test_match_assay_matches_somatic_variant_calling_phrase():
+    # "somatic variant calling" contains the generic "variant calling" needle;
+    # somatic must win because it is checked first.
+    assert match_assay("somatic variant calling") == "somatic_variant_calling"
+
+
+def test_match_assay_matches_tumour_normal_phrase():
+    assert match_assay("tumour normal") == "somatic_variant_calling"
+
+
+def test_match_assay_germline_not_pulled_into_somatic():
+    # Non-collision: germline goals must still route to variant_calling and must
+    # NOT be pulled into the somatic assay.
+    assert match_assay("germline variant calling") == "variant_calling"
+    assert match_assay("call variants") == "variant_calling"
+    assert match_assay("find SNVs") == "variant_calling"
+
+
+def test_match_assay_somatic_goals_do_not_route_to_germline():
+    # And the somatic goals must NOT fall through to the generic variant_calling.
+    assert match_assay("somatic variant calling") != "variant_calling"
+    assert match_assay("tumour normal") != "variant_calling"
+
+
+def test_assay_for_pipeline_sarek_is_deterministic_to_germline():
+    # Two assays share nf-core/sarek. The legacy reverse lookup (only used as a
+    # fallback now that the run path carries an explicit --assay, P1) must remain
+    # deterministic: germline variant_calling wins because its REGISTRY entry is
+    # inserted AFTER the somatic entry (dict comprehension keeps the last write).
+    assert assay_for_pipeline("nf-core/sarek") == "variant_calling"
