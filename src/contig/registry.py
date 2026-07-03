@@ -26,6 +26,12 @@ REGISTRY: list[PipelineEntry] = [
         pipeline="nf-core/sarek",
         revision="3.5.1",
         description="Somatic tumor–normal short-variant calling (nf-core/sarek), research use.",
+        # Somatic sarek needs an explicit tool selection or it does nothing somatic;
+        # this default injects `--tools strelka,mutect2` at dispatch. R5 (honest
+        # scope): this only assembles the command — a real Mutect2 run typically
+        # also needs a panel-of-normals / germline resource that resolve_reference
+        # does not wire; that reference wiring is deferred (PRD Out-of-Scope / OQ2).
+        default_params={"tools": "strelka,mutect2"},
     ),
     PipelineEntry(
         assay="variant_calling",

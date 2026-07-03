@@ -156,6 +156,12 @@ class PipelineEntry(BaseModel):
     pipeline: str
     revision: str
     description: str
+    # Declarative per-assay Nextflow params merged into a run's params at dispatch
+    # (without overriding user-supplied values). Empty for most assays; somatic
+    # sarek uses it to inject `--tools strelka,mutect2` so the run genuinely
+    # invokes the somatic callers. default_factory=dict avoids a shared mutable
+    # default across entries.
+    default_params: dict[str, object] = Field(default_factory=dict)
 
 
 class DataShape(BaseModel):

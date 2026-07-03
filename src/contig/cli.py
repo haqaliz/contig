@@ -57,7 +57,7 @@ from contig.progress import read_progress, render_progress
 from contig.reference import ReferenceError, resolve_reference
 from contig.reference_check import check_reference_consistency
 from contig.reference_harmonize import harmonize_gtf, plan_harmonization
-from contig.registry import assay_for_pipeline
+from contig.registry import UnknownAssayError, assay_for_pipeline, select_pipeline
 from contig.report import render_explain, render_run_report, render_run_report_html
 from contig.verification.concordance import evaluate_concordance
 from contig.verification.count_concordance import (
@@ -264,6 +264,30 @@ def run(
         approval_timeout=approval_timeout,
         notify=notify,
     )
+
+
+def _inject_default_params(params: dict[str, object], assay: str) -> None:
+    """Merge the resolved assay's registry `default_params` into `params` in place,
+    WITHOUT overriding any user-supplied key (setdefault semantics).
+
+    This is the declarative seam that makes a somatic sarek run genuinely invoke
+    the somatic callers: the somatic entry carries `{"tools": "strelka,mutect2"}`,
+    which becomes `--tools strelka,mutect2` in the Nextflow argv. All other assays
+    default-empty, so germline/RNA-seq command assembly is unchanged.
+
+    R5 (honest scope): this only assembles the command correctly — it does NOT wire
+    a panel-of-normals / germline resource that Mutect2 typically needs; that
+    reference wiring is deferred (PRD Out-of-Scope / OQ2).
+
+    Defensive: an assay with no registry entry (a non-registry fallback like a bare
+    "rnaseq" default) is a no-op rather than a crash.
+    """
+    try:
+        defaults = select_pipeline(assay).default_params
+    except UnknownAssayError:
+        return
+    for key, value in defaults.items():
+        params.setdefault(key, value)
 
 
 def _dispatch_run(
@@ -473,6 +497,13 @@ def _dispatch_run(
     # (so rerun re-applies it) and the RunRecord (so methods/benchmark read it
     # directly instead of re-deriving from the ambiguous pipeline string).
     resolved_assay = assay or assay_for_pipeline(effective_pipeline) or "rnaseq"
+
+    # Merge the resolved assay's declarative default_params into `params` BEFORE the
+    # manifest is written and the run starts, so e.g. somatic sarek picks up
+    # `--tools strelka,mutect2`. User-supplied params are never overridden. Reproduce
+    # is faithful because the assay persists in launch.json and this re-injects on
+    # rerun (rather than storing the derived params). See _inject_default_params (R5).
+    _inject_default_params(params, resolved_assay)
 
     # Write the reproduce sidecar BEFORE the run, so it exists during the run and
     # on early failure. outdir/work_dir are deliberately not captured: reproduce
