@@ -275,6 +275,12 @@ class RunRecord(BaseModel):
     resource_usage: list[TaskResource] = []
     reference_identity: ReferenceIdentity | None = None
     harmonized_reference_direction: str | None = None
+    # The resolved assay this run was executed as. Persisted so methods/benchmark
+    # can read it directly instead of re-deriving from the pipeline string (which
+    # is ambiguous when two assays share a pipeline, e.g. somatic vs germline
+    # sarek). Optional/defaulted so legacy bundles written before this field still
+    # load and fall back to the pipeline-derived assay.
+    assay: str | None = None
 
     @computed_field  # serialized into run_record.json so the dashboard reads it directly
     @property
@@ -324,6 +330,11 @@ class LaunchManifest(BaseModel):
     # defaults False so a legacy launch.json (written before this field) stays valid.
     allow_reference_mismatch: bool = False
     harmonized_reference: bool = False
+    # The resolved assay used for this run (e.g. "somatic_variant_calling"), so a
+    # reproduce (`rerun`) re-applies the same assay rather than re-deriving it from
+    # the pipeline string. Defaults None so a legacy launch.json (written before
+    # this field) stays valid and falls back to the pipeline-derived assay.
+    assay: str | None = None
     created_at: str
 
     @computed_field  # serialized so the dashboard reads it without re-deriving

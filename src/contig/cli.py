@@ -204,6 +204,7 @@ def plan(
 def run(
     run_id: str = typer.Option(..., "--run-id", help="Identifier for this run."),
     pipeline: str = typer.Option("nf-core/rnaseq", "--pipeline", help="Pipeline to run (Nextflow engine)."),
+    assay: str = typer.Option(None, "--assay", help="Assay key override; needed when two assays share a pipeline (e.g. somatic vs germline sarek). Defaults to the pipeline's registered assay."),
     revision: str = typer.Option("3.26.0", "--revision", help="Pipeline revision."),
     engine: str = typer.Option("nextflow", "--engine", help="Workflow engine (nextflow, snakemake)."),
     snakefile: str = typer.Option(None, "--snakefile", help="Snakefile path (required for --engine snakemake)."),
@@ -238,6 +239,7 @@ def run(
     _dispatch_run(
         run_id=run_id,
         pipeline=pipeline,
+        assay=assay,
         revision=revision,
         profiles=profiles,
         runs_dir=runs_dir,
@@ -268,6 +270,7 @@ def _dispatch_run(
     *,
     run_id: str,
     pipeline: str,
+    assay: str | None = None,
     revision: str,
     profiles: str | None,
     runs_dir: str,
@@ -464,12 +467,20 @@ def _dispatch_run(
         params["outdir"] = str(outdir_path.resolve())
     selected_profiles = profiles or ("docker" if input else "test,docker")
 
+    # Resolve the assay ONCE: an explicit --assay wins (needed when two assays
+    # share a pipeline, e.g. somatic vs germline sarek); otherwise fall back to the
+    # legacy pipeline-derived assay, then "rnaseq". Persisted on both the manifest
+    # (so rerun re-applies it) and the RunRecord (so methods/benchmark read it
+    # directly instead of re-deriving from the ambiguous pipeline string).
+    resolved_assay = assay or assay_for_pipeline(effective_pipeline) or "rnaseq"
+
     # Write the reproduce sidecar BEFORE the run, so it exists during the run and
     # on early failure. outdir/work_dir are deliberately not captured: reproduce
     # re-defaults them under the new run dir (PRD contract A).
     manifest = LaunchManifest(
         run_id=run_id,
         pipeline=pipeline,
+        assay=resolved_assay,
         revision=revision,
         profiles=selected_profiles.split(","),
         backend=backend,
@@ -502,7 +513,7 @@ def _dispatch_run(
             index_builder=default_index_builder,
             params=params or None,
             max_attempts=max_attempts,
-            assay=assay_for_pipeline(effective_pipeline) or "rnaseq",
+            assay=resolved_assay,
             resume=resume,
             auto_approve=auto_approve,
             approval_timeout=approval_timeout,
@@ -558,6 +569,7 @@ def rerun(
     _dispatch_run(
         run_id=target_run_id,
         pipeline=manifest.pipeline,
+        assay=manifest.assay,  # replay the persisted assay (None for legacy manifests -> falls back)
         revision=manifest.revision,
         profiles=",".join(manifest.profiles),
         runs_dir=runs_dir,
