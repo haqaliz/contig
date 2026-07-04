@@ -376,6 +376,23 @@ def test_somatic_only_strelka_vcf_is_unverified(tmp_path):
     assert not any(r.check.startswith("median_vaf") for r in results)
 
 
+def test_somatic_mutect2_in_ancestor_dir_does_not_misselect_strelka(tmp_path):
+    # Robustness: "mutect2" appearing in an ANCESTOR directory (a workspace or run-id
+    # name outside the run's output tree) must NOT cause a Strelka-only VCF to be read
+    # as the Mutect2 candidate. The gate matches "mutect2" as a path component BELOW
+    # run_dir, not as a substring of the absolute path — so this stays UNVERIFIED,
+    # never a false pass on the wrong caller's data.
+    run_dir = tmp_path / "mutect2_workspace" / "run"
+    vcf = run_dir / "results" / "variant_calling" / "strelka" / "T_vs_N" / "x.vcf.gz"
+    _write_somatic_vcf_gz(vcf)
+
+    results = _discover_qc(run_dir, assay="somatic_variant_calling")
+    unverified = [r for r in results if r.check == "somatic_vaf_plausibility"]
+    assert len(unverified) == 1
+    assert unverified[0].status == "unverified"
+    assert not any(r.check.startswith("median_vaf") for r in results)
+
+
 def test_somatic_no_vcf_at_all_skips_silently(tmp_path):
     # No *.vcf.gz anywhere -> the somatic gate emits nothing and does not crash
     # (structural QC already covers a missing required output).

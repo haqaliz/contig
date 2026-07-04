@@ -79,7 +79,18 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
         pattern = manifest_for("somatic_variant_calling").required[0]  # "*.vcf.gz"
         vcfs = sorted(p for p in run_dir.rglob(pattern) if p.is_file())
         if vcfs:
-            mutect2 = next((p for p in vcfs if "mutect2" in str(p).lower()), None)
+            # Match "mutect2" as a path COMPONENT below the run dir (sarek writes the
+            # VCF under a `mutect2/` directory), not as a substring of the absolute
+            # path — otherwise a "mutect2" in an ancestor workspace/run-id name would
+            # false-positively select a Strelka VCF and risk a pass on the wrong data.
+            mutect2 = next(
+                (
+                    p
+                    for p in vcfs
+                    if "mutect2" in {part.lower() for part in p.relative_to(run_dir).parts}
+                ),
+                None,
+            )
             if mutect2 is not None:
                 results.extend(evaluate_somatic_plausibility(mutect2))
             else:
