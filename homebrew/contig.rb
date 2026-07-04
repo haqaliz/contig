@@ -9,22 +9,22 @@
 class Contig < Formula
   desc "Agentic bioinformatics analyst: the Layer-2 run, self-heal, verify, reproduce engine"
   homepage "https://github.com/haqaliz/contig"
-  version "0.14.0"
+  version "0.15.0"
 
   on_macos do
     on_arm do
-      url "https://github.com/haqaliz/contig/releases/download/v0.14.0/contig-macos-arm64"
-      sha256 "dc503618fefcd4066954b29d9bce33624804bc788f3fa3c4e34dd52bc186e0ec"
+      url "https://github.com/haqaliz/contig/releases/download/v0.15.0/contig-macos-arm64"
+      sha256 "9cf4346dfa0f5f18a7702888f35a5806dff274164e16352df4a141e4dc7ebad7"
     end
     on_intel do
-      url "https://github.com/haqaliz/contig/releases/download/v0.14.0/contig-macos-x86_64"
-      sha256 "0623116551674e1a0d4450c53dfdf09fd523c21ca62a9e4c9887aef3ad6edc9c"
+      url "https://github.com/haqaliz/contig/releases/download/v0.15.0/contig-macos-x86_64"
+      sha256 "3b5cd963747a48cf2645d76bc2134166227d22a3f25145e10eb3d623dca9839a"
     end
   end
 
   on_linux do
-    url "https://github.com/haqaliz/contig/releases/download/v0.14.0/contig-linux-x86_64"
-    sha256 "11cd3a95e7d17e1be23e4258004bfa79294fd31c88472709cba1e3d4b8fb6e68"
+    url "https://github.com/haqaliz/contig/releases/download/v0.15.0/contig-linux-x86_64"
+    sha256 "4ec8ddf6b2279cab1f1d74afc9e27f717c5d5db08ee9f57b79c0aed90b766ebc"
   end
 
   def install
@@ -32,6 +32,6 @@ class Contig < Formula
   end
 
   test do
-    assert_match "0.14.0", shell_output("#{bin}/contig version")
+    assert_match "0.15.0", shell_output("#{bin}/contig version")
   end
 end
