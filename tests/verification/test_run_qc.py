@@ -300,3 +300,91 @@ def test_plausibility_runs_alongside_multiqc(tmp_path):
     checks = [r.check for r in results]
     assert any(c.startswith("ts_tv_ratio") for c in checks)
     assert any(c.startswith("het_hom_ratio") for c in checks)
+
+
+# --- Somatic VAF plausibility runner gate (Phase 4) -------------------------
+
+# A two-sample somatic VCF: column order NORMAL then TUMOR (so the gate must
+# select the tumor by the ##tumor_sample= header name, not by position). FORMAT
+# is GT:AF:AD:DP; plausible tumor AFs (0.30, 0.40) sit inside the WARN band.
+_SOMATIC_HEADER = (
+    "##fileformat=VCFv4.2\n"
+    "##tumor_sample=TUMOR\n"
+    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tNORMAL\tTUMOR\n"
+)
+_SOMATIC_ROWS = [
+    ("chr1", 100, "A", "G", "0/1:0.30:14,6:20"),
+    ("chr1", 200, "C", "T", "0/1:0.40:12,8:20"),
+]
+
+
+def _write_somatic_vcf_gz(path, header=_SOMATIC_HEADER, rows=_SOMATIC_ROWS):
+    """Write a gzipped two-sample somatic VCF (NORMAL then TUMOR columns)."""
+    body = "".join(
+        f"{c}\t{p}\t.\t{r}\t{al}\t.\tPASS\t.\tGT:AF:AD:DP\t0/0:0.0:10,0:10\t{t}\n"
+        for (c, p, r, al, t) in rows
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(gzip.compress((header + body).encode()))
+    return path
+
+
+def test_discover_qc_includes_somatic_plausibility(tmp_path):
+    # A somatic run whose results carry a Mutect2 VCF (under a mutect2/ path) and
+    # NO multiqc_data.json still gets the somatic plausibility checks.
+    run_dir = tmp_path / "run"
+    vcf = run_dir / "results" / "variant_calling" / "mutect2" / "T_vs_N" / "x.vcf.gz"
+    _write_somatic_vcf_gz(vcf)
+
+    results = _discover_qc(run_dir, assay="somatic_variant_calling")
+    checks = [r.check for r in results]
+    assert any(c.startswith("median_vaf") for c in checks)
+    assert any(c.startswith("somatic_variant_count") for c in checks)
+    assert any(c.startswith("pon_applied") for c in checks)
+
+
+def test_somatic_plausibility_not_run_for_non_somatic_assay(tmp_path):
+    # The same Mutect2 VCF under a germline (variant_calling) run does NOT get the
+    # somatic checks — the gate is strictly keyed to somatic_variant_calling.
+    run_dir = tmp_path / "run"
+    vcf = run_dir / "results" / "variant_calling" / "mutect2" / "T_vs_N" / "x.vcf.gz"
+    _write_somatic_vcf_gz(vcf)
+
+    results = _discover_qc(run_dir, assay="variant_calling")
+    checks = [r.check for r in results]
+    assert not any(c.startswith("median_vaf") for c in checks)
+    assert not any(c.startswith("somatic_variant_count") for c in checks)
+    assert not any(c.startswith("pon_applied") for c in checks)
+
+
+def test_somatic_only_strelka_vcf_is_unverified(tmp_path):
+    # VCFs exist but none under a mutect2 path (only Strelka) -> a single
+    # UNVERIFIED somatic_vaf_plausibility result (D1), never a silent pass.
+    # NB: the test name deliberately avoids the substring "mutect2" — pytest bakes
+    # the test name into tmp_path, and the D1 gate matches "mutect2" anywhere in the
+    # VCF's absolute path (str(path).lower()), so a "mutect2"-named test would false-
+    # positively select this VCF as the Mutect2 candidate.
+    run_dir = tmp_path / "run"
+    vcf = run_dir / "results" / "variant_calling" / "strelka" / "T_vs_N" / "x.vcf.gz"
+    _write_somatic_vcf_gz(vcf)
+
+    results = _discover_qc(run_dir, assay="somatic_variant_calling")
+    unverified = [r for r in results if r.check == "somatic_vaf_plausibility"]
+    assert len(unverified) == 1
+    assert unverified[0].status == "unverified"
+    assert unverified[0].value is None
+    assert not any(r.check.startswith("median_vaf") for r in results)
+
+
+def test_somatic_no_vcf_at_all_skips_silently(tmp_path):
+    # No *.vcf.gz anywhere -> the somatic gate emits nothing and does not crash
+    # (structural QC already covers a missing required output).
+    run_dir = tmp_path / "run"
+    (run_dir / "results").mkdir(parents=True)
+
+    results = _discover_qc(run_dir, assay="somatic_variant_calling")
+    checks = [r.check for r in results]
+    assert not any(c.startswith("median_vaf") for c in checks)
+    assert not any(c.startswith("somatic_variant_count") for c in checks)
+    assert not any(c.startswith("pon_applied") for c in checks)
+    assert not any(c == "somatic_vaf_plausibility" for c in checks)
