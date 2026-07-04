@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-07-05
+
 ### Added
 
 - **Somatic Strelka2-vs-Mutect2 cross-tool concordance** (capability C1 for the somatic
