@@ -97,3 +97,72 @@ None blocking. Two pre-existing worktree-local modifications
 (`docs/planning/_card/issue.md`, `docs/planning/_card/understanding.md`) were
 present before this task started and are unrelated to Phase 2 — left untouched
 and excluded from this commit.
+
+## Fix wave
+
+Folded in two Minor findings from the final review, both in
+`src/contig/verification/somatic_concordance.py`. Strict TDD: failing tests
+added first (confirmed RED), then the fixes, then full-suite green.
+
+**Finding 1 (correctness) — cross-caller pair mismatch.** `select_caller_vcfs`
+previously only flagged ambiguity when a single caller spanned >1 distinct pair
+directory. It missed the case where Mutect2 has exactly one pair dir and
+Strelka has exactly one pair dir but they're *different* pairs (e.g. Mutect2
+only `T1_vs_N`, Strelka only `T2_vs_N`) — comparing those would corroborate two
+unrelated tumor-normal pairs and read as a misleading WARN. Fixed by, after the
+existing per-caller `> 1 distinct pair dir` check, also comparing the two
+callers' single pair-dir sets: if both are non-empty and differ, return a
+reason. `evaluate_somatic_concordance_from_run` reuses its existing single
+`somatic_site_overlap` UNVERIFIED path for this reason (value `None`,
+`kind="concordance"`) — no new branch needed there. Existing behavior
+unchanged: same-pair single-pair runs, a caller spanning >1 pair, and a single
+caller present (clean `[]` skip) all behave as before.
+
+**Finding 2 (cosmetic) — round-then-compare.** `evaluate_somatic_concordance`
+rounded the Jaccard to 4dp *before* the `< _OVERLAP_WARN_BELOW` band check, so
+a value like `1808/2009 = 0.89995022...` (unrounded, correctly WARN) would
+round to display `0.9` and read as PASS under the old rounded-first order.
+Reordered to match germline `concordance.py:223`: compute `status` from the
+unrounded `jaccard`, then round only the `value` placed on the `QCResult`.
+
+### Covering tests
+
+- `tests/verification/test_somatic_concordance.py`:
+  - `test_select_caller_vcfs_single_pair_mismatch_is_ambiguous` — Mutect2
+    `T1_vs_N`-only vs Strelka `T2_vs_N`-only → `([], [], reason)` with both pair
+    names in `reason`.
+  - `test_evaluate_somatic_concordance_from_run_pair_mismatch_is_unverified` —
+    same setup → one UNVERIFIED `somatic_site_overlap` result, `value=None`,
+    `kind="concordance"`.
+  - `test_warn_band_computed_on_unrounded_jaccard` — constructed
+    shared=1808/union=2009 (unrounded Jaccard `0.89995022...`, `round(..., 4)
+    == 0.9`) → asserts `status == "warn"` even though the rounded `value ==
+    0.9`, proving the band is decided pre-rounding.
+
+All three failed (confirmed RED) before the fixes and pass after.
+
+### Test commands and results
+
+RED:
+```
+uv run pytest tests/verification/test_somatic_concordance.py -q
+```
+→ 3 of the (then) 25 tests failed with the expected assertion mismatches
+(`mutect2 == []` false, `status == 'unverified'` got `'pass'`,
+`status == 'warn'` got `'pass'`).
+
+GREEN (targeted):
+```
+uv run pytest tests/verification/test_somatic_concordance.py -q
+```
+→ `25 passed`
+
+GREEN (full suite):
+```
+uv run pytest
+```
+→ `1071 passed, 1 skipped in 10.96s` (prior baseline 1068 passed, 1 skipped, 0
+failed — 3 more passed from the new tests, same skip, zero failures).
+
+No other files were touched; `runner.py` and the WARN-capped / `kind="concordance"`
+posture are unchanged.

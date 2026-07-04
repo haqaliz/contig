@@ -185,6 +185,23 @@ def test_custom_labels_used_in_message(tmp_path):
     assert "other_caller" in result.message
 
 
+def test_warn_band_computed_on_unrounded_jaccard(tmp_path):
+    # shared=1808, union=2009 -> unrounded jaccard ~0.89995022 (< 0.90), but
+    # round(jaccard, 4) == 0.9 (>= 0.90). The band must be decided on the
+    # unrounded value (mirrors concordance.py:223), so this must WARN even
+    # though the rounded value alone would read as passing.
+    shared_rows = _sites(1808, start=0)
+    a_only_rows = _sites(100, start=100_000)
+    b_only_rows = _sites(101, start=200_000)
+    a = _write_vcf(tmp_path / "mutect2.vcf", shared_rows + a_only_rows)
+    b = _write_vcf(tmp_path / "strelka.vcf", shared_rows + b_only_rows)
+
+    result = evaluate_somatic_concordance([a], [b])[0]
+
+    assert result.value == 0.9
+    assert result.status == "warn"
+
+
 # --- Phase 2: run-level caller selection ------------------------------------
 #
 # A synthetic sarek-shaped run tree: results/variant_calling/<caller>/<pair>/...
@@ -269,6 +286,50 @@ def test_select_caller_vcfs_multi_pair_is_ambiguous(tmp_path):
     assert strelka == []
     assert reason is not None
     assert "T1_vs_N" in reason or "T2_vs_N" in reason
+
+
+def test_select_caller_vcfs_single_pair_mismatch_is_ambiguous(tmp_path):
+    # Mutect2 has exactly one pair dir and Strelka has exactly one pair dir,
+    # but they're DIFFERENT tumor-normal pairs. Comparing them would
+    # corroborate two unrelated pairs, so this must be ambiguous too, not
+    # just the "one caller spans >1 pair" case.
+    run_dir = tmp_path / "run"
+    m_dir = _pair_dir(run_dir, "mutect2", "T1_vs_N")
+    s_dir = _pair_dir(run_dir, "strelka", "T2_vs_N")
+    rows = _sites(12)
+    vcfs = [
+        _write_vcf(m_dir / "T1_vs_N.mutect2.somatic.vcf", rows),
+        _write_vcf(s_dir / "T2_vs_N.strelka.somatic_snvs.vcf", rows[:6]),
+        _write_vcf(s_dir / "T2_vs_N.strelka.somatic_indels.vcf", rows[6:]),
+    ]
+
+    mutect2, strelka, reason = select_caller_vcfs(run_dir, vcfs)
+
+    assert mutect2 == []
+    assert strelka == []
+    assert reason is not None
+    assert "T1_vs_N" in reason
+    assert "T2_vs_N" in reason
+
+
+def test_evaluate_somatic_concordance_from_run_pair_mismatch_is_unverified(tmp_path):
+    run_dir = tmp_path / "run"
+    m_dir = _pair_dir(run_dir, "mutect2", "T1_vs_N")
+    s_dir = _pair_dir(run_dir, "strelka", "T2_vs_N")
+    rows = _sites(12)
+    vcfs = [
+        _write_vcf(m_dir / "T1_vs_N.mutect2.somatic.vcf", rows),
+        _write_vcf(s_dir / "T2_vs_N.strelka.somatic_snvs.vcf", rows[:6]),
+        _write_vcf(s_dir / "T2_vs_N.strelka.somatic_indels.vcf", rows[6:]),
+    ]
+
+    results = evaluate_somatic_concordance_from_run(run_dir, vcfs)
+
+    assert len(results) == 1
+    assert results[0].check == "somatic_site_overlap"
+    assert results[0].status == "unverified"
+    assert results[0].value is None
+    assert results[0].kind == "concordance"
 
 
 def test_evaluate_somatic_concordance_from_run_both_present(tmp_path):
