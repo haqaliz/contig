@@ -9,7 +9,10 @@ import gzip
 
 import pytest
 
-from contig.verification.somatic_plausibility import somatic_metrics
+from contig.verification.somatic_plausibility import (
+    evaluate_somatic_plausibility,
+    somatic_metrics,
+)
 
 _TUMOR = "TUMOR"
 _NORMAL = "NORMAL"
@@ -175,3 +178,98 @@ def test_gzip_supported(tmp_path):
 
     assert gz_m == plain_m
     assert gz_m.median_vaf == pytest.approx(0.30)
+
+
+# --- Phase 2: WARN-capped rule pack + plausibility evaluator --------------------
+
+
+def _recs_with_af(af, n, start_pos=100):
+    """n biallelic records, each tumor AF == af (deterministic median == af)."""
+    return [
+        _rec("chr1", start_pos + i, "A", "G", f"0/1:{af}:14,6:20")
+        for i in range(n)
+    ]
+
+
+def test_median_vaf_in_band_passes(tmp_path):
+    # median 0.30 is inside the band [0.05, 0.95] -> one median_vaf:TUMOR check
+    # with status pass, kind metric, value 0.30.
+    vcf = _write(tmp_path / "a.vcf", _header(), _recs_with_af(0.30, 12))
+
+    results = evaluate_somatic_plausibility(vcf)
+
+    mv = [r for r in results if r.check == "median_vaf:TUMOR"]
+    assert len(mv) == 1
+    assert mv[0].status == "pass"
+    assert mv[0].kind == "metric"
+    assert mv[0].value == pytest.approx(0.30)
+
+
+def test_median_vaf_out_of_band_warns_never_fails(tmp_path):
+    # All tumor AF ~= 0.99 -> median above the band -> WARN, never FAIL (WARN-cap).
+    vcf = _write(tmp_path / "a.vcf", _header(), _recs_with_af(0.99, 12))
+
+    results = evaluate_somatic_plausibility(vcf)
+
+    mv = [r for r in results if r.check == "median_vaf:TUMOR"]
+    assert len(mv) == 1
+    assert mv[0].status == "warn"
+    assert mv[0].status != "fail"
+    assert mv[0].expected_range is not None
+
+
+def test_median_vaf_uncomputable_is_unverified(tmp_path):
+    # No VAF derivable (FORMAT GT only) -> median_vaf:TUMOR is unverified (not
+    # skipped, not pass), value None, kind metric.
+    recs = [_rec("chr1", 100, "A", "G", "0/1", normal_fmt="0/0", fmt="GT")]
+    vcf = _write(tmp_path / "a.vcf", _header(), recs)
+
+    results = evaluate_somatic_plausibility(vcf)
+    by_check = {r.check: r for r in results}
+
+    assert by_check["median_vaf:TUMOR"].status == "unverified"
+    assert by_check["median_vaf:TUMOR"].value is None
+    assert by_check["median_vaf:TUMOR"].kind == "metric"
+
+
+def test_variant_count_in_band_passes(tmp_path):
+    # 12 considered records is inside the count band [10, 100000] -> pass.
+    vcf = _write(tmp_path / "a.vcf", _header(), _recs_with_af(0.30, 12))
+
+    results = evaluate_somatic_plausibility(vcf)
+
+    vc = [r for r in results if r.check == "somatic_variant_count:TUMOR"]
+    assert len(vc) == 1
+    assert vc[0].status == "pass"
+    assert vc[0].value == 12
+
+
+def test_variant_count_out_of_band_warns(tmp_path):
+    # 2 considered records is below the count floor (10) -> WARN, never FAIL.
+    vcf = _write(tmp_path / "a.vcf", _header(), _recs_with_af(0.30, 2))
+
+    results = evaluate_somatic_plausibility(vcf)
+
+    vc = [r for r in results if r.check == "somatic_variant_count:TUMOR"]
+    assert len(vc) == 1
+    assert vc[0].status == "warn"
+    assert vc[0].status != "fail"
+
+
+def test_sample_label_is_tumor_name(tmp_path):
+    # The sample label is the header tumor name; the check is "median_vaf:TUMOR".
+    vcf = _write(tmp_path / "a.vcf", _header(), _recs_with_af(0.30, 12))
+
+    results = evaluate_somatic_plausibility(vcf)
+
+    assert any(r.check == "median_vaf:TUMOR" for r in results)
+
+
+def test_sample_label_falls_back_when_unidentifiable(tmp_path):
+    # No ##tumor_sample= header -> tumor unidentifiable -> label "sample".
+    recs = [_rec("chr1", 100, "A", "G", "0/1:0.30:14,6:20")]
+    vcf = _write(tmp_path / "a.vcf", _header(tumor_line=False), recs)
+
+    results = evaluate_somatic_plausibility(vcf)
+
+    assert any(r.check == "median_vaf:sample" for r in results)

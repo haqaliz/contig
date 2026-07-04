@@ -30,6 +30,9 @@ import statistics
 from dataclasses import dataclass
 from pathlib import Path
 
+from contig.models import QCResult
+from contig.verification.rule_pack import SOMATIC_PLAUSIBILITY_PACK, evaluate
+
 
 @dataclass(frozen=True)
 class SomaticMetrics:
@@ -170,3 +173,61 @@ def somatic_metrics(vcf_path: str | os.PathLike) -> SomaticMetrics:
     vafs, count, _tumor_idx = _read_somatic(vcf_path)
     median_vaf = statistics.median(vafs) if vafs else None
     return SomaticMetrics(median_vaf=median_vaf, variant_count=count)
+
+
+def _tumor_sample_name(vcf_path: str | os.PathLike) -> str | None:
+    """Return the ``##tumor_sample=`` name, or None if the header is absent."""
+    with _open_text(vcf_path) as fh:
+        for line in fh:
+            if not line.startswith("#"):
+                break
+            if line.startswith("##tumor_sample="):
+                return line[len("##tumor_sample="):].strip()
+    return None
+
+
+def evaluate_somatic_plausibility(
+    vcf_path: str | os.PathLike, sample: str | None = None
+) -> list[QCResult]:
+    """Evaluate the somatic plausibility rules over a VCF, capped at WARN.
+
+    Computes median_vaf and somatic_variant_count from the tumor column, then runs
+    the WARN-capped SOMATIC_PLAUSIBILITY_PACK over the COMPUTABLE metrics via the
+    shared evaluate() (band logic and "<check>:<sample>" naming stay single-sourced).
+    A None median_vaf is NOT silently skipped: it gets an explicit "unverified"
+    QCResult (no severity, so it can never read as a pass). variant_count is always
+    an int, so it is always computable. Every result is kind "metric".
+
+    The sample label is the resolved tumor sample name (from the header), or
+    "sample" when the tumor cannot be identified.
+    """
+    metrics = somatic_metrics(vcf_path)
+    label = sample or _tumor_sample_name(vcf_path) or "sample"
+
+    by_metric = {
+        "median_vaf": metrics.median_vaf,
+        "somatic_variant_count": metrics.variant_count,
+    }
+    computable = {
+        metric: value for metric, value in by_metric.items() if value is not None
+    }
+
+    results = evaluate({label: computable}, SOMATIC_PLAUSIBILITY_PACK)
+
+    for rule in SOMATIC_PLAUSIBILITY_PACK:
+        metric = rule["metric"]
+        if by_metric[metric] is None:
+            results.append(
+                QCResult(
+                    check=f"{rule['check']}:{label}",
+                    status="unverified",
+                    message=(
+                        f"{label}: {metric} could not be computed "
+                        "(no derivable tumor VAF)"
+                    ),
+                    value=None,
+                    kind="metric",
+                )
+            )
+
+    return results
