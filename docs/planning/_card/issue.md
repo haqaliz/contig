@@ -1,64 +1,53 @@
-# Card: feat / somatic-vaf-plausibility
+# Card: feat/somatic-concordance
 
-- **Type:** feat
-- **Slug:** somatic-vaf-plausibility
-- **Owner:** aliz
-- **Branch:** feat/somatic-vaf-plausibility/aliz
-- **Source:** inline brief (no GitHub issue). Handed off from `contig-next` on 2026-07-04.
+Source: inline brief from the `contig-next` handoff (no GitHub issue; slug-based work).
+Type: feat · id/slug: somatic-concordance · owner: aliz · branch: feat/somatic-concordance/aliz
 
 ## Brief
 
-Add a **C3-style biological-plausibility verdict for the somatic (tumor–normal)
-assay** shipped in v0.13.0, whose verification is currently **structural-only**.
+Add a C1-style cross-tool concordance axis to the **somatic** verdict, corroborating
+the run's Mutect2 VCF against the Strelka2 VCF that the *same* sarek
+`--tools strelka,mutect2` run already emitted. Unlike germline concordance there is
+**no second caller to run and no user-supplied input** — both call sets are already
+first-class outputs of the same run bundle.
 
-C4 (somatic variant calling) shipped its first slice today (v0.13.0): intake →
-plan → run → verify wired through the engine on `nf-core/sarek` somatic mode. But
-the CHANGELOG is explicit that the somatic verdict is "honestly structural-only"
-because there is "no somatic rule pack or plausibility yet." Per
-`USE_CASE_UNIVERSE.md`, "a passthrough that issues no verdict is not a Contig
-assay" — so somatic is currently the weakest-verified assay on the engine, and a
-biological-plausibility verdict is what turns it into a real Layer-2 win.
+Reuse the `evaluate_concordance` primitive and the `kind="concordance"` reporting
+path, gated to `assay == "somatic_variant_calling"`, capped at WARN, and `unverified`
+(never a false pass) when a VCF is missing or the two share no comparable PASS sites.
 
-## What to build
+### Key caveat to dig on first
 
-Mirror the shipped **germline** C3 slice (`verification/variant_metrics.py`, the
-Ti/Tv + het/hom slice from v0.3.0):
+Strelka2 somatic SNVs carry **no standard `GT`**, so the shipped germline
+`genotype_concordance` metric won't transfer. The honest metric here is
+**PASS-site overlap / shared-call fraction** (F1 of one caller's PASS calls against
+the other), keyed on `(CHROM,POS,REF,ALT)`. The real work is in the somatic-specific
+representation: FILTER/`PASS` conventions per caller, indel normalization, and how
+Strelka2 splits SNV vs indel output (`somatic.snvs.vcf.gz` / `somatic.indels.vcf.gz`).
 
-- Compute a **VAF-distribution sanity check** (and, if it falls out cheaply, a
-  somatic-variant-count band) from the run's **somatic VCF** into a new
-  `SOMATIC_PLAUSIBILITY_PACK`.
-- Wire it into `_discover_qc`, **gated to `assay == "somatic_variant_calling"`**.
-- **WARN-capped** (corroboration, never a cancer diagnosis).
-- Emit **UNVERIFIED — never a false pass** — when the VAF field is absent.
+### Guardrails (from CLAUDE.md / CAPABILITY_ROADMAP)
 
-## Known caveats (flag / resolve in the dig)
+- Corroboration only — at most WARN, never promotes UNVERIFIED to PASS.
+- No raw-read egress: operates on VCFs on the user's compute.
+- Test-first with synthetic two-caller somatic VCF fixtures; no real nf-core/sarek run in CI.
+- Layer 2 only (verify axis), no Layer 1 workflow authoring.
+- Research-use only; a somatic verdict is "ran correctly and reproducibly," never a cancer diagnosis.
 
-1. **Uncalibrated bands.** The plausibility bands are best-effort engineering
-   defaults (WARN-capped only, like every C3 slice so far). FAIL severity is
-   deferred until calibrated on real data.
-2. **Field parsing differs across callers.** VAF/AF lives in different FORMAT
-   fields for **Mutect2** (`AF`) vs **Strelka2** (no direct `AF`; derived from
-   tier counts). The dig must decide **which caller's VCF** it computes over and
-   degrade to UNVERIFIED cleanly when the field is absent — never a fabricated VAF.
-3. **No live somatic run yet.** A real Mutect2 somatic run still needs deferred
-   PON / germline-resource wiring, so — exactly as germline Ti/Tv did — this ships
-   and is tested against **synthetic VCF fixtures** (no real nf-core/sarek run in
-   CI). The compute runs whenever a VCF exists and degrades to UNVERIFIED otherwise.
+## Provenance in the docs (where this work is named)
 
-## Guardrails (CLAUDE.md)
+- `CAPABILITY_ROADMAP.md:311` — C4: "A concordance hook (C1) against a second somatic caller."
+- `CAPABILITY_ROADMAP.md:288-293` — VAF-plausibility slice defers "the second-somatic-caller concordance hook (C1-style — Strelka2 vs Mutect2)."
+- `CHANGELOG.md:44-45` (v0.14.0) — defers "the Strelka2-vs-Mutect2 somatic concordance hook (C1)."
+- `CHANGELOG.md:76-80` (v0.13.0) — somatic launches sarek with `--tools strelka,mutect2` (both callers in one run).
+- `FEATURES.md:253` — "the Strelka2-vs-Mutect2 concordance hook ... deferred."
 
-- Layer-2 only: we consume nf-core/sarek somatic; we do **not** author the pipeline
-  from English (no Layer 1).
-- No raw-read egress; runs on the user's compute (deterministic, synthetic fixtures).
-- No clinical over-claiming: a somatic verdict is "ran correctly and reproducibly,"
-  research-use, never a cancer diagnosis (`USE_CASE_UNIVERSE.md` bright line).
-- Test-first, every capability lands with its failing test written first.
+## Shipped concordance precedent to mirror
 
-## Grounding citations
+- Germline `--concordance-vcf` (v0.2.0) and `--concordance-auto` (v0.4.0).
+- RNA-seq `--concordance-counts` (v0.12.0).
+- All via `verification/concordance.py` `evaluate_concordance`, `kind="concordance"`, WARN-capped, `unverified` below a comparability floor.
 
-- `CHANGELOG.md:9-50` — v0.13.0 somatic slice; verification is structural-only.
-- `docs/technical/CAPABILITY_ROADMAP.md:265-309` — C4; VAF/PON plausibility +
-  Strelka2-vs-Mutect2 concordance hook deferred to follow-on slices.
-- `docs/technical/USE_CASE_UNIVERSE.md:73-74, 127-138` — somatic verify menu; the
-  depth-first / "must issue a verdict" discipline.
-- `CHANGELOG.md:340-356` — germline C3 slice (v0.3.0) to mirror.
+## Shipped somatic precedent to reuse
+
+- `verification/somatic_plausibility.py` (v0.14.0) — how the somatic Mutect2 VCF is
+  located (path component below run dir), how the tumor sample is identified
+  (`##tumor_sample=` header), and how `_discover_qc` gates on `assay == "somatic_variant_calling"`.
