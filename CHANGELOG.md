@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-04
+
 - **Somatic (tumor–normal) variant calling assay** (capability C4 — a whole new assay
   end to end, the natural extension of the shipped germline sarek assay). A somatic goal
   now routes to a new `somatic_variant_calling` assay served by the same curated
@@ -422,6 +424,7 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.13.0]: https://github.com/haqaliz/contig/releases/tag/v0.13.0
 [0.12.0]: https://github.com/haqaliz/contig/releases/tag/v0.12.0
 [0.10.0]: https://github.com/haqaliz/contig/releases/tag/v0.10.0
 [0.9.0]: https://github.com/haqaliz/contig/releases/tag/v0.9.0
