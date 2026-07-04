@@ -175,15 +175,50 @@ def somatic_metrics(vcf_path: str | os.PathLike) -> SomaticMetrics:
     return SomaticMetrics(median_vaf=median_vaf, variant_count=count)
 
 
-def _tumor_sample_name(vcf_path: str | os.PathLike) -> str | None:
-    """Return the ``##tumor_sample=`` name, or None if the header is absent."""
+def _header_lines(vcf_path: str | os.PathLike) -> list[str]:
+    """Read the VCF header lines (up to and including ``#CHROM``)."""
+    lines: list[str] = []
     with _open_text(vcf_path) as fh:
         for line in fh:
             if not line.startswith("#"):
                 break
-            if line.startswith("##tumor_sample="):
-                return line[len("##tumor_sample="):].strip()
+            lines.append(line)
+            if line.startswith("#CHROM"):
+                break
+    return lines
+
+
+def _tumor_sample_name(header_lines: list[str]) -> str | None:
+    """Return the ``##tumor_sample=`` name, or None if the header is absent."""
+    for line in header_lines:
+        if line.startswith("##tumor_sample="):
+            return line[len("##tumor_sample="):].strip()
     return None
+
+
+def _pon_status(header_lines: list[str]) -> tuple[str, str]:
+    """Panel-of-normals presence, decided from the GATK command header.
+
+    Returns (status, message):
+    - no line mentioning ``GATKCommandLine`` -> "unverified" (a stripped/re-headed
+      VCF, or a non-Mutect2 file: we cannot tell, never a false pass);
+    - a GATK command line present WITH ``--panel-of-normals`` / ``--pon`` -> "pass";
+    - a GATK command line present WITHOUT either -> "warn".
+    """
+    gatk_lines = [line for line in header_lines if "GATKCommandLine" in line]
+    if not gatk_lines:
+        return (
+            "unverified",
+            "no Mutect2 (GATK) command header found to assess panel-of-normals use",
+        )
+    if any(
+        "--panel-of-normals" in line or "--pon" in line for line in gatk_lines
+    ):
+        return ("pass", "panel-of-normals applied per the Mutect2 command header")
+    return (
+        "warn",
+        "no panel-of-normals argument in the Mutect2 command header",
+    )
 
 
 def evaluate_somatic_plausibility(
@@ -196,13 +231,15 @@ def evaluate_somatic_plausibility(
     shared evaluate() (band logic and "<check>:<sample>" naming stay single-sourced).
     A None median_vaf is NOT silently skipped: it gets an explicit "unverified"
     QCResult (no severity, so it can never read as a pass). variant_count is always
-    an int, so it is always computable. Every result is kind "metric".
+    an int, so it is always computable. It also appends a ``pon_applied`` check
+    decided from the Mutect2 (GATK) command header. Every result is kind "metric".
 
     The sample label is the resolved tumor sample name (from the header), or
     "sample" when the tumor cannot be identified.
     """
     metrics = somatic_metrics(vcf_path)
-    label = sample or _tumor_sample_name(vcf_path) or "sample"
+    header_lines = _header_lines(vcf_path)
+    label = sample or _tumor_sample_name(header_lines) or "sample"
 
     by_metric = {
         "median_vaf": metrics.median_vaf,
@@ -229,5 +266,16 @@ def evaluate_somatic_plausibility(
                     kind="metric",
                 )
             )
+
+    pon_status, pon_message = _pon_status(header_lines)
+    results.append(
+        QCResult(
+            check="pon_applied",
+            status=pon_status,
+            message=pon_message,
+            value=None,
+            kind="metric",
+        )
+    )
 
     return results

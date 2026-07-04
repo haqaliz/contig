@@ -273,3 +273,62 @@ def test_sample_label_falls_back_when_unidentifiable(tmp_path):
     results = evaluate_somatic_plausibility(vcf)
 
     assert any(r.check == "median_vaf:sample" for r in results)
+
+
+# --- Phase 3: panel-of-normals presence check (header scan) --------------------
+
+_GATK_PON = (
+    '##GATKCommandLine=<ID=Mutect2,CommandLine="Mutect2 --panel-of-normals '
+    'pon.vcf.gz --input tumor.bam">'
+)
+_GATK_NO_PON = (
+    '##GATKCommandLine=<ID=Mutect2,CommandLine="Mutect2 --input tumor.bam">'
+)
+_GATK_SHORT_PON = (
+    '##GATKCommandLine=<ID=Mutect2,CommandLine="Mutect2 --pon pon.vcf.gz '
+    '--input tumor.bam">'
+)
+
+
+def _pon_check(results):
+    matches = [r for r in results if r.check == "pon_applied"]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def test_pon_present_passes(tmp_path):
+    header = _header(extra=[_GATK_PON])
+    vcf = _write(tmp_path / "a.vcf", header, _recs_with_af(0.30, 12))
+
+    results = evaluate_somatic_plausibility(vcf)
+
+    assert _pon_check(results).status == "pass"
+
+
+def test_pon_absent_warns(tmp_path):
+    header = _header(extra=[_GATK_NO_PON])
+    vcf = _write(tmp_path / "a.vcf", header, _recs_with_af(0.30, 12))
+
+    results = evaluate_somatic_plausibility(vcf)
+
+    assert _pon_check(results).status == "warn"
+
+
+def test_pon_no_gatk_header_unverified(tmp_path):
+    # No ##GATKCommandLine line at all -> cannot tell -> unverified, value None.
+    vcf = _write(tmp_path / "a.vcf", _header(), _recs_with_af(0.30, 12))
+
+    results = evaluate_somatic_plausibility(vcf)
+
+    pon = _pon_check(results)
+    assert pon.status == "unverified"
+    assert pon.value is None
+
+
+def test_pon_short_flag_recognized(tmp_path):
+    header = _header(extra=[_GATK_SHORT_PON])
+    vcf = _write(tmp_path / "a.vcf", header, _recs_with_af(0.30, 12))
+
+    results = evaluate_somatic_plausibility(vcf)
+
+    assert _pon_check(results).status == "pass"
