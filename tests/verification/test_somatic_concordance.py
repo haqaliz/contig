@@ -1,16 +1,21 @@
 """Deterministic somatic PASS-site-overlap concordance metric (PRD C4 follow-on).
 
-Phase 1 only: the pure module (`parse_pass_sites`, `read_caller_sites`,
-`evaluate_somatic_concordance`). Real files only, via pytest tmp_path; no mocks,
-no tool execution, no network.
+Phase 1: the pure module (`parse_pass_sites`, `read_caller_sites`,
+`evaluate_somatic_concordance`). Phase 2: the run-level selection helpers
+(`select_caller_vcfs`, `evaluate_somatic_concordance_from_run`) that auto-wire
+into `_discover_qc` (see `tests/verification/test_run_qc.py` for the runner-gate
+tests). Real files only, via pytest tmp_path; no mocks, no tool execution, no
+network.
 """
 
 import gzip
 
 from contig.verification.somatic_concordance import (
     evaluate_somatic_concordance,
+    evaluate_somatic_concordance_from_run,
     parse_pass_sites,
     read_caller_sites,
+    select_caller_vcfs,
 )
 
 _HEADER = "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
@@ -178,3 +183,133 @@ def test_custom_labels_used_in_message(tmp_path):
 
     assert "tumor_caller" in result.message
     assert "other_caller" in result.message
+
+
+# --- Phase 2: run-level caller selection ------------------------------------
+#
+# A synthetic sarek-shaped run tree: results/variant_calling/<caller>/<pair>/...
+# (paths from `tests/test_somatic_end_to_end.py`). `select_caller_vcfs` and
+# `evaluate_somatic_concordance_from_run` only ever see the already-globbed VCF
+# list plus run_dir, exactly as `_discover_qc` calls them.
+
+
+def _pair_dir(run_dir, caller, pair):
+    d = run_dir / "results" / "variant_calling" / caller / pair
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _sarek_tree(run_dir, pairs=("T_vs_N",), n=12):
+    """Write a Mutect2 VCF and a Strelka snvs+indels pair per pair dir, with
+    identical PASS sites (n >= _MIN_SHARED_SITES) so a resulting concordance
+    check is computable rather than UNVERIFIED. Returns the sorted VCF list
+    exactly as `run_dir.rglob("*.vcf.gz")` would (here: plain `.vcf`, since the
+    selection helpers care only about path components, not gzip)."""
+    vcfs = []
+    rows = _sites(n)
+    for pair in pairs:
+        m_dir = _pair_dir(run_dir, "mutect2", pair)
+        vcfs.append(_write_vcf(m_dir / f"{pair}.mutect2.somatic.vcf", rows))
+        s_dir = _pair_dir(run_dir, "strelka", pair)
+        vcfs.append(
+            _write_vcf(s_dir / f"{pair}.strelka.somatic_snvs.vcf", rows[:6])
+        )
+        vcfs.append(
+            _write_vcf(s_dir / f"{pair}.strelka.somatic_indels.vcf", rows[6:])
+        )
+    return sorted(vcfs)
+
+
+def test_select_caller_vcfs_both_present(tmp_path):
+    run_dir = tmp_path / "run"
+    vcfs = _sarek_tree(run_dir)
+
+    mutect2, strelka, reason = select_caller_vcfs(run_dir, vcfs)
+
+    assert reason is None
+    assert len(mutect2) == 1
+    assert len(strelka) == 2
+
+
+def test_select_caller_vcfs_strelka_only(tmp_path):
+    run_dir = tmp_path / "run"
+    s_dir = _pair_dir(run_dir, "strelka", "T_vs_N")
+    rows = _sites(12)
+    vcfs = [
+        _write_vcf(s_dir / "T_vs_N.strelka.somatic_snvs.vcf", rows[:6]),
+        _write_vcf(s_dir / "T_vs_N.strelka.somatic_indels.vcf", rows[6:]),
+    ]
+
+    mutect2, strelka, reason = select_caller_vcfs(run_dir, vcfs)
+
+    assert reason is None
+    assert mutect2 == []
+    assert len(strelka) == 2
+
+
+def test_select_caller_vcfs_mutect2_only(tmp_path):
+    run_dir = tmp_path / "run"
+    m_dir = _pair_dir(run_dir, "mutect2", "T_vs_N")
+    vcfs = [_write_vcf(m_dir / "T_vs_N.mutect2.somatic.vcf", _sites(12))]
+
+    mutect2, strelka, reason = select_caller_vcfs(run_dir, vcfs)
+
+    assert reason is None
+    assert len(mutect2) == 1
+    assert strelka == []
+
+
+def test_select_caller_vcfs_multi_pair_is_ambiguous(tmp_path):
+    run_dir = tmp_path / "run"
+    vcfs = _sarek_tree(run_dir, pairs=("T1_vs_N", "T2_vs_N"))
+
+    mutect2, strelka, reason = select_caller_vcfs(run_dir, vcfs)
+
+    assert mutect2 == []
+    assert strelka == []
+    assert reason is not None
+    assert "T1_vs_N" in reason or "T2_vs_N" in reason
+
+
+def test_evaluate_somatic_concordance_from_run_both_present(tmp_path):
+    run_dir = tmp_path / "run"
+    vcfs = _sarek_tree(run_dir)
+
+    results = evaluate_somatic_concordance_from_run(run_dir, vcfs)
+
+    assert len(results) == 1
+    assert results[0].check == "somatic_site_overlap"
+    assert results[0].kind == "concordance"
+    assert results[0].status != "fail"
+
+
+def test_evaluate_somatic_concordance_from_run_strelka_only_skips(tmp_path):
+    run_dir = tmp_path / "run"
+    s_dir = _pair_dir(run_dir, "strelka", "T_vs_N")
+    rows = _sites(12)
+    vcfs = [
+        _write_vcf(s_dir / "T_vs_N.strelka.somatic_snvs.vcf", rows[:6]),
+        _write_vcf(s_dir / "T_vs_N.strelka.somatic_indels.vcf", rows[6:]),
+    ]
+
+    assert evaluate_somatic_concordance_from_run(run_dir, vcfs) == []
+
+
+def test_evaluate_somatic_concordance_from_run_mutect2_only_skips(tmp_path):
+    run_dir = tmp_path / "run"
+    m_dir = _pair_dir(run_dir, "mutect2", "T_vs_N")
+    vcfs = [_write_vcf(m_dir / "T_vs_N.mutect2.somatic.vcf", _sites(12))]
+
+    assert evaluate_somatic_concordance_from_run(run_dir, vcfs) == []
+
+
+def test_evaluate_somatic_concordance_from_run_multi_pair_is_unverified(tmp_path):
+    run_dir = tmp_path / "run"
+    vcfs = _sarek_tree(run_dir, pairs=("T1_vs_N", "T2_vs_N"))
+
+    results = evaluate_somatic_concordance_from_run(run_dir, vcfs)
+
+    assert len(results) == 1
+    assert results[0].status == "unverified"
+    assert results[0].value is None
+    assert results[0].kind == "concordance"

@@ -159,3 +159,65 @@ def evaluate_somatic_concordance(
             expected_range=f">= {_OVERLAP_WARN_BELOW}",
         )
     ]
+
+
+def select_caller_vcfs(
+    run_dir: str | os.PathLike, vcfs: Iterable[str | os.PathLike]
+) -> tuple[list[Path], list[Path], str | None]:
+    """Select each caller's VCF(s) out of a somatic run's already-globbed VCF list.
+
+    Mirrors the runner's Mutect2 path-component match (`runner.py`'s somatic
+    branch): a VCF belongs to a caller when that caller's name appears as a
+    lowercased path COMPONENT below `run_dir` (sarek writes each caller's output
+    under a `<caller>/` directory), not as a substring of the absolute path.
+
+    UNVERIFIED, never an arbitrary pick, when either caller's VCFs span more than
+    one distinct tumor-normal pair directory (`p.parent.name`): returns
+    `([], [], reason)` instead of guessing which pair to compare.
+    """
+    run_dir = Path(run_dir)
+
+    def _has_component(p: Path, caller: str) -> bool:
+        return caller in {part.lower() for part in p.relative_to(run_dir).parts}
+
+    mutect2 = [Path(p) for p in vcfs if _has_component(Path(p), "mutect2")]
+    strelka = [Path(p) for p in vcfs if _has_component(Path(p), "strelka")]
+
+    for label, paths in (("mutect2", mutect2), ("strelka", strelka)):
+        pair_dirs = {p.parent.name for p in paths}
+        if len(pair_dirs) > 1:
+            reason = (
+                f"{label} VCFs span {len(pair_dirs)} tumor-normal pair "
+                f"directories ({sorted(pair_dirs)}); not computed for an "
+                "ambiguous multi-pair layout"
+            )
+            return [], [], reason
+
+    return mutect2, strelka, None
+
+
+def evaluate_somatic_concordance_from_run(
+    run_dir: str | os.PathLike, vcfs: Iterable[str | os.PathLike]
+) -> list[QCResult]:
+    """Auto-select the Mutect2/Strelka VCFs from a somatic run and evaluate their
+    PASS-site overlap.
+
+    Clean skip (`[]`) when either caller's VCF is absent — one caller missing is
+    already handled independently by VAF plausibility for Mutect2, and a
+    corroboration check needs both callers present. UNVERIFIED, not an arbitrary
+    compare, on an ambiguous multi tumor-normal pair layout.
+    """
+    mutect2, strelka, reason = select_caller_vcfs(run_dir, vcfs)
+    if reason is not None:
+        return [
+            _concordance(
+                "somatic_site_overlap",
+                "unverified",
+                f"cannot compute concordance: {reason}",
+                value=None,
+                expected_range=f">= {_OVERLAP_WARN_BELOW}",
+            )
+        ]
+    if not mutect2 or not strelka:
+        return []
+    return evaluate_somatic_concordance(mutect2, strelka)

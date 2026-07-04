@@ -405,3 +405,121 @@ def test_somatic_no_vcf_at_all_skips_silently(tmp_path):
     assert not any(c.startswith("somatic_variant_count") for c in checks)
     assert not any(c.startswith("pon_applied") for c in checks)
     assert not any(c == "somatic_vaf_plausibility" for c in checks)
+
+
+# --- Somatic Strelka2-vs-Mutect2 concordance auto-wiring (site-overlap Phase 2) --
+#
+# Reuses the somatic manifest's globbed *.vcf.gz list, exactly as VAF
+# plausibility does; the concordance check is independent and additive.
+
+
+def _pass_site_rows(n, chrom="chr1", start=100):
+    return [(chrom, start + i, "A", "G") for i in range(n)]
+
+
+def _write_pass_vcf_gz(path, rows):
+    """A minimal FILTER-PASS VCF (rows: (chrom, pos, ref, alt)), gzipped, at the
+    path sarek writes a somatic caller's VCF under."""
+    header = "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+    body = "".join(f"{c}\t{p}\t.\t{r}\t{a}\t.\tPASS\t.\n" for (c, p, r, a) in rows)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(gzip.compress((header + body).encode()))
+    return path
+
+
+def test_discover_qc_includes_somatic_concordance_for_both_callers(tmp_path):
+    run_dir = tmp_path / "run"
+    rows = _pass_site_rows(12)
+    _write_pass_vcf_gz(
+        run_dir / "results" / "variant_calling" / "mutect2" / "T_vs_N" / "x.vcf.gz", rows
+    )
+    _write_pass_vcf_gz(
+        run_dir
+        / "results"
+        / "variant_calling"
+        / "strelka"
+        / "T_vs_N"
+        / "T_vs_N.strelka.somatic_snvs.vcf.gz",
+        rows[:6],
+    )
+    _write_pass_vcf_gz(
+        run_dir
+        / "results"
+        / "variant_calling"
+        / "strelka"
+        / "T_vs_N"
+        / "T_vs_N.strelka.somatic_indels.vcf.gz",
+        rows[6:],
+    )
+
+    results = _discover_qc(run_dir, assay="somatic_variant_calling")
+
+    concordance = [r for r in results if r.kind == "concordance"]
+    assert any(r.check == "somatic_site_overlap" for r in concordance)
+
+
+def test_discover_qc_somatic_concordance_warn_does_not_fail_verdict(tmp_path):
+    run_dir = tmp_path / "run"
+    m_rows = _pass_site_rows(12, start=100)
+    s_rows = _pass_site_rows(12, start=900)  # disjoint -> warn, not fail
+    _write_pass_vcf_gz(
+        run_dir / "results" / "variant_calling" / "mutect2" / "T_vs_N" / "x.vcf.gz", m_rows
+    )
+    _write_pass_vcf_gz(
+        run_dir
+        / "results"
+        / "variant_calling"
+        / "strelka"
+        / "T_vs_N"
+        / "T_vs_N.strelka.somatic_snvs.vcf.gz",
+        s_rows,
+    )
+
+    results = _discover_qc(run_dir, assay="somatic_variant_calling")
+
+    concordance = [r for r in results if r.check == "somatic_site_overlap"]
+    assert len(concordance) == 1
+    assert concordance[0].status == "warn"
+    assert _record_with(results).verdict != "fail"
+
+
+def test_discover_qc_no_somatic_concordance_for_germline_assay(tmp_path):
+    run_dir = tmp_path / "run"
+    rows = _pass_site_rows(12)
+    _write_pass_vcf_gz(
+        run_dir / "results" / "variant_calling" / "mutect2" / "T_vs_N" / "x.vcf.gz", rows
+    )
+    _write_pass_vcf_gz(
+        run_dir
+        / "results"
+        / "variant_calling"
+        / "strelka"
+        / "T_vs_N"
+        / "T_vs_N.strelka.somatic_snvs.vcf.gz",
+        rows,
+    )
+
+    results = _discover_qc(run_dir, assay="variant_calling")
+
+    assert not any(r.check == "somatic_site_overlap" for r in results)
+
+
+def test_discover_qc_no_somatic_concordance_for_rnaseq_assay(tmp_path):
+    run_dir = tmp_path / "run"
+    rows = _pass_site_rows(12)
+    _write_pass_vcf_gz(
+        run_dir / "results" / "variant_calling" / "mutect2" / "T_vs_N" / "x.vcf.gz", rows
+    )
+    _write_pass_vcf_gz(
+        run_dir
+        / "results"
+        / "variant_calling"
+        / "strelka"
+        / "T_vs_N"
+        / "T_vs_N.strelka.somatic_snvs.vcf.gz",
+        rows,
+    )
+
+    results = _discover_qc(run_dir, assay="rnaseq")
+
+    assert not any(r.check == "somatic_site_overlap" for r in results)
