@@ -293,6 +293,7 @@ def run_pipeline(
             parameters=params or {},
             events=parse_events(artifact_path),
             qc_results=_discover_qc(run_dir, assay),
+            assay=assay,
             nextflow_version=nextflow_version,
             contig_version=_contig_version(),
         )

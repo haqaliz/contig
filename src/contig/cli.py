@@ -57,7 +57,7 @@ from contig.progress import read_progress, render_progress
 from contig.reference import ReferenceError, resolve_reference
 from contig.reference_check import check_reference_consistency
 from contig.reference_harmonize import harmonize_gtf, plan_harmonization
-from contig.registry import assay_for_pipeline
+from contig.registry import UnknownAssayError, assay_for_pipeline, select_pipeline
 from contig.report import render_explain, render_run_report, render_run_report_html
 from contig.verification.concordance import evaluate_concordance
 from contig.verification.count_concordance import (
@@ -70,7 +70,12 @@ from contig.verification.second_caller import (
 )
 from contig.verification.structural import manifest_for
 from contig.runner import PipelineExecutionError, default_executor, default_index_builder
-from contig.samplesheet import fastq_paths, parse_samplesheet, validate_samplesheet
+from contig.samplesheet import (
+    fastq_paths,
+    parse_samplesheet,
+    validate_samplesheet,
+    validate_somatic_samplesheet,
+)
 from contig.lifecycle import (
     CancelError,
     ResumeError,
@@ -204,6 +209,7 @@ def plan(
 def run(
     run_id: str = typer.Option(..., "--run-id", help="Identifier for this run."),
     pipeline: str = typer.Option("nf-core/rnaseq", "--pipeline", help="Pipeline to run (Nextflow engine)."),
+    assay: str = typer.Option(None, "--assay", help="Assay key override; needed when two assays share a pipeline (e.g. somatic vs germline sarek). Defaults to the pipeline's registered assay."),
     revision: str = typer.Option("3.26.0", "--revision", help="Pipeline revision."),
     engine: str = typer.Option("nextflow", "--engine", help="Workflow engine (nextflow, snakemake)."),
     snakefile: str = typer.Option(None, "--snakefile", help="Snakefile path (required for --engine snakemake)."),
@@ -238,6 +244,7 @@ def run(
     _dispatch_run(
         run_id=run_id,
         pipeline=pipeline,
+        assay=assay,
         revision=revision,
         profiles=profiles,
         runs_dir=runs_dir,
@@ -264,10 +271,35 @@ def run(
     )
 
 
+def _inject_default_params(params: dict[str, object], assay: str) -> None:
+    """Merge the resolved assay's registry `default_params` into `params` in place,
+    WITHOUT overriding any user-supplied key (setdefault semantics).
+
+    This is the declarative seam that makes a somatic sarek run genuinely invoke
+    the somatic callers: the somatic entry carries `{"tools": "strelka,mutect2"}`,
+    which becomes `--tools strelka,mutect2` in the Nextflow argv. All other assays
+    default-empty, so germline/RNA-seq command assembly is unchanged.
+
+    R5 (honest scope): this only assembles the command correctly — it does NOT wire
+    a panel-of-normals / germline resource that Mutect2 typically needs; that
+    reference wiring is deferred (PRD Out-of-Scope / OQ2).
+
+    Defensive: an assay with no registry entry (a non-registry fallback like a bare
+    "rnaseq" default) is a no-op rather than a crash.
+    """
+    try:
+        defaults = select_pipeline(assay).default_params
+    except UnknownAssayError:
+        return
+    for key, value in defaults.items():
+        params.setdefault(key, value)
+
+
 def _dispatch_run(
     *,
     run_id: str,
     pipeline: str,
+    assay: str | None = None,
     revision: str,
     profiles: str | None,
     runs_dir: str,
@@ -372,6 +404,14 @@ def _dispatch_run(
                 typer.echo(f"  - {problem}", err=True)
             raise typer.Exit(code=1)
 
+    # Resolve the assay ONCE, BEFORE the sample-sheet gate so it can select the
+    # right validator: an explicit --assay wins (needed when two assays share a
+    # pipeline, e.g. somatic vs germline sarek); otherwise fall back to the legacy
+    # pipeline-derived assay, then "rnaseq". Persisted below on both the manifest
+    # (so rerun re-applies it) and the RunRecord (so methods/benchmark read it
+    # directly instead of re-deriving from the ambiguous pipeline string).
+    resolved_assay = assay or assay_for_pipeline(effective_pipeline) or "rnaseq"
+
     params: dict[str, object] = {}
     input_paths: list = []
     harmonized_direction: str | None = None
@@ -380,7 +420,13 @@ def _dispatch_run(
     # its inputs and outputs from the Snakefile itself, so it skips this block.
     if engine == "nextflow":
         if input:
-            issues = validate_samplesheet(input)
+            # Somatic runs validate the sarek tumor/normal paired shape; every
+            # other assay (incl. germline sarek) keeps the generic validator
+            # unchanged (M3, somatic-gated).
+            if resolved_assay == "somatic_variant_calling":
+                issues = validate_somatic_samplesheet(input)
+            else:
+                issues = validate_samplesheet(input)
             if issues:
                 typer.echo("Sample sheet is invalid:", err=True)
                 for issue in issues:
@@ -464,12 +510,20 @@ def _dispatch_run(
         params["outdir"] = str(outdir_path.resolve())
     selected_profiles = profiles or ("docker" if input else "test,docker")
 
+    # Merge the resolved assay's declarative default_params into `params` BEFORE the
+    # manifest is written and the run starts, so e.g. somatic sarek picks up
+    # `--tools strelka,mutect2`. User-supplied params are never overridden. Reproduce
+    # is faithful because the assay persists in launch.json and this re-injects on
+    # rerun (rather than storing the derived params). See _inject_default_params (R5).
+    _inject_default_params(params, resolved_assay)
+
     # Write the reproduce sidecar BEFORE the run, so it exists during the run and
     # on early failure. outdir/work_dir are deliberately not captured: reproduce
     # re-defaults them under the new run dir (PRD contract A).
     manifest = LaunchManifest(
         run_id=run_id,
         pipeline=pipeline,
+        assay=resolved_assay,
         revision=revision,
         profiles=selected_profiles.split(","),
         backend=backend,
@@ -502,7 +556,7 @@ def _dispatch_run(
             index_builder=default_index_builder,
             params=params or None,
             max_attempts=max_attempts,
-            assay=assay_for_pipeline(effective_pipeline) or "rnaseq",
+            assay=resolved_assay,
             resume=resume,
             auto_approve=auto_approve,
             approval_timeout=approval_timeout,
@@ -558,6 +612,7 @@ def rerun(
     _dispatch_run(
         run_id=target_run_id,
         pipeline=manifest.pipeline,
+        assay=manifest.assay,  # replay the persisted assay (None for legacy manifests -> falls back)
         revision=manifest.revision,
         profiles=",".join(manifest.profiles),
         runs_dir=runs_dir,

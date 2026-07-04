@@ -278,3 +278,35 @@ def test_manifest_for_returns_a_manifest_for_a_known_assay():
 def test_manifest_for_rejects_an_unknown_assay():
     with pytest.raises(ValueError):
         manifest_for("nonexistent_assay")
+
+
+def test_manifest_for_somatic_mirrors_germline_vcf_shape():
+    manifest = manifest_for("somatic_variant_calling")
+    assert isinstance(manifest, ExpectedOutputs)
+    assert manifest.required == ["*.vcf.gz"]
+    assert manifest.gzip == ["*.vcf.gz"]
+
+
+def test_evaluate_somatic_manifest_passes_for_present_intact_vcf(tmp_path):
+    # Somatic outputs land under variant_calling/<caller>/<tumor>_vs_<normal>/.
+    out = tmp_path / "variant_calling" / "strelka" / "T_vs_N"
+    out.mkdir(parents=True)
+    _write_gzip(
+        out / "T_vs_N.strelka.somatic_snvs.vcf.gz",
+        b"##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\n",
+    )
+
+    results = evaluate_against_manifest(tmp_path, manifest_for("somatic_variant_calling"))
+
+    assert results
+    assert all(r.status == "pass" for r in results)
+    assert all(r.kind == "structural" for r in results)
+
+
+def test_evaluate_somatic_manifest_fails_on_missing_vcf(tmp_path):
+    out = tmp_path / "variant_calling" / "strelka" / "T_vs_N"
+    out.mkdir(parents=True)
+
+    results = evaluate_against_manifest(tmp_path, manifest_for("somatic_variant_calling"))
+
+    assert any(r.status == "fail" for r in results)

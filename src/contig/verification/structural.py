@@ -251,6 +251,14 @@ _ASSAY_MANIFESTS: dict[str, ExpectedOutputs] = {
         required=["*.vcf.gz"],
         gzip=["*.vcf.gz"],
     ),
+    # Somatic sarek outputs land under variant_calling/<caller>/<tumor>_vs_<normal>/.
+    # Deliberately minimal and mirroring germline: require an intact bgzipped VCF.
+    # No `indexed` — somatic VCFs ship a `.tbi`, which check_index_present does not
+    # recognize (only .bai/.csi), so asserting it would false-fail an intact run.
+    "somatic_variant_calling": ExpectedOutputs(
+        required=["*.vcf.gz"],
+        gzip=["*.vcf.gz"],
+    ),
     "scrnaseq": ExpectedOutputs(
         required=["*.h5ad", "*matrix.mtx*"],
     ),

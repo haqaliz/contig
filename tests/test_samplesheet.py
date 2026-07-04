@@ -1,9 +1,15 @@
-import pytest
+import json
 
+import pytest
+from typer.testing import CliRunner
+
+from contig.cli import app
+from contig.models import RunRecord
 from contig.samplesheet import (
     fastq_paths,
     parse_samplesheet,
     validate_samplesheet,
+    validate_somatic_samplesheet,
 )
 
 
@@ -148,3 +154,181 @@ def test_fastq_paths_paired_end_resolved_against_sheet_dir(tmp_path):
         (tmp_path / "r1_1.fastq.gz").resolve(),
         (tmp_path / "r1_2.fastq.gz").resolve(),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 (M3): sarek tumor/normal somatic sample-sheet validation.
+# Columns: patient, sample, status, lane, fastq_1, fastq_2 (status 0=normal,
+# 1=tumor). A tumor/normal PAIR = same patient, distinct sample, both a
+# status-0 and a status-1 row.
+# ---------------------------------------------------------------------------
+
+
+def _write_fastqs(tmp_path, *names):
+    for name in names:
+        write(tmp_path, name, "")
+
+
+def test_somatic_valid_tumor_normal_pair_returns_empty(tmp_path):
+    # (a) patient P1 with a normal (status 0) + tumor (status 1) → no issues.
+    _write_fastqs(tmp_path, "n_1.fastq.gz", "n_2.fastq.gz", "t_1.fastq.gz", "t_2.fastq.gz")
+    sheet = write(
+        tmp_path,
+        "somatic.csv",
+        "patient,sample,status,lane,fastq_1,fastq_2\n"
+        "P1,N,0,L1,n_1.fastq.gz,n_2.fastq.gz\n"
+        "P1,T,1,L1,t_1.fastq.gz,t_2.fastq.gz\n",
+    )
+    assert validate_somatic_samplesheet(sheet) == []
+
+
+def test_somatic_missing_status_column_refuses_with_specific_message(tmp_path):
+    # (b) missing `status` column → the specific missing-column message.
+    _write_fastqs(tmp_path, "n_1.fastq.gz", "n_2.fastq.gz")
+    sheet = write(
+        tmp_path,
+        "somatic.csv",
+        "patient,sample,lane,fastq_1,fastq_2\n"
+        "P1,N,L1,n_1.fastq.gz,n_2.fastq.gz\n",
+    )
+    issues = validate_somatic_samplesheet(sheet)
+    assert len(issues) == 1
+    assert "status" in issues[0]
+
+
+def test_somatic_status_not_in_zero_one_refuses_naming_row(tmp_path):
+    # (c) status ∉ {0,1} → refuse naming the offending row.
+    _write_fastqs(tmp_path, "n_1.fastq.gz", "n_2.fastq.gz", "t_1.fastq.gz", "t_2.fastq.gz")
+    sheet = write(
+        tmp_path,
+        "somatic.csv",
+        "patient,sample,status,lane,fastq_1,fastq_2\n"
+        "P1,N,0,L1,n_1.fastq.gz,n_2.fastq.gz\n"
+        "P1,T,2,L1,t_1.fastq.gz,t_2.fastq.gz\n",
+    )
+    issues = validate_somatic_samplesheet(sheet)
+    assert any("status" in issue and ("row 2" in issue or "T" in issue) for issue in issues)
+
+
+def test_somatic_unpaired_tumor_refuses_pointing_at_germline(tmp_path):
+    # (d) a status:1 patient (P2) with no status:0 → refuse pointing at germline,
+    # even though another patient (P1) is a valid pair.
+    _write_fastqs(
+        tmp_path,
+        "n_1.fastq.gz", "n_2.fastq.gz",
+        "t_1.fastq.gz", "t_2.fastq.gz",
+        "t2_1.fastq.gz", "t2_2.fastq.gz",
+    )
+    sheet = write(
+        tmp_path,
+        "somatic.csv",
+        "patient,sample,status,lane,fastq_1,fastq_2\n"
+        "P1,N,0,L1,n_1.fastq.gz,n_2.fastq.gz\n"
+        "P1,T,1,L1,t_1.fastq.gz,t_2.fastq.gz\n"
+        "P2,T2,1,L1,t2_1.fastq.gz,t2_2.fastq.gz\n",
+    )
+    issues = validate_somatic_samplesheet(sheet)
+    assert issues != []
+    assert any("P2" in issue and "germline" in issue.lower() for issue in issues)
+
+
+def test_somatic_multi_tumor_relapse_is_allowed(tmp_path):
+    # (e) patient with a normal + two distinct tumor rows (relapse) → allowed.
+    _write_fastqs(
+        tmp_path,
+        "n_1.fastq.gz", "n_2.fastq.gz",
+        "t1_1.fastq.gz", "t1_2.fastq.gz",
+        "t2_1.fastq.gz", "t2_2.fastq.gz",
+    )
+    sheet = write(
+        tmp_path,
+        "somatic.csv",
+        "patient,sample,status,lane,fastq_1,fastq_2\n"
+        "P1,N,0,L1,n_1.fastq.gz,n_2.fastq.gz\n"
+        "P1,T1,1,L1,t1_1.fastq.gz,t1_2.fastq.gz\n"
+        "P1,T2,1,L1,t2_1.fastq.gz,t2_2.fastq.gz\n",
+    )
+    assert validate_somatic_samplesheet(sheet) == []
+
+
+def test_somatic_tumor_only_refuses_pointing_at_germline(tmp_path):
+    # (f) no normal anywhere → refuse, message points at germline.
+    _write_fastqs(tmp_path, "t_1.fastq.gz", "t_2.fastq.gz")
+    sheet = write(
+        tmp_path,
+        "somatic.csv",
+        "patient,sample,status,lane,fastq_1,fastq_2\n"
+        "P1,T,1,L1,t_1.fastq.gz,t_2.fastq.gz\n",
+    )
+    issues = validate_somatic_samplesheet(sheet)
+    assert issues != []
+    assert any("germline" in issue.lower() for issue in issues)
+
+
+# ---------------------------------------------------------------------------
+# (g) somatic-gating at the CLI: a somatic run uses the somatic validator;
+# a germline run still uses the generic validate_samplesheet unchanged.
+# ---------------------------------------------------------------------------
+
+_cli = CliRunner()
+
+
+def _self_heal_spy(captured):
+    def spy(**kwargs):
+        captured.append(kwargs.get("assay"))
+        return RunRecord(
+            run_id=kwargs["run_id"],
+            pipeline=kwargs["pipeline"],
+            pipeline_revision=kwargs["revision"],
+            target=kwargs["target"],
+            input_checksums={},
+        )
+
+    return spy
+
+
+def _tumor_only_sarek_sheet(tmp_path):
+    """A sarek-shaped tumor-only sheet: the somatic validator REFUSES it
+    (no matched normal), but the generic validator ACCEPTS it (it has a
+    sample + fastq_1 and the FASTQs exist)."""
+    _write_fastqs(tmp_path, "t_1.fastq.gz", "t_2.fastq.gz")
+    return write(
+        tmp_path,
+        "sheet.csv",
+        "patient,sample,status,lane,fastq_1,fastq_2\n"
+        "P1,T,1,L1,t_1.fastq.gz,t_2.fastq.gz\n",
+    )
+
+
+def test_cli_somatic_run_uses_somatic_validator(tmp_path, monkeypatch):
+    captured: list = []
+    monkeypatch.setattr("contig.cli.self_heal_run", _self_heal_spy(captured))
+    sheet = _tumor_only_sarek_sheet(tmp_path)
+    result = _cli.invoke(
+        app,
+        ["run", "--run-id", "s", "--runs-dir", str(tmp_path / "runs"),
+         "--pipeline", "nf-core/sarek", "--revision", "3.5.1",
+         "--assay", "somatic_variant_calling",
+         "--input", str(sheet), "--genome", "GRCh38"],
+    )
+    # Somatic validator refuses the unpaired/tumor-only sheet before launching.
+    assert result.exit_code == 1, result.output
+    assert "germline" in result.output.lower()
+    assert captured == []  # self_heal_run never reached
+
+
+def test_cli_germline_run_uses_generic_validator(tmp_path, monkeypatch):
+    captured: list = []
+    monkeypatch.setattr("contig.cli.self_heal_run", _self_heal_spy(captured))
+    sheet = _tumor_only_sarek_sheet(tmp_path)
+    # No --assay: sarek derives germline `variant_calling`, which keeps the
+    # generic validator; the same tumor-only sarek sheet passes the sheet gate.
+    result = _cli.invoke(
+        app,
+        ["run", "--run-id", "g", "--runs-dir", str(tmp_path / "runs"),
+         "--pipeline", "nf-core/sarek", "--revision", "3.5.1",
+         "--input", str(sheet), "--genome", "GRCh38"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "germline" not in result.output.lower()
+    assert captured == ["variant_calling"]  # generic gate passed, run launched

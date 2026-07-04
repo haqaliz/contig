@@ -262,9 +262,26 @@ distributions and flag implausible-but-completed runs for review.
 
 ---
 
-## C4. New assay, depth-first: somatic variant calling  ·  months 4 to 5
+## C4. New assay, depth-first: somatic variant calling  ·  SHIPPED v0.13.0 (intake→launch→verify slice)
 
-Add one assay end to end rather than several shallowly. Recommended:
+**Shipped (slice 1) in v0.13.0.** A somatic (tumor–normal) assay is now on the engine end
+to end: a `somatic_variant_calling` registry entry + routing served by `nf-core/sarek`
+in somatic mode; an explicit, persisted `--assay` that resolves the germline-vs-somatic
+pipeline-string collision at its root (carried on the `RunRecord`/`launch.json`, legacy
+`assay_for_pipeline` kept as the backward-compatible fallback); a sarek tumor/normal
+sample-sheet pre-flight (paired `status` validation, unpaired-tumor/tumor-only refused);
+a declarative `PipelineEntry.default_params` seam that launches sarek somatic with
+`--tools strelka,mutect2`; and a `somatic_variant_calling` structural manifest + methods
+label. Research-use only, test-first with synthetic fixtures (no real nf-core run in CI).
+**Deferred to follow-on slices:** VAF-distribution plausibility and the panel-of-normals
+presence check (C3-style, so live-run verification is structural-only for now); the
+second-somatic-caller **concordance hook** (C1-style — Strelka2 vs Mutect2); a somatic
+rule pack; and panel-of-normals / germline-resource reference wiring for a real Mutect2
+somatic run (today the slice proves the launch command is assembled correctly, against
+injected fixtures).
+
+The original framing, for reference: add one assay end to end rather than several
+shallowly. Recommended:
 **somatic (tumor and normal) variant calling** via an existing nf-core pipeline
 (for example nf-core/sarek in somatic mode). It is a natural extension of the
 shipped germline assay, it is high-value, and it is rich to verify.
@@ -374,7 +391,7 @@ above a threshold; a deliberately worse detector is flagged as a regression.
 | C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap; auto-run second tool + single-cell deferred) |
 | C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); bwa-mem2/classic-BWA build+redirect, peak-RSS, assembly-signature + wider catalog pending) | Unattended-completion rate, corpus fuel |
 | C3 | Biological-plausibility verification | SHIPPED v0.3.0 | Verdict gets smarter about biology (germline Ti/Tv, het/hom; other assays deferred) |
-| C4 | New assay: somatic variant calling | M4 to M5 | Breadth, depth-first, new corpus |
+| C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify slice; VAF/PON plausibility, somatic concordance hook + PON reference wiring deferred) | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
 | C6 | Eval flywheel as a continuous loop | M6 | Compounding accuracy from real runs |
 

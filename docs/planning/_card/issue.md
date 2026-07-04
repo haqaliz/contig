@@ -1,46 +1,59 @@
-# Card — feat/rnaseq-concordance
+# Card: feat / somatic-variant-calling
 
-**Type:** feat · **Owner:** aliz · **Branch:** `feat/rnaseq-concordance/aliz`
-
-No GitHub issue — source is the inline brief carried from `contig-next` (2026-07-02).
+- **Type:** feat
+- **Slug:** somatic-variant-calling
+- **Owner:** aliz
+- **Branch:** feat/somatic-variant-calling/aliz
+- **Source:** inline brief (no GitHub issue). Handed off from `contig-next` on 2026-07-03.
 
 ## Brief
 
-Add one independent axis to the RNA-seq verdict: **cross-tool quantification
-concordance**, the RNA-seq slice of capability **C1** (germline shipped in v0.2.0;
-see `docs/technical/CAPABILITY_ROADMAP.md:70-71`).
+Add **somatic (tumor–normal) variant calling** as a new assay via nf-core/sarek's
+somatic mode, through the `ADD_AN_ASSAY` path — the next capability (**C4**) on
+`docs/technical/CAPABILITY_ROADMAP.md` and the biggest unblocked lever, reusing the
+shipped C1 (concordance) / C2 (self-heal) / C3 (plausibility) machinery on new terrain
+to compound the failure-and-verification corpus (moat #2).
 
-Compute **per-gene Spearman rank correlation** and the **fraction of genes agreeing
-within a tolerance** between the run's primary count matrix and a second count
-matrix supplied via a new `contig verify --concordance-counts <matrix>` flag,
-emitting `kind="concordance"` QCResults that are **WARN-capped** (corroboration,
-not ground truth) and report **`unverified`** (never a false pass) when the two
-matrices share no comparable genes — mirroring the shipped germline
-`--concordance-vcf` path.
+It is a natural extension of the **shipped germline assay** (GATK best-practices via
+nf-core/sarek), so much of the verification plumbing is reused rather than rebuilt.
 
-Build **test-first** with synthetic count-matrix fixtures:
-- concordant pair → PASS with the metric reported,
-- divergent pair → WARN naming the metric and both quantifiers,
-- no shared genes → UNVERIFIED.
+## Scope discipline — tight first slice
 
-No network, no raw-read egress.
+C4 is genuinely large. The first slice is scoped tightly:
 
-## Caveat to dig on first
+- Registry entry for the somatic goal.
+- Planner match for the somatic (tumor–normal) goal.
+- Tumor/normal **sample-sheet shape** + pre-flight validation (the paired
+  tumor/normal structure sarek somatic requires).
+- **Structural output manifest** for the somatic outputs (present / non-empty /
+  indexed / gzip-intact), wired into `run_qc` like the other assays.
 
-`src/contig/verification/concordance.py` is genotype/VCF-specific today — its own
-comment (`concordance.py:35-36`) even says "an RNA-seq quantification has no
-genotypes to agree on." So this is a **genuinely new count-concordance code path**
-(Spearman + fraction-within-tolerance over two count matrices), **not** a one-line
-`_CONCORDANCE_ASSAYS` addition, and that comment must be updated.
+All **test-first** with synthetic fixtures — no real nf-core run in CI.
 
-Honest scope for **slice 1**: the deterministic computation plus a user-supplied
-`--concordance-counts <matrix>` flag over the run's primary count matrix.
-**Auto-running a second quantifier** (e.g. Salmon vs STAR+featureCounts) is the
-**deferred follow-on**, exactly as the germline autorun followed one release later
-(v0.4.0).
+## Deferred to follow-on slices (do NOT build in slice 1)
+
+- VAF-distribution plausibility (biological-plausibility check, C3-style).
+- Panel-of-normals filtering-present check.
+- Second-somatic-caller **concordance hook** (C1-style).
+- Seed corpus cases for somatic-specific failure modes (beyond what structural QC needs).
+
+This mirrors how germline / RNA-seq were built up over v0.2.0 → v0.6.0: the assay
+lands structurally first, then plausibility, then concordance, in separate releases.
+
+## Caveats to confirm in the dig (from the contig-next handoff)
+
+1. **Roadmap-push, not partner-pull.** No named design partner requested somatic;
+   C4 is pre-designated by the roadmap. The discipline (`USE_CASE_UNIVERSE.md`
+   "demand-pull, not our guess") prefers a partner ask. Sanity-check the pick against
+   deepening a shipped assay before committing.
+2. **C4 is large.** Hold the line on the tight first slice above; resist pulling
+   plausibility/concordance into slice 1.
 
 ## Guardrails (CLAUDE.md)
 
-- Layer-2 only (verify/corroborate), never Layer-1 workflow authoring.
-- No raw-read egress; deterministic; synthetic fixtures (no real nf-core run in CI).
-- No over-claiming: WARN-cap, UNVERIFIED-never-PASS.
+- Layer-2 only: we consume nf-core/sarek somatic; we do **not** author the pipeline
+  from English (no Layer 1).
+- No raw-read egress; runs on the user's compute.
+- No clinical over-claiming: a somatic verdict is "ran correctly and reproducibly,"
+  research-use, never a cancer diagnosis (`USE_CASE_UNIVERSE.md` bright line).
+- Test-first, every capability lands with its failing test written first.

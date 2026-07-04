@@ -153,3 +153,49 @@ def test_methods_explicit_reference_degraded_no_checksums():
     # The reference clause must not emit a sha256 snippet when the hash is absent.
     assert "sha256" not in text
     assert "None" not in text
+
+
+# ---------------------------------------------------------------------------
+# Somatic vs germline sarek labelling (both share the nf-core/sarek pipeline;
+# the explicit RunRecord.assay disambiguates the prose).
+# ---------------------------------------------------------------------------
+
+
+def test_methods_labels_a_somatic_run_as_tumor_normal_not_germline():
+    """A somatic sarek run (explicit assay) names tumor-normal somatic calling,
+    a research-use variant assay, and NOT the germline label."""
+    text = render_methods(
+        _record(
+            pipeline="nf-core/sarek",
+            pipeline_revision="3.5.1",
+            assay="somatic_variant_calling",
+        )
+    )
+    lowered = text.lower()
+    assert "somatic" in lowered
+    assert "tumor" in lowered
+    assert "normal" in lowered
+    # It must not fall back to the germline sarek label.
+    assert "germline" not in lowered
+
+
+def test_methods_germline_sarek_still_labelled_germline():
+    """REGRESSION: a germline sarek run (no explicit somatic assay) keeps the
+    germline short-variant-calling label via the legacy pipeline fallback."""
+    text = render_methods(
+        _record(
+            pipeline="nf-core/sarek",
+            pipeline_revision="3.5.1",
+            assay="variant_calling",
+        )
+    )
+    assert "germline short-variant calling" in text.lower()
+
+
+def test_methods_germline_sarek_without_assay_field_still_germline():
+    """REGRESSION: a legacy record with no assay field falls back to the
+    pipeline-derived germline label (backward compatibility)."""
+    text = render_methods(
+        _record(pipeline="nf-core/sarek", pipeline_revision="3.5.1")
+    )
+    assert "germline short-variant calling" in text.lower()

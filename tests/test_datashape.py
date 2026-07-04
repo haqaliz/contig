@@ -55,6 +55,12 @@ def test_variant_calling_does_not_expect_replicates():
     assert assay_expects_replicates("variant_calling") is False
 
 
+def test_somatic_variant_calling_does_not_expect_replicates():
+    # a single tumor/normal pair is a complete somatic run, not a replicate group,
+    # so it must not raise the "needs replicates" warning
+    assert assay_expects_replicates("somatic_variant_calling") is False
+
+
 def test_scrnaseq_does_not_expect_bulk_replicates():
     # single-cell measures cells within a sample, not bulk replicates, so a
     # single scRNA sample must not raise the "needs replicates" warning

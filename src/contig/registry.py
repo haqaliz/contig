@@ -16,6 +16,23 @@ REGISTRY: list[PipelineEntry] = [
         revision="3.26.0",
         description="Bulk RNA-seq quantification + QC (differential-expression inputs).",
     ),
+    # Somatic shares nf-core/sarek with germline. It is listed BEFORE the germline
+    # variant_calling entry so that `_ASSAY_BY_PIPELINE` (last write wins) keeps
+    # mapping "nf-core/sarek" -> "variant_calling": germline stays the legacy
+    # reverse-lookup fallback, while the run path selects somatic via an explicit
+    # assay override.
+    PipelineEntry(
+        assay="somatic_variant_calling",
+        pipeline="nf-core/sarek",
+        revision="3.5.1",
+        description="Somatic tumor–normal short-variant calling (nf-core/sarek), research use.",
+        # Somatic sarek needs an explicit tool selection or it does nothing somatic;
+        # this default injects `--tools strelka,mutect2` at dispatch. R5 (honest
+        # scope): this only assembles the command — a real Mutect2 run typically
+        # also needs a panel-of-normals / germline resource that resolve_reference
+        # does not wire; that reference wiring is deferred (PRD Out-of-Scope / OQ2).
+        default_params={"tools": "strelka,mutect2"},
+    ),
     PipelineEntry(
         assay="variant_calling",
         pipeline="nf-core/sarek",
@@ -104,6 +121,20 @@ _ASSAY_KEYWORDS: dict[str, tuple[str, ...]] = {
         "gene expression",
         "transcript",
         "deg",
+    ),
+    # somatic tumor/normal calling is listed BEFORE variant_calling in iteration
+    # order because "somatic variant calling" also contains the generic
+    # "variant calling" needle; first-hit-wins means the more specific somatic
+    # assay must be checked first (mirrors the scrnaseq-before-rnaseq ordering).
+    # Germline needles do not contain any of these tumor/somatic tokens, so
+    # germline goals are unaffected.
+    "somatic_variant_calling": (
+        "somatic",
+        "tumor",
+        "tumour",
+        "tumor-normal",
+        "tumor normal",
+        "tumour-normal",
     ),
     "variant_calling": (
         "variant calling",
