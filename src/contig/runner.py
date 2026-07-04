@@ -30,6 +30,7 @@ from contig.snakemake import build_snakemake_command, parse_snakemake_stats_file
 from contig.verification.qc_ingest import parse_multiqc_general_stats_file
 from contig.verification.rnaseq_plausibility import evaluate_rnaseq_plausibility
 from contig.verification.rule_pack import rule_pack_for
+from contig.verification.somatic_plausibility import evaluate_somatic_plausibility
 from contig.verification.run_qc import evaluate_run_qc
 from contig.verification.structural import evaluate_structural, manifest_for
 from contig.verification.variant_metrics import evaluate_variant_plausibility
@@ -37,7 +38,8 @@ from contig.verification.variant_metrics import evaluate_variant_plausibility
 
 def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
     """Verify a finished run: MultiQC metric checks (assay-specific rule pack) +
-    structural checks on outputs + (germline only) VCF plausibility checks."""
+    structural checks on outputs + VCF plausibility checks (germline ts_tv/het_hom;
+    somatic VAF/count/PON), each gated to its own assay."""
     results: list[QCResult] = []
     multiqc = next(run_dir.glob("**/multiqc_data.json"), None)
     if multiqc is not None:
@@ -66,6 +68,43 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
         vcfs = sorted(p for p in run_dir.rglob(pattern) if p.is_file())
         if vcfs:
             results.extend(evaluate_variant_plausibility(vcfs[0]))
+    # Somatic biological-plausibility checks (capability C4 follow-on): VAF
+    # distribution, somatic variant count, and panel-of-normals presence, all
+    # computed from the tumor column of the Mutect2 VCF. Gated strictly to the
+    # somatic assay. We glob the somatic manifest's required *.vcf.gz and pick the
+    # Mutect2 candidate by path; if VCFs exist but none is Mutect2 we emit ONE
+    # honest UNVERIFIED (never a silent pass), and if there is no VCF at all we
+    # skip silently (structural QC already covers a missing required output).
+    if assay == "somatic_variant_calling":
+        pattern = manifest_for("somatic_variant_calling").required[0]  # "*.vcf.gz"
+        vcfs = sorted(p for p in run_dir.rglob(pattern) if p.is_file())
+        if vcfs:
+            # Match "mutect2" as a path COMPONENT below the run dir (sarek writes the
+            # VCF under a `mutect2/` directory), not as a substring of the absolute
+            # path — otherwise a "mutect2" in an ancestor workspace/run-id name would
+            # false-positively select a Strelka VCF and risk a pass on the wrong data.
+            mutect2 = next(
+                (
+                    p
+                    for p in vcfs
+                    if "mutect2" in {part.lower() for part in p.relative_to(run_dir).parts}
+                ),
+                None,
+            )
+            if mutect2 is not None:
+                results.extend(evaluate_somatic_plausibility(mutect2))
+            else:
+                results.append(
+                    QCResult(
+                        check="somatic_vaf_plausibility",
+                        status="unverified",
+                        message=(
+                            "no Mutect2 somatic VCF found to assess VAF distribution"
+                        ),
+                        value=None,
+                        kind="metric",
+                    )
+                )
     # RNA-seq biological-plausibility checks (capability C3, RNA-seq slice, Phase 3).
     # Gated: only when the assay is rnaseq AND a MultiQC report was found. One extra
     # parse of the same JSON is intentional — mirrors the germline path independently

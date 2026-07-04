@@ -6,6 +6,43 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Somatic VAF-distribution biological-plausibility verification** (capability C4
+  follow-on — the biological verdict for the somatic assay whose v0.13.0 slice was
+  honestly structural-only). A somatic run now gains a biological axis alongside its
+  structural checks, computed deterministically from the **tumor column of the run's
+  Mutect2 VCF** by a new `verification/somatic_plausibility.py` and wired into
+  `_discover_qc` gated to `assay == "somatic_variant_calling"`. Three checks:
+  - `median_vaf` — median tumor variant allele fraction over biallelic records, read from
+    the FORMAT `AF` (Mutect2 allele fraction) when present, else derived from `AD_alt/DP`
+    (guarding `DP==0`), else the record contributes no VAF. The tumor sample is identified
+    by the `##tumor_sample=` header mapped to its `#CHROM` column (never a guessed column).
+    A somatic set pinned near VAF≈1.0 (germline leakage) or exactly ~0.5 (mis-paired
+    normal) drifts out of the band. Multiallelic sites are excluded; indels are included.
+  - `somatic_variant_count` — number of considered (biallelic) somatic records, with a
+    deliberately wide band (target type varies by orders of magnitude) to catch only a
+    grossly failed call set.
+  - `pon_applied` — a panel-of-normals presence check keyed off the GATK command header:
+    present with `--panel-of-normals`/`--pon` → PASS; header present without it → WARN;
+    no recognizable `GATKCommandLine` header → UNVERIFIED (cannot tell).
+  Both metric bands are **WARN-capped** (uncalibrated engineering defaults, no `fail_*`),
+  in a new `SOMATIC_PLAUSIBILITY_PACK` that is imported directly (not registered in
+  `_RULE_PACKS`). Every uncomputable path — no derivable VAF, an unidentifiable tumor
+  column, a missing GATK header — yields **UNVERIFIED (never a false pass)**, mirroring the
+  germline Ti/Tv slice. The `*.vcf.gz` locator selects the Mutect2 VCF by a path
+  **component** below the run dir (so a "mutect2" in an ancestor workspace/run-id name
+  cannot mis-select a Strelka VCF); if VCFs exist but none is Mutect2, one honest
+  UNVERIFIED is emitted; if no VCF exists at all the gate skips silently (structural QC
+  already covers a missing output). A somatic verdict remains "ran correctly and
+  reproducibly," research use — never a cancer diagnosis. Additive to the verdict only: no
+  detector/`FailureClass`, model, or persisted-record change; deterministic, no raw-read
+  egress; fully covered by synthetic two-sample VCF fixtures (no real nf-core/sarek run in
+  CI). **Deferred:** Strelka2-native VAF (tier-count derivation — non-Mutect2 VCFs degrade
+  to UNVERIFIED), the Strelka2-vs-Mutect2 somatic concordance hook (C1), FAIL severity
+  until the bands are calibrated on real data, and a cross-column swapped-pair smell test
+  (the residual case where the `##tumor_sample=` header is present but mislabeled).
+
 ## [0.13.0] - 2026-07-04
 
 - **Somatic (tumor–normal) variant calling assay** (capability C4 — a whole new assay

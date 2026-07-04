@@ -250,6 +250,34 @@ RNASEQ_PLAUSIBILITY_PACK: list[dict] = [
 ]
 
 
+# Somatic (tumor-normal) biological-plausibility checks (capability C4 follow-on).
+# WARN-capped (no fail_*): the bands are illustrative, tunable engineering defaults,
+# NOT biological claims, uncalibrated on real cohorts. Computed from the tumor
+# column of the Mutect2 somatic VCF (AF else AD/DP); UNVERIFIED-when-uncomputable
+# absorbs a non-Mutect2 / stripped VCF (see evaluate_somatic_plausibility). Like the
+# germline/RNA-seq plausibility packs, this is imported directly by its evaluator
+# and is deliberately NOT registered in _RULE_PACKS.
+SOMATIC_PLAUSIBILITY_PACK: list[dict] = [
+    {   # tumor VAF distribution: a somatic set spans low subclonal to ~0.5 clonal-het;
+        # a median pinned near 1.0 (germline leakage) or ~0.5 (mis-paired normal) is
+        # suspicious. Uncalibrated engineering defaults, WARN-capped.
+        "check": "median_vaf",
+        "metric": "median_vaf",
+        "warn_below": 0.05,
+        "warn_above": 0.95,
+        "message": "median tumor variant allele fraction",
+    },
+    {   # coarse count floor/ceiling to catch a grossly failed call set; band is wide
+        # because target type (panel/WES/WGS) varies by orders of magnitude.
+        "check": "somatic_variant_count",
+        "metric": "somatic_variant_count",
+        "warn_below": 10,
+        "warn_above": 100000,
+        "message": "number of somatic variant records called",
+    },
+]
+
+
 _RULE_PACKS: dict[str, list[dict]] = {
     "rnaseq": RNASEQ_RULE_PACK,
     "variant_calling": VARIANT_RULE_PACK,

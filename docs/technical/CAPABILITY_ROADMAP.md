@@ -262,7 +262,7 @@ distributions and flag implausible-but-completed runs for review.
 
 ---
 
-## C4. New assay, depth-first: somatic variant calling  ·  SHIPPED v0.13.0 (intake→launch→verify slice)
+## C4. New assay, depth-first: somatic variant calling  ·  SHIPPED v0.13.0 (intake→launch→verify) + VAF plausibility slice (Unreleased)
 
 **Shipped (slice 1) in v0.13.0.** A somatic (tumor–normal) assay is now on the engine end
 to end: a `somatic_variant_calling` registry entry + routing served by `nf-core/sarek`
@@ -273,12 +273,24 @@ sample-sheet pre-flight (paired `status` validation, unpaired-tumor/tumor-only r
 a declarative `PipelineEntry.default_params` seam that launches sarek somatic with
 `--tools strelka,mutect2`; and a `somatic_variant_calling` structural manifest + methods
 label. Research-use only, test-first with synthetic fixtures (no real nf-core run in CI).
-**Deferred to follow-on slices:** VAF-distribution plausibility and the panel-of-normals
-presence check (C3-style, so live-run verification is structural-only for now); the
-second-somatic-caller **concordance hook** (C1-style — Strelka2 vs Mutect2); a somatic
-rule pack; and panel-of-normals / germline-resource reference wiring for a real Mutect2
-somatic run (today the slice proves the launch command is assembled correctly, against
-injected fixtures).
+
+**Shipped (VAF-plausibility slice — Unreleased).** The somatic verdict gained its biological
+axis (C3-style, so the assay is no longer structural-only). A new
+`verification/somatic_plausibility.py`, gated to `assay == "somatic_variant_calling"` in
+`_discover_qc`, computes from the **tumor column of the run's Mutect2 VCF**: `median_vaf`
+(median tumor allele fraction over biallelic records — FORMAT `AF`, else `AD_alt/DP`; tumor
+identified by the `##tumor_sample=` header, never a guessed column), `somatic_variant_count`
+(a deliberately wide band), and `pon_applied` (panel-of-normals presence from the GATK
+command header). Both metric bands are **WARN-capped** in a new `SOMATIC_PLAUSIBILITY_PACK`
+(uncalibrated defaults, no `fail_*`); every uncomputable path — no derivable VAF, an
+unidentifiable tumor column, no GATK header — is **UNVERIFIED, never a false pass**. The
+Mutect2 VCF is selected by a path component below the run dir; a VCF present but non-Mutect2
+yields one honest UNVERIFIED, and no VCF skips silently. **Deferred to follow-on slices:**
+the second-somatic-caller **concordance hook** (C1-style — Strelka2 vs Mutect2); Strelka2-
+native VAF (tier-count derivation — non-Mutect2 VCFs degrade to UNVERIFIED); FAIL severity
+until bands are calibrated on real data; a cross-column swapped-pair smell test; and
+panel-of-normals / germline-resource reference wiring for a real Mutect2 somatic run (today
+the verification runs against injected fixtures).
 
 The original framing, for reference: add one assay end to end rather than several
 shallowly. Recommended:
@@ -391,7 +403,7 @@ above a threshold; a deliberately worse detector is flagged as a regression.
 | C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap; auto-run second tool + single-cell deferred) |
 | C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); bwa-mem2/classic-BWA build+redirect, peak-RSS, assembly-signature + wider catalog pending) | Unattended-completion rate, corpus fuel |
 | C3 | Biological-plausibility verification | SHIPPED v0.3.0 | Verdict gets smarter about biology (germline Ti/Tv, het/hom; other assays deferred) |
-| C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify slice; VAF/PON plausibility, somatic concordance hook + PON reference wiring deferred) | Breadth, depth-first, new corpus |
+| C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased); Strelka2-vs-Mutect2 concordance hook, Strelka2-native VAF, FAIL severity + PON reference wiring deferred | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
 | C6 | Eval flywheel as a continuous loop | M6 | Compounding accuracy from real runs |
 
