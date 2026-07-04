@@ -6,6 +6,47 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Somatic (tumor–normal) variant calling assay** (capability C4 — a whole new assay
+  end to end, the natural extension of the shipped germline sarek assay). A somatic goal
+  now routes to a new `somatic_variant_calling` assay served by the same curated
+  `nf-core/sarek` pipeline (`@3.5.1`) in somatic mode, with intake → plan → run → verify
+  wired through the existing engine. Concretely:
+  - **Explicit, persisted assay** (resolves the sarek pipeline-string collision): `contig
+    run --assay <key>` carries the run's assay as a first-class input that **overrides**
+    the legacy pipeline-derived lookup, is persisted on the `RunRecord` and the
+    `launch.json` reproduce sidecar, and is re-applied by `rerun`/`resume`. Because two
+    assays now share one pipeline (germline vs somatic sarek), the run no longer derives
+    its assay from the pipeline string alone. The legacy `assay_for_pipeline` derivation
+    is preserved as the fallback, so every existing run and every already-shipped bundle
+    (no persisted assay) resolves exactly as before — a backward-compatible change.
+  - **Somatic goal routing**: a `somatic_variant_calling` registry entry plus a
+    `somatic`/`tumor`/`tumour`/`tumor-normal` keyword group ordered ahead of germline, so
+    "somatic tumor/normal variant calling" routes to the somatic assay while germline
+    goals still route to `variant_calling` (non-collision pinned by test).
+  - **Sarek tumor/normal sample-sheet pre-flight**: a sarek-shaped sample sheet
+    (`patient, sample, status, lane, fastq_1, fastq_2`) is validated for the paired
+    structure at the launch chokepoint — `status ∈ {0,1}`, at least one patient with both
+    a normal (0) and a tumor (1) row, multi-tumor/relapse allowed, and an unpaired-tumor
+    or tumor-only sheet refused with a message pointing at germline. Somatic-gated;
+    germline/RNA-seq sample-sheet validation is unchanged.
+  - **Somatic launch**: a declarative per-assay `PipelineEntry.default_params` seam
+    injects `--tools strelka,mutect2` for the somatic assay (sarek infers somatic mode
+    from the paired sheet + somatic-capable callers), captured for reproduce; all other
+    assays inject nothing and are unchanged. This proves the somatic launch command is
+    correctly assembled — **not** that a real Mutect2 somatic run completes without a
+    panel-of-normals / germline resource (that reference wiring, and VAF-distribution
+    plausibility, panel-of-normals checks, and the second-caller Strelka2-vs-Mutect2
+    concordance hook, are **deferred** to follow-on slices).
+  - **Somatic verification**: a `somatic_variant_calling` structural output manifest
+    (required + gzip-intact `*.vcf.gz`, mirroring germline) is added, evaluated at
+    `contig verify` time; the methods paragraph labels somatic tumor–normal runs
+    (research use). Live-run verification stays structural for now (no somatic rule pack
+    or plausibility yet), so a somatic verdict is honestly structural-only and never a
+    false pass.
+  - Research-use only, on the user's compute (no raw-read egress); a somatic verdict
+    means "ran correctly and reproducibly," never a cancer diagnosis. Built test-first
+    across seven slices with synthetic fixtures — no real nf-core/sarek run in CI.
+
 ## [0.12.0] - 2026-07-02
 
 ### Added
