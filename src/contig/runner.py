@@ -30,6 +30,7 @@ from contig.snakemake import build_snakemake_command, parse_snakemake_stats_file
 from contig.verification.qc_ingest import parse_multiqc_general_stats_file
 from contig.verification.rnaseq_plausibility import evaluate_rnaseq_plausibility
 from contig.verification.rule_pack import rule_pack_for
+from contig.verification.somatic_concordance import evaluate_somatic_concordance_from_run
 from contig.verification.somatic_plausibility import evaluate_somatic_plausibility
 from contig.verification.run_qc import evaluate_run_qc
 from contig.verification.structural import evaluate_structural, manifest_for
@@ -105,6 +106,11 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
                         kind="metric",
                     )
                 )
+            # Cross-tool PASS-site-overlap concordance (Strelka2 vs Mutect2):
+            # appended after, and independent of, VAF plausibility above — it
+            # reuses the same globbed VCF list but self-selects both callers'
+            # files and skips cleanly (or reports UNVERIFIED) on its own terms.
+            results.extend(evaluate_somatic_concordance_from_run(run_dir, vcfs))
     # RNA-seq biological-plausibility checks (capability C3, RNA-seq slice, Phase 3).
     # Gated: only when the assay is rnaseq AND a MultiQC report was found. One extra
     # parse of the same JSON is intentional — mirrors the germline path independently
