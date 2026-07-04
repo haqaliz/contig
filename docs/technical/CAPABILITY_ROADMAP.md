@@ -33,7 +33,7 @@ better base model should make each of these stronger, never redundant.
 
 ---
 
-## C1. Cross-tool concordance verification  ·  SHIPPED v0.2.0 (germline) + RNA-seq slice (Unreleased)
+## C1. Cross-tool concordance verification  ·  SHIPPED v0.2.0 (germline) + RNA-seq slice (Unreleased) + somatic slice (Unreleased)
 
 **Shipped (slice 1) in v0.2.0.** The verdict gained a third axis alongside QC
 thresholds and structural checks: `verification/concordance.py` computes a
@@ -59,6 +59,24 @@ to a follow-on slice:** auto-running a second caller/quantifier (today the user
 supplies the second call set/matrix — mirrors the germline `--concordance-auto`
 follow-on in v0.4.0), single-cell concordance, a dashboard "corroborated by" line, and
 FAIL-severity once thresholds are calibrated on real data.
+
+**Shipped (somatic slice — Unreleased).** The concordance axis now extends to the somatic
+(tumor–normal) assay, and — uniquely — with **no user-supplied input and no second tool run**:
+a single `nf-core/sarek` somatic run already emits both a Mutect2 and a Strelka2 call set
+(`--tools strelka,mutect2`), so a new `verification/somatic_concordance.py` corroborates them
+directly. It emits one `kind="concordance"` **`somatic_site_overlap`** check — the Jaccard
+overlap of the two callers' **PASS** call sites keyed on `(CHROM, POS, REF, ALT)` (FILTER-aware:
+`FILTER ∈ {"PASS", "."}`), **sample-agnostic** because Strelka2 somatic SNVs carry no
+conventional per-sample `GT` (the germline `genotype_concordance` metric deliberately does not
+transfer). It is **auto-wired** into `_discover_qc` gated to `assay ==
+"somatic_variant_calling"` — the Mutect2 VCF located by a `mutect2` path component, the Strelka2
+VCF by a symmetric `strelka` component with its split `*.somatic_snvs`/`*.somatic_indels` files
+unioned. Same contract as the other slices: at most WARN (0.90 default), never FAIL, never
+changes the exit code, **`unverified` (never a false pass)** below 10 union PASS sites; a
+single-caller run skips, and a multi/mismatched tumor-pair layout yields one honest
+`unverified` rather than an arbitrary compare. **Deferred to a follow-on slice:** Strelka2-native
+tumor-VAF agreement, FAIL severity once the overlap band is calibrated on real data, and an
+explicit `contig verify` concordance flag/echo (auto-in-verdict covers slice 1).
 
 The original framing, for reference: today the verdict rests on QC thresholds,
 structural checks, and (where a reference run exists) benchmarking against a
@@ -262,7 +280,7 @@ distributions and flag implausible-but-completed runs for review.
 
 ---
 
-## C4. New assay, depth-first: somatic variant calling  ·  SHIPPED v0.13.0 (intake→launch→verify) + VAF plausibility slice (Unreleased)
+## C4. New assay, depth-first: somatic variant calling  ·  SHIPPED v0.13.0 (intake→launch→verify) + VAF plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased)
 
 **Shipped (slice 1) in v0.13.0.** A somatic (tumor–normal) assay is now on the engine end
 to end: a `somatic_variant_calling` registry entry + routing served by `nf-core/sarek`
@@ -285,8 +303,9 @@ command header). Both metric bands are **WARN-capped** in a new `SOMATIC_PLAUSIB
 (uncalibrated defaults, no `fail_*`); every uncomputable path — no derivable VAF, an
 unidentifiable tumor column, no GATK header — is **UNVERIFIED, never a false pass**. The
 Mutect2 VCF is selected by a path component below the run dir; a VCF present but non-Mutect2
-yields one honest UNVERIFIED, and no VCF skips silently. **Deferred to follow-on slices:**
-the second-somatic-caller **concordance hook** (C1-style — Strelka2 vs Mutect2); Strelka2-
+yields one honest UNVERIFIED, and no VCF skips silently. The second-somatic-caller
+**concordance hook** (C1-style — Strelka2 vs Mutect2) has since **shipped** (see C1, somatic
+slice). **Deferred to follow-on slices:** Strelka2-
 native VAF (tier-count derivation — non-Mutect2 VCFs degrade to UNVERIFIED); FAIL severity
 until bands are calibrated on real data; a cross-column swapped-pair smell test; and
 panel-of-normals / germline-resource reference wiring for a real Mutect2 somatic run (today
@@ -400,10 +419,10 @@ above a threshold; a deliberately worse detector is flagged as a regression.
 
 | ID | Capability | Window | Leverage |
 |----|-----------|--------|----------|
-| C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap; auto-run second tool + single-cell deferred) |
+| C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) + somatic slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap + somatic auto `somatic_site_overlap` PASS-site Jaccard, Mutect2 vs Strelka2, no user input; auto-run second germline/RNA tool + single-cell deferred) |
 | C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); bwa-mem2/classic-BWA build+redirect, peak-RSS, assembly-signature + wider catalog pending) | Unattended-completion rate, corpus fuel |
 | C3 | Biological-plausibility verification | SHIPPED v0.3.0 | Verdict gets smarter about biology (germline Ti/Tv, het/hom; other assays deferred) |
-| C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased); Strelka2-vs-Mutect2 concordance hook, Strelka2-native VAF, FAIL severity + PON reference wiring deferred | Breadth, depth-first, new corpus |
+| C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased); Strelka2-native VAF, FAIL severity + PON reference wiring deferred | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
 | C6 | Eval flywheel as a continuous loop | M6 | Compounding accuracy from real runs |
 

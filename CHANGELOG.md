@@ -6,6 +6,40 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Somatic Strelka2-vs-Mutect2 cross-tool concordance** (capability C1 for the somatic
+  assay — the second-caller concordance hook deferred by the v0.14.0 VAF slice). A somatic
+  (tumor–normal) run's verdict now gains an independent **cross-tool concordance axis**,
+  corroborating the run's **Mutect2** call set against the **Strelka2** call set that the
+  *same* `nf-core/sarek` run already emitted (`--tools strelka,mutect2`) — so unlike germline
+  concordance there is **no second caller to run and no user-supplied input**; both VCFs are
+  already in the bundle. A new `verification/somatic_concordance.py` emits one
+  `kind="concordance"` **`somatic_site_overlap`** check: the Jaccard overlap
+  (`|A∩B| / |A∪B|`) of the two callers' **PASS** call sites, keyed on `(CHROM, POS, REF,
+  ALT)`, where PASS means `FILTER ∈ {"PASS", "."}` (FILTER-aware parsing, so noisy filtered
+  candidate calls are excluded). It is **sample-agnostic** — it reads no genotype or tumor
+  column, sidestepping the fact that Strelka2 somatic SNVs carry no conventional per-sample
+  `GT` (the germline `genotype_concordance` metric deliberately does **not** transfer).
+  - **Auto-wired** into `_discover_qc` gated to `assay == "somatic_variant_calling"`,
+    alongside (and independent of) the VAF-plausibility block: the Mutect2 VCF is located by a
+    `mutect2` path component below the run dir (as the VAF slice already does) and the Strelka2
+    VCF by a symmetric `strelka` component, with Strelka's split `*.somatic_snvs.vcf.gz` +
+    `*.somatic_indels.vcf.gz` **unioned** into one call set.
+  - **Corroboration only:** at most WARN (below a `0.90` overlap default), **never FAIL**, and
+    structurally incapable of changing the verify exit code or promoting UNVERIFIED to PASS.
+    Below a minimum of 10 union PASS sites the check is **UNVERIFIED, never a false pass**.
+  - **Honest on ambiguity:** a single caller present (mutect2-only / strelka-only) skips
+    cleanly; a multi-tumor-pair layout — or two callers whose single tumor–normal pair
+    directories **differ** — yields one honest UNVERIFIED rather than corroborating an
+    arbitrary or unrelated pair.
+  - Deterministic, local, no raw-read egress, no tool execution; research-use only (a somatic
+    verdict means "ran correctly and reproducibly," never a cancer diagnosis). Built
+    test-first with synthetic two-caller VCF fixtures (no real nf-core/sarek run in CI).
+    **Deferred:** Strelka2-native tumor-VAF agreement, FAIL severity until the overlap band is
+    calibrated on real tumor–normal data, and an explicit `contig verify` concordance flag/echo
+    (the auto-in-verdict surface covers slice 1).
+
 ## [0.14.0] - 2026-07-04
 
 ### Added
