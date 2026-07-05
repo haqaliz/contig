@@ -125,7 +125,7 @@ inventing a workflow:
 ```bash
 uv run contig plan --goal "find differentially expressed genes" \
   --input samplesheet.csv --genome GRCh38
-# → Plan: nf-core/rnaseq @ 3.26.0  (assay: rnaseq) … + any warnings
+# → Plan: nf-core/rnaseq @ <pinned revision>  (assay: rnaseq) … + any warnings
 ```
 
 The goal→pipeline matching is deterministic and **replaceable**: a better model

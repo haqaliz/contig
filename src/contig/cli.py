@@ -1485,7 +1485,7 @@ def corpus_promote(
 @app.command(name="eval-detector")
 def eval_detector(
     corpus: str = typer.Option(None, "--corpus", help="Failure-corpus JSONL (defaults to the shipped seed)."),
-    detector: str = typer.Option("rules", "--detector", help="Which detector to score (rules, rules-strict)."),
+    detector: str = typer.Option("rules", "--detector", help="Which detector to score (rules, rules-strict, or llm when a provider/key is configured)."),
     json_out: bool = typer.Option(False, "--json", help="Emit the report as JSON (for the dashboard)."),
     snapshot: bool = typer.Option(False, "--snapshot", help="Append this eval to the committed history (trend)."),
     show_history: bool = typer.Option(False, "--history", help="Print the recorded accuracy-over-time trend instead of re-evaluating."),

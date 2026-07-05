@@ -8,19 +8,21 @@
 
 Contig takes raw sequencing data all the way to a *verified, reproducible* answer: it selects and runs the right pipeline on your own compute, diagnoses and **self-heals** failures, **verifies** the output, and writes a portable record anyone can reproduce.
 
+[![Release](https://img.shields.io/github/v/release/haqaliz/contig?color=3fb950&label=release)](https://github.com/haqaliz/contig/releases/latest)
+[![Status](https://img.shields.io/badge/status-MVP%20·%20early%20access-3fb950)](docs/ROADMAP.md)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Built with uv](https://img.shields.io/badge/built%20with-uv-DE5FE9?logo=astral&logoColor=white)](https://github.com/astral-sh/uv)
 [![Powered by Nextflow](https://img.shields.io/badge/engine-Nextflow-0DC09D)](https://www.nextflow.io/)
-[![Status](https://img.shields.io/badge/status-pre--MVP%20·%20validating-orange)](docs/ROADMAP.md)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-3fb950)](CONTRIBUTING.md)
 
 [Quickstart](#-quickstart) · [Usage](docs/USAGE.md) · [How it works](#-how-it-works) · [Architecture](docs/technical/ARCHITECTURE.md) · [Vision](VISION.md) · [Roadmap](docs/ROADMAP.md) · [Contributing](CONTRIBUTING.md)
 
 <br/>
 
-<img src="assets/contig-demo.svg" alt="A Contig run: validate, plan, self-heal an out-of-memory failure, verify QC, and return a PASS verdict with a reproducible record." width="760" />
+<img src="https://raw.githubusercontent.com/haqaliz/contig/master/assets/contig-demo.gif" alt="A real Contig terminal session: a pipeline run hits an out-of-memory failure, Contig self-heals it, verifies QC to a PASS verdict, and confirms the signed, reproducible record." width="820" />
 
-<sub>A real run shape: validate → plan → <b>self-heal</b> an OOM failure → <b>verify</b> QC → <b>reproduce</b> bit-for-bit → honest <b>verdict</b>.</sub>
+<sub>A real terminal capture (offline demo): a run that <b>OOMs</b> → <b>self-heals</b> → passes <b>QC</b> to a <b>PASS</b> verdict → a signed, <b>verified</b> record.</sub>
 
 </div>
 
@@ -103,19 +105,21 @@ Running a **real** pipeline also needs [Nextflow](https://www.nextflow.io/), a J
 Try it in 30 seconds, no data of your own (uses nf-core/rnaseq's bundled test profile):
 
 ```bash
-uv run contig run --run-id smoke      # run → self-heal → verify → reproduce
-uv run contig show smoke              # verdict + provenance + repair chain
+contig run --run-id smoke      # run → self-heal → verify → reproduce
+contig show smoke              # verdict + provenance + repair chain
 ```
 
 Run on **your** data: plan first, then run against a reference:
 
 ```bash
-uv run contig plan --goal "find differentially expressed genes" \
+contig plan --goal "find differentially expressed genes" \
   --input samplesheet.csv --genome GRCh38      # propose a pipeline to approve
 
-uv run contig run  --run-id my-analysis \
+contig run  --run-id my-analysis \
   --input samplesheet.csv --genome GRCh38      # or: --fasta ref.fa --gtf genes.gtf
 ```
+
+> Running from a source checkout instead of an install? Prefix each command with `uv run` (e.g. `uv run contig run --run-id smoke`).
 
 Prefer a screen? The local dashboard launches runs and shows live progress, the self-heal feed, verdict explanations, and the detector trend:
 
@@ -146,16 +150,17 @@ Contig is built around **Layer 2** (the run-and-verify engine) and consumes Laye
 
 ### Supported analyses
 
-| Goal | Pipeline | QC checks |
-|---|---|---|
-| RNA-seq differential expression | [`nf-core/rnaseq`](https://nf-co.re/rnaseq) | alignment/assignment rate, library-size skew, replicate checks |
-| Single-cell RNA-seq | [`nf-core/scrnaseq`](https://nf-co.re/scrnaseq) | estimated cells, median genes per cell, reads in cells, mito fraction |
-| Germline variant calling (research) | [`nf-core/sarek`](https://nf-co.re/sarek) | Ti/Tv & het/hom ratios, coverage |
-| Methylation (bisulfite) | [`nf-core/methylseq`](https://nf-co.re/methylseq) | bisulfite conversion rate, mapping efficiency, duplication |
-| 16S amplicon (microbiome) | [`nf-core/ampliseq`](https://nf-co.re/ampliseq) | DADA2 read retention, ASV count, sample read depth |
-| Shotgun metagenomics | [`nf-core/mag`](https://nf-co.re/mag) | assembly N50, bin completeness, contamination |
+| Goal | Pipeline | QC checks | Maturity |
+|---|---|---|---|
+| RNA-seq differential expression | [`nf-core/rnaseq`](https://nf-co.re/rnaseq) | alignment/assignment rate, library-size skew, replicate checks | validated end-to-end |
+| Single-cell RNA-seq | [`nf-core/scrnaseq`](https://nf-co.re/scrnaseq) | estimated cells, median genes per cell, reads in cells, mito fraction | wired · QC pack |
+| Germline variant calling (research) | [`nf-core/sarek`](https://nf-co.re/sarek) | Ti/Tv & het/hom ratios, coverage | wired · QC pack |
+| Somatic variant calling (tumor–normal, research) | [`nf-core/sarek`](https://nf-co.re/sarek) | Strelka2-vs-Mutect2 concordance, VAF distribution, panel-of-normals | wired · QC pack |
+| Methylation (bisulfite) | [`nf-core/methylseq`](https://nf-co.re/methylseq) | bisulfite conversion rate, mapping efficiency, duplication | wired · QC pack |
+| 16S amplicon (microbiome) | [`nf-core/ampliseq`](https://nf-co.re/ampliseq) | DADA2 read retention, ASV count, sample read depth | wired · QC pack |
+| Shotgun metagenomics | [`nf-core/mag`](https://nf-co.re/mag) | assembly N50, bin completeness, contamination | wired · QC pack |
 
-`contig plan` routes to the right one and **declines goals it has no curated pipeline for** rather than inventing a workflow. The same run → self-heal → verify → reproduce engine serves both.
+`contig plan` routes to the right one and **declines goals it has no curated pipeline for** rather than inventing a workflow. The same run → self-heal → verify → reproduce engine serves every assay above. **Maturity** is honest: `nf-core/rnaseq` is exercised end-to-end (including the self-heal loop) in CI; the others ship a curated pipeline + assay-aware QC pack and are being hardened toward the same end-to-end bar (see [docs/ROADMAP.md](docs/ROADMAP.md)).
 
 ---
 
@@ -178,7 +183,7 @@ Contig is built around **Layer 2** (the run-and-verify engine) and consumes Laye
 
 ## 🛠 Status & roadmap
 
-**MVP engine built; validating.** The Layer-2 core (run → capture → self-heal → verify → reproduce) works end-to-end on `nf-core/rnaseq`, built test-first, as a CLI and a local dashboard (launch, live progress, the self-heal approval gate, verdict explainability, one-click reproduce, and the detector-accuracy trend). Not yet built: an LLM-backed planner (the goal→pipeline matcher is deterministic and replaceable today), more assays, hosted multi-user access (the dashboard is localhost-only today), and live-tested `slurm`/`gcp_batch`/`k8s` backends (the mapping layer is in place; `local` and `aws_batch` are wired). See [docs/ROADMAP.md](docs/ROADMAP.md).
+**MVP engine built; in early access.** The Layer-2 core (run → capture → self-heal → verify → reproduce) works end-to-end on `nf-core/rnaseq`, built test-first, as a CLI and a local dashboard (launch, live progress, the self-heal approval gate, verdict explainability, one-click reproduce, and the detector-accuracy trend). Not yet built: an LLM-backed planner (the goal→pipeline matcher is deterministic and replaceable today), more assays, hosted multi-user access (the dashboard is localhost-only today), and live-tested `slurm`/`gcp_batch`/`k8s` backends (the mapping layer is in place; `local` and `aws_batch` are wired). See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
 
@@ -188,6 +193,6 @@ Contributions are welcome: code, curated pipelines, QC checks, and especially **
 
 ## 📄 License
 
-License not yet finalized (open source intended). Until a `LICENSE` file lands, all rights are reserved by the authors.
+[Apache License 2.0](LICENSE) — permissive, with an explicit patent and trademark grant. Use, modify, and redistribute Contig, including commercially, under its terms. Contributions are accepted under the same license (see [CONTRIBUTING.md](CONTRIBUTING.md)). Contig orchestrates third-party pipelines (nf-core, Nextflow) that carry their own licenses; see [NOTICE](NOTICE).
 
 <div align="center"><sub>Built test-first. The moat is execution, verification, and reproducibility, the part that gets <i>better</i> as models improve.</sub></div>

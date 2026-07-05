@@ -5,12 +5,11 @@ market does not: it does not just generate a workflow, it RUNS the analysis on
 your data and compute, debugs and self-heals the failures, and hands back a
 verified, reproducible, tamper-evident result.
 
-The whole demo takes about five minutes. It runs entirely offline on a laptop. No
-cloud account, no real sequencing data, and no real Nextflow run are required,
-because the self-heal moment is driven by a small generator that injects a fake
-executor (the same seam Contig's own test suite uses). That means the money
-moment, a run that fails then heals itself to a clean PASS, fires every single
-time, on camera.
+The whole demo takes about five minutes and runs entirely offline on a laptop —
+no cloud account, no real sequencing data, and no real Nextflow run required. The
+self-heal step is driven deterministically by a small generator that injects a
+test executor (the same seam Contig's own test suite uses), so the failure →
+recovery → PASS sequence reproduces every time you run the demo.
 
 A note on honesty, which is the whole point of the product: everything except
 that one injected executor is the real engine. The failure detector, the
@@ -178,8 +177,6 @@ result is verified and reproducible.
 | `sample-run/PUBLIC_KEY.txt` | The public key a partner verifies against (the private key was a throwaway) |
 | `sample-run/results/` | The captured outputs the record hashes, so `contig verify` checks integrity too |
 | `sample-report.html` | The shareable, offline HTML report of the run |
-| `WHAT_THIS_PROVES.md` | One page mapping each demo step to the moat |
-| `OUTREACH.md` | The cold-outreach message and the design-partner session guide |
 
 To rebuild the bundle and report from scratch:
 
