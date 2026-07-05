@@ -6,6 +6,34 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Held-out regression guard for the diagnosis detector** (capability C6, eval
+  flywheel — slice 1). A new frozen `src/contig/data/detector_corpus_holdout.jsonl`
+  (12 newly authored `FailureCase`s, `source="holdout:synthetic"`, disjoint `case_id`s
+  from the training corpus) is scored by a new `contig eval-guard` command, which
+  reuses the shipped `evaluate_detector`/`get_detector` machinery (no reimplemented
+  scoring) and **fails the build** (`exit 1`, `REGRESSION: ...`) when the current
+  detector's held-out accuracy drops below a committed baseline
+  (`src/contig/data/holdout_baseline.json`, one `EvalSnapshot` pinning `corpus_sha`,
+  `detector`, and `contig_version` so a drop is attributable to a detector change vs
+  a held-out-set change) minus a small float tolerance. `--update-baseline`
+  (re)freezes the baseline as a deliberate, reviewed act — never an automatic side
+  effect of running the guard. The guard also warns loudly (non-failing, stderr) on
+  a held-out-sha mismatch (set changed but baseline not refreshed) or a
+  detector-mismatch (baseline measured with a different detector than the one being
+  guarded), and nudges (`consider --update-baseline`) when accuracy improves beyond
+  tolerance. The committed baseline is honestly **83.3% (10/12)**: two held-out
+  classes, `qc_anomaly` and `no_progress`, are currently **structurally unreachable**
+  by `diagnose_failure` (no rule branch emits them yet) — this is deliberate, not a
+  bug, so the guard has real headroom to catch the day those rules are added.
+  **Honest scope:** this slice guards the **labeled failure-class detector corpus
+  only**. Folding in the unlabeled C1 concordance / C3 plausibility corroboration
+  signals (no ground-truth labels, so not classification-accuracy scoreable) and
+  repair-loop (whole self-heal) accuracy into the same guard are **deferred**
+  follow-on slices, as is wiring the guard into CI. Local, deterministic, no
+  network; `llm` is never the guard's default detector.
+
 ## [0.16.0] - 2026-07-05
 
 ### Added

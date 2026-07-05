@@ -409,6 +409,25 @@ from a static model.
 **Acceptance (test-first):** a frozen held-out set; a known-good detector scores
 above a threshold; a deliberately worse detector is flagged as a regression.
 
+**Slice 1 — SHIPPED (Unreleased).** A frozen held-out corpus
+(`src/contig/data/detector_corpus_holdout.jsonl`, 12 cases, `source="holdout:synthetic"`,
+`case_id`s disjoint from the training corpus) plus `contig eval-guard`: scores the
+`rules` detector against the held-out set (reusing `evaluate_detector`/`get_detector`,
+no reimplemented scoring) and fails the build when accuracy drops below a committed
+baseline (`src/contig/data/holdout_baseline.json`, one `EvalSnapshot` pinning
+`corpus_sha`/`detector`/`contig_version`); `--update-baseline` (re)freezes it as a
+deliberate act; loud non-failing warnings on sha/detector mismatch; an improvement
+nudge. The committed baseline is honestly **0.833 (10/12)** — `qc_anomaly` and
+`no_progress` are currently structurally unreachable by `diagnose_failure` (no rule
+branch emits them), a deliberate gap that leaves headroom for the nudge to fire once
+those rules exist. **Honest scope, unchanged from the PRD:** this slice guards the
+**labeled failure-class detector corpus only**. **Pending follow-on slices:** folding
+the unlabeled C1 concordance / C3 plausibility corroboration signals and repair-loop
+(whole self-heal) accuracy into one number (the "fold C1–C5 into one accuracy number"
+framing above is *not yet built* — it needs its own labeling design since C1/C3 carry
+no ground-truth labels); a held-out-accuracy trend over corpus/detector versions
+(mirroring `eval-detector --history`); wiring the guard into CI.
+
 **Eval data captured:** this *is* the capture loop; it closes over all the above.
 
 **Dependencies:** consumes the outputs of C1 to C5.
@@ -424,7 +443,7 @@ above a threshold; a deliberately worse detector is flagged as a regression.
 | C3 | Biological-plausibility verification | SHIPPED v0.3.0 | Verdict gets smarter about biology (germline Ti/Tv, het/hom; other assays deferred) |
 | C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased); Strelka2-native VAF, FAIL severity + PON reference wiring deferred | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
-| C6 | Eval flywheel as a continuous loop | M6 | Compounding accuracy from real runs |
+| C6 | Eval flywheel as a continuous loop | M6 (held-out set + regression-guard slice 1 SHIPPED, Unreleased — honestly 0.833/10:12, two classes structurally unreachable; folding C1/C3 signals + repair-loop accuracy + CI wiring pending) | Compounding accuracy from real runs |
 
 **One-line mantra:** make every verdict harder to fool, recover more failures
 without a human, and let every run make the next verdict smarter.
