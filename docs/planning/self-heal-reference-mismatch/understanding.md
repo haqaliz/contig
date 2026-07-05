@@ -87,3 +87,17 @@ consumed pipeline) ✓.
 5. **Which file is rewritten** (GTF vs FASTA) and the scratch output location.
 6. **Outcome/decision naming** (e.g. `harmonized_reference_and_proceeded`) and the
    honest give-up when no safe harmonization exists.
+
+## Update — RESOLVED (contig-alias-harmonization, `feat/contig-alias-harmonization/aliz`)
+
+The `MT`/`chrM` per-contig alias edge case flagged in open question 4 above is now
+**RESOLVED**. `plan_harmonization` (`src/contig/reference_harmonize.py`) resolves each
+GTF contig against a FASTA-driven candidate set (prefix variants ∪ alias group,
+intersected with the actual FASTA contig set): mitochondrion `M`↔`MT` is a universal
+code constant, and a small curated GRCh38 scaffold table
+(`src/contig/data/contig_aliases.tsv`) covers common unplaced scaffolds. This also
+resolves the residual case (implied by the same edge-case question) where autosomes
+already match and only the mito spelling differs — previously silently skipped
+because harmonization was gated behind the disjoint-only detector. Scaffold/`GL…`/
+`KI…` contigs beyond the seeded GRCh38 table remain future work (deferred, not
+resolved).

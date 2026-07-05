@@ -18,12 +18,10 @@ No network, no subprocess, no mutations of input files.
 import gzip
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Mapping
+from typing import Mapping
 
 from contig.contig_aliases import alias_group
 from contig.reference_check import _sample, fasta_contigs, gtf_contigs
-
-HarmonizationDirection = Literal["add_chr", "strip_chr"]
 
 
 @dataclass(frozen=True)
