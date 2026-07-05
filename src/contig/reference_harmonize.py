@@ -2,13 +2,16 @@
 
 This module provides two public functions:
 
-- ``plan_harmonization(fasta_path, gtf_path)`` — pure decision: returns a
-  ``HarmonizationPlan`` only when a safe uniform ``chr``-prefix transform on
-  the GTF will resolve a detected FASTA/GTF naming mismatch; ``None`` otherwise.
+- ``plan_harmonization(fasta_path, gtf_path)`` — pure decision: builds a
+  FASTA-driven rename map for the GTF's seqnames (chr-prefix AND alias-table
+  aware — mitochondrion ``chrM``/``MT``, scaffolds) and returns a
+  ``HarmonizationPlan`` only when applying it would strictly improve the
+  FASTA/GTF contig-name overlap; ``None`` otherwise.
 
 - ``harmonize_gtf(gtf_path, direction, out_path)`` — stream-rewrites the GTF
   applying the direction to column 1 only; byte-faithful everywhere else;
-  gzip-transparent.
+  gzip-transparent. (Still a uniform add_chr/strip_chr rewriter — applying a
+  full ``rename_map`` is Phase 3's job.)
 
 No network, no subprocess, no mutations of input files.
 """
@@ -18,62 +21,108 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from contig.reference_check import (
-    _all_chr_prefixed,
-    _sample,
-    check_reference_consistency,
-    fasta_contigs,
-    gtf_contigs,
-)
+from contig.contig_aliases import alias_group
+from contig.reference_check import _sample, fasta_contigs, gtf_contigs
 
 HarmonizationDirection = Literal["add_chr", "strip_chr"]
 
 
 @dataclass(frozen=True)
 class HarmonizationPlan:
-    direction: HarmonizationDirection
-    fasta_sample: str   # _sample(fasta_contigs) — for user-facing notes
-    gtf_sample: str     # _sample(gtf_contigs)   — for user-facing notes
+    rename_map: dict[str, str]  # GTF seqname -> FASTA seqname, renames only
+    direction: str              # "add_chr" | "strip_chr" | "alias"
+    unmatched: tuple[str, ...]  # GTF seqnames with no FASTA candidate at all
+    fasta_sample: str           # _sample(fasta_contigs) — for user-facing notes
+    gtf_sample: str             # _sample(gtf_contigs)   — for user-facing notes
+
+
+def _prefix_variants(name: str) -> set[str]:
+    """All chr-prefix spellings of *name*: itself, ``chr``-prefixed, and (if
+    *name* is already ``chr``-prefixed and long enough) the bare/stripped form.
+    """
+    variants = {name, f"chr{name}"}
+    if name.startswith("chr") and len(name) > 3:
+        variants.add(name[3:])
+    variants.discard("")
+    return variants
+
+
+def _candidate_names(g: str) -> set[str]:
+    """All FASTA-side spellings *g* could plausibly rename to.
+
+    Unifies prefix handling and alias-table lookup: expand *g* through its
+    own prefix variants first (so a chr-prefixed spelling like ``chrMT``
+    reaches the bare-name alias table entry ``MT`` <-> ``M``), look up the
+    alias group of every one of those variants, then expand each alias
+    through prefix variants again (so the alias's own chr-prefixed form,
+    e.g. ``chrM``, is reachable too). This is what lets a hybrid FASTA
+    (``chrMT``) resolve a bare GTF (``MT``) and a UCSC FASTA (``chrM``)
+    resolve the same bare GTF (``MT``) — the FASTA's actual spelling wins
+    either way once intersected with F in the caller.
+    """
+    names: set[str] = set()
+    for v in _prefix_variants(g):
+        for a in alias_group(v):
+            names |= _prefix_variants(a)
+    return names
 
 
 def plan_harmonization(fasta_path, gtf_path) -> HarmonizationPlan | None:
-    """Decide whether a safe uniform chr-prefix transform resolves the mismatch.
+    """Build a FASTA-driven rename map for the GTF and decide whether to apply it.
 
-    Returns a :class:`HarmonizationPlan` only when:
-    - ``check_reference_consistency`` reports a mismatch (non-empty), AND
-    - the mismatch is an unambiguous chr-prefix asymmetry (one side all-chr,
-      the other none-chr), AND
-    - after applying the transform the two sets share at least one name.
-
-    Returns ``None`` in all other cases so the caller can refuse safely.
+    For every GTF seqname, compute the candidate FASTA spellings via
+    ``_candidate_names`` (prefix + alias union), intersected against the
+    actual FASTA contig set. Refuses (returns ``None``) unless applying the
+    resulting rename map would strictly increase the FASTA/GTF name overlap.
     """
-    # Step 1: only act when there is an actual mismatch.
-    if not check_reference_consistency(fasta_path, gtf_path):
-        return None
-
-    # Step 2: parse both sides.
+    # Step 1: parse both sides; either side unparseable -> uncomparable.
     fa = fasta_contigs(fasta_path)
     gt = gtf_contigs(gtf_path)
+    if not fa or not gt:
+        return None
 
-    # Step 3: determine direction.
-    if _all_chr_prefixed(fa) and not _all_chr_prefixed(gt):
-        direction: HarmonizationDirection = "add_chr"
-        transformed = {f"chr{n}" for n in gt}
-    elif _all_chr_prefixed(gt) and not _all_chr_prefixed(fa):
+    # Step 2/3: for each GTF seqname, resolve against the FASTA set.
+    rename_map: dict[str, str] = {}
+    unmatched: list[str] = []
+    for g in gt:
+        cands = _candidate_names(g) & fa
+        if not cands:
+            unmatched.append(g)
+            continue
+        chosen = g if g in fa else sorted(cands)[0]
+        if chosen != g:
+            rename_map[g] = chosen
+
+    # Step 4: overlap before vs. after applying the rename map.
+    overlap_before = len(fa & gt)
+    mapped = {rename_map.get(g, g) for g in gt}
+    overlap_after = len(fa & mapped)
+
+    # Step 5: refuse / no-op — nothing resolvable, already consistent,
+    # a strict subset, or a genuine wrong-assembly mismatch renaming can't fix.
+    if not rename_map or overlap_after <= overlap_before:
+        return None
+
+    # Step 6: explicit disjoint guard (redundant with step 5, kept explicit
+    # per spec) — a wrong-assembly pair must never be "resolved".
+    if not (fa & mapped):
+        return None
+
+    # Step 7: derive the direction label. Preserve the legacy "add_chr" /
+    # "strip_chr" labels when every rename follows that single uniform
+    # pattern exactly (this is what the pre-Phase-2 callers/tests assert);
+    # anything else (mixed prefix+alias, or pure alias) is labeled "alias".
+    if all(v == f"chr{k}" for k, v in rename_map.items()):
+        direction = "add_chr"
+    elif all(v == k[3:] for k, v in rename_map.items()):
         direction = "strip_chr"
-        transformed = {n[3:] if n.startswith("chr") else n for n in gt}
     else:
-        # Mixed prefixes or both bare-vs-bare: not an unambiguous asymmetry.
-        return None
+        direction = "alias"
 
-    # Step 4: post-transform must intersect FASTA — otherwise it's a genuine
-    # wrong-assembly, not a prefix convention difference.
-    if not (transformed & fa):
-        return None
-
-    # Step 5: safe — return the plan.
     return HarmonizationPlan(
+        rename_map=rename_map,
         direction=direction,
+        unmatched=tuple(sorted(unmatched)),
         fasta_sample=_sample(fa),
         gtf_sample=_sample(gt),
     )

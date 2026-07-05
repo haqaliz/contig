@@ -145,6 +145,78 @@ class TestPlanHarmonization:
         with pytest.raises((AttributeError, TypeError)):
             plan.direction = "strip_chr"  # type: ignore[misc]
 
+    # --- alias-aware rename map (Phase 2) -----------------------------------
+
+    def test_ucsc_ensembl_full_alias_and_prefix_mix(self, tmp_path):
+        """FASTA UCSC {chr1,chr2,chrM} vs GTF Ensembl {1,2,MT}: mixed
+        prefix + mito-alias renames; direction is 'alias' since not every
+        rename follows a single uniform pattern."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2", "chrM"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("1", "2", "MT"))
+        plan = plan_harmonization(fa, gtf)
+        assert plan is not None
+        assert plan.rename_map == {"1": "chr1", "2": "chr2", "MT": "chrM"}
+        assert plan.direction == "alias"
+        assert plan.unmatched == ()
+
+    def test_residual_mito_only_rename(self, tmp_path):
+        """Autosomes already match; only the mitochondrion needs renaming."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2", "chrM"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("chr1", "chr2", "MT"))
+        plan = plan_harmonization(fa, gtf)
+        assert plan is not None
+        assert plan.rename_map == {"MT": "chrM"}
+
+    def test_pure_alias_both_chr_prefixed(self, tmp_path):
+        """Both sides chr-prefixed but mito spelled differently: chrMT -> chrM."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chrM"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("chr1", "chrMT"))
+        plan = plan_harmonization(fa, gtf)
+        assert plan is not None
+        assert plan.rename_map == {"chrMT": "chrM"}
+
+    def test_hybrid_fasta_lookup_wins(self, tmp_path):
+        """FASTA itself uses the hybrid spelling chrMT: GTF bare MT resolves
+        against the actual FASTA set, not a fixed convention."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chrMT"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("chr1", "MT"))
+        plan = plan_harmonization(fa, gtf)
+        assert plan is not None
+        assert plan.rename_map == {"MT": "chrMT"}
+
+    def test_pure_prefix_add_still_labeled_add_chr(self, tmp_path):
+        """Uniform add_chr rename set keeps the legacy 'add_chr' label."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("1", "2"))
+        plan = plan_harmonization(fa, gtf)
+        assert plan is not None
+        assert plan.rename_map == {"1": "chr1", "2": "chr2"}
+        assert plan.direction == "add_chr"
+
+    def test_pure_prefix_strip_still_labeled_strip_chr(self, tmp_path):
+        """Uniform strip_chr rename set keeps the legacy 'strip_chr' label."""
+        fa = _write(tmp_path / "ref.fa", _fasta("1", "2"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("chr1", "chr2"))
+        plan = plan_harmonization(fa, gtf)
+        assert plan is not None
+        assert plan.direction == "strip_chr"
+
+    def test_unmatched_contig_enumerated_rest_still_harmonized(self, tmp_path):
+        """A contig with no FASTA candidate lands in unmatched; the rest of
+        the GTF is still harmonized."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2", "chrM"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("1", "2", "MT", "weirdcontig"))
+        plan = plan_harmonization(fa, gtf)
+        assert plan is not None
+        assert "weirdcontig" in plan.unmatched
+        assert plan.rename_map == {"1": "chr1", "2": "chr2", "MT": "chrM"}
+
+    def test_wrong_assembly_no_candidates_refuses(self, tmp_path):
+        """No GTF contig has any FASTA candidate at all → refuse (None)."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("scaffold_1", "scaffold_2"))
+        assert plan_harmonization(fa, gtf) is None
+
 
 # ===========================================================================
 # Part 2 — harmonize_gtf
