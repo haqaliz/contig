@@ -6,6 +6,37 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Apache-2.0 license.** A top-level `LICENSE` (Apache License 2.0) and `NOTICE`
+  file, `license`/`license-files`/`classifiers` in `pyproject.toml`, and a
+  `[project.urls]` block (Homepage, Repository, Documentation, Issues, Changelog)
+  so the PyPI page and GitHub license chip render correctly. `readme = "README.md"`
+  so `pip install contig` users see the full project description on PyPI.
+- **Real demo GIF** (`assets/contig-demo.gif`): an offline terminal capture of the
+  run → self-heal (OOM → resource patch) → `PASS` verdict → signed `verify` loop,
+  featured as the README hero (served from an absolute raw URL so it also renders
+  on PyPI).
+
+### Changed
+
+- **Honest launch positioning.** Reconciled the project status across README badge,
+  README body, and `CLAUDE.md` to "MVP · early access (v0.15.0)"; added a dynamic
+  release badge and an Apache-2.0 license badge.
+- **Supported-analyses table** now carries a `Maturity` column (RNA-seq validated
+  end-to-end; the other assays wired with QC packs) and lists the somatic
+  (tumor–normal) assay, matching the registry.
+- **Quickstart** leads with the installed `contig …` form (matching the install
+  section) and points source-checkout users to the `uv run` prefix once.
+- `eval-detector --help` now mentions the env-gated `llm` detector; the illustrative
+  pipeline revision in `docs/USAGE.md` no longer hardcodes a version that can drift.
+
+### Removed
+
+- Internal go-to-market material from the public tree: `demo/OUTREACH.md`,
+  `demo/WHAT_THIS_PROVES.md`, the internal `root@vpn` validation-host references in
+  two planning docs, and the "money moment on camera" framing in `demo/DEMO.md`.
+
 ## [0.15.0] - 2026-07-05
 
 ### Added

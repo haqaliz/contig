@@ -9,7 +9,7 @@ validation after the code lands.
 ## Decisions (locked with the user)
 
 1. SLURM: wire the Nextflow slurm executor + a preflight + offline tests + a runbook,
-   AND a live single-node SLURM validation on root@vpn after the build (orchestrator).
+   AND a live single-node SLURM validation on a dedicated Linux host after the build (orchestrator).
 2. Structural QC: a missing or empty expected output (or a corrupt one) FAILs the
    verdict; softer issues WARN.
 3. Shareable report: enhance the self-contained contig show --html into a polished,
@@ -116,7 +116,7 @@ and extends `contig verify` to also check signature.json when present, adding
 - Dashboard: tsc + lint clean; Playwright green with CONTIG_AUTH_DISABLED=1; new
   fixtures under e2e/fixtures, provisioned by the global setup, never the real runs dir.
 - Live SLURM (orchestrator): install single-node SLURM (slurmctld, slurmd, munge) on
-  root@vpn, run a real Nextflow job through the slurm executor, confirm a PASS, save
+  a single-node Linux host, run a real Nextflow job through the slurm executor, confirm a PASS, save
   proof locally, then tear SLURM and the toolchain down and restore the box.
 
 ## Style / security constraints (carried)

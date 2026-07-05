@@ -165,5 +165,6 @@ to report it privately.
 
 ## License
 
-License not yet finalized (open source intended). By contributing you agree your
-contributions will be licensed under the project's eventual open-source license.
+Contig is released under the [Apache License 2.0](LICENSE). By contributing you
+agree that your contributions are licensed under the same Apache-2.0 terms
+(including its patent grant), per section 5 of the license.

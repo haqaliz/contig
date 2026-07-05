@@ -2,12 +2,43 @@
 name = "contig"
 version = "0.15.0"
 description = "Agentic bioinformatics analyst: Layer 2 execution/verification/reproducibility engine"
+readme = "README.md"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Ali Haqiqi" }]
+keywords = [
+    "bioinformatics",
+    "genomics",
+    "rna-seq",
+    "variant-calling",
+    "nextflow",
+    "reproducibility",
+    "self-healing",
+    "agentic",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "pydantic>=2.6",
     "typer>=0.12",
     "cryptography>=42.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/haqaliz/contig"
+Repository = "https://github.com/haqaliz/contig"
+Documentation = "https://github.com/haqaliz/contig/blob/master/docs/USAGE.md"
+Issues = "https://github.com/haqaliz/contig/issues"
+Changelog = "https://github.com/haqaliz/contig/blob/master/CHANGELOG.md"
 
 [project.scripts]
 contig = "contig.cli:app"

@@ -7,7 +7,7 @@ runs the live validation after the code lands. Cross-module shapes are pinned.
 
 ## Decisions (locked with the user)
 
-1. Live validation on root@vpn (a plain Linux box, no AWS): a FULL from-scratch
+1. Live validation on a single-node Linux host (a plain Linux box, no AWS): a FULL from-scratch
    nf-core run on the local backend on real data, exercising self-heal, output
    verify, and notifications end-to-end, then tear everything down. aws_batch stays
    code-tested until the user has AWS. This is an orchestrator task after the build.
@@ -32,7 +32,7 @@ runs the live validation after the code lands. Cross-module shapes are pinned.
   events.py, NEW src/contig/cost.py (or resources.py), + their tests. Does NOT touch
   detect.py, registry.py, verification/*, datashape.py, corpus.py.
 - Dashboard (Auth0 + cost display + llm selector): dashboard/** + e2e fixtures.
-- Orchestrator: full verification, commits, and the root@vpn live validation.
+- Orchestrator: full verification, commits, and the single-node Linux host live validation.
 
 No cross-file CLI wiring is needed this round: the existing `eval-detector
 --detector` flag already resolves any name in the detector registry (so "llm" works
@@ -108,7 +108,7 @@ datashape + rule pack + rule_pack_for; the single mapping points; no engine rewr
 - Dashboard: tsc + lint clean; Playwright green with auth disabled via
   CONTIG_AUTH_DISABLED (document it); new fixtures under e2e/fixtures, provisioned by
   the global setup, never the real runs dir.
-- Live validation (orchestrator): a real from-scratch nf-core run on root@vpn, the
+- Live validation (orchestrator): a real from-scratch nf-core run on a single-node Linux host, the
   new verify and notifications exercised, a PASS bundle saved locally as proof, the
   box restored to its prior state (portable JRE, uv venv, swap, run dirs removed).
 
