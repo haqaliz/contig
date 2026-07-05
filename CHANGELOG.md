@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-07-05
+
 ### Added
 
 - **Apache-2.0 license.** A top-level `LICENSE` (Apache License 2.0) and `NOTICE`
