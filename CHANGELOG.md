@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-07-06
+
 ### Added
 
 - **Per-contig alias harmonization for reference/build-mismatch repair** (capability
@@ -597,6 +599,7 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.18.0]: https://github.com/haqaliz/contig/releases/tag/v0.18.0
 [0.14.0]: https://github.com/haqaliz/contig/releases/tag/v0.14.0
 [0.13.0]: https://github.com/haqaliz/contig/releases/tag/v0.13.0
 [0.12.0]: https://github.com/haqaliz/contig/releases/tag/v0.12.0
