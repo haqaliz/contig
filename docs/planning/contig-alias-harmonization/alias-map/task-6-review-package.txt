@@ -1,0 +1,267 @@
+=== COMMITS ===
+8e52914 docs(reference): record alias harmonization (C2 follow-on) + drop dead type alias
+
+=== STAT ===
+ CHANGELOG.md                                       | 33 ++++++++++++
+ FEATURES.md                                        |  2 +-
+ .../alias-map/task-6-report.md                     | 62 ++++++++++++++++++++++
+ .../self-heal-reference-mismatch/understanding.md  | 14 +++++
+ docs/technical/CAPABILITY_ROADMAP.md               | 24 +++++++--
+ src/contig/reference_harmonize.py                  |  4 +-
+ 6 files changed, 131 insertions(+), 8 deletions(-)
+
+=== DIFF ===
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 2c25eb4..d6a535c 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -3,12 +3,45 @@
+ All notable changes to Contig are recorded here. The format follows
+ [Keep a Changelog](https://keepachangelog.com/), and the project aims for
+ [semantic versioning](https://semver.org/) once it reaches 1.0.
+ 
+ ## [Unreleased]
+ 
++### Added
++
++- **Per-contig alias harmonization for reference/build-mismatch repair** (capability
++  C2, self-heal breadth — a follow-on of v0.9.0's chr-prefix GTF harmonizer). The
++  reference pre-flight harmonizer is widened from pure `chr`-prefix add/strip to a
++  **general per-contig rename map** driven by a **lookup against the actual FASTA
++  contig set**: a new alias equivalence table treats the mitochondrion `M`↔`MT` as
++  universal (a code constant) and consults a small **curated, extensible GRCh38
++  scaffold table** (`src/contig/data/contig_aliases.tsv`, sourced from UCSC
++  chromAlias) for common unplaced scaffolds; the loader fails loud on malformed or
++  duplicate rows. `plan_harmonization` now resolves each GTF contig to whichever
++  spelling actually exists in the FASTA (prefix variants ∪ alias group ∩ FASTA), so
++  it handles the canonical UCSC-FASTA (`chrM`) + Ensembl-GTF (`MT`) case; the
++  **residual case where the autosomes already match but the mito differs**
++  (previously silently skipped because harmonization was gated behind the
++  disjoint-only detector); pure-alias mismatches; and a hybrid FASTA (`chrMT`) via
++  FASTA-lookup. It still **refuses (no harmonization) a genuine wrong-assembly**
++  (disjoint after mapping) and now also **refuses a non-injective map** (two GTF
++  contigs that would collapse onto one FASTA target) — never a silent contig merge.
++  The CLI pre-flight is now driven by the plan itself (rather than the disjoint-only
++  detector), with a strengthened overlap-increase post-check; `--allow-reference-
++  mismatch` still harmonizes-first; `rerun`/`resume` continue to re-derive the plan
++  from the original GTF path stored in the manifest, unchanged. **Honesty:** the
++  WARN-level `reference_harmonized` breadcrumb now enumerates any GTF contigs that
++  could not be matched to the FASTA and were left as-is, so a partial harmonization
++  is visible rather than a relocated silent failure. Provenance-only eval capture —
++  no new `reference_mismatch` `FailureClass` or detector-corpus case, matching
++  v0.9.0. Local, deterministic, no raw-read egress; fully covered by synthetic
++  FASTA/GTF fixtures (no real nf-core run in CI). **Deferred:** exhaustive
++  per-assembly scaffold-table completeness (the shipped table is a seed, not
++  exhaustive); network fetch of chromAlias; rewriting the FASTA (only the GTF is
++  ever rewritten); and the sample-data-vs-reference assembly-signature comparison.
++
+ ## [0.17.0] - 2026-07-05
+ 
+ ### Added
+ 
+ - **Held-out regression guard for the diagnosis detector** (capability C6, eval
+   flywheel — slice 1). A new frozen `src/contig/data/detector_corpus_holdout.jsonl`
+diff --git a/FEATURES.md b/FEATURES.md
+index 22d470f..82c17c2 100644
+--- a/FEATURES.md
++++ b/FEATURES.md
+@@ -245,13 +245,13 @@ human, and widening what we can verify. That work has its own sequenced backlog
+ [`docs/technical/CAPABILITY_ROADMAP.md`](docs/technical/CAPABILITY_ROADMAP.md),
+ built one capability at a time, test-first:
+ 
+ | ID | Capability | Window | What it adds |
+ |----|-----------|--------|--------------|
+ | **C1** | Cross-tool concordance verification | **Shipped v0.2.0 + RNA-seq slice (Unreleased) + somatic slice (Unreleased)** | A second independent tool corroborates the result; a verdict axis distinct from the shipped reference-run benchmark (germline slice via `contig verify --concordance-vcf`; RNA-seq slice via `contig verify --concordance-counts` — per-gene Spearman, fraction-agreeing, informational gene-overlap; somatic slice auto in the verdict — `somatic_site_overlap`, the PASS-site Jaccard of Mutect2 vs Strelka2 from one sarek run, no user input; auto-run second germline/RNA tool + single-cell deferred) |
+-| **C2** | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family incl. `.dict` shipped; chr-prefix GTF harmonization shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); bwa-mem2/classic-BWA build+redirect + peak-RSS + assembly-signature + wider catalog pending) | Bounded OOM/walltime retries up to an absolute ceiling with honest `gave_up_at_ceiling` give-up; a missing single-file index is now built and retried — `.fai` (`samtools faidx`), `.bai` (`samtools index`), `.tbi` (`tabix -p vcf`), `.csi` (`bcftools index`), and a GATK sequence dictionary `.dict` (`samtools dict`, resolving the companion FASTA) — with honest `index_unresolvable`/`index_build_failed` give-up and a build-once-per-path guard; a chr-prefix GTF naming mismatch (FASTA `chr1…` vs GTF `1…`, or vice versa) is now auto-harmonized at pre-flight into a run-scoped scratch copy (user file untouched), wrong-assembly still refused, decision recorded in the manifest and `ReferenceIdentity`, WARN breadcrumb on the verdict; a missing/version-incompatible **STAR** directory-shaped index is now rebuilt with `STAR --runMode genomeGenerate` into a run-scoped scratch dir and the retry is redirected at it (`built_index_and_retried`, bounded to one rebuild per run, STAR version recorded, reproduce re-derives without baking in the scratch path); classic **BWA** and **bwa-mem2** missing-index failures are detected and classified `missing_index` with a golden corpus case each, but build/redirect is deferred with no live trigger (nf-core/sarek auto-builds a missing bwa-mem2 index, iGenomes ships classic BWA, and Contig has no flag to supply a broken index); BAM/CRAM `.csi`, bwa-mem2/classic-BWA build+redirect, corrupt/partial STAR signature, assembly-signature form of reference mismatch, per-contig name mapping, and the wider catalog (format, pin conflict) deferred |
++| **C2** | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family incl. `.dict` shipped; chr-prefix GTF harmonization shipped; per-contig alias harmonization shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); bwa-mem2/classic-BWA build+redirect + peak-RSS + assembly-signature + wider catalog pending) | Bounded OOM/walltime retries up to an absolute ceiling with honest `gave_up_at_ceiling` give-up; a missing single-file index is now built and retried — `.fai` (`samtools faidx`), `.bai` (`samtools index`), `.tbi` (`tabix -p vcf`), `.csi` (`bcftools index`), and a GATK sequence dictionary `.dict` (`samtools dict`, resolving the companion FASTA) — with honest `index_unresolvable`/`index_build_failed` give-up and a build-once-per-path guard; a chr-prefix GTF naming mismatch (FASTA `chr1…` vs GTF `1…`, or vice versa) is now auto-harmonized at pre-flight into a run-scoped scratch copy (user file untouched), wrong-assembly still refused, decision recorded in the manifest and `ReferenceIdentity`, WARN breadcrumb on the verdict; the harmonizer now also resolves a **general per-contig alias map** looked up against the actual FASTA contig set — mitochondrion `M`↔`MT` is universal, plus a curated extensible GRCh38 scaffold table (`contig_aliases.tsv`, from UCSC chromAlias) — covering the residual case where autosomes already match but the mito spelling differs, refusing a non-injective rename (no silent contig merge), with the breadcrumb enumerating any unmatched contigs, provenance-only capture; a missing/version-incompatible **STAR** directory-shaped index is now rebuilt with `STAR --runMode genomeGenerate` into a run-scoped scratch dir and the retry is redirected at it (`built_index_and_retried`, bounded to one rebuild per run, STAR version recorded, reproduce re-derives without baking in the scratch path); classic **BWA** and **bwa-mem2** missing-index failures are detected and classified `missing_index` with a golden corpus case each, but build/redirect is deferred with no live trigger (nf-core/sarek auto-builds a missing bwa-mem2 index, iGenomes ships classic BWA, and Contig has no flag to supply a broken index); BAM/CRAM `.csi`, bwa-mem2/classic-BWA build+redirect, corrupt/partial STAR signature, assembly-signature form of reference mismatch, exhaustive per-assembly alias-table completeness, and the wider catalog (format, pin conflict) deferred |
+ | **C3** | Biological-plausibility verification | **Shipped v0.3.0** | Assay-aware sanity scoped honestly per assay (germline Ti/Tv and het/hom from the VCF; rRNA, doublet, sex-check deferred to later slices) |
+ | **C4** | New assay, depth-first: somatic variant calling | **Shipped v0.13.0** (intake→launch→verify) **+ VAF plausibility slice (Unreleased)** | A somatic tumor–normal assay end to end on nf-core/sarek: explicit persisted `--assay` (fixes the shared-pipeline collision), sarek tumor/normal sample-sheet pre-flight, `--tools strelka,mutect2` launch seam, structural manifest + methods label; plus a C3-style biological verdict — `median_vaf` + `somatic_variant_count` (WARN-capped) + `pon_applied` from the tumor column of the Mutect2 VCF, UNVERIFIED-when-uncomputable; plus a C1 cross-tool concordance axis — `somatic_site_overlap`, the PASS-site Jaccard of the run's Mutect2 vs Strelka2 call sets, auto-run in the verdict with no user input; Strelka2-native VAF and FAIL severity deferred |
+ | **C5** | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped; mismatch detector + known-sites + GTF version + RO-Crate pending) | Record reference identity into provenance — explicit FASTA/GTF `sha256` or the iGenomes key (never a fabricated hash), rendered in `contig methods` and the provenance panel; deepens reproduce and seeds C2's mismatch repair. Catching wrong-reference runs at pre-flight is the next slice |
+ | **C6** | Eval flywheel as a continuous loop | **Slice 1 shipped (Unreleased)** — held-out set + regression guard; folding C1/C3 + repair-loop accuracy + CI wiring pending | A frozen held-out corpus (`detector_corpus_holdout.jsonl`, 12 cases) and `contig eval-guard` fail the build when the `rules` detector's held-out accuracy drops below a committed baseline (`holdout_baseline.json`, pinning corpus sha/detector/version); `--update-baseline` refreezes it deliberately; loud sha/detector-mismatch warnings; an improvement nudge. Honestly 0.833 (10/12) — `qc_anomaly`/`no_progress` are structurally unreachable by the detector today, left as headroom. Scoped to the **labeled failure-class corpus only**; folding in C1/C3's unlabeled corroboration signals and whole-loop repair accuracy into one number is future work |
+ 
+ Each capability dovetails with the dashboard items above (for example C1 surfaces
+diff --git a/docs/planning/contig-alias-harmonization/alias-map/task-6-report.md b/docs/planning/contig-alias-harmonization/alias-map/task-6-report.md
+new file mode 100644
+index 0000000..0641b3a
+--- /dev/null
++++ b/docs/planning/contig-alias-harmonization/alias-map/task-6-report.md
+@@ -0,0 +1,62 @@
++# Task 6 report — docs sync + dead-code sweep (Phase 6, final)
++
++Branch: `feat/contig-alias-harmonization/aliz`
++
++## Files touched
++
++- `CHANGELOG.md` — new entry under `## [Unreleased]` for the per-contig alias
++  harmonization feature (C2 follow-on of v0.9.0's chr-prefix GTF harmonizer).
++- `docs/technical/CAPABILITY_ROADMAP.md` — C2 section: added a "Shipped (per-contig
++  alias harmonization slice — Unreleased)" paragraph; moved "per-contig name mapping
++  (e.g., `chrM`↔`MT`)" out of the C2 deferred list (replaced with "exhaustive
++  per-assembly alias-table completeness beyond the GRCh38 seed", which remains
++  genuinely deferred); updated the C2 row of the Sequencing summary table to note
++  the shipped slice.
++- `FEATURES.md` — C2 row: window column and description column both updated to
++  mention the per-contig alias harmonization slice, mirroring the CHANGELOG/roadmap
++  wording; "per-contig name mapping" dropped from the still-deferred tail, replaced
++  with "exhaustive per-assembly alias-table completeness".
++- `docs/planning/self-heal-reference-mismatch/understanding.md` — appended an
++  "Update — RESOLVED" section at the end (file otherwise untouched) noting that the
++  `MT`/`chrM` per-contig alias edge case flagged in open question 4 is now resolved
++  by this feature, referencing the branch and the resolving module
++  (`src/contig/reference_harmonize.py`) and table
++  (`src/contig/data/contig_aliases.tsv`). Scaffold contigs beyond the GRCh38 seed
++  are noted as still deferred, not resolved.
++- `src/contig/reference_harmonize.py` — removed the dead
++  `HarmonizationDirection = Literal["add_chr", "strip_chr"]` type alias and the now
++  otherwise-unused `Literal` import (the `HarmonizationPlan.direction` field is
++  typed as plain `str` and carries `"add_chr" | "strip_chr" | "alias"`; nothing in
++  `src/` or `tests/` referenced the alias itself).
++
++## CHANGELOG entry summary
++
++One `### Added` bullet under `## [Unreleased]`, mirroring the v0.9.0 entry's tone:
++widened harmonizer as a general per-contig rename map driven by a FASTA-set lookup;
++universal `M`↔`MT` mito alias (code constant) + curated extensible GRCh38 scaffold
++table (`contig_aliases.tsv`, sourced from UCSC chromAlias, loader fails loud on
++malformed/duplicate rows); resolves the UCSC/Ensembl mito case, the
++autosomes-already-match-but-mito-differs residual case (previously silently
++skipped), pure-alias mismatches, and hybrid FASTA (`chrMT`) via FASTA lookup;
++refuses genuine wrong-assembly and non-injective rename maps; CLI pre-flight now
++plan-driven with a strengthened overlap-increase post-check; `--allow-reference-
++mismatch` and `rerun`/`resume` behavior unchanged; WARN breadcrumb now enumerates
++unmatched contigs; provenance-only eval capture (no new `FailureClass`/corpus case,
++matching v0.9.0); deferred items listed (exhaustive per-assembly completeness,
++chromAlias network fetch, FASTA rewriting, assembly-signature comparison). No
++version bump, no git tag — left for the separate release step.
++
++## Dead-code sweep confirmation
++
++`grep -rn "HarmonizationDirection" src/ tests/` before removal found exactly one
++hit: the definition itself at `src/contig/reference_harmonize.py:26`. No other
++reference in `src/` or `tests/` (matches in `docs/planning/**` are historical
++plan/report artifacts from earlier phases and were left untouched, per the task
++scope of "nothing else"). Confirmed dead; removed along with the now-unused
++`Literal` import. Post-removal grep of `src/` and `tests/` is clean (no hits).
++
++## Suite result
++
++`uv run pytest` (full suite, after the dead-code removal): **1124 passed, 1
++skipped** — matches the expected baseline exactly. No behavior changes were made
++(docs-only + a type-alias removal).
+diff --git a/docs/planning/self-heal-reference-mismatch/understanding.md b/docs/planning/self-heal-reference-mismatch/understanding.md
+index bdd0e5f..1dbf27c 100644
+--- a/docs/planning/self-heal-reference-mismatch/understanding.md
++++ b/docs/planning/self-heal-reference-mismatch/understanding.md
+@@ -84,6 +84,20 @@ consumed pipeline) ✓.
+    propose-and-require-approval; relation to `--allow-reference-mismatch`.
+ 4. **Predicate edge cases:** `MT`/`chrM`, scaffold/`GL…`/`KI…` contigs, partial-overlap
+    (subset) references the detector already passes today.
+ 5. **Which file is rewritten** (GTF vs FASTA) and the scratch output location.
+ 6. **Outcome/decision naming** (e.g. `harmonized_reference_and_proceeded`) and the
+    honest give-up when no safe harmonization exists.
++
++## Update — RESOLVED (contig-alias-harmonization, `feat/contig-alias-harmonization/aliz`)
++
++The `MT`/`chrM` per-contig alias edge case flagged in open question 4 above is now
++**RESOLVED**. `plan_harmonization` (`src/contig/reference_harmonize.py`) resolves each
++GTF contig against a FASTA-driven candidate set (prefix variants ∪ alias group,
++intersected with the actual FASTA contig set): mitochondrion `M`↔`MT` is a universal
++code constant, and a small curated GRCh38 scaffold table
++(`src/contig/data/contig_aliases.tsv`) covers common unplaced scaffolds. This also
++resolves the residual case (implied by the same edge-case question) where autosomes
++already match and only the mito spelling differs — previously silently skipped
++because harmonization was gated behind the disjoint-only detector. Scaffold/`GL…`/
++`KI…` contigs beyond the seeded GRCh38 table remain future work (deferred, not
++resolved).
+diff --git a/docs/technical/CAPABILITY_ROADMAP.md b/docs/technical/CAPABILITY_ROADMAP.md
+index d8e6e49..2759e7b 100644
+--- a/docs/technical/CAPABILITY_ROADMAP.md
++++ b/docs/technical/CAPABILITY_ROADMAP.md
+@@ -160,12 +160,28 @@ leaves two disjoint sets — is still refused. The decision is recorded in the l
+ (`harmonized_reference: bool`) and in `ReferenceIdentity` (`.harmonized`,
+ `.harmonized_direction`); `rerun`/`resume` re-derive it by re-entering `_dispatch_run` with
+ the original GTF path (no scratch path baked into the manifest). A WARN-level
+ `reference_harmonized` QC breadcrumb is appended in `_finalize` so the rewrite is visible in
+ every verdict surface. Built on top of the C5 mismatch detector (v0.7.0), which detected and
+ refused this class of mismatch; it now also repairs it.
++**Shipped (per-contig alias harmonization slice — Unreleased):** the harmonizer is widened
++from pure `chr`-prefix add/strip to a **general per-contig rename map** driven by a lookup
++against the actual FASTA contig set. Mitochondrion `M`↔`MT` is treated as universal (a code
++constant); a small curated, extensible GRCh38 scaffold table
++(`src/contig/data/contig_aliases.tsv`, sourced from UCSC chromAlias) covers common unplaced
++scaffolds, with the loader failing loud on malformed/duplicate rows. `plan_harmonization` now
++resolves each GTF contig to whichever spelling actually exists in the FASTA (prefix variants ∪
++alias group ∩ FASTA), so it also handles the case where the autosomes already match but the
++mito spelling differs — previously silently skipped because harmonization was gated behind
++the disjoint-only detector. A non-injective rename map (two GTF contigs collapsing onto one
++FASTA target) is refused, never a silent contig merge; a genuine wrong-assembly is still
++refused. The CLI pre-flight is now driven by the plan itself rather than the disjoint-only
++detector, with a strengthened overlap-increase post-check. The `reference_harmonized`
++breadcrumb now enumerates any GTF contigs left unmatched, so a partial harmonization stays
++visible. Provenance-only eval capture, matching v0.9.0 — no new `reference_mismatch`
++`FailureClass` or detector-corpus case.
+ **Shipped (STAR/BWA directory-index slice — Unreleased):** the missing-index family now
+ extends past single-file indexes to a **directory-shaped aligner index**. A missing/aborted
+ STAR index (`could not open genome file … genomeParameters.txt`) or a version-incompatible
+ one (`Genome version … is INCOMPATIBLE with running STAR version`) is rebuilt with `STAR
+ --runMode genomeGenerate` from the run's resolved FASTA(+GTF) into a run-scoped scratch dir
+ (`<run_id>/healed_index/star`, the user's supplied index never mutated); the retried run is
+@@ -193,15 +209,15 @@ build blocked until a live trigger exists) and the classic-vs-mem2 aligner-misma
+ classic-BWA index build/redirect (needs a supported `bwa index` target, e.g. sarek
+ `--aligner bwa-mem`); a corrupt/partial STAR index signature; peak-RSS-
+ informed scaling (needs a refactor — `resource_usage` is only populated at finalize, after
+ the patch decision); the still-missing single-file index kind (the BAM/CRAM form of
+ `.csi`) plus stale-index detection on the same seam; and the wider failure catalog — the
+ assembly-signature form of reference/build mismatch (no sample-side contig signal in raw
+-FASTQ or finished bundle), per-contig name mapping (e.g., `chrM`↔`MT`), known-sites/GTF-
+-version consistency, a runtime `reference_mismatch` detector-corpus case, format
+-conversion, and pin conflict.
++FASTQ or finished bundle), exhaustive per-assembly alias-table completeness beyond the
++GRCh38 seed, known-sites/GTF-version consistency, a runtime `reference_mismatch`
++detector-corpus case, format conversion, and pin conflict.
+ 
+ Expand the failure-mode catalog and repair strategies well past the current set,
+ and make repairs resource-aware. This is the most directly "gets better with
+ better models" surface and the richest corpus fuel.
+ 
+ **Why it is moat.** Unattended-completion rate is the headline reliability metric
+@@ -437,13 +453,13 @@ no ground-truth labels); and a held-out-accuracy trend over corpus/detector vers
+ 
+ ## Sequencing summary
+ 
+ | ID | Capability | Window | Leverage |
+ |----|-----------|--------|----------|
+ | C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) + somatic slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap + somatic auto `somatic_site_overlap` PASS-site Jaccard, Mutect2 vs Strelka2, no user input; auto-run second germline/RNA tool + single-cell deferred) |
+-| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); bwa-mem2/classic-BWA build+redirect, peak-RSS, assembly-signature + wider catalog pending) | Unattended-completion rate, corpus fuel |
++| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; per-contig alias harmonization (mito `M`↔`MT` + GRCh38 scaffold seed) shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); bwa-mem2/classic-BWA build+redirect, peak-RSS, assembly-signature + exhaustive per-assembly alias completeness pending) | Unattended-completion rate, corpus fuel |
+ | C3 | Biological-plausibility verification | SHIPPED v0.3.0 | Verdict gets smarter about biology (germline Ti/Tv, het/hom; other assays deferred) |
+ | C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased); Strelka2-native VAF, FAIL severity + PON reference wiring deferred | Breadth, depth-first, new corpus |
+ | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
+ | C6 | Eval flywheel as a continuous loop | M6 (held-out set + regression-guard slice 1 SHIPPED, Unreleased — honestly 0.833/10:12, two classes structurally unreachable; folding C1/C3 signals + repair-loop accuracy + CI wiring pending) | Compounding accuracy from real runs |
+ 
+ **One-line mantra:** make every verdict harder to fool, recover more failures
+diff --git a/src/contig/reference_harmonize.py b/src/contig/reference_harmonize.py
+index 0b8edef..926e5d6 100644
+--- a/src/contig/reference_harmonize.py
++++ b/src/contig/reference_harmonize.py
+@@ -15,19 +15,17 @@ This module provides two public functions:
+ No network, no subprocess, no mutations of input files.
+ """
+ 
+ import gzip
+ from dataclasses import dataclass
+ from pathlib import Path
+-from typing import Literal, Mapping
++from typing import Mapping
+ 
+ from contig.contig_aliases import alias_group
+ from contig.reference_check import _sample, fasta_contigs, gtf_contigs
+ 
+-HarmonizationDirection = Literal["add_chr", "strip_chr"]
+-
+ 
+ @dataclass(frozen=True)
+ class HarmonizationPlan:
+     rename_map: dict[str, str]  # GTF seqname -> FASTA seqname, renames only
+     direction: str              # "add_chr" | "strip_chr" | "alias"
+     unmatched: tuple[str, ...]  # GTF seqnames with no FASTA candidate at all

@@ -1,0 +1,381 @@
+=== COMMITS ===
+04abbb3 feat(reference): rewrite plan_harmonization as a FASTA-driven rename map
+
+=== STAT ===
+ .../alias-map/task-2-report.md                     |  82 +++++++++++++
+ src/contig/reference_harmonize.py                  | 129 ++++++++++++++-------
+ tests/test_reference_harmonize.py                  |  72 ++++++++++++
+ 3 files changed, 243 insertions(+), 40 deletions(-)
+
+=== DIFF ===
+diff --git a/docs/planning/contig-alias-harmonization/alias-map/task-2-report.md b/docs/planning/contig-alias-harmonization/alias-map/task-2-report.md
+new file mode 100644
+index 0000000..8e54419
+--- /dev/null
++++ b/docs/planning/contig-alias-harmonization/alias-map/task-2-report.md
+@@ -0,0 +1,82 @@
++# Task 2 report: `plan_harmonization` rewritten as a FASTA-driven rename map (Phase 2)
++
++## What changed
++
++`src/contig/reference_harmonize.py`:
++
++- **`HarmonizationPlan`** (frozen dataclass) gained two fields and changed one:
++  - `rename_map: dict[str, str]` — GTF seqname -> chosen FASTA seqname, renames only (entries where the GTF name already matches the FASTA are omitted).
++  - `direction: str` — widened from the `Literal["add_chr","strip_chr"]` alias to plain `str`, since it can now also be `"alias"`.
++  - `unmatched: tuple[str, ...]` — GTF seqnames with zero FASTA candidates (sorted, immutable).
++  - `fasta_sample` / `gtf_sample` — unchanged.
++- **`plan_harmonization(fasta_path, gtf_path)`** — fully rewritten per the spec's 8-step algorithm:
++  1. Parse `F = fasta_contigs(...)`, `G = gtf_contigs(...)`; either empty → `None`.
++  2. New helper `_prefix_variants(name)` = `{name, "chr"+name} ∪ ({name[3:]} if chr-prefixed and len>3)`.
++  3. New helper `_candidate_names(g)` — the FASTA-driven closure: for every prefix-variant `v` of `g`, for every alias `a` in `alias_group(v)`, union in `_prefix_variants(a)`. This double expansion (prefix → alias → prefix) is what lets a chr-prefixed spelling like `chrMT` reach the bare mito alias-table entry `MT`↔`M` and then re-expand `M`/`MT` back through their own prefix variants (`chrM`) — see "algorithm nuance" below, this is the one place the implementation had to go beyond a literal reading of the brief's formula.
++  4. For each `g in G`: `cands = _candidate_names(g) & F`. If empty → `unmatched`. Else `chosen = g if g in F else sorted(cands)[0]`; if `chosen != g`, record `rename_map[g] = chosen`.
++  5. `overlap_before = |F ∩ G|`, `mapped = {rename_map.get(g,g) for g in G}`, `overlap_after = |F ∩ mapped|`.
++  6. Refuse: `rename_map` empty OR `overlap_after <= overlap_before` → `None`.
++  7. Explicit (redundant but commented per spec) disjoint guard: `F ∩ mapped` empty → `None`.
++  8. Direction label: `"add_chr"` if every rename is exactly `chosen == "chr"+g`; `"strip_chr"` if every rename is exactly `chosen == g[3:]`; else `"alias"`.
++  9. Return the plan with `unmatched` sorted into a tuple.
++- Removed now-unused imports (`_all_chr_prefixed`, `check_reference_consistency` from `reference_check`); added `from contig.contig_aliases import alias_group`.
++- `harmonize_gtf`, `_apply`, `_open_input`, `_open_output` — **untouched**, exactly per the Phase-3-not-now instruction.
++
++## Algorithm nuance vs. the literal brief formula
++
++The brief's formula was `cands = (⋃_{a ∈ alias_group(g)} prefix_variants(a)) ∩ F`. Applied literally to `g = "chrMT"` against `F = {chr1, chrM}` this produces an **empty** `cands`, because `alias_group("chrMT")` does not match anything in the alias table (the table's mito entry is bare `{"M","MT"}` only — `contig_aliases.py` intentionally has no chr-prefixed keys, per its own Phase-1 docstring). That would fail the "Pure-alias both prefixed" test case (`F={chr1,chrM}`, `G={chr1,chrMT}` → expected `rename_map=={"chrMT":"chrM"}`).
++
++To satisfy that test (and the "Hybrid FASTA" test, which the literal formula does handle since its `g="MT"` is already a bare alias-table key), the implementation expands over `_prefix_variants(g)` **first** (so `chrMT` yields the bare form `MT` as one candidate), looks up `alias_group` on **each** of those variants, and then re-expands **each** alias through `_prefix_variants` again (so the alias `M`/`MT` also yields `chrM`/`chrMT`). This is a strict superset of the literal single-level formula (since `g ∈ _prefix_variants(g)`, the literal formula's results are always included) and was verified by hand against every listed test case before writing code.
++
++## New/updated tests (`tests/test_reference_harmonize.py`, `TestPlanHarmonization`)
++
++All 12 pre-existing tests in this class needed **no modification** — the new fields are additive and none of the old assertions touch `rename_map` or `unmatched`. Added 8 new tests:
++
++- `test_ucsc_ensembl_full_alias_and_prefix_mix` — mixed prefix+alias, `direction=="alias"`, `unmatched==()`.
++- `test_residual_mito_only_rename` — autosomes already match, only `MT`→`chrM` renamed.
++- `test_pure_alias_both_chr_prefixed` — `chrMT`→`chrM` (the nuance case above).
++- `test_hybrid_fasta_lookup_wins` — hybrid FASTA `chrMT`; bare GTF `MT` resolves to it (FASTA-lookup wins).
++- `test_pure_prefix_add_still_labeled_add_chr` — legacy label preserved.
++- `test_pure_prefix_strip_still_labeled_strip_chr` — legacy label preserved.
++- `test_unmatched_contig_enumerated_rest_still_harmonized` — `weirdcontig` lands in `unmatched`, rest still harmonized.
++- `test_wrong_assembly_no_candidates_refuses` — scaffold-only disjoint GTF → `None`.
++
++## TDD evidence
++
++**RED** (tests added, before touching `reference_harmonize.py`):
++
++```
++FAILED ...::test_ucsc_ensembl_full_alias_and_prefix_mix - assert None is not None
++FAILED ...::test_residual_mito_only_rename
++FAILED ...::test_pure_alias_both_chr_prefixed
++FAILED ...::test_hybrid_fasta_lookup_wins - assert None is not None
++FAILED ...::test_pure_prefix_add_still_labeled_add_chr - AttributeError: 'HarmonizationPlan' object has no attribute 'rename_map'
++FAILED ...::test_unmatched_contig_enumerated_rest_still_harmonized - AttributeError: ...no attribute 'unmatched'
++```
++(2 of the 8 new tests — `test_pure_prefix_strip_still_labeled_strip_chr` and `test_wrong_assembly_no_candidates_refuses` — happened to pass against the old code by coincidence of old semantics; the other 6 failed as expected, confirming the tests actually exercise new behavior.)
++
++**GREEN** — after the rewrite:
++
++```
++$ uv run pytest tests/test_reference_harmonize.py -q
++..................................                                       [100%]
++34 passed
++```
++
++## Full-suite result
++
++```
++$ uv run pytest
++1113 passed, 1 skipped in 11.06s
++```
++
++No failures anywhere, including `test_cli.py`. Confirmed why: the existing `test_cli.py` reference-harmonization scenarios (`_write_disjoint_reference` — pure `chr1,chr2` vs `1,2`; `_write_wrong_assembly_reference` — `scaffold_1,scaffold_2` disjoint) only exercise the pure add_chr and genuine-refuse paths, both of which the rewritten `plan_harmonization` still produces identically to before (same `direction` value, same `None`). None of the cli tests hit an `"alias"`-direction scenario, so `cli.py`'s `harmonize_gtf(params["gtf"], hplan.direction, ...)` call — which only understands `"add_chr"`/`"strip_chr"` — was never exercised against the new label. This is a latent integration gap (Phase 4's job per the task brief), not a test failure.
++
++## Commit
++
++`feat(reference): rewrite plan_harmonization as a FASTA-driven rename map` — see git log for hash.
++
++## Concerns
++
++1. **cli.py latent gap (expected, not fixed here):** `cli.py` line ~465 calls `harmonize_gtf(params["gtf"], hplan.direction, harmonized_path)`. `harmonize_gtf`'s `_apply` only branches on `"add_chr"` vs. else-treated-as-`"strip_chr"`. If `plan_harmonization` ever returns `direction == "alias"` in production, `cli.py` will silently apply a `strip_chr` transform instead of the real rename map — producing wrong output, not a clean failure. No test currently exercises this path (all cli fixtures are pure-prefix), so the full suite is green, but this is a real correctness gap until Phase 3 (apply the rename map in `harmonize_gtf`) and Phase 4 (wire `cli.py` to the new shape) land. Flagging per the task brief's explicit instruction not to fix `cli.py` in this phase.
++2. The `_candidate_names` double-expansion (prefix → alias → prefix) is a generalization beyond the brief's literal single-level formula; documented in code and above so Phase 3/4 authors aren't surprised by it. Verified by hand against every listed test case, not just asserted — worth a second pair of eyes given it's the trickiest part of this phase.
+diff --git a/src/contig/reference_harmonize.py b/src/contig/reference_harmonize.py
+index 2dd8e9e..b9db952 100644
+--- a/src/contig/reference_harmonize.py
++++ b/src/contig/reference_harmonize.py
+@@ -1,88 +1,137 @@
+ """Pure decision + stream-rewriter for GTF contig-name harmonization.
+ 
+ This module provides two public functions:
+ 
+-- ``plan_harmonization(fasta_path, gtf_path)`` — pure decision: returns a
+-  ``HarmonizationPlan`` only when a safe uniform ``chr``-prefix transform on
+-  the GTF will resolve a detected FASTA/GTF naming mismatch; ``None`` otherwise.
++- ``plan_harmonization(fasta_path, gtf_path)`` — pure decision: builds a
++  FASTA-driven rename map for the GTF's seqnames (chr-prefix AND alias-table
++  aware — mitochondrion ``chrM``/``MT``, scaffolds) and returns a
++  ``HarmonizationPlan`` only when applying it would strictly improve the
++  FASTA/GTF contig-name overlap; ``None`` otherwise.
+ 
+ - ``harmonize_gtf(gtf_path, direction, out_path)`` — stream-rewrites the GTF
+   applying the direction to column 1 only; byte-faithful everywhere else;
+-  gzip-transparent.
++  gzip-transparent. (Still a uniform add_chr/strip_chr rewriter — applying a
++  full ``rename_map`` is Phase 3's job.)
+ 
+ No network, no subprocess, no mutations of input files.
+ """
+ 
+ import gzip
+ from dataclasses import dataclass
+ from pathlib import Path
+ from typing import Literal
+ 
+-from contig.reference_check import (
+-    _all_chr_prefixed,
+-    _sample,
+-    check_reference_consistency,
+-    fasta_contigs,
+-    gtf_contigs,
+-)
++from contig.contig_aliases import alias_group
++from contig.reference_check import _sample, fasta_contigs, gtf_contigs
+ 
+ HarmonizationDirection = Literal["add_chr", "strip_chr"]
+ 
+ 
+ @dataclass(frozen=True)
+ class HarmonizationPlan:
+-    direction: HarmonizationDirection
+-    fasta_sample: str   # _sample(fasta_contigs) — for user-facing notes
+-    gtf_sample: str     # _sample(gtf_contigs)   — for user-facing notes
++    rename_map: dict[str, str]  # GTF seqname -> FASTA seqname, renames only
++    direction: str              # "add_chr" | "strip_chr" | "alias"
++    unmatched: tuple[str, ...]  # GTF seqnames with no FASTA candidate at all
++    fasta_sample: str           # _sample(fasta_contigs) — for user-facing notes
++    gtf_sample: str             # _sample(gtf_contigs)   — for user-facing notes
+ 
+ 
+-def plan_harmonization(fasta_path, gtf_path) -> HarmonizationPlan | None:
+-    """Decide whether a safe uniform chr-prefix transform resolves the mismatch.
++def _prefix_variants(name: str) -> set[str]:
++    """All chr-prefix spellings of *name*: itself, ``chr``-prefixed, and (if
++    *name* is already ``chr``-prefixed and long enough) the bare/stripped form.
++    """
++    variants = {name, f"chr{name}"}
++    if name.startswith("chr") and len(name) > 3:
++        variants.add(name[3:])
++    variants.discard("")
++    return variants
++
++
++def _candidate_names(g: str) -> set[str]:
++    """All FASTA-side spellings *g* could plausibly rename to.
++
++    Unifies prefix handling and alias-table lookup: expand *g* through its
++    own prefix variants first (so a chr-prefixed spelling like ``chrMT``
++    reaches the bare-name alias table entry ``MT`` <-> ``M``), look up the
++    alias group of every one of those variants, then expand each alias
++    through prefix variants again (so the alias's own chr-prefixed form,
++    e.g. ``chrM``, is reachable too). This is what lets a hybrid FASTA
++    (``chrMT``) resolve a bare GTF (``MT``) and a UCSC FASTA (``chrM``)
++    resolve the same bare GTF (``MT``) — the FASTA's actual spelling wins
++    either way once intersected with F in the caller.
++    """
++    names: set[str] = set()
++    for v in _prefix_variants(g):
++        for a in alias_group(v):
++            names |= _prefix_variants(a)
++    return names
+ 
+-    Returns a :class:`HarmonizationPlan` only when:
+-    - ``check_reference_consistency`` reports a mismatch (non-empty), AND
+-    - the mismatch is an unambiguous chr-prefix asymmetry (one side all-chr,
+-      the other none-chr), AND
+-    - after applying the transform the two sets share at least one name.
+ 
+-    Returns ``None`` in all other cases so the caller can refuse safely.
+-    """
+-    # Step 1: only act when there is an actual mismatch.
+-    if not check_reference_consistency(fasta_path, gtf_path):
+-        return None
++def plan_harmonization(fasta_path, gtf_path) -> HarmonizationPlan | None:
++    """Build a FASTA-driven rename map for the GTF and decide whether to apply it.
+ 
+-    # Step 2: parse both sides.
++    For every GTF seqname, compute the candidate FASTA spellings via
++    ``_candidate_names`` (prefix + alias union), intersected against the
++    actual FASTA contig set. Refuses (returns ``None``) unless applying the
++    resulting rename map would strictly increase the FASTA/GTF name overlap.
++    """
++    # Step 1: parse both sides; either side unparseable -> uncomparable.
+     fa = fasta_contigs(fasta_path)
+     gt = gtf_contigs(gtf_path)
++    if not fa or not gt:
++        return None
+ 
+-    # Step 3: determine direction.
+-    if _all_chr_prefixed(fa) and not _all_chr_prefixed(gt):
+-        direction: HarmonizationDirection = "add_chr"
+-        transformed = {f"chr{n}" for n in gt}
+-    elif _all_chr_prefixed(gt) and not _all_chr_prefixed(fa):
+-        direction = "strip_chr"
+-        transformed = {n[3:] if n.startswith("chr") else n for n in gt}
+-    else:
+-        # Mixed prefixes or both bare-vs-bare: not an unambiguous asymmetry.
++    # Step 2/3: for each GTF seqname, resolve against the FASTA set.
++    rename_map: dict[str, str] = {}
++    unmatched: list[str] = []
++    for g in gt:
++        cands = _candidate_names(g) & fa
++        if not cands:
++            unmatched.append(g)
++            continue
++        chosen = g if g in fa else sorted(cands)[0]
++        if chosen != g:
++            rename_map[g] = chosen
++
++    # Step 4: overlap before vs. after applying the rename map.
++    overlap_before = len(fa & gt)
++    mapped = {rename_map.get(g, g) for g in gt}
++    overlap_after = len(fa & mapped)
++
++    # Step 5: refuse / no-op — nothing resolvable, already consistent,
++    # a strict subset, or a genuine wrong-assembly mismatch renaming can't fix.
++    if not rename_map or overlap_after <= overlap_before:
+         return None
+ 
+-    # Step 4: post-transform must intersect FASTA — otherwise it's a genuine
+-    # wrong-assembly, not a prefix convention difference.
+-    if not (transformed & fa):
++    # Step 6: explicit disjoint guard (redundant with step 5, kept explicit
++    # per spec) — a wrong-assembly pair must never be "resolved".
++    if not (fa & mapped):
+         return None
+ 
+-    # Step 5: safe — return the plan.
++    # Step 7: derive the direction label. Preserve the legacy "add_chr" /
++    # "strip_chr" labels when every rename follows that single uniform
++    # pattern exactly (this is what the pre-Phase-2 callers/tests assert);
++    # anything else (mixed prefix+alias, or pure alias) is labeled "alias".
++    if all(v == f"chr{k}" for k, v in rename_map.items()):
++        direction = "add_chr"
++    elif all(v == k[3:] for k, v in rename_map.items()):
++        direction = "strip_chr"
++    else:
++        direction = "alias"
++
+     return HarmonizationPlan(
++        rename_map=rename_map,
+         direction=direction,
++        unmatched=tuple(sorted(unmatched)),
+         fasta_sample=_sample(fa),
+         gtf_sample=_sample(gt),
+     )
+ 
+ 
+ # ---------------------------------------------------------------------------
+ # Internal helpers
+ # ---------------------------------------------------------------------------
+ 
+ def _apply(name: str, direction: HarmonizationDirection) -> str:
+     """Apply the direction to a single seqname; idempotent."""
+     if direction == "add_chr":
+diff --git a/tests/test_reference_harmonize.py b/tests/test_reference_harmonize.py
+index 8de189c..d1cc1fe 100644
+--- a/tests/test_reference_harmonize.py
++++ b/tests/test_reference_harmonize.py
+@@ -136,24 +136,96 @@ class TestPlanHarmonization:
+         plan2 = plan_harmonization(fa, gtf)
+         assert plan1 == plan2
+ 
+     def test_plan_is_frozen_dataclass(self, tmp_path):
+         """HarmonizationPlan is a frozen dataclass (immutable)."""
+         fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2"))
+         gtf = _write(tmp_path / "genes.gtf", _gtf("1", "2"))
+         plan = plan_harmonization(fa, gtf)
+         assert plan is not None
+         with pytest.raises((AttributeError, TypeError)):
+             plan.direction = "strip_chr"  # type: ignore[misc]
+ 
++    # --- alias-aware rename map (Phase 2) -----------------------------------
++
++    def test_ucsc_ensembl_full_alias_and_prefix_mix(self, tmp_path):
++        """FASTA UCSC {chr1,chr2,chrM} vs GTF Ensembl {1,2,MT}: mixed
++        prefix + mito-alias renames; direction is 'alias' since not every
++        rename follows a single uniform pattern."""
++        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2", "chrM"))
++        gtf = _write(tmp_path / "genes.gtf", _gtf("1", "2", "MT"))
++        plan = plan_harmonization(fa, gtf)
++        assert plan is not None
++        assert plan.rename_map == {"1": "chr1", "2": "chr2", "MT": "chrM"}
++        assert plan.direction == "alias"
++        assert plan.unmatched == ()
++
++    def test_residual_mito_only_rename(self, tmp_path):
++        """Autosomes already match; only the mitochondrion needs renaming."""
++        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2", "chrM"))
++        gtf = _write(tmp_path / "genes.gtf", _gtf("chr1", "chr2", "MT"))
++        plan = plan_harmonization(fa, gtf)
++        assert plan is not None
++        assert plan.rename_map == {"MT": "chrM"}
++
++    def test_pure_alias_both_chr_prefixed(self, tmp_path):
++        """Both sides chr-prefixed but mito spelled differently: chrMT -> chrM."""
++        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chrM"))
++        gtf = _write(tmp_path / "genes.gtf", _gtf("chr1", "chrMT"))
++        plan = plan_harmonization(fa, gtf)
++        assert plan is not None
++        assert plan.rename_map == {"chrMT": "chrM"}
++
++    def test_hybrid_fasta_lookup_wins(self, tmp_path):
++        """FASTA itself uses the hybrid spelling chrMT: GTF bare MT resolves
++        against the actual FASTA set, not a fixed convention."""
++        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chrMT"))
++        gtf = _write(tmp_path / "genes.gtf", _gtf("chr1", "MT"))
++        plan = plan_harmonization(fa, gtf)
++        assert plan is not None
++        assert plan.rename_map == {"MT": "chrMT"}
++
++    def test_pure_prefix_add_still_labeled_add_chr(self, tmp_path):
++        """Uniform add_chr rename set keeps the legacy 'add_chr' label."""
++        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2"))
++        gtf = _write(tmp_path / "genes.gtf", _gtf("1", "2"))
++        plan = plan_harmonization(fa, gtf)
++        assert plan is not None
++        assert plan.rename_map == {"1": "chr1", "2": "chr2"}
++        assert plan.direction == "add_chr"
++
++    def test_pure_prefix_strip_still_labeled_strip_chr(self, tmp_path):
++        """Uniform strip_chr rename set keeps the legacy 'strip_chr' label."""
++        fa = _write(tmp_path / "ref.fa", _fasta("1", "2"))
++        gtf = _write(tmp_path / "genes.gtf", _gtf("chr1", "chr2"))
++        plan = plan_harmonization(fa, gtf)
++        assert plan is not None
++        assert plan.direction == "strip_chr"
++
++    def test_unmatched_contig_enumerated_rest_still_harmonized(self, tmp_path):
++        """A contig with no FASTA candidate lands in unmatched; the rest of
++        the GTF is still harmonized."""
++        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2", "chrM"))
++        gtf = _write(tmp_path / "genes.gtf", _gtf("1", "2", "MT", "weirdcontig"))
++        plan = plan_harmonization(fa, gtf)
++        assert plan is not None
++        assert "weirdcontig" in plan.unmatched
++        assert plan.rename_map == {"1": "chr1", "2": "chr2", "MT": "chrM"}
++
++    def test_wrong_assembly_no_candidates_refuses(self, tmp_path):
++        """No GTF contig has any FASTA candidate at all → refuse (None)."""
++        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2"))
++        gtf = _write(tmp_path / "genes.gtf", _gtf("scaffold_1", "scaffold_2"))
++        assert plan_harmonization(fa, gtf) is None
++
+ 
+ # ===========================================================================
+ # Part 2 — harmonize_gtf
+ # ===========================================================================
+ 
+ 
+ class TestHarmonizeGtf:
+ 
+     # --- closed-loop (CRITICAL) ------------------------------------------
+ 
+     def test_closed_loop_add_chr_resolves_mismatch(self, tmp_path):
+         """harmonize GTF (add_chr) then check_reference_consistency == [] ."""

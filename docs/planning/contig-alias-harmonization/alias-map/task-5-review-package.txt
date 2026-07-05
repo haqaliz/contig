@@ -1,0 +1,462 @@
+=== COMMITS ===
+e7513fa feat(verify): breadcrumb enumerates unmatched contigs after harmonization
+
+=== STAT ===
+ .../alias-map/task-5-report.md                     | 162 +++++++++++++++++++++
+ src/contig/self_heal.py                            |  42 +++++-
+ tests/test_self_heal.py                            | 130 +++++++++++++++++
+ 3 files changed, 329 insertions(+), 5 deletions(-)
+
+=== DIFF ===
+diff --git a/docs/planning/contig-alias-harmonization/alias-map/task-5-report.md b/docs/planning/contig-alias-harmonization/alias-map/task-5-report.md
+new file mode 100644
+index 0000000..56219e5
+--- /dev/null
++++ b/docs/planning/contig-alias-harmonization/alias-map/task-5-report.md
+@@ -0,0 +1,162 @@
++# Task 5 report: enumerate still-unmatched GTF contigs in the harmonization breadcrumb (M8)
++
++## The gap this phase closes
++
++When Contig auto-harmonizes a FASTA/GTF contig-naming mismatch,
++`plan_harmonization` already computes the ground-truth unmatched set
++(`HarmonizationPlan.unmatched`: GTF seqnames with no FASTA candidate at all,
++e.g. an assembly-specific scaffold or a typo'd contig). `harmonize_gtf`
++passes those seqnames through **unchanged** — they are silently left
++mismatched in the harmonized GTF. Before this task, the `reference_harmonized`
++WARN breadcrumb said only "Reference GTF seqnames were harmonized (add_chr)
++... Confirm the reference was correct." — identical wording whether 0 or 40
++contigs were left unmatched. That is a relocated silent failure: the run
++looks "harmonized" and merely "warn", but some genes on unmatched contigs may
++never show up in the counts, with no trace of which ones.
++
++## CRITICAL correctness decision: recompute vs. thread
++
++Per the task brief, resolved empirically with a RED test **before** touching
++`_finalize`'s logic:
++
++`test_finalize_receives_the_harmonized_gtf_path_in_parameters` builds a real
++FASTA (`chr1,chr2`) and GTF (`1,2`), runs them through the actual
++`plan_harmonization` + `harmonize_gtf` (exactly as `cli.py`'s pre-flight
++block does), passes `params={"fasta": ..., "gtf": str(harmonized_path)}`
++into `self_heal_run`, and asserts:
++
++```python
++assert record.parameters["gtf"] == str(harmonized_path)
++assert record.parameters["gtf"] != str(orig_gtf_path)
++```
++
++This test passed immediately (no code change needed) — confirming empirically
++that `record.parameters["gtf"]` holds the **HARMONIZED** scratch path, not the
++original. Trace: `cli.py` (`_dispatch_run`, line 497) overwrites
++`params["gtf"] = str(harmonized_path.resolve())` **before** calling
++`self_heal_run`; `self_heal_run` seeds `current_params = dict(params or {})`
++and passes it straight through to `run_pipeline`; `runner.py` line 338 sets
++`RunRecord(parameters=params or {}, ...)`. No original-path fallback exists
++anywhere in that chain.
++
++**Decision: RECOMPUTE in `_finalize`**, per the brief's licensed option —
++because the harmonized GTF has already renamed every matchable contig to its
++FASTA spelling, whatever GTF seqname remains outside the FASTA contig set
++*is* exactly `HarmonizationPlan.unmatched`. Threading `hplan.unmatched`
++through the ~10 pass-through call sites of `harmonized_reference_direction`
++in `self_heal.py` would have been pure duplication of information already
++recoverable from data already in hand. No changes to `cli.py` were needed
++(mirrors the brief's "touch cli.py only if the threading fallback is
++needed").
++
++## Implementation (`src/contig/self_heal.py`)
++
++New pure helper, adjacent to `_finalize`:
++
++```python
++def _unmatched_harmonized_contigs(params: dict[str, object]) -> list[str]:
++    fasta = params.get("fasta")
++    gtf = params.get("gtf")
++    if not fasta or not gtf:
++        return []
++    try:
++        return sorted(gtf_contigs(gtf) - fasta_contigs(fasta))
++    except OSError:
++        return []
++```
++
++`fasta_contigs`/`gtf_contigs` imported from `contig.reference_check`
++(alphabetically slotted between the existing `notify` and `repair` imports).
++Degrades to `[]` on missing/unreadable paths — same "never crash, never
++fabricate" posture as `compute_reference_identity`'s `_hash` helper; this is
++what keeps the pre-existing fake-path tests
++(`params={"fasta": "/fake/ref.fa", "gtf": "/fake/ref.gtf"}`) green.
++
++`_finalize`'s WARN-breadcrumb branch now builds the message conditionally:
++
++```python
++unmatched = _unmatched_harmonized_contigs(record.parameters)
++message = (
++    f"Reference harmonized ({harmonized_reference_direction}) to match "
++    f"the FASTA before the run. "
++)
++if unmatched:
++    names = ", ".join(unmatched)
++    message += (
++        f"Note: {len(unmatched)} GTF contig(s) could not be matched to "
++        f"the FASTA and were left as-is: {names}. "
++    )
++message += "Confirm the reference was correct."
++```
++
++Message shape now matches the brief's example exactly when unmatched
++contigs exist, e.g.: `"Reference harmonized (add_chr) to match the FASTA
++before the run. Note: 1 GTF contig(s) could not be matched to the FASTA and
++were left as-is: weirdcontig. Confirm the reference was correct."` — and
++collapses to the clean, pre-existing-style sentence when `unmatched == []`.
++
++The wording changed slightly from "Reference GTF seqnames were harmonized"
++to "Reference harmonized" (plain-language per M8); grepped the repo first —
++no other code or test hard-codes the old exact string, only
++`check == "reference_harmonized"` and substring checks like `"add_chr" in
++message`, both still satisfied.
++
++## Tests added (`tests/test_self_heal.py`)
++
++New fixture helpers: `_write_fasta(path, names)`, `_write_gtf(path, names)` —
++minimal real FASTA/GTF files (not fakes) so `plan_harmonization` /
++`harmonize_gtf` run for real, mirroring what `cli.py` actually produces.
++
++- `test_finalize_receives_the_harmonized_gtf_path_in_parameters` — the
++  decision test described above (passed immediately; confirms the ground
++  truth that licensed the recompute approach).
++- `test_finalize_harmonized_warn_message_lists_unmatched_contig` — FASTA
++  `chr1,chr2` / GTF `1,2,weirdcontig`; asserts `hplan.unmatched ==
++  ("weirdcontig",)`, then asserts the WARN message contains `"weirdcontig"`,
++  `"could not be matched"`, and the count `"1"`. Also re-asserts the
++  pre-existing invariants (`reference_identity.harmonized is True`,
++  `harmonized_direction` recorded, `verdict == "warn"`).
++- `test_finalize_harmonized_warn_message_omits_clause_when_fully_matched` —
++  FASTA/GTF where every contig matches (`hplan.unmatched == ()`); asserts
++  `"could not be matched" not in message` and the direction label is still
++  present.
++
++## TDD evidence
++
++RED (before the `self_heal.py` edit):
++
++```
++$ uv run pytest tests/test_self_heal.py -k "finalize_receives_the_harmonized or finalize_harmonized_warn_message" -v
++tests/test_self_heal.py .F.
++FAILED tests/test_self_heal.py::test_finalize_harmonized_warn_message_lists_unmatched_contig
++AssertionError: assert 'weirdcontig' in 'Reference GTF seqnames were harmonized (add_chr) to match the FASTA before the run. Confirm the reference was correct.'
++1 failed, 2 passed
++```
++
++(The "receives the harmonized path" and "omits clause when fully matched"
++tests passed pre-edit, as expected — they assert pre-existing behavior /
++the decision, not the new feature.)
++
++GREEN after the `self_heal.py` edit:
++
++```
++$ uv run pytest tests/test_self_heal.py
++120 passed in 0.25s
++
++$ uv run pytest
++1124 passed, 1 skipped in 10.89s
++```
++
++(was 1121 passed, 1 skipped before this task; +3 net new tests, all existing
++tests — including both pre-existing `_finalize` breadcrumb tests — still
++green unchanged.)
++
++## Files touched
++
++- `src/contig/self_heal.py` — added `_unmatched_harmonized_contigs` helper;
++  added `fasta_contigs, gtf_contigs` import from `contig.reference_check`;
++  updated the `reference_harmonized` WARN message construction in
++  `_finalize`.
++- `tests/test_self_heal.py` — added `_write_fasta`/`_write_gtf` fixture
++  helpers and three new tests (see above).
++- `cli.py` — **not touched**: the recompute approach needed no threading.
+diff --git a/src/contig/self_heal.py b/src/contig/self_heal.py
+index 0596b1f..235a894 100644
+--- a/src/contig/self_heal.py
++++ b/src/contig/self_heal.py
+@@ -18,24 +18,25 @@ import re
+ import shutil
+ import time
+ from datetime import datetime, timezone
+ from pathlib import Path
+ from typing import Callable
+ 
+ from contig.bundle import compute_output_checksums, compute_reference_identity, write_bundle
+ from contig.corpus import append_case, failure_case_from_run
+ from contig.detect import diagnose_failure
+ from contig.events import parse_resource_usage_file
+ from contig.models import Diagnosis, ExecutionTarget, Patch, QCResult, RepairStep, RunRecord, RunSummary
+ from contig.notify import emit_event
++from contig.reference_check import fasta_contigs, gtf_contigs
+ from contig.repair import propose_patches
+ from contig.runner import (
+     Executor,
+     IndexBuilder,
+     PipelineExecutionError,
+     default_executor,
+     default_index_builder,
+     read_run_log,
+     read_task_errors,
+     run_pipeline,
+ )
+ 
+@@ -970,24 +971,47 @@ def self_heal_run(
+                     runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                     harmonized_reference_direction=harmonized_reference_direction)
+ 
+             current_target, current_params = apply_patch(current_target, safe, current_params, ceiling=resource_ceiling)
+             _record_attempt(
+                 run_dir,
+                 repair_history,
+                 RepairStep(attempt=attempt, diagnosis=diagnosis, patch=safe, outcome="patched_and_retried"),
+             )
+             attempt += 1
+ 
+ 
++def _unmatched_harmonized_contigs(params: dict[str, object]) -> list[str]:
++    """Recompute the still-unmatched GTF contigs after harmonization.
++
++    ``params["gtf"]`` at ``_finalize`` time is the HARMONIZED scratch path (the
++    CLI swaps it in before calling ``self_heal_run``, see cli.py's pre-flight
++    block): every GTF seqname with a FASTA match has already been renamed to
++    its FASTA spelling. So whatever GTF seqname remains outside the FASTA
++    contig set is exactly the set ``plan_harmonization`` recorded as
++    ``HarmonizationPlan.unmatched`` — no need to thread that plan through the
++    whole self_heal_run call chain. Degrades to `[]` (never a crash, never a
++    fabricated list) if the paths are missing/unreadable, e.g. in tests that
++    exercise the breadcrumb with fake paths.
++    """
++    fasta = params.get("fasta")
++    gtf = params.get("gtf")
++    if not fasta or not gtf:
++        return []
++    try:
++        return sorted(gtf_contigs(gtf) - fasta_contigs(fasta))
++    except OSError:
++        return []
++
++
+ def _finalize(
+     record: RunRecord | None,
+     repair_history: list[RepairStep],
+     run_dir: Path,
+     *,
+     runs_dir,
+     run_id: str,
+     webhook: str | None = None,
+     harmonized_reference_direction: str | None = None,
+ ) -> RunRecord:
+     """Attach the repair history to the final record, persist it, and notify.
+ 
+@@ -998,33 +1022,41 @@ def _finalize(
+     """
+     if record is None:
+         # The run failed before producing any trace; nothing was captured.
+         _write_status(run_dir, "error")
+         raise PipelineExecutionError(1, None)
+     record.repair_history = repair_history
+     record.output_checksums = compute_output_checksums(_results_dir(record, run_dir))
+     record.reference_identity = compute_reference_identity(record.parameters)
+     if harmonized_reference_direction and record.reference_identity is not None:
+         record.harmonized_reference_direction = harmonized_reference_direction
+         record.reference_identity.harmonized = True
+         record.reference_identity.harmonized_direction = harmonized_reference_direction
++        unmatched = _unmatched_harmonized_contigs(record.parameters)
++        message = (
++            f"Reference harmonized ({harmonized_reference_direction}) to match "
++            f"the FASTA before the run. "
++        )
++        if unmatched:
++            names = ", ".join(unmatched)
++            message += (
++                f"Note: {len(unmatched)} GTF contig(s) could not be matched to "
++                f"the FASTA and were left as-is: {names}. "
++            )
++        message += "Confirm the reference was correct."
+         record.qc_results.append(QCResult(
+             kind="structural",
+             check="reference_harmonized",
+             status="warn",
+-            message=(
+-                f"Reference GTF seqnames were harmonized "
+-                f"({harmonized_reference_direction}) to match the FASTA before the run. "
+-                f"Confirm the reference was correct."
+-            ),
++            message=message,
+         ))
+     trace_path = Path(run_dir) / "trace.txt"
+     if trace_path.exists():
+         record.resource_usage = parse_resource_usage_file(trace_path)
+     write_bundle(record, run_dir)
+     _write_status(run_dir, "finished")
+     succeeded = RunSummary.from_events(record.events).succeeded
+     if succeeded:
+         emit_event(runs_dir, run_id, "finished", f"Run {run_id} finished.", webhook=webhook)
+     else:
+         emit_event(runs_dir, run_id, "failed", f"Run {run_id} failed.", webhook=webhook)
+     return record
+diff --git a/tests/test_self_heal.py b/tests/test_self_heal.py
+index a4f7676..d7ed3f2 100644
+--- a/tests/test_self_heal.py
++++ b/tests/test_self_heal.py
+@@ -404,24 +404,154 @@ def test_finalize_no_harmonized_direction_leaves_identity_unchanged(tmp_path):
+         # harmonized_reference_direction omitted (defaults to None)
+     )
+ 
+     assert record.reference_identity is not None
+     assert record.reference_identity.harmonized is False
+     assert record.reference_identity.harmonized_direction is None
+     assert record.harmonized_reference_direction is None
+ 
+     warn_checks = [r for r in record.qc_results if r.check == "reference_harmonized"]
+     assert len(warn_checks) == 0
+ 
+ 
++# ---------------------------------------------------------------------------
++# M8: the reference_harmonized breadcrumb must enumerate still-unmatched GTF
++# contigs, mirroring exactly what cli.py's pre-flight block does: swap
++# params["gtf"] to the harmonized scratch path BEFORE calling self_heal_run.
++# ---------------------------------------------------------------------------
++
++def _write_fasta(path, names):
++    path.write_text("".join(f">{n}\ndescribeme\n" for n in names))
++
++
++def _write_gtf(path, names):
++    path.write_text(
++        "".join(f"{n}\tsrc\texon\t1\t10\t.\t+\t.\tgene_id \"g\";\n" for n in names)
++    )
++
++
++def test_finalize_receives_the_harmonized_gtf_path_in_parameters(tmp_path):
++    # This is the RED/decision test for the CRITICAL correctness question: what
++    # does record.parameters["gtf"] hold at _finalize time? cli.py (line ~497)
++    # overwrites params["gtf"] with the harmonized scratch path BEFORE calling
++    # self_heal_run, so current_params (and thus record.parameters, set by
++    # run_pipeline as `parameters=params or {}`) carries the HARMONIZED path,
++    # never the original. This licenses recomputing the unmatched set in
++    # _finalize from record.parameters directly, rather than threading a new
++    # parameter through the whole self_heal_run call chain.
++    from contig.reference_harmonize import harmonize_gtf, plan_harmonization
++
++    fasta_path = tmp_path / "ref.fa"
++    orig_gtf_path = tmp_path / "orig.gtf"
++    _write_fasta(fasta_path, ["chr1", "chr2"])
++    _write_gtf(orig_gtf_path, ["1", "2"])
++
++    hplan = plan_harmonization(str(fasta_path), str(orig_gtf_path))
++    assert hplan is not None
++    harmonized_path = tmp_path / "harmonized.gtf"
++    harmonize_gtf(str(orig_gtf_path), hplan.rename_map, harmonized_path)
++
++    def executor(cmd, trace_path):
++        _write(trace_path, TRACE_OK, "done")
++        return 0
++
++    record = _heal(
++        tmp_path,
++        executor,
++        params={"fasta": str(fasta_path), "gtf": str(harmonized_path)},
++        harmonized_reference_direction=hplan.direction,
++    )
++
++    # The GROUND TRUTH: record.parameters["gtf"] is the harmonized path we
++    # passed in as `params["gtf"]`, NOT the original gtf path.
++    assert record.parameters["gtf"] == str(harmonized_path)
++    assert record.parameters["gtf"] != str(orig_gtf_path)
++
++
++def test_finalize_harmonized_warn_message_lists_unmatched_contig(tmp_path):
++    from contig.reference_harmonize import harmonize_gtf, plan_harmonization
++
++    fasta_path = tmp_path / "ref.fa"
++    orig_gtf_path = tmp_path / "orig.gtf"
++    _write_fasta(fasta_path, ["chr1", "chr2"])
++    # "weirdcontig" has no FASTA candidate at all -> lands in hplan.unmatched.
++    _write_gtf(orig_gtf_path, ["1", "2", "weirdcontig"])
++
++    hplan = plan_harmonization(str(fasta_path), str(orig_gtf_path))
++    assert hplan is not None
++    assert hplan.unmatched == ("weirdcontig",)
++
++    harmonized_path = tmp_path / "harmonized.gtf"
++    harmonize_gtf(str(orig_gtf_path), hplan.rename_map, harmonized_path)
++
++    def executor(cmd, trace_path):
++        _write(trace_path, TRACE_OK, "done")
++        return 0
++
++    record = _heal(
++        tmp_path,
++        executor,
++        params={"fasta": str(fasta_path), "gtf": str(harmonized_path)},
++        harmonized_reference_direction=hplan.direction,
++    )
++
++    warn_checks = [r for r in record.qc_results if r.check == "reference_harmonized"]
++    assert len(warn_checks) == 1
++    message = warn_checks[0].message
++    assert "weirdcontig" in message
++    assert "could not be matched" in message
++    assert "1" in message  # "1 GTF contig(s)"
++
++    # Existing invariants must still hold.
++    assert record.reference_identity.harmonized is True
++    assert record.reference_identity.harmonized_direction == hplan.direction
++    assert record.verdict == "warn"
++
++
++def test_finalize_harmonized_warn_message_omits_clause_when_fully_matched(tmp_path):
++    from contig.reference_harmonize import harmonize_gtf, plan_harmonization
++
++    fasta_path = tmp_path / "ref.fa"
++    orig_gtf_path = tmp_path / "orig.gtf"
++    _write_fasta(fasta_path, ["chr1", "chr2"])
++    _write_gtf(orig_gtf_path, ["1", "2"])  # every contig matches -> no unmatched
++
++    hplan = plan_harmonization(str(fasta_path), str(orig_gtf_path))
++    assert hplan is not None
++    assert hplan.unmatched == ()
++
++    harmonized_path = tmp_path / "harmonized.gtf"
++    harmonize_gtf(str(orig_gtf_path), hplan.rename_map, harmonized_path)
++
++    def executor(cmd, trace_path):
++        _write(trace_path, TRACE_OK, "done")
++        return 0
++
++    record = _heal(
++        tmp_path,
++        executor,
++        params={"fasta": str(fasta_path), "gtf": str(harmonized_path)},
++        harmonized_reference_direction=hplan.direction,
++    )
++
++    warn_checks = [r for r in record.qc_results if r.check == "reference_harmonized"]
++    assert len(warn_checks) == 1
++    message = warn_checks[0].message
++    assert "could not be matched" not in message
++    assert hplan.direction in message
++
++    assert record.reference_identity.harmonized is True
++    assert record.verdict == "warn"
++
++
+ # ---------------------------------------------------------------------------
+ # Ceiling-clamp + never-shrink tests (Task 1: resource-aware-retry)
+ # ---------------------------------------------------------------------------
+ 
+ 
+ def test_apply_patch_clamps_memory_to_ceiling():
+     # 96 GB * 2 = 192 GB, but ceiling is 128 GB -> clamped to 128 GB
+     patch = Patch(
+         kind="resource",
+         operation={"multiply": {"memory": 2}},
+         rationale="OOM retry",
+         risk="safe",
