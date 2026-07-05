@@ -8,10 +8,9 @@ This module provides two public functions:
   ``HarmonizationPlan`` only when applying it would strictly improve the
   FASTA/GTF contig-name overlap; ``None`` otherwise.
 
-- ``harmonize_gtf(gtf_path, direction, out_path)`` — stream-rewrites the GTF
-  applying the direction to column 1 only; byte-faithful everywhere else;
-  gzip-transparent. (Still a uniform add_chr/strip_chr rewriter — applying a
-  full ``rename_map`` is Phase 3's job.)
+- ``harmonize_gtf(gtf_path, rename_map, out_path)`` — stream-rewrites the GTF
+  applying *rename_map* to column 1 only; a seqname absent from the map
+  passes through unchanged; byte-faithful everywhere else; gzip-transparent.
 
 No network, no subprocess, no mutations of input files.
 """
@@ -19,7 +18,7 @@ No network, no subprocess, no mutations of input files.
 import gzip
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Mapping
 
 from contig.contig_aliases import alias_group
 from contig.reference_check import _sample, fasta_contigs, gtf_contigs
@@ -146,14 +145,6 @@ def plan_harmonization(fasta_path, gtf_path) -> HarmonizationPlan | None:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _apply(name: str, direction: HarmonizationDirection) -> str:
-    """Apply the direction to a single seqname; idempotent."""
-    if direction == "add_chr":
-        return name if name.startswith("chr") else f"chr{name}"
-    else:  # strip_chr
-        return name[3:] if name.startswith("chr") else name
-
-
 def _open_input(path: Path):
     """Open path for reading; gzip-aware iff the filename ends with .gz."""
     return gzip.open(path, "rt") if path.name.endswith(".gz") else open(path, "r", newline="")
@@ -170,14 +161,16 @@ def _open_output(path: Path):
 # Public rewriter
 # ---------------------------------------------------------------------------
 
-def harmonize_gtf(gtf_path, direction: HarmonizationDirection, out_path) -> Path:
-    """Stream-rewrite *gtf_path* applying *direction* to column 1 only.
+def harmonize_gtf(gtf_path, rename_map: Mapping[str, str], out_path) -> Path:
+    """Stream-rewrite *gtf_path* applying *rename_map* to column 1 only.
 
     - Blank lines and lines starting with ``#`` are passed through unchanged.
     - ``track`` / ``browser`` lines (no tab-delimited seqname) are passed
       through unchanged.
     - Column 1 is tokenized with the same boundary as ``gtf_contigs``
-      (``split("\\t", 1)``); the token is transformed and re-joined.
+      (``split("\\t", 1)``); the (stripped) token is looked up in
+      *rename_map* and rewritten; a seqname absent from the map passes
+      through unchanged.
     - Everything after the first tab is byte-identical in the output.
     - Line endings (``\\n`` vs ``\\r\\n``) are preserved exactly.
     - Input/output are gzip-compressed iff the respective path ends with ``.gz``.
@@ -218,7 +211,8 @@ def harmonize_gtf(gtf_path, direction: HarmonizationDirection, out_path) -> Path
             # (.strip() on field0), so a malformed GTF with leading/trailing
             # whitespace on the seqname is transformed consistently with what
             # the detector sees.  Columns 2+ (rest) remain byte-identical.
-            new_col1 = _apply(col1.strip(), direction)
+            stripped_col1 = col1.strip()
+            new_col1 = rename_map.get(stripped_col1, stripped_col1)
             fh_out.write(new_col1 + "\t" + rest + ending)
 
     return out_path

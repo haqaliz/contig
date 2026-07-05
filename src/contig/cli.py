@@ -462,7 +462,7 @@ def _dispatch_run(
                             Path(runs_dir) / run_id / "harmonized" / Path(params["gtf"]).name
                         )
                         harmonized_path.parent.mkdir(parents=True, exist_ok=True)
-                        harmonize_gtf(params["gtf"], hplan.direction, harmonized_path)
+                        harmonize_gtf(params["gtf"], hplan.rename_map, harmonized_path)
                         # POST-CONDITION GUARD: re-verify the harmonized file actually
                         # resolved the mismatch.  Should never trigger for valid inputs,
                         # but guarantees the engine never proceeds believing it harmonized
