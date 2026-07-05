@@ -18,6 +18,7 @@ yet -- this phase is the data table + loader only.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
 
 # Mitochondrion is universal across references (not reference-specific like
@@ -28,43 +29,69 @@ _MITO: frozenset[str] = frozenset({"M", "MT"})
 _DATA_PATH = Path(__file__).parent / "data" / "contig_aliases.tsv"
 
 
-def _parse_tsv(path: Path) -> list[tuple[str, str]]:
-    """Parse the bundled TSV into (ensembl_name, ucsc_name) pairs.
+def _build_alias_map(lines: Iterable[str]) -> dict[str, frozenset[str]]:
+    """Build a name -> alias-group map from TSV-style alias rows.
 
     Tolerant of blank lines and `#`-comment lines, matching the simple
     line-based parsing style used elsewhere in this codebase (e.g.
-    `reference_check.gtf_contigs`).
+    `reference_check.gtf_contigs`). Takes an iterable of lines (not a path)
+    so it is unit-testable against synthetic input without touching the
+    filesystem; the real bundled TSV is read and passed in by
+    `_load_bundled_alias_map` below.
+
+    Fails loud (`ValueError`) rather than silently dropping or
+    last-write-wins-overwriting bad data, per this repo's no-silent-failure
+    stance:
+
+    - A non-blank, non-comment line that does not split into exactly two
+      non-empty tab-separated fields is a malformed row.
+    - A name that would end up belonging to two different (non-identical)
+      alias groups is a conflicting duplicate. An exact repeat of an
+      already-seen pair is harmless (idempotent re-append) and is deduped
+      silently instead of erroring -- only a genuine conflict is an error,
+      so every resulting group stays symmetric.
     """
-    pairs: list[tuple[str, str]] = []
-    text = path.read_text()
-    for line in text.splitlines():
+    alias_map: dict[str, frozenset[str]] = {}
+    pairs_seen: set[tuple[str, str]] = set()
+
+    for line in lines:
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        ensembl, _, ucsc = stripped.partition("\t")
-        ensembl = ensembl.strip()
-        ucsc = ucsc.strip()
-        if ensembl and ucsc:
-            pairs.append((ensembl, ucsc))
-    return pairs
 
+        fields = stripped.split("\t")
+        if len(fields) != 2 or not fields[0].strip() or not fields[1].strip():
+            raise ValueError(
+                f"malformed alias-table row (expected 'name<TAB>name'): {line!r}"
+            )
 
-def _build_alias_map(path: Path) -> dict[str, frozenset[str]]:
-    """Build the name -> full-alias-group map from the mito constant + TSV."""
-    alias_map: dict[str, frozenset[str]] = {}
+        ensembl, ucsc = fields[0].strip(), fields[1].strip()
+        pair = (ensembl, ucsc)
+        if pair in pairs_seen:
+            continue
+        pairs_seen.add(pair)
 
-    for name in _MITO:
-        alias_map[name] = _MITO
-
-    for ensembl, ucsc in _parse_tsv(path):
         group = frozenset({ensembl, ucsc})
-        alias_map[ensembl] = group
-        alias_map[ucsc] = group
+        for name in (ensembl, ucsc):
+            existing = alias_map.get(name)
+            if existing is not None and existing != group:
+                raise ValueError(
+                    f"alias-table name {name!r} appears in conflicting "
+                    f"alias groups: {sorted(existing)!r} vs {sorted(group)!r}"
+                )
+            alias_map[name] = group
 
     return alias_map
 
 
-_ALIAS_MAP: dict[str, frozenset[str]] = _build_alias_map(_DATA_PATH)
+def _load_bundled_alias_map(path: Path) -> dict[str, frozenset[str]]:
+    """Build the full name -> alias-group map: mito constant + bundled TSV."""
+    alias_map: dict[str, frozenset[str]] = {name: _MITO for name in _MITO}
+    alias_map.update(_build_alias_map(path.read_text().splitlines()))
+    return alias_map
+
+
+_ALIAS_MAP: dict[str, frozenset[str]] = _load_bundled_alias_map(_DATA_PATH)
 
 
 def alias_group(name: str) -> frozenset[str]:
