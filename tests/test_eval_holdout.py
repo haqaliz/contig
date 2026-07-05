@@ -323,3 +323,16 @@ def test_guard_json(tmp_path):
     data = json.loads(guard.output)
     assert "regressed" in data
     assert data["has_baseline"] is True
+
+
+def test_guard_default_committed_baseline_passes_clean():
+    """The real entry point: `contig eval-guard` (no args) must pass against the
+    committed baseline + shipped held-out set, with no spurious sha/detector
+    warning. This locks 'committed baseline sha == shipped held-out sha' so a
+    future held-out edit without --update-baseline cannot silently rot the guard.
+    """
+    result = runner.invoke(app, ["eval-guard"])
+    assert result.exit_code == 0
+    assert "Guard PASS" in result.output
+    assert "changed" not in result.stderr.lower()  # no held-out-sha mismatch
+    assert "crosses detectors" not in result.stderr.lower()  # no detector mismatch
