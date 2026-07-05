@@ -412,3 +412,29 @@ class EvalSnapshot(BaseModel):
     # (e.g. rules vs llm) on the same corpus. Defaults to the deterministic rules
     # detector for back-compat with snapshots written before detectors were named.
     detector: str = "rules"
+
+
+class HoldoutGuardResult(BaseModel):
+    """The result of scoring a detector against the frozen held-out set and
+    comparing it to a committed baseline (C6 slice 1: the regression guard).
+
+    Pinning `holdout_sha`/`baseline_sha` and the two detector names lets the
+    guard tell "accuracy dropped" apart from "the held-out set or detector
+    changed underneath the comparison" (`sha_mismatch`/`detector_mismatch`),
+    so a real regression is never confused with a stale baseline.
+    """
+
+    detector: str
+    holdout_size: int
+    accuracy: float
+    baseline_accuracy: float | None = None
+    delta: float | None = None  # accuracy - baseline_accuracy
+    tolerance: float
+    regressed: bool = False
+    improved: bool = False
+    holdout_sha: str
+    baseline_sha: str | None = None
+    sha_mismatch: bool = False
+    detector_mismatch: bool = False  # baseline.detector != detector
+    has_baseline: bool = True
+    mismatches: list[DetectorMismatch] = []
