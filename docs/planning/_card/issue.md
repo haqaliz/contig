@@ -1,71 +1,61 @@
-# Card: feat/eval-holdout-guard
+# Card: feat/contig-alias-harmonization
 
 - **Type:** feat
-- **Id/slug:** eval-holdout-guard
+- **Id/slug:** contig-alias-harmonization
 - **Owner:** aliz
-- **Branch:** feat/eval-holdout-guard/aliz
-- **Source:** inline brief (no GitHub issue; produced by the `contig-next` handoff)
+- **Branch:** feat/contig-alias-harmonization/aliz
+- **Source:** inline brief (no GitHub issue — slug-based unit of work, handed off from `contig-next`)
 
 ## Brief
 
-Build the first concrete slice of **C6 — eval flywheel as a continuous loop**
-(`docs/technical/CAPABILITY_ROADMAP.md` §C6, lines 390-414). C6 is the one pending
-engine capability whose dependencies (C1–C5) have now all shipped through v0.16.0, and
-it is not started: there is no held-out corpus split and no regression-guard command in
-`src/` today (grep confirms "held-out" appears only as a to-build in `CAPABILITY_ROADMAP.md:404-407`
-and `ROADMAP.md:168`).
+Extend the shipped reference-mismatch self-heal (`src/contig/reference_harmonize.py`,
+`plan_harmonization` / `harmonize_gtf`) from pure `chr`-prefix harmonization to
+**per-contig alias harmonization**, so a UCSC-FASTA + Ensembl-GTF mismatch
+(canonically `chrM`↔`MT`, plus the wider UCSC↔Ensembl/GenBank naming family) is
+auto-harmonized at pre-flight into a run-scoped scratch GTF and the run proceeds,
+instead of being silently mis-harmonized or refused.
 
-**The slice:**
+This is capability **C2** (self-heal breadth), an explicitly-deferred follow-on of
+**v0.9.0** (the chr-prefix GTF harmonizer).
 
-- Freeze a **held-out split** of the labeled detector corpus.
-- Add a single command that scores the current detector against that held-out split.
-- Add a **regression guard**: a corpus or detector change that lowers held-out accuracy is
-  flagged before it ships.
+## Grounding (files, not memory)
 
-**Reuse, don't rebuild.** The pieces C6 consumes are already shipped: `EvalSnapshot`
-(`src/contig/models.py:397`), the committed `eval_history.jsonl` +
-`src/contig/eval_history.py`, `contig eval-detector --snapshot/--history`
-(`src/contig/cli.py:1485`), and the `benchmark`/`coverage`/`clusters` commands. This slice
-wraps that machinery with a held-out split and a guard — it does not reinvent the detector
-eval.
+- **Deferral is real and named:** CHANGELOG.md v0.9.0 — "**Deferred:** … per-contig
+  name mapping for ambiguous cases (e.g., `chrM`↔`MT`)". Also the C2 deferred list in
+  `docs/technical/CAPABILITY_ROADMAP.md` (per-contig name mapping `chrM`↔`MT`).
+- **Seam exists:** `src/contig/reference_harmonize.py` holds `plan_harmonization` and
+  `harmonize_gtf`; detection lives in the v0.7.0 `reference_check` path; the launch
+  chokepoint is `_dispatch_run`.
+- **Edge cases already flagged:** `docs/planning/self-heal-reference-mismatch/understanding.md`
+  names `MT`/`chrM`, scaffold `GL…`/`KI…` contigs, and subset/partial-overlap references
+  as the open predicate edge cases.
+- **Moat fit:** CAPABILITY_ROADMAP frames C2 self-heal breadth as "the most directly
+  'gets better with better models' surface and the richest corpus fuel"; unattended-
+  completion is the Phase-1 headline metric (`docs/ROADMAP.md`).
 
-**Test-first acceptance** (the roadmap's own, `CAPABILITY_ROADMAP.md:409-411`):
-a frozen held-out set; a known-good detector scores above a threshold; a deliberately worse
-detector is flagged as a regression.
+## Known caveat (from the handoff)
 
-## Why this is the moat (grounding)
+The current `plan_harmonization` only accepts a **uniform** chr-add/chr-strip and
+requires the post-transform contig sets to intersect. `chrM`↔`MT` is **not** a uniform
+prefix transform, so the design must add an **alias table** (chrM↔MT, and the
+UCSC↔Ensembl/GenBank family) layered on top of the prefix rule — while preserving the
+v0.9.0 safety property: a genuine wrong-assembly (still disjoint after aliasing) must
+still be **refused**, never fabricated.
 
-- It is **moat #2 made real** — `CLAUDE.md`: the moat is "execution/verification/reproducibility
-  infrastructure **+ accumulated workflow-evaluation data**." C6 turns the accumulated eval
-  data into a measured, regression-guarded loop so every other shipped verdict compounds
-  instead of silently drifting.
-- It **gets better as base models improve and can't be made redundant by them** (`CLAUDE.md`
-  constraint #3): the model-swap harness already exists (`FEATURES.md:225`); a held-out
-  benchmark is what lets a better diagnoser be *proven* better rather than asserted.
-- It is **Layer 2** (verification/eval infrastructure), inside the founder's edge (pure
-  engineering, no wet-lab/clinical), and its only prior blocker ("consumes C1–C5") is now
-  satisfied.
+**The real target / trickiest test:** the residual case where prefix-harmonization
+already makes the autosomes intersect (so the run proceeds today) but `chrM`/`MT`
+stays silently mismatched.
 
-## Known caveat / the one real design decision (from the contig-next dig)
+## Definition of done (from the brief)
 
-The roadmap's aspirational framing folds "C1–C5 outcomes" into one accuracy number, but
-**concordance (C1) and plausibility (C3) signals are WARN-capped corroboration WITHOUT
-ground-truth labels** — they cannot be scored as classification accuracy the way the labeled
-failure-class detector corpus can. So the honest first slice is:
+- Build **test-first** with synthetic FASTA/GTF fixtures (no real nf-core run).
+- Record the decision in the launch manifest + `ReferenceIdentity` and a WARN
+  `reference_harmonized` breadcrumb, exactly as the prefix slice does.
+- Seed a golden corpus case.
+- Preserve the refuse-on-genuine-wrong-assembly invariant.
 
-> **a frozen held-out split of the labeled failure-class corpus + a detector-accuracy
-> regression guard** — NOT a grand unified "verification accuracy" folding in unlabeled
-> signals.
+## Strategic guardrail check
 
-The one real design decision is the **split boundary**: where the held-out split physically
-lives so it can never leak into the training/eval corpus that `eval-detector` already scores
-over the whole of. Folding in the unlabeled C1/C3 signals is explicitly a **later slice** that
-needs its own labeling design; flag it, don't build it here.
-
-## Strategic guardrails (must hold)
-
-- No Layer-1 workflow authoring as a product surface.
-- No raw-read egress; deterministic, local, no network in tests.
-- Nothing needing wet-lab/clinical credentials or proprietary datasets.
-- No correctness over-claiming; UNVERIFIED is never rendered as PASS.
-- Test-first: every unit lands with its failing test written first.
+Stays in **Layer 2** (run/self-heal/verify/reproduce). No Layer-1 workflow authoring,
+no wet-lab/clinical credentials, no raw-read egress (operates on reference contig
+names on the user's compute). ✅

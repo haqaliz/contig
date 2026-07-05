@@ -113,3 +113,94 @@ Commit hash recorded in the handoff message back to the orchestrating agent.
 - This phase does not wire `alias_group` into `reference_check.py` or
   `reference_harmonize.py` — that is explicitly out of scope here and left
   for the next phase.
+
+## Fix — loader hardening
+
+Review flagged a latent defect in the loader: `_parse_tsv`/`_build_alias_map`
+silently (a) dropped a data row with no tab, and (b) let a name appearing in
+two different rows silently last-write-wins into a wrong, non-symmetric
+alias group — no error either way. The seed TSV is clean today, so this was
+dormant, but future phases append rows and the repo's fail-loud stance
+(CLAUDE.md) requires this to be a hard error, not silent data corruption.
+
+### What changed
+
+- `contig_aliases.py`: replaced the path-only `_parse_tsv` / `_build_alias_map`
+  pair with a single `_build_alias_map(lines: Iterable[str]) -> dict[str,
+  frozenset[str]]` that takes injected lines (not a `Path`), so the
+  row-parsing/group-building logic is directly unit-testable against
+  synthetic input with no filesystem involved.
+  - Raises `ValueError` naming the offending line when a non-blank,
+    non-`#` line does not split into exactly two non-empty
+    tab-separated fields.
+  - Raises `ValueError` naming the offending name when a name would end up
+    in two different (non-identical) alias groups.
+  - Design decision (documented inline as a comment in the function
+    docstring): an **exact repeat of an already-seen pair is deduped
+    silently** (harmless, idempotent), while **any other repeat of a name
+    is a hard error** — this is the stricter option and it's what keeps
+    every resulting group symmetric.
+  - Added `_load_bundled_alias_map(path: Path)` as the thin wrapper that
+    reads the real bundled TSV's lines, merges in the `_MITO` constant, and
+    calls `_build_alias_map`. The module-level `_ALIAS_MAP` is still built
+    eagerly at import time from the real bundled TSV (unchanged behavior;
+    it's clean, so import still succeeds).
+
+### New/changed tests (`tests/test_contig_aliases.py`)
+
+- `test_seeded_scaffold_second_pair` — minor coverage of the second seeded
+  scaffold pair, `GL000192.1` <-> `chrUn_GL000192v1` (previously only
+  `GL000191.1` and `KI270711.1` were exercised).
+- `test_build_alias_map_raises_on_row_without_tab` — synthetic tab-less line
+  raises `ValueError` naming the line.
+- `test_build_alias_map_raises_on_row_with_empty_field` — trailing-tab line
+  (empty second field) also raises.
+- `test_build_alias_map_raises_on_conflicting_duplicate_name` — a name
+  (`"A"`) appearing in two conflicting rows (`A\tB` then `A\tC`) raises
+  `ValueError` naming `"A"`.
+- `test_build_alias_map_tolerates_exact_duplicate_pair` — an exact repeat of
+  the same pair is deduped silently, not an error.
+- `test_build_alias_map_handles_comments_and_blanks_and_is_symmetric` —
+  replaces the old weak indirect test
+  (`test_loader_tolerates_blank_and_comment_lines_and_has_known_pair`, which
+  only inferred blank/comment tolerance from the real bundled TSV having
+  loaded without crashing). The new test builds a map from synthetic lines
+  mixing comments, blank lines, and valid pairs, and asserts the resulting
+  groups are symmetric (`a in alias_map[b]` iff `b in alias_map[a]`).
+
+### RED -> GREEN evidence
+
+RED (new tests written first, against the not-yet-refactored loader):
+
+```
+$ uv run pytest tests/test_contig_aliases.py -q
+...
+AttributeError: 'list' object has no attribute 'read_text'
+5 failed, 7 passed
+```
+
+(Failure reason: the old `_build_alias_map` signature took a `Path`, not an
+iterable of lines; the new tests call it with a plain list of lines.)
+
+GREEN (after the refactor):
+
+```
+$ uv run pytest tests/test_contig_aliases.py -q
+............                                                             [100%]
+12 passed
+```
+
+### Full suite
+
+```
+$ uv run pytest -q
+1105 passed, 1 skipped in 11.04s
+```
+
+(1105 = 1093 original baseline + 12 tests in this file, up from 7; no
+existing test touched, no regression.)
+
+### Commit
+
+`f973ec1` — `fix(reference): fail loud on malformed/duplicate alias-table rows`,
+branch `feat/contig-alias-harmonization/aliz`.
