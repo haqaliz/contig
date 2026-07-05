@@ -1,0 +1,291 @@
+=== COMMITS ===
+d3f4b2a feat(reference): add contig alias equivalence table (mito + GRCh38 scaffolds)
+
+=== STAT ===
+ .../alias-map/task-1-report.md                     | 115 +++++++++++++++++++++
+ src/contig/contig_aliases.py                       |  79 ++++++++++++++
+ src/contig/data/contig_aliases.tsv                 |  14 +++
+ tests/test_contig_aliases.py                       |  48 +++++++++
+ 4 files changed, 256 insertions(+)
+
+=== DIFF ===
+diff --git a/docs/planning/contig-alias-harmonization/alias-map/task-1-report.md b/docs/planning/contig-alias-harmonization/alias-map/task-1-report.md
+new file mode 100644
+index 0000000..09c7af0
+--- /dev/null
++++ b/docs/planning/contig-alias-harmonization/alias-map/task-1-report.md
+@@ -0,0 +1,115 @@
++# Task 1 report: contig alias equivalence table (Phase 1)
++
++## What was built
++
++Phase 1 of `contig-alias-harmonization`: a standalone, data-driven alias
++equivalence lookup. No existing module was modified or consumed yet — this
++phase is purely the data table + loader, per the task brief.
++
++Files created:
++
++1. **`src/contig/data/contig_aliases.tsv`** — bundled TSV seed data.
++   - Top `#` comment documents the source (UCSC hg38.chromAlias.txt) and
++     notes mito is code-only, plus the extension format
++     (`ensembl_name<TAB>ucsc_name` per line).
++   - 3 seeded GRCh38 scaffold pairs:
++     - `GL000191.1` <-> `chrUn_GL000191v1`
++     - `GL000192.1` <-> `chrUn_GL000192v1`
++     - `KI270711.1` <-> `chr1_KI270711v1`
++
++2. **`src/contig/contig_aliases.py`** — the loader + lookup.
++   - `_MITO: frozenset[str] = frozenset({"M", "MT"})` — code constant, bare
++     names only (no `chr` prefix — prefix handling stays out of scope for
++     this phase per the brief).
++   - `_DATA_PATH = Path(__file__).parent / "data" / "contig_aliases.tsv"` —
++     mirrors `corpus.py`'s `default_corpus_path()` pattern
++     (`Path(__file__).parent / "data" / "detector_corpus.jsonl"`), which
++     works for both a source checkout and an installed package since the
++     wheel target `packages = ["src/contig"]` (see `pyproject.toml`) carries
++     the whole `contig` package tree, including `data/`, with it.
++   - `_parse_tsv()` — line-based parsing (blank lines and `#`-comment lines
++     skipped), matching the simplicity of `reference_check.gtf_contigs`'s
++     line-skipping style.
++   - `_build_alias_map()` — builds a `dict[str, frozenset[str]]` mapping
++     every member (mito members + every TSV row's ensembl/ucsc name) to its
++     full equivalence group. Built once at module import time (module-level
++     `_ALIAS_MAP`).
++   - `alias_group(name: str) -> frozenset[str]` — public API. Looks up
++     `name` in `_ALIAS_MAP`; if absent, returns `frozenset({name})`; if
++     present, returns the stored group unioned with `{name}` (always
++     includes the queried name, defensively, even though by construction
++     every map value already contains its own key).
++
++3. **`tests/test_contig_aliases.py`** — 7 tests, written first (RED) before
++   any implementation existed.
++
++## Exact test names
++
++- `test_mito_mt_group_includes_both_spellings`
++- `test_mito_m_group_includes_both_spellings`
++- `test_seeded_scaffold_ensembl_to_ucsc`
++- `test_seeded_scaffold_ucsc_to_ensembl`
++- `test_unknown_name_maps_to_itself_only`
++- `test_alias_group_always_includes_queried_name`
++- `test_loader_tolerates_blank_and_comment_lines_and_has_known_pair`
++
++## TDD evidence
++
++**RED** — test file written first, `contig_aliases.py` did not exist yet:
++
++```
++$ uv run pytest tests/test_contig_aliases.py -v
++ImportError while importing test module '.../tests/test_contig_aliases.py'.
++E   ModuleNotFoundError: No module named 'contig.contig_aliases'
++=========================== short test summary info ============================
++ERROR tests/test_contig_aliases.py
++!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
++=============================== 1 error in 0.04s ===============================
++```
++
++**GREEN** — after creating the TSV and implementing `contig_aliases.py`:
++
++```
++$ uv run pytest tests/test_contig_aliases.py -v
++collected 7 items
++tests/test_contig_aliases.py .......                                     [100%]
++============================== 7 passed in 0.01s ===============================
++```
++
++No refactor pass was needed beyond the initial clean implementation (the
++module is small and single-purpose; nothing came up worth restructuring
++after GREEN).
++
++## Full suite
++
++Baseline (measured before any changes in this task): `1093 passed, 1 skipped`.
++
++Final full-suite run:
++
++```
++$ uv run pytest
++1100 passed, 1 skipped in 11.05s
++```
++
++1100 = 1093 baseline + 7 new tests. No existing test was touched, no
++regression.
++
++Note: `ruff` and `mypy` are not installed in this environment's venv
++(`Failed to spawn: ruff` / `mypy` — os error 2), so no lint/type-check pass
++was run; this matches what the shell had available.
++
++## Commit
++
++`git commit` on branch `feat/contig-alias-harmonization/aliz` with message
++`feat(reference): add contig alias equivalence table (mito + GRCh38 scaffolds)`.
++Commit hash recorded in the handoff message back to the orchestrating agent.
++
++## Concerns
++
++- None blocking. The scaffold seed set is intentionally minimal (3 pairs)
++  per the brief ("completeness is explicitly NOT required") — later phases
++  extending the TSV should just append rows in the same `ensembl<TAB>ucsc`
++  format.
++- This phase does not wire `alias_group` into `reference_check.py` or
++  `reference_harmonize.py` — that is explicitly out of scope here and left
++  for the next phase.
+diff --git a/src/contig/contig_aliases.py b/src/contig/contig_aliases.py
+new file mode 100644
+index 0000000..1e7bc99
+--- /dev/null
++++ b/src/contig/contig_aliases.py
+@@ -0,0 +1,79 @@
++"""Contig alias equivalence table (Phase 1 of contig-alias-harmonization).
++
++Pre-flight reference-consistency checking (see `reference_check.py`) today
++only tolerates a `chr`-prefix mismatch between FASTA and GTF contig naming.
++Real references also use per-contig alternate spellings that are not a simple
++prefix rule: the mitochondrion is `chrM`/`M` in UCSC-style naming but `MT` in
++Ensembl-style naming, and unplaced/unlocalized scaffolds have entirely
++different names between the two conventions (e.g. Ensembl `GL000191.1` vs
++UCSC `chrUn_GL000191v1`).
++
++This module builds a lookup from any known spelling of a contig to the full
++set of equivalent spellings (its "alias group"), merging a code-level
++mitochondrion group with a data-driven scaffold table loaded from the bundled
++TSV. It does not do any prefix handling itself (that stays in
++`reference_check.py` / a later phase) and it does not get consumed anywhere
++yet -- this phase is the data table + loader only.
++"""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++# Mitochondrion is universal across references (not reference-specific like
++# scaffolds), so it is a code constant rather than a TSV row. Bare names only
++# -- no `chr` prefix here; prefix handling is a later phase's job.
++_MITO: frozenset[str] = frozenset({"M", "MT"})
++
++_DATA_PATH = Path(__file__).parent / "data" / "contig_aliases.tsv"
++
++
++def _parse_tsv(path: Path) -> list[tuple[str, str]]:
++    """Parse the bundled TSV into (ensembl_name, ucsc_name) pairs.
++
++    Tolerant of blank lines and `#`-comment lines, matching the simple
++    line-based parsing style used elsewhere in this codebase (e.g.
++    `reference_check.gtf_contigs`).
++    """
++    pairs: list[tuple[str, str]] = []
++    text = path.read_text()
++    for line in text.splitlines():
++        stripped = line.strip()
++        if not stripped or stripped.startswith("#"):
++            continue
++        ensembl, _, ucsc = stripped.partition("\t")
++        ensembl = ensembl.strip()
++        ucsc = ucsc.strip()
++        if ensembl and ucsc:
++            pairs.append((ensembl, ucsc))
++    return pairs
++
++
++def _build_alias_map(path: Path) -> dict[str, frozenset[str]]:
++    """Build the name -> full-alias-group map from the mito constant + TSV."""
++    alias_map: dict[str, frozenset[str]] = {}
++
++    for name in _MITO:
++        alias_map[name] = _MITO
++
++    for ensembl, ucsc in _parse_tsv(path):
++        group = frozenset({ensembl, ucsc})
++        alias_map[ensembl] = group
++        alias_map[ucsc] = group
++
++    return alias_map
++
++
++_ALIAS_MAP: dict[str, frozenset[str]] = _build_alias_map(_DATA_PATH)
++
++
++def alias_group(name: str) -> frozenset[str]:
++    """Return every cross-convention spelling of the contig `name` belongs to.
++
++    Always includes `name` itself. For a name with no known alias (not the
++    mitochondrion, not a seeded scaffold), returns `frozenset({name})`.
++    """
++    group = _ALIAS_MAP.get(name)
++    if group is None:
++        return frozenset({name})
++    return group | {name}
+diff --git a/src/contig/data/contig_aliases.tsv b/src/contig/data/contig_aliases.tsv
+new file mode 100644
+index 0000000..705d5e3
+--- /dev/null
++++ b/src/contig/data/contig_aliases.tsv
+@@ -0,0 +1,14 @@
++# Contig alias equivalence table (scaffolds only).
++#
++# Source: UCSC hg38.chromAlias.txt (GRCh38 scaffold naming).
++# Mitochondrion (M <-> MT) is NOT listed here: it is a code constant
++# (`_MITO` in contig_aliases.py) since it is universal across references,
++# not reference-specific like these scaffolds.
++#
++# To extend: add one row per line, tab-separated, `ensembl_name<TAB>ucsc_name`.
++# Each row forms a bidirectional equivalence group (either spelling maps to
++# both). This seed set is intentionally small (a handful of rows) -- full
++# GRCh38 scaffold coverage is explicitly not required for this phase.
++GL000191.1	chrUn_GL000191v1
++GL000192.1	chrUn_GL000192v1
++KI270711.1	chr1_KI270711v1
+diff --git a/tests/test_contig_aliases.py b/tests/test_contig_aliases.py
+new file mode 100644
+index 0000000..22d25eb
+--- /dev/null
++++ b/tests/test_contig_aliases.py
+@@ -0,0 +1,48 @@
++"""Tests for the contig alias equivalence table (mito + GRCh38 scaffolds).
++
++Phase 1 of contig-alias-harmonization: a data-driven lookup that widens
++pre-flight FASTA/GTF harmonization beyond the simple `chr`-prefix case to
++per-contig aliases (mito chrM<->MT, plus scaffold spellings). This phase only
++builds the lookup; no consumer wiring yet.
++"""
++
++from contig.contig_aliases import alias_group
++
++
++def test_mito_mt_group_includes_both_spellings():
++    group = alias_group("MT")
++    assert {"MT", "M"} <= group
++
++
++def test_mito_m_group_includes_both_spellings():
++    group = alias_group("M")
++    assert {"MT", "M"} <= group
++
++
++def test_seeded_scaffold_ensembl_to_ucsc():
++    group = alias_group("GL000191.1")
++    assert {"GL000191.1", "chrUn_GL000191v1"} <= group
++
++
++def test_seeded_scaffold_ucsc_to_ensembl():
++    group = alias_group("chrUn_GL000191v1")
++    assert {"GL000191.1", "chrUn_GL000191v1"} <= group
++
++
++def test_unknown_name_maps_to_itself_only():
++    assert alias_group("chr7") == frozenset({"chr7"})
++
++
++def test_alias_group_always_includes_queried_name():
++    for name in ("MT", "M", "GL000191.1", "chrUn_GL000191v1", "chr7", "randomXYZ"):
++        assert name in alias_group(name)
++
++
++def test_loader_tolerates_blank_and_comment_lines_and_has_known_pair():
++    # Loading the module already parses the bundled TSV; if it crashed on
++    # blank/comment lines, importing/using alias_group above would have
++    # failed already. This test asserts a known seeded pair is present as
++    # positive evidence the loader actually parsed data rows (not just
++    # survived comments).
++    group = alias_group("KI270711.1")
++    assert {"KI270711.1", "chr1_KI270711v1"} <= group

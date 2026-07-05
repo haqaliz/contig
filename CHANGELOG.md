@@ -6,6 +6,39 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Per-contig alias harmonization for reference/build-mismatch repair** (capability
+  C2, self-heal breadth — a follow-on of v0.9.0's chr-prefix GTF harmonizer). The
+  reference pre-flight harmonizer is widened from pure `chr`-prefix add/strip to a
+  **general per-contig rename map** driven by a **lookup against the actual FASTA
+  contig set**: a new alias equivalence table treats the mitochondrion `M`↔`MT` as
+  universal (a code constant) and consults a small **curated, extensible GRCh38
+  scaffold table** (`src/contig/data/contig_aliases.tsv`, sourced from UCSC
+  chromAlias) for common unplaced scaffolds; the loader fails loud on malformed or
+  duplicate rows. `plan_harmonization` now resolves each GTF contig to whichever
+  spelling actually exists in the FASTA (prefix variants ∪ alias group ∩ FASTA), so
+  it handles the canonical UCSC-FASTA (`chrM`) + Ensembl-GTF (`MT`) case; the
+  **residual case where the autosomes already match but the mito differs**
+  (previously silently skipped because harmonization was gated behind the
+  disjoint-only detector); pure-alias mismatches; and a hybrid FASTA (`chrMT`) via
+  FASTA-lookup. It still **refuses (no harmonization) a genuine wrong-assembly**
+  (disjoint after mapping) and now also **refuses a non-injective map** (two GTF
+  contigs that would collapse onto one FASTA target) — never a silent contig merge.
+  The CLI pre-flight is now driven by the plan itself (rather than the disjoint-only
+  detector), with a strengthened overlap-increase post-check; `--allow-reference-
+  mismatch` still harmonizes-first; `rerun`/`resume` continue to re-derive the plan
+  from the original GTF path stored in the manifest, unchanged. **Honesty:** the
+  WARN-level `reference_harmonized` breadcrumb now enumerates any GTF contigs that
+  could not be matched to the FASTA and were left as-is, so a partial harmonization
+  is visible rather than a relocated silent failure. Provenance-only eval capture —
+  no new `reference_mismatch` `FailureClass` or detector-corpus case, matching
+  v0.9.0. Local, deterministic, no raw-read egress; fully covered by synthetic
+  FASTA/GTF fixtures (no real nf-core run in CI). **Deferred:** exhaustive
+  per-assembly scaffold-table completeness (the shipped table is a seed, not
+  exhaustive); network fetch of chromAlias; rewriting the FASTA (only the GTF is
+  ever rewritten); and the sample-data-vs-reference assembly-signature comparison.
+
 ## [0.17.0] - 2026-07-05
 
 ### Added

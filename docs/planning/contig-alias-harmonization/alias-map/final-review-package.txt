@@ -1,0 +1,1473 @@
+=== COMMITS (29540475c80b73b9da49eab77386174f07f0823c..HEAD) ===
+8e52914 docs(reference): record alias harmonization (C2 follow-on) + drop dead type alias
+e7513fa feat(verify): breadcrumb enumerates unmatched contigs after harmonization
+5327ce0 feat(cli): drive alias harmonization from the plan, not the disjoint detector
+8d599d3 refactor(reference): harmonize_gtf applies a rename map
+4731e32 fix(reference): refuse a non-injective rename map (no silent contig merge)
+04abbb3 feat(reference): rewrite plan_harmonization as a FASTA-driven rename map
+2373b57 docs(planning): add contig-alias-harmonization PRD, spec, plan, and task-1 artifacts
+f973ec1 fix(reference): fail loud on malformed/duplicate alias-table rows
+d3f4b2a feat(reference): add contig alias equivalence table (mito + GRCh38 scaffolds)
+
+=== STAT ===
+ CHANGELOG.md                                       |  33 +++
+ FEATURES.md                                        |   2 +-
+ docs/planning/_card/issue.md                       | 120 ++++-----
+ docs/planning/_card/understanding.md               | 158 ++++++-----
+ .../alias-map/plan_20260706.md                     | 273 +++++++++++++++++++
+ .../contig-alias-harmonization/alias-map/spec.md   |  58 ++++
+ .../alias-map/task-1-report.md                     | 206 +++++++++++++++
+ .../alias-map/task-1-review-package.txt            | 291 +++++++++++++++++++++
+ .../alias-map/task-2-report.md                     | 123 +++++++++
+ .../alias-map/task-3-report.md                     | 118 +++++++++
+ .../alias-map/task-4-report.md                     | 152 +++++++++++
+ .../alias-map/task-5-report.md                     | 162 ++++++++++++
+ .../alias-map/task-6-report.md                     |  62 +++++
+ docs/planning/contig-alias-harmonization/prd.md    | 240 +++++++++++++++++
+ .../self-heal-reference-mismatch/understanding.md  |  14 +
+ docs/technical/CAPABILITY_ROADMAP.md               |  24 +-
+ src/contig/cli.py                                  | 122 +++++----
+ src/contig/contig_aliases.py                       | 106 ++++++++
+ src/contig/data/contig_aliases.tsv                 |  14 +
+ src/contig/reference_harmonize.py                  | 169 ++++++++----
+ src/contig/self_heal.py                            |  42 ++-
+ tests/test_cli.py                                  |  95 +++++++
+ tests/test_contig_aliases.py                       | 100 +++++++
+ tests/test_reference_harmonize.py                  | 171 ++++++++++--
+ tests/test_self_heal.py                            | 130 +++++++++
+ 25 files changed, 2711 insertions(+), 274 deletions(-)
+
+=== SRC DIFF (production code only) ===
+diff --git a/src/contig/cli.py b/src/contig/cli.py
+index 5a6a4f3..c13ddc6 100644
+--- a/src/contig/cli.py
++++ b/src/contig/cli.py
+@@ -50,31 +50,31 @@ from contig.holdout import (
+     load_baseline,
+     save_baseline,
+ )
+ from contig.bundle import compute_output_checksums
+ from contig.cost import cost_report
+ from contig.signing import generate_keypair, signing_available, verify_signature
+ from contig.estimate import estimate_run
+ from contig.methods import render_methods
+ from contig.provenance import to_rocrate
+ from contig.models import ExecutionTarget, LaunchManifest, RunRecord, RunSummary, sha256_file
+ from contig.nfconfig import ConfigGenerationError, preflight_aws_batch, preflight_slurm
+ from contig.planner import PlanningError
+ from contig.planner import plan as build_plan
+ from contig.progress import read_progress, render_progress
+ from contig.reference import ReferenceError, resolve_reference
+-from contig.reference_check import check_reference_consistency
++from contig.reference_check import check_reference_consistency, fasta_contigs, gtf_contigs
+ from contig.reference_harmonize import harmonize_gtf, plan_harmonization
+ from contig.registry import UnknownAssayError, assay_for_pipeline, select_pipeline
+ from contig.report import render_explain, render_run_report, render_run_report_html
+ from contig.verification.concordance import evaluate_concordance
+ from contig.verification.count_concordance import (
+     _COUNT_MATRIX_GLOB,
+     evaluate_count_concordance,
+ )
+ from contig.verification.second_caller import (
+     SecondCallerError,
+     run_bcftools_caller,
+ )
+ from contig.verification.structural import manifest_for
+ from contig.runner import PipelineExecutionError, default_executor, default_index_builder
+ from contig.samplesheet import (
+@@ -440,85 +440,101 @@ def _dispatch_run(
+                     typer.echo(f"  - {issue}", err=True)
+                 raise typer.Exit(code=1)
+             try:
+                 params.update(resolve_reference(genome=genome, fasta=fasta, gtf=gtf))
+             except ReferenceError as exc:
+                 typer.echo(f"Reference error: {exc}", err=True)
+                 raise typer.Exit(code=1)
+             # Pre-flight the explicit reference: a FASTA/GTF pair whose contig
+             # naming is disjoint (e.g. FASTA 'chr1' vs GTF '1') silently yields an
+             # empty count matrix. If a safe chr-prefix transform can resolve the
+             # mismatch, harmonize the GTF and proceed. Only refuse (or bypass with
+             # --allow-reference-mismatch) for a genuinely non-harmonizable pair.
+             # iGenomes (--genome) has no fasta/gtf here, so it is skipped.
+             if "fasta" in params and "gtf" in params:
+                 problems = check_reference_consistency(params["fasta"], params["gtf"])
+-                if problems:
+-                    hplan = plan_harmonization(params["fasta"], params["gtf"])
+-                    if hplan is not None:
+-                        # Safe chr-prefix harmonization: rewrite the GTF and proceed.
+-                        # Harmonize-first even when --allow-reference-mismatch is set —
+-                        # harmonizing is strictly safer than running against a mismatch.
+-                        harmonized_path = (
+-                            Path(runs_dir) / run_id / "harmonized" / Path(params["gtf"]).name
++                # Drive harmonization off the PLAN, not off the disjoint-only
++                # detector: `problems` is empty whenever FASTA/GTF share ANY
++                # contig at all, even when only a residual case (e.g. mito
++                # chrM/MT) still needs resolving and the autosomes already
++                # overlap. `plan_harmonization` is the one that knows whether
++                # applying a rename map would strictly improve the overlap, so
++                # it — not `problems` — is what gates the harmonize attempt.
++                hplan = plan_harmonization(params["fasta"], params["gtf"])
++                if hplan is not None:
++                    # Safe chr-prefix / alias-table harmonization: rewrite the
++                    # GTF and proceed. Harmonize-first even when
++                    # --allow-reference-mismatch is set — harmonizing is
++                    # strictly safer than running against a mismatch.
++                    harmonized_path = (
++                        Path(runs_dir) / run_id / "harmonized" / Path(params["gtf"]).name
++                    )
++                    harmonized_path.parent.mkdir(parents=True, exist_ok=True)
++                    harmonize_gtf(params["gtf"], hplan.rename_map, harmonized_path)
++                    # POST-CONDITION GUARD: confirm the rewrite actually improved
++                    # the FASTA/GTF name overlap. `check_reference_consistency`
++                    # alone cannot detect this — it only flags a fully DISJOINT
++                    # pair, so it would pass (no problems) even if harmonization
++                    # silently no-op'd on a pair that already shared some
++                    # contigs (the residual-mito case). Compare overlap counts
++                    # directly instead: never proceed believing harmonization
++                    # worked when it actually didn't ("never manufacture a
++                    # silent wrong result").
++                    orig_overlap = len(
++                        fasta_contigs(params["fasta"]) & gtf_contigs(params["gtf"])
++                    )
++                    post_overlap = len(
++                        fasta_contigs(params["fasta"])
++                        & gtf_contigs(str(harmonized_path.resolve()))
++                    )
++                    if post_overlap > orig_overlap:
++                        # Overlap improved — proceed with the harmonized file.
++                        typer.echo(
++                            f"⚙ Reference harmonized: GTF seqnames {hplan.direction} "
++                            f"to match the FASTA. Proceeding.",
++                            err=True,
+                         )
+-                        harmonized_path.parent.mkdir(parents=True, exist_ok=True)
+-                        harmonize_gtf(params["gtf"], hplan.direction, harmonized_path)
+-                        # POST-CONDITION GUARD: re-verify the harmonized file actually
+-                        # resolved the mismatch.  Should never trigger for valid inputs,
+-                        # but guarantees the engine never proceeds believing it harmonized
+-                        # when it actually didn't ("never manufacture a silent wrong result").
+-                        post_problems = check_reference_consistency(
+-                            params["fasta"], str(harmonized_path.resolve())
++                        harmonized_direction = hplan.direction
++                        params["gtf"] = str(harmonized_path.resolve())
++                        # DO NOT Exit — proceed with the harmonized file.
++                    else:
++                        # Guard triggered: harmonization did NOT resolve the mismatch.
++                        # Discard the scratch file and fall through to the refuse/allow
++                        # path with the ORIGINAL problems and GTF.
++                        typer.echo(
++                            "⚠ Harmonization was attempted but did not resolve the "
++                            "reference mismatch; reverting to the original GTF.",
++                            err=True,
+                         )
+-                        if not post_problems:
+-                            # Mismatch resolved — proceed with the harmonized file.
+-                            typer.echo(
+-                                f"⚙ Reference harmonized: GTF seqnames {hplan.direction} "
+-                                f"to match the FASTA. Proceeding.",
+-                                err=True,
+-                            )
+-                            harmonized_direction = hplan.direction
+-                            params["gtf"] = str(harmonized_path.resolve())
+-                            # DO NOT Exit — proceed with the harmonized file.
+-                        else:
+-                            # Guard triggered: harmonization did NOT resolve the mismatch.
+-                            # Discard the scratch file and fall through to the refuse/allow
+-                            # path with the ORIGINAL problems and GTF.
+-                            typer.echo(
+-                                "⚠ Harmonization was attempted but did not resolve the "
+-                                "reference mismatch; reverting to the original GTF.",
+-                                err=True,
+-                            )
+-                            hplan = None  # signal fall-through to the refuse/allow path
+-                    if hplan is None:
+-                        # Genuine wrong-assembly (non-harmonizable, or guard triggered):
+-                        # keep existing behavior.
+-                        prefix = (
+-                            "⚠ Reference mismatch (proceeding, --allow-reference-mismatch):"
+-                            if allow_reference_mismatch
+-                            else "Reference mismatch:"
++                        hplan = None  # signal fall-through to the refuse/allow path
++                if hplan is None and problems:
++                    # Genuine wrong-assembly (non-harmonizable, or guard triggered):
++                    # keep existing behavior.
++                    prefix = (
++                        "⚠ Reference mismatch (proceeding, --allow-reference-mismatch):"
++                        if allow_reference_mismatch
++                        else "Reference mismatch:"
++                    )
++                    typer.echo(prefix, err=True)
++                    for problem in problems:
++                        typer.echo(f"  - {problem}", err=True)
++                    if not allow_reference_mismatch:
++                        typer.echo(
++                            "  Pass --allow-reference-mismatch to override if this is intentional.",
++                            err=True,
+                         )
+-                        typer.echo(prefix, err=True)
+-                        for problem in problems:
+-                            typer.echo(f"  - {problem}", err=True)
+-                        if not allow_reference_mismatch:
+-                            typer.echo(
+-                                "  Pass --allow-reference-mismatch to override if this is intentional.",
+-                                err=True,
+-                            )
+-                            raise typer.Exit(code=1)
++                        raise typer.Exit(code=1)
+             # Absolutize the sheet: Nextflow runs with cwd=run_dir, so a relative
+             # --input would fail nf-core's "file does not exist" validation.
+             params["input"] = str(Path(input).resolve())
+             input_paths = [input, *fastq_paths(input)]
+         # nf-core always requires --outdir; default it under the run dir. Absolute
+         # so Nextflow (which runs in the run dir) writes to the right place.
+         outdir_path = Path(outdir) if outdir else Path(runs_dir) / run_id / "results"
+         params["outdir"] = str(outdir_path.resolve())
+     selected_profiles = profiles or ("docker" if input else "test,docker")
+ 
+     # Merge the resolved assay's declarative default_params into `params` BEFORE the
+     # manifest is written and the run starts, so e.g. somatic sarek picks up
+     # `--tools strelka,mutect2`. User-supplied params are never overridden. Reproduce
+     # is faithful because the assay persists in launch.json and this re-injects on
+     # rerun (rather than storing the derived params). See _inject_default_params (R5).
+diff --git a/src/contig/contig_aliases.py b/src/contig/contig_aliases.py
+new file mode 100644
+index 0000000..c260948
+--- /dev/null
++++ b/src/contig/contig_aliases.py
+@@ -0,0 +1,106 @@
++"""Contig alias equivalence table (Phase 1 of contig-alias-harmonization).
++
++Pre-flight reference-consistency checking (see `reference_check.py`) today
++only tolerates a `chr`-prefix mismatch between FASTA and GTF contig naming.
++Real references also use per-contig alternate spellings that are not a simple
++prefix rule: the mitochondrion is `chrM`/`M` in UCSC-style naming but `MT` in
++Ensembl-style naming, and unplaced/unlocalized scaffolds have entirely
++different names between the two conventions (e.g. Ensembl `GL000191.1` vs
++UCSC `chrUn_GL000191v1`).
++
++This module builds a lookup from any known spelling of a contig to the full
++set of equivalent spellings (its "alias group"), merging a code-level
++mitochondrion group with a data-driven scaffold table loaded from the bundled
++TSV. It does not do any prefix handling itself (that stays in
++`reference_check.py` / a later phase) and it does not get consumed anywhere
++yet -- this phase is the data table + loader only.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Iterable
++from pathlib import Path
++
++# Mitochondrion is universal across references (not reference-specific like
++# scaffolds), so it is a code constant rather than a TSV row. Bare names only
++# -- no `chr` prefix here; prefix handling is a later phase's job.
++_MITO: frozenset[str] = frozenset({"M", "MT"})
++
++_DATA_PATH = Path(__file__).parent / "data" / "contig_aliases.tsv"
++
++
++def _build_alias_map(lines: Iterable[str]) -> dict[str, frozenset[str]]:
++    """Build a name -> alias-group map from TSV-style alias rows.
++
++    Tolerant of blank lines and `#`-comment lines, matching the simple
++    line-based parsing style used elsewhere in this codebase (e.g.
++    `reference_check.gtf_contigs`). Takes an iterable of lines (not a path)
++    so it is unit-testable against synthetic input without touching the
++    filesystem; the real bundled TSV is read and passed in by
++    `_load_bundled_alias_map` below.
++
++    Fails loud (`ValueError`) rather than silently dropping or
++    last-write-wins-overwriting bad data, per this repo's no-silent-failure
++    stance:
++
++    - A non-blank, non-comment line that does not split into exactly two
++      non-empty tab-separated fields is a malformed row.
++    - A name that would end up belonging to two different (non-identical)
++      alias groups is a conflicting duplicate. An exact repeat of an
++      already-seen pair is harmless (idempotent re-append) and is deduped
++      silently instead of erroring -- only a genuine conflict is an error,
++      so every resulting group stays symmetric.
++    """
++    alias_map: dict[str, frozenset[str]] = {}
++    pairs_seen: set[tuple[str, str]] = set()
++
++    for line in lines:
++        stripped = line.strip()
++        if not stripped or stripped.startswith("#"):
++            continue
++
++        fields = stripped.split("\t")
++        if len(fields) != 2 or not fields[0].strip() or not fields[1].strip():
++            raise ValueError(
++                f"malformed alias-table row (expected 'name<TAB>name'): {line!r}"
++            )
++
++        ensembl, ucsc = fields[0].strip(), fields[1].strip()
++        pair = (ensembl, ucsc)
++        if pair in pairs_seen:
++            continue
++        pairs_seen.add(pair)
++
++        group = frozenset({ensembl, ucsc})
++        for name in (ensembl, ucsc):
++            existing = alias_map.get(name)
++            if existing is not None and existing != group:
++                raise ValueError(
++                    f"alias-table name {name!r} appears in conflicting "
++                    f"alias groups: {sorted(existing)!r} vs {sorted(group)!r}"
++                )
++            alias_map[name] = group
++
++    return alias_map
++
++
++def _load_bundled_alias_map(path: Path) -> dict[str, frozenset[str]]:
++    """Build the full name -> alias-group map: mito constant + bundled TSV."""
++    alias_map: dict[str, frozenset[str]] = {name: _MITO for name in _MITO}
++    alias_map.update(_build_alias_map(path.read_text().splitlines()))
++    return alias_map
++
++
++_ALIAS_MAP: dict[str, frozenset[str]] = _load_bundled_alias_map(_DATA_PATH)
++
++
++def alias_group(name: str) -> frozenset[str]:
++    """Return every cross-convention spelling of the contig `name` belongs to.
++
++    Always includes `name` itself. For a name with no known alias (not the
++    mitochondrion, not a seeded scaffold), returns `frozenset({name})`.
++    """
++    group = _ALIAS_MAP.get(name)
++    if group is None:
++        return frozenset({name})
++    return group | {name}
+diff --git a/src/contig/data/contig_aliases.tsv b/src/contig/data/contig_aliases.tsv
+new file mode 100644
+index 0000000..705d5e3
+--- /dev/null
++++ b/src/contig/data/contig_aliases.tsv
+@@ -0,0 +1,14 @@
++# Contig alias equivalence table (scaffolds only).
++#
++# Source: UCSC hg38.chromAlias.txt (GRCh38 scaffold naming).
++# Mitochondrion (M <-> MT) is NOT listed here: it is a code constant
++# (`_MITO` in contig_aliases.py) since it is universal across references,
++# not reference-specific like these scaffolds.
++#
++# To extend: add one row per line, tab-separated, `ensembl_name<TAB>ucsc_name`.
++# Each row forms a bidirectional equivalence group (either spelling maps to
++# both). This seed set is intentionally small (a handful of rows) -- full
++# GRCh38 scaffold coverage is explicitly not required for this phase.
++GL000191.1	chrUn_GL000191v1
++GL000192.1	chrUn_GL000192v1
++KI270711.1	chr1_KI270711v1
+diff --git a/src/contig/reference_harmonize.py b/src/contig/reference_harmonize.py
+index 2dd8e9e..926e5d6 100644
+--- a/src/contig/reference_harmonize.py
++++ b/src/contig/reference_harmonize.py
+@@ -1,132 +1,186 @@
+ """Pure decision + stream-rewriter for GTF contig-name harmonization.
+ 
+ This module provides two public functions:
+ 
+-- ``plan_harmonization(fasta_path, gtf_path)`` — pure decision: returns a
+-  ``HarmonizationPlan`` only when a safe uniform ``chr``-prefix transform on
+-  the GTF will resolve a detected FASTA/GTF naming mismatch; ``None`` otherwise.
++- ``plan_harmonization(fasta_path, gtf_path)`` — pure decision: builds a
++  FASTA-driven rename map for the GTF's seqnames (chr-prefix AND alias-table
++  aware — mitochondrion ``chrM``/``MT``, scaffolds) and returns a
++  ``HarmonizationPlan`` only when applying it would strictly improve the
++  FASTA/GTF contig-name overlap; ``None`` otherwise.
+ 
+-- ``harmonize_gtf(gtf_path, direction, out_path)`` — stream-rewrites the GTF
+-  applying the direction to column 1 only; byte-faithful everywhere else;
+-  gzip-transparent.
++- ``harmonize_gtf(gtf_path, rename_map, out_path)`` — stream-rewrites the GTF
++  applying *rename_map* to column 1 only; a seqname absent from the map
++  passes through unchanged; byte-faithful everywhere else; gzip-transparent.
+ 
+ No network, no subprocess, no mutations of input files.
+ """
+ 
+ import gzip
+ from dataclasses import dataclass
+ from pathlib import Path
+-from typing import Literal
++from typing import Mapping
+ 
+-from contig.reference_check import (
+-    _all_chr_prefixed,
+-    _sample,
+-    check_reference_consistency,
+-    fasta_contigs,
+-    gtf_contigs,
+-)
+-
+-HarmonizationDirection = Literal["add_chr", "strip_chr"]
++from contig.contig_aliases import alias_group
++from contig.reference_check import _sample, fasta_contigs, gtf_contigs
+ 
+ 
+ @dataclass(frozen=True)
+ class HarmonizationPlan:
+-    direction: HarmonizationDirection
+-    fasta_sample: str   # _sample(fasta_contigs) — for user-facing notes
+-    gtf_sample: str     # _sample(gtf_contigs)   — for user-facing notes
++    rename_map: dict[str, str]  # GTF seqname -> FASTA seqname, renames only
++    direction: str              # "add_chr" | "strip_chr" | "alias"
++    unmatched: tuple[str, ...]  # GTF seqnames with no FASTA candidate at all
++    fasta_sample: str           # _sample(fasta_contigs) — for user-facing notes
++    gtf_sample: str             # _sample(gtf_contigs)   — for user-facing notes
+ 
+ 
+-def plan_harmonization(fasta_path, gtf_path) -> HarmonizationPlan | None:
+-    """Decide whether a safe uniform chr-prefix transform resolves the mismatch.
++def _prefix_variants(name: str) -> set[str]:
++    """All chr-prefix spellings of *name*: itself, ``chr``-prefixed, and (if
++    *name* is already ``chr``-prefixed and long enough) the bare/stripped form.
++    """
++    variants = {name, f"chr{name}"}
++    if name.startswith("chr") and len(name) > 3:
++        variants.add(name[3:])
++    variants.discard("")
++    return variants
++
++
++def _candidate_names(g: str) -> set[str]:
++    """All FASTA-side spellings *g* could plausibly rename to.
++
++    Unifies prefix handling and alias-table lookup: expand *g* through its
++    own prefix variants first (so a chr-prefixed spelling like ``chrMT``
++    reaches the bare-name alias table entry ``MT`` <-> ``M``), look up the
++    alias group of every one of those variants, then expand each alias
++    through prefix variants again (so the alias's own chr-prefixed form,
++    e.g. ``chrM``, is reachable too). This is what lets a hybrid FASTA
++    (``chrMT``) resolve a bare GTF (``MT``) and a UCSC FASTA (``chrM``)
++    resolve the same bare GTF (``MT``) — the FASTA's actual spelling wins
++    either way once intersected with F in the caller.
++    """
++    names: set[str] = set()
++    for v in _prefix_variants(g):
++        for a in alias_group(v):
++            names |= _prefix_variants(a)
++    return names
+ 
+-    Returns a :class:`HarmonizationPlan` only when:
+-    - ``check_reference_consistency`` reports a mismatch (non-empty), AND
+-    - the mismatch is an unambiguous chr-prefix asymmetry (one side all-chr,
+-      the other none-chr), AND
+-    - after applying the transform the two sets share at least one name.
+ 
+-    Returns ``None`` in all other cases so the caller can refuse safely.
+-    """
+-    # Step 1: only act when there is an actual mismatch.
+-    if not check_reference_consistency(fasta_path, gtf_path):
+-        return None
++def plan_harmonization(fasta_path, gtf_path) -> HarmonizationPlan | None:
++    """Build a FASTA-driven rename map for the GTF and decide whether to apply it.
+ 
+-    # Step 2: parse both sides.
++    For every GTF seqname, compute the candidate FASTA spellings via
++    ``_candidate_names`` (prefix + alias union), intersected against the
++    actual FASTA contig set. Refuses (returns ``None``) unless applying the
++    resulting rename map would strictly increase the FASTA/GTF name overlap.
++    """
++    # Step 1: parse both sides; either side unparseable -> uncomparable.
+     fa = fasta_contigs(fasta_path)
+     gt = gtf_contigs(gtf_path)
++    if not fa or not gt:
++        return None
+ 
+-    # Step 3: determine direction.
+-    if _all_chr_prefixed(fa) and not _all_chr_prefixed(gt):
+-        direction: HarmonizationDirection = "add_chr"
+-        transformed = {f"chr{n}" for n in gt}
+-    elif _all_chr_prefixed(gt) and not _all_chr_prefixed(fa):
+-        direction = "strip_chr"
+-        transformed = {n[3:] if n.startswith("chr") else n for n in gt}
+-    else:
+-        # Mixed prefixes or both bare-vs-bare: not an unambiguous asymmetry.
++    # Step 2/3: for each GTF seqname, resolve against the FASTA set.
++    rename_map: dict[str, str] = {}
++    unmatched: list[str] = []
++    for g in gt:
++        cands = _candidate_names(g) & fa
++        if not cands:
++            unmatched.append(g)
++            continue
++        chosen = g if g in fa else sorted(cands)[0]
++        if chosen != g:
++            rename_map[g] = chosen
++
++    # Step 4: overlap before vs. after applying the rename map. Keep the
++    # post-harmonization names as a list (not just a set) so a collision
++    # between two distinct GTF seqnames is still visible for the
++    # injectivity check below.
++    overlap_before = len(fa & gt)
++    mapped_list = [rename_map.get(g, g) for g in gt]
++    mapped = set(mapped_list)
++    overlap_after = len(fa & mapped)
++
++    # Step 5: refuse / no-op — nothing resolvable, already consistent,
++    # a strict subset, or a genuine wrong-assembly mismatch renaming can't fix.
++    if not rename_map or overlap_after <= overlap_before:
++        return None
++
++    # Step 6: explicit disjoint guard (redundant with step 5, kept explicit
++    # per spec) — a wrong-assembly pair must never be "resolved".
++    if not (fa & mapped):
+         return None
+ 
+-    # Step 4: post-transform must intersect FASTA — otherwise it's a genuine
+-    # wrong-assembly, not a prefix convention difference.
+-    if not (transformed & fa):
++    # Step 6b: injectivity guard — refuse if the rename map is not injective.
++    # Two distinct GTF seqnames must never land on the same post-harmonization
++    # name, whether both get renamed onto a shared target (e.g. GTF {M, MT}
++    # both resolving to FASTA chrM) or one gets renamed onto a name another
++    # seqname already has unchanged. Applying such a map would silently merge
++    # two distinct contigs into one downstream; refuse rather than corrupt
++    # the data.
++    if len(mapped_list) != len(mapped):
+         return None
+ 
+-    # Step 5: safe — return the plan.
++    # Step 7: derive the direction label. Preserve the legacy "add_chr" /
++    # "strip_chr" labels when every rename follows that single uniform
++    # pattern exactly (this is what the pre-Phase-2 callers/tests assert);
++    # anything else (mixed prefix+alias, or pure alias) is labeled "alias".
++    if all(v == f"chr{k}" for k, v in rename_map.items()):
++        direction = "add_chr"
++    elif all(v == k[3:] for k, v in rename_map.items()):
++        direction = "strip_chr"
++    else:
++        direction = "alias"
++
+     return HarmonizationPlan(
++        rename_map=rename_map,
+         direction=direction,
++        unmatched=tuple(sorted(unmatched)),
+         fasta_sample=_sample(fa),
+         gtf_sample=_sample(gt),
+     )
+ 
+ 
+ # ---------------------------------------------------------------------------
+ # Internal helpers
+ # ---------------------------------------------------------------------------
+ 
+-def _apply(name: str, direction: HarmonizationDirection) -> str:
+-    """Apply the direction to a single seqname; idempotent."""
+-    if direction == "add_chr":
+-        return name if name.startswith("chr") else f"chr{name}"
+-    else:  # strip_chr
+-        return name[3:] if name.startswith("chr") else name
+-
+-
+ def _open_input(path: Path):
+     """Open path for reading; gzip-aware iff the filename ends with .gz."""
+     return gzip.open(path, "rt") if path.name.endswith(".gz") else open(path, "r", newline="")
+ 
+ 
+ def _open_output(path: Path):
+     """Open path for writing; gzip-aware iff the filename ends with .gz."""
+     if path.name.endswith(".gz"):
+         return gzip.open(path, "wt")
+     return open(path, "w", newline="")
+ 
+ 
+ # ---------------------------------------------------------------------------
+ # Public rewriter
+ # ---------------------------------------------------------------------------
+ 
+-def harmonize_gtf(gtf_path, direction: HarmonizationDirection, out_path) -> Path:
+-    """Stream-rewrite *gtf_path* applying *direction* to column 1 only.
++def harmonize_gtf(gtf_path, rename_map: Mapping[str, str], out_path) -> Path:
++    """Stream-rewrite *gtf_path* applying *rename_map* to column 1 only.
+ 
+     - Blank lines and lines starting with ``#`` are passed through unchanged.
+     - ``track`` / ``browser`` lines (no tab-delimited seqname) are passed
+       through unchanged.
+     - Column 1 is tokenized with the same boundary as ``gtf_contigs``
+-      (``split("\\t", 1)``); the token is transformed and re-joined.
++      (``split("\\t", 1)``); the (stripped) token is looked up in
++      *rename_map* and rewritten; a seqname absent from the map passes
++      through unchanged.
+     - Everything after the first tab is byte-identical in the output.
+     - Line endings (``\\n`` vs ``\\r\\n``) are preserved exactly.
+     - Input/output are gzip-compressed iff the respective path ends with ``.gz``.
+ 
+     Returns *out_path* as a :class:`~pathlib.Path`.
+     """
+     gtf_path = Path(gtf_path)
+     out_path = Path(out_path)
+ 
+     with _open_input(gtf_path) as fh_in, _open_output(out_path) as fh_out:
+         for raw_line in fh_in:
+             # Detect line ending without stripping the whole line.
+             if raw_line.endswith("\r\n"):
+                 ending = "\r\n"
+                 line = raw_line[:-2]
+@@ -143,19 +197,20 @@ def harmonize_gtf(gtf_path, direction: HarmonizationDirection, out_path) -> Path
+             if not stripped or stripped.startswith("#"):
+                 fh_out.write(raw_line)
+                 continue
+ 
+             # Split on the first tab to isolate column 1.
+             if "\t" not in line:
+                 # No tab → not a standard GTF data line (e.g. track/browser).
+                 fh_out.write(raw_line)
+                 continue
+ 
+             col1, rest = line.split("\t", 1)
+             # Strip the token to match the boundary that gtf_contigs uses
+             # (.strip() on field0), so a malformed GTF with leading/trailing
+             # whitespace on the seqname is transformed consistently with what
+             # the detector sees.  Columns 2+ (rest) remain byte-identical.
+-            new_col1 = _apply(col1.strip(), direction)
++            stripped_col1 = col1.strip()
++            new_col1 = rename_map.get(stripped_col1, stripped_col1)
+             fh_out.write(new_col1 + "\t" + rest + ending)
+ 
+     return out_path
+diff --git a/src/contig/self_heal.py b/src/contig/self_heal.py
+index 0596b1f..235a894 100644
+--- a/src/contig/self_heal.py
++++ b/src/contig/self_heal.py
+@@ -15,30 +15,31 @@ from __future__ import annotations
+ import json
+ import os
+ import re
+ import shutil
+ import time
+ from datetime import datetime, timezone
+ from pathlib import Path
+ from typing import Callable
+ 
+ from contig.bundle import compute_output_checksums, compute_reference_identity, write_bundle
+ from contig.corpus import append_case, failure_case_from_run
+ from contig.detect import diagnose_failure
+ from contig.events import parse_resource_usage_file
+ from contig.models import Diagnosis, ExecutionTarget, Patch, QCResult, RepairStep, RunRecord, RunSummary
+ from contig.notify import emit_event
++from contig.reference_check import fasta_contigs, gtf_contigs
+ from contig.repair import propose_patches
+ from contig.runner import (
+     Executor,
+     IndexBuilder,
+     PipelineExecutionError,
+     default_executor,
+     default_index_builder,
+     read_run_log,
+     read_task_errors,
+     run_pipeline,
+ )
+ 
+ _DEFAULT_MEMORY_GB = 8
+ _DEFAULT_TIME_HOURS = 4
+ 
+@@ -967,67 +968,98 @@ def self_heal_run(
+                     RepairStep(attempt=attempt, diagnosis=diagnosis, patch=safe,
+                                outcome="gave_up_at_ceiling", detail=block))
+                 return _finalize(exc.record, repair_history, run_dir,
+                     runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                     harmonized_reference_direction=harmonized_reference_direction)
+ 
+             current_target, current_params = apply_patch(current_target, safe, current_params, ceiling=resource_ceiling)
+             _record_attempt(
+                 run_dir,
+                 repair_history,
+                 RepairStep(attempt=attempt, diagnosis=diagnosis, patch=safe, outcome="patched_and_retried"),
+             )
+             attempt += 1
+ 
+ 
++def _unmatched_harmonized_contigs(params: dict[str, object]) -> list[str]:
++    """Recompute the still-unmatched GTF contigs after harmonization.
++
++    ``params["gtf"]`` at ``_finalize`` time is the HARMONIZED scratch path (the
++    CLI swaps it in before calling ``self_heal_run``, see cli.py's pre-flight
++    block): every GTF seqname with a FASTA match has already been renamed to
++    its FASTA spelling. So whatever GTF seqname remains outside the FASTA
++    contig set is exactly the set ``plan_harmonization`` recorded as
++    ``HarmonizationPlan.unmatched`` — no need to thread that plan through the
++    whole self_heal_run call chain. Degrades to `[]` (never a crash, never a
++    fabricated list) if the paths are missing/unreadable, e.g. in tests that
++    exercise the breadcrumb with fake paths.
++    """
++    fasta = params.get("fasta")
++    gtf = params.get("gtf")
++    if not fasta or not gtf:
++        return []
++    try:
++        return sorted(gtf_contigs(gtf) - fasta_contigs(fasta))
++    except OSError:
++        return []
++
++
+ def _finalize(
+     record: RunRecord | None,
+     repair_history: list[RepairStep],
+     run_dir: Path,
+     *,
+     runs_dir,
+     run_id: str,
+     webhook: str | None = None,
+     harmonized_reference_direction: str | None = None,
+ ) -> RunRecord:
+     """Attach the repair history to the final record, persist it, and notify.
+ 
+     Emits a terminal notification (PRD contract A): `finished` when the run's
+     events show success, otherwise `failed` (a give-up, rejection, or timeout all
+     finalize a failed record). A trace-less run produces no record and no
+     terminal notification: there is nothing to report yet.
+     """
+     if record is None:
+         # The run failed before producing any trace; nothing was captured.
+         _write_status(run_dir, "error")
+         raise PipelineExecutionError(1, None)
+     record.repair_history = repair_history
+     record.output_checksums = compute_output_checksums(_results_dir(record, run_dir))
+     record.reference_identity = compute_reference_identity(record.parameters)
+     if harmonized_reference_direction and record.reference_identity is not None:
+         record.harmonized_reference_direction = harmonized_reference_direction
+         record.reference_identity.harmonized = True
+         record.reference_identity.harmonized_direction = harmonized_reference_direction
++        unmatched = _unmatched_harmonized_contigs(record.parameters)
++        message = (
++            f"Reference harmonized ({harmonized_reference_direction}) to match "
++            f"the FASTA before the run. "
++        )
++        if unmatched:
++            names = ", ".join(unmatched)
++            message += (
++                f"Note: {len(unmatched)} GTF contig(s) could not be matched to "
++                f"the FASTA and were left as-is: {names}. "
++            )
++        message += "Confirm the reference was correct."
+         record.qc_results.append(QCResult(
+             kind="structural",
+             check="reference_harmonized",
+             status="warn",
+-            message=(
+-                f"Reference GTF seqnames were harmonized "
+-                f"({harmonized_reference_direction}) to match the FASTA before the run. "
+-                f"Confirm the reference was correct."
+-            ),
++            message=message,
+         ))
+     trace_path = Path(run_dir) / "trace.txt"
+     if trace_path.exists():
+         record.resource_usage = parse_resource_usage_file(trace_path)
+     write_bundle(record, run_dir)
+     _write_status(run_dir, "finished")
+     succeeded = RunSummary.from_events(record.events).succeeded
+     if succeeded:
+         emit_event(runs_dir, run_id, "finished", f"Run {run_id} finished.", webhook=webhook)
+     else:
+         emit_event(runs_dir, run_id, "failed", f"Run {run_id} failed.", webhook=webhook)
+     return record
+ 
+ 
+ def _results_dir(record: RunRecord, run_dir: Path) -> Path:
+
+=== TEST + DATA DIFF ===
+diff --git a/src/contig/data/contig_aliases.tsv b/src/contig/data/contig_aliases.tsv
+new file mode 100644
+index 0000000..705d5e3
+--- /dev/null
++++ b/src/contig/data/contig_aliases.tsv
+@@ -0,0 +1,14 @@
++# Contig alias equivalence table (scaffolds only).
++#
++# Source: UCSC hg38.chromAlias.txt (GRCh38 scaffold naming).
++# Mitochondrion (M <-> MT) is NOT listed here: it is a code constant
++# (`_MITO` in contig_aliases.py) since it is universal across references,
++# not reference-specific like these scaffolds.
++#
++# To extend: add one row per line, tab-separated, `ensembl_name<TAB>ucsc_name`.
++# Each row forms a bidirectional equivalence group (either spelling maps to
++# both). This seed set is intentionally small (a handful of rows) -- full
++# GRCh38 scaffold coverage is explicitly not required for this phase.
++GL000191.1	chrUn_GL000191v1
++GL000192.1	chrUn_GL000192v1
++KI270711.1	chr1_KI270711v1
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index 9ed9e66..cefa2f5 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -5,8 +5,9 @@ from typer.testing import CliRunner
+ 
+ from contig.bundle import load_bundle, write_bundle
+ from contig.cli import app
+ from contig.models import ExecutionTarget, QCResult, RunRecord, TaskEvent, TaskResource
++from contig.reference_check import check_reference_consistency
+ 
+ 
+ def _make_sheet(tmp_path, *, valid=True):
+     (tmp_path / "s1_R1.fastq.gz").write_bytes(b"\x1f\x8bR1")
+@@ -607,8 +608,45 @@ def _write_wrong_assembly_reference(tmp_path):
+     )
+     return fasta, gtf
+ 
+ 
++def _write_ucsc_ensembl_reference(tmp_path):
++    """FASTA (chr1,chr2,chrM) / GTF (1,2,MT) — UCSC FASTA vs Ensembl GTF.
++
++    Fully disjoint (no shared contig at all: check_reference_consistency
++    flags it), but harmonizable via chr-prefix + the mito alias table.
++    """
++    fasta = tmp_path / "ref.fa"
++    fasta.write_text(">chr1\nACGT\n>chr2\nTTTT\n>chrM\nGGGG\n")
++    gtf = tmp_path / "ref.gtf"
++    gtf.write_text(
++        "1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g1\"\n"
++        "2\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g2\"\n"
++        "MT\tsource\tgene\t1\t50\t.\t+\t.\tgene_id \"g3\"\n"
++    )
++    return fasta, gtf
++
++
++def _write_residual_mito_reference(tmp_path):
++    """FASTA (chr1,chr2,chrM) / GTF (chr1,chr2,MT) — autosomes already match.
++
++    check_reference_consistency sees the shared chr1/chr2 contigs and reports
++    NO problems (fasta & gtf is non-empty), yet the mito seqname is still
++    mismatched (chrM vs MT). This is the residual case that must still
++    harmonize even though `problems == []` — the silent bug this feature
++    kills.
++    """
++    fasta = tmp_path / "ref.fa"
++    fasta.write_text(">chr1\nACGT\n>chr2\nTTTT\n>chrM\nGGGG\n")
++    gtf = tmp_path / "ref.gtf"
++    gtf.write_text(
++        "chr1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g1\"\n"
++        "chr2\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g2\"\n"
++        "MT\tsource\tgene\t1\t50\t.\t+\t.\tgene_id \"g3\"\n"
++    )
++    return fasta, gtf
++
++
+ def _write_overlapping_reference(tmp_path):
+     """A FASTA (chr1,chr2) / GTF (chr1) pair that shares a contig (legitimate)."""
+     fasta = tmp_path / "ref.fa"
+     fasta.write_text(">chr1\nACGT\n>chr2\nTTTT\n")
+@@ -747,8 +785,65 @@ def test_run_chr_asymmetric_with_allow_flag_still_harmonizes(tmp_path, monkeypat
+     harmonized_dir = tmp_path / "runs" / "harmflag" / "harmonized"
+     assert harmonized_dir.exists() and any(harmonized_dir.iterdir())
+ 
+ 
++def test_run_ucsc_ensembl_reference_harmonizes_and_proceeds(tmp_path, monkeypatch):
++    # A UCSC FASTA (chr1,chr2,chrM) vs Ensembl GTF (1,2,MT) pair is fully
++    # disjoint (no shared contig), but harmonizable via chr-prefix + the mito
++    # alias table. The run must NOT exit(1): it harmonizes and proceeds.
++    sheet = _make_sheet(tmp_path)
++    fasta, gtf = _write_ucsc_ensembl_reference(tmp_path)
++    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
++    result = runner.invoke(
++        app,
++        ["run", "--run-id", "ucsce", "--runs-dir", str(tmp_path / "runs"),
++         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf)],
++    )
++    assert result.exit_code == 0, f"Expected 0, got {result.exit_code}: {result.output}"
++    assert "harmonized" in result.output.lower()
++    manifest = json.loads((tmp_path / "runs" / "ucsce" / "launch.json").read_text())
++    assert manifest["harmonized_reference"] is True
++    assert manifest["gtf"] == str(gtf)  # ORIGINAL path
++    harmonized_dir = tmp_path / "runs" / "ucsce" / "harmonized"
++    assert harmonized_dir.exists() and any(harmonized_dir.iterdir())
++    assert (tmp_path / "runs" / "ucsce" / "run_record.json").exists()
++
++
++def test_run_residual_mito_reference_harmonizes_and_proceeds(tmp_path, monkeypatch):
++    # THE SILENT BUG THIS FEATURE KILLS: a FASTA/GTF pair whose autosomes
++    # already match (chr1,chr2 shared) but whose mito seqname is still
++    # mismatched (FASTA chrM vs GTF MT). check_reference_consistency reports
++    # NO problems here (fasta & gtf is non-empty), so the OLD `if problems:`
++    # gate never harmonized this case. The plan-driven gate must still
++    # harmonize it: the run proceeds, and the harmonized GTF's mito line is
++    # rewritten from MT to chrM.
++    sheet = _make_sheet(tmp_path)
++    fasta, gtf = _write_residual_mito_reference(tmp_path)
++    # Sanity: confirm the disjoint-only detector sees no problem at all — this
++    # is what proves the residual case was previously silent.
++    assert check_reference_consistency(str(fasta), str(gtf)) == []
++    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
++    result = runner.invoke(
++        app,
++        ["run", "--run-id", "resmito", "--runs-dir", str(tmp_path / "runs"),
++         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf)],
++    )
++    assert result.exit_code == 0, f"Expected 0, got {result.exit_code}: {result.output}"
++    assert "harmonized" in result.output.lower()
++    manifest = json.loads((tmp_path / "runs" / "resmito" / "launch.json").read_text())
++    assert manifest["harmonized_reference"] is True
++    assert manifest["gtf"] == str(gtf)  # ORIGINAL path unchanged in the manifest
++    harmonized_dir = tmp_path / "runs" / "resmito" / "harmonized"
++    assert harmonized_dir.exists()
++    harmonized_files = list(harmonized_dir.iterdir())
++    assert harmonized_files
++    harmonized_text = harmonized_files[0].read_text()
++    # Prove the GTF was actually rewritten: the mito line now reads chrM, not MT.
++    assert "chrM\tsource\tgene" in harmonized_text
++    assert "MT\tsource\tgene" not in harmonized_text
++    assert (tmp_path / "runs" / "resmito" / "run_record.json").exists()
++
++
+ def test_rerun_from_harmonized_manifest_re_derives_harmonization(tmp_path, monkeypatch):
+     # rerun from a manifest with harmonized_reference=True re-enters _dispatch_run
+     # with the ORIGINAL gtf paths and re-derives the harmonization (reproduce =
+     # reproduce the decision). The reproduced run also harmonizes.
+diff --git a/tests/test_contig_aliases.py b/tests/test_contig_aliases.py
+new file mode 100644
+index 0000000..0ca103f
+--- /dev/null
++++ b/tests/test_contig_aliases.py
+@@ -0,0 +1,100 @@
++"""Tests for the contig alias equivalence table (mito + GRCh38 scaffolds).
++
++Phase 1 of contig-alias-harmonization: a data-driven lookup that widens
++pre-flight FASTA/GTF harmonization beyond the simple `chr`-prefix case to
++per-contig aliases (mito chrM<->MT, plus scaffold spellings). This phase only
++builds the lookup; no consumer wiring yet.
++"""
++
++import pytest
++
++from contig.contig_aliases import _build_alias_map, alias_group
++
++
++def test_mito_mt_group_includes_both_spellings():
++    group = alias_group("MT")
++    assert {"MT", "M"} <= group
++
++
++def test_mito_m_group_includes_both_spellings():
++    group = alias_group("M")
++    assert {"MT", "M"} <= group
++
++
++def test_seeded_scaffold_ensembl_to_ucsc():
++    group = alias_group("GL000191.1")
++    assert {"GL000191.1", "chrUn_GL000191v1"} <= group
++
++
++def test_seeded_scaffold_ucsc_to_ensembl():
++    group = alias_group("chrUn_GL000191v1")
++    assert {"GL000191.1", "chrUn_GL000191v1"} <= group
++
++
++def test_unknown_name_maps_to_itself_only():
++    assert alias_group("chr7") == frozenset({"chr7"})
++
++
++def test_alias_group_always_includes_queried_name():
++    for name in ("MT", "M", "GL000191.1", "chrUn_GL000191v1", "chr7", "randomXYZ"):
++        assert name in alias_group(name)
++
++
++def test_seeded_scaffold_second_pair():
++    # Minor coverage: exercise the second seeded scaffold pair too, not just
++    # the first one used by the other tests above.
++    group = alias_group("GL000192.1")
++    assert {"GL000192.1", "chrUn_GL000192v1"} <= group
++    assert alias_group("chrUn_GL000192v1") == group
++
++
++def test_build_alias_map_raises_on_row_without_tab():
++    with pytest.raises(ValueError, match="no_tab_here"):
++        _build_alias_map(["no_tab_here"])
++
++
++def test_build_alias_map_raises_on_row_with_empty_field():
++    # Trailing tab with nothing after it: two fields, but the second is empty.
++    with pytest.raises(ValueError, match="malformed"):
++        _build_alias_map(["A\t"])
++
++
++def test_build_alias_map_raises_on_conflicting_duplicate_name():
++    # "A" first pairs with "B", then a later row claims "A" pairs with "C" --
++    # a genuine conflict (not a repeat of the same pair), which must be a
++    # hard, loud error rather than silently letting "C" win.
++    lines = ["A\tB", "A\tC"]
++    with pytest.raises(ValueError, match="A"):
++        _build_alias_map(lines)
++
++
++def test_build_alias_map_tolerates_exact_duplicate_pair():
++    # An identical row repeated verbatim is harmless (e.g. a future append
++    # that accidentally re-adds a row already present) -- dedupe silently
++    # rather than erroring, since it doesn't create any conflicting group.
++    lines = ["A\tB", "A\tB"]
++    alias_map = _build_alias_map(lines)
++    assert alias_map["A"] == frozenset({"A", "B"})
++    assert alias_map["B"] == frozenset({"A", "B"})
++
++
++def test_build_alias_map_handles_comments_and_blanks_and_is_symmetric():
++    lines = [
++        "# a comment",
++        "",
++        "   ",
++        "X\tY",
++        "# another comment in the middle",
++        "P\tQ",
++        "",
++    ]
++    alias_map = _build_alias_map(lines)
++
++    assert alias_map["X"] == frozenset({"X", "Y"})
++    assert alias_map["P"] == frozenset({"P", "Q"})
++
++    # Groups must be symmetric: a name is in another name's group iff the
++    # reverse also holds.
++    for a, b in (("X", "Y"), ("P", "Q")):
++        assert a in alias_map[b]
++        assert b in alias_map[a]
+diff --git a/tests/test_reference_harmonize.py b/tests/test_reference_harmonize.py
+index 8de189c..f145e20 100644
+--- a/tests/test_reference_harmonize.py
++++ b/tests/test_reference_harmonize.py
+@@ -144,8 +144,109 @@ class TestPlanHarmonization:
+         assert plan is not None
+         with pytest.raises((AttributeError, TypeError)):
+             plan.direction = "strip_chr"  # type: ignore[misc]
+ 
++    # --- alias-aware rename map (Phase 2) -----------------------------------
++
++    def test_ucsc_ensembl_full_alias_and_prefix_mix(self, tmp_path):
++        """FASTA UCSC {chr1,chr2,chrM} vs GTF Ensembl {1,2,MT}: mixed
++        prefix + mito-alias renames; direction is 'alias' since not every
++        rename follows a single uniform pattern."""
++        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2", "chrM"))
++        gtf = _write(tmp_path / "genes.gtf", _gtf("1", "2", "MT"))
++        plan = plan_harmonization(fa, gtf)
++        assert plan is not None
++        assert plan.rename_map == {"1": "chr1", "2": "chr2", "MT": "chrM"}
++        assert plan.direction == "alias"
++        assert plan.unmatched == ()
++
++    def test_residual_mito_only_rename(self, tmp_path):
++        """Autosomes already match; only the mitochondrion needs renaming."""
++        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2", "chrM"))
++        gtf = _write(tmp_path / "genes.gtf", _gtf("chr1", "chr2", "MT"))
++        plan = plan_harmonization(fa, gtf)
++        assert plan is not None
++        assert plan.rename_map == {"MT": "chrM"}
++
++    def test_pure_alias_both_chr_prefixed(self, tmp_path):
++        """Both sides chr-prefixed but mito spelled differently: chrMT -> chrM."""
++        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chrM"))
++        gtf = _write(tmp_path / "genes.gtf", _gtf("chr1", "chrMT"))
++        plan = plan_harmonization(fa, gtf)
++        assert plan is not None
++        assert plan.rename_map == {"chrMT": "chrM"}
++
++    def test_hybrid_fasta_lookup_wins(self, tmp_path):
++        """FASTA itself uses the hybrid spelling chrMT: GTF bare MT resolves
++        against the actual FASTA set, not a fixed convention."""
++        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chrMT"))
++        gtf = _write(tmp_path / "genes.gtf", _gtf("chr1", "MT"))
++        plan = plan_harmonization(fa, gtf)
++        assert plan is not None
++        assert plan.rename_map == {"MT": "chrMT"}
++
++    def test_pure_prefix_add_still_labeled_add_chr(self, tmp_path):
++        """Uniform add_chr rename set keeps the legacy 'add_chr' label."""
++        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2"))
++        gtf = _write(tmp_path / "genes.gtf", _gtf("1", "2"))
++        plan = plan_harmonization(fa, gtf)
++        assert plan is not None
++        assert plan.rename_map == {"1": "chr1", "2": "chr2"}
++        assert plan.direction == "add_chr"
++
++    def test_pure_prefix_strip_still_labeled_strip_chr(self, tmp_path):
++        """Uniform strip_chr rename set keeps the legacy 'strip_chr' label."""
++        fa = _write(tmp_path / "ref.fa", _fasta("1", "2"))
++        gtf = _write(tmp_path / "genes.gtf", _gtf("chr1", "chr2"))
++        plan = plan_harmonization(fa, gtf)
++        assert plan is not None
++        assert plan.direction == "strip_chr"
++
++    def test_unmatched_contig_enumerated_rest_still_harmonized(self, tmp_path):
++        """A contig with no FASTA candidate lands in unmatched; the rest of
++        the GTF is still harmonized."""
++        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2", "chrM"))
++        gtf = _write(tmp_path / "genes.gtf", _gtf("1", "2", "MT", "weirdcontig"))
++        plan = plan_harmonization(fa, gtf)
++        assert plan is not None
++        assert plan.unmatched == ("weirdcontig",)
++        assert plan.rename_map == {"1": "chr1", "2": "chr2", "MT": "chrM"}
++
++    def test_wrong_assembly_no_candidates_refuses(self, tmp_path):
++        """No GTF contig has any FASTA candidate at all → refuse (None)."""
++        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2"))
++        gtf = _write(tmp_path / "genes.gtf", _gtf("scaffold_1", "scaffold_2"))
++        assert plan_harmonization(fa, gtf) is None
++
++    # --- injectivity guard (refuse-on-ambiguity, no silent contig merge) ---
++
++    def test_colliding_targets_refuse(self, tmp_path):
++        """FASTA {chrM,chr1} + GTF {M,MT}: both M and MT resolve to the same
++        FASTA target chrM. Applying that rename map would silently merge two
++        distinct GTF seqnames onto one contig, so plan_harmonization must
++        refuse rather than hand back an ambiguous map."""
++        fa = _write(tmp_path / "ref.fa", _fasta("chrM", "chr1"))
++        gtf = _write(tmp_path / "genes.gtf", _gtf("M", "MT"))
++        assert plan_harmonization(fa, gtf) is None
++
++    def test_renamed_collides_with_staying_contig_refuses(self, tmp_path):
++        """FASTA {chr1} + GTF {1,chr1}: renaming '1' -> 'chr1' collides with
++        the GTF's own already-matching 'chr1' seqname. Two distinct source
++        seqnames would land on the same target → refuse."""
++        fa = _write(tmp_path / "ref.fa", _fasta("chr1"))
++        gtf = _write(tmp_path / "genes.gtf", _gtf("1", "chr1"))
++        assert plan_harmonization(fa, gtf) is None
++
++    def test_distinct_targets_still_harmonize(self, tmp_path):
++        """Positive control: a normal UCSC/Ensembl mix where every renamed
++        target is distinct must still produce a valid plan (the injectivity
++        guard must not over-refuse ordinary harmonizable input)."""
++        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2", "chrM"))
++        gtf = _write(tmp_path / "genes.gtf", _gtf("1", "2", "MT"))
++        plan = plan_harmonization(fa, gtf)
++        assert plan is not None
++        assert plan.rename_map == {"1": "chr1", "2": "chr2", "MT": "chrM"}
++
+ 
+ # ===========================================================================
+ # Part 2 — harmonize_gtf
+ # ===========================================================================
+@@ -155,44 +256,74 @@ class TestHarmonizeGtf:
+ 
+     # --- closed-loop (CRITICAL) ------------------------------------------
+ 
+     def test_closed_loop_add_chr_resolves_mismatch(self, tmp_path):
+-        """harmonize GTF (add_chr) then check_reference_consistency == [] ."""
++        """harmonize GTF (add_chr-shaped rename map) then check_reference_consistency == [] ."""
+         fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2"))
+         gtf = _write(tmp_path / "genes.gtf", _gtf("1", "2"))
+         out = tmp_path / "harmonized.gtf"
+-        harmonize_gtf(gtf, "add_chr", out)
++        harmonize_gtf(gtf, {"1": "chr1", "2": "chr2"}, out)
+         assert check_reference_consistency(fa, out) == []
+ 
+     def test_closed_loop_strip_chr_resolves_mismatch(self, tmp_path):
+-        """harmonize GTF (strip_chr) then check_reference_consistency == [] ."""
++        """harmonize GTF (strip_chr-shaped rename map) then check_reference_consistency == [] ."""
+         fa = _write(tmp_path / "ref.fa", _fasta("1", "2"))
+         gtf = _write(tmp_path / "genes.gtf", _gtf("chr1", "chr2"))
+         out = tmp_path / "harmonized.gtf"
+-        harmonize_gtf(gtf, "strip_chr", out)
++        harmonize_gtf(gtf, {"chr1": "1", "chr2": "2"}, out)
++        assert check_reference_consistency(fa, out) == []
++
++    def test_closed_loop_alias_rename_mito(self, tmp_path):
++        """A mito alias rename map ({"MT": "chrM"}) rewrites the mito line's
++        col1 to chrM — an alias rename, not a uniform chr add/strip."""
++        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chrM"))
++        gtf = _write(tmp_path / "genes.gtf", _gtf("1", "MT"))
++        out = tmp_path / "harmonized.gtf"
++        harmonize_gtf(gtf, {"1": "chr1", "MT": "chrM"}, out)
+         assert check_reference_consistency(fa, out) == []
++        result = out.read_text()
++        cols1 = {line.split("\t", 1)[0] for line in result.splitlines() if line.strip()}
++        assert cols1 == {"chr1", "chrM"}
++
++    def test_contig_not_in_map_passes_through_unchanged(self, tmp_path):
++        """A contig absent from the rename map is left unchanged in column 1."""
++        gtf_text = _gtf_row("MT") + _gtf_row("chr1")
++        gtf = _write(tmp_path / "genes.gtf", gtf_text)
++        out = tmp_path / "harmonized.gtf"
++        harmonize_gtf(gtf, {"MT": "chrM"}, out)
++        result = out.read_text()
++        cols1 = [line.split("\t", 1)[0] for line in result.splitlines() if line.strip()]
++        assert cols1 == ["chrM", "chr1"]
++
++    def test_empty_rename_map_is_pure_passthrough(self, tmp_path):
++        """An empty rename_map leaves the file contents identical."""
++        content = _gtf("1", "chr2", "MT")
++        gtf = _write(tmp_path / "genes.gtf", content)
++        out = tmp_path / "out.gtf"
++        harmonize_gtf(gtf, {}, out)
++        assert out.read_text() == content
+ 
+     # --- column fidelity -------------------------------------------------
+ 
+     def test_column_fidelity_add_chr(self, tmp_path):
+         """Only column 1 changes; everything after the first tab is byte-identical."""
+         row = '1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id "g1"\n'
+         gtf = _write(tmp_path / "in.gtf", row)
+         out = tmp_path / "out.gtf"
+-        harmonize_gtf(gtf, "add_chr", out)
++        harmonize_gtf(gtf, {"1": "chr1"}, out)
+         result = out.read_text()
+         lines = [l for l in result.splitlines(keepends=True) if l.strip() and not l.startswith("#")]
+         assert len(lines) == 1
+         col1, rest = lines[0].split("\t", 1)
+         assert col1 == "chr1"
+         assert rest == "source\tgene\t1\t100\t.\t+\t.\t" + 'gene_id "g1"\n'
+ 
+     def test_column_fidelity_strip_chr(self, tmp_path):
+-        """strip_chr: only column 1 changes."""
++        """strip_chr-shaped rename: only column 1 changes."""
+         row = 'chr2\tsource\texon\t5\t50\t.\t-\t.\tgene_id "g2"\n'
+         gtf = _write(tmp_path / "in.gtf", row)
+         out = tmp_path / "out.gtf"
+-        harmonize_gtf(gtf, "strip_chr", out)
++        harmonize_gtf(gtf, {"chr2": "2"}, out)
+         result = out.read_text()
+         lines = [l for l in result.splitlines(keepends=True) if l.strip() and not l.startswith("#")]
+         col1, rest = lines[0].split("\t", 1)
+         assert col1 == "2"
+@@ -210,9 +341,9 @@ class TestHarmonizeGtf:
+             '1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id "g1"\n'
+         )
+         gtf = _write(tmp_path / "in.gtf", content)
+         out = tmp_path / "out.gtf"
+-        harmonize_gtf(gtf, "add_chr", out)
++        harmonize_gtf(gtf, {"1": "chr1"}, out)
+         result = out.read_text()
+         assert result.startswith("# comment line\n")
+         assert "\n\n" in result
+         assert "track name=foo\n" in result
+@@ -224,18 +355,18 @@ class TestHarmonizeGtf:
+         """A \\r\\n input file stays \\r\\n."""
+         row = '1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id "g1"\r\n'
+         gtf = _write(tmp_path / "in.gtf", row)
+         out = tmp_path / "out.gtf"
+-        harmonize_gtf(gtf, "add_chr", out)
++        harmonize_gtf(gtf, {"1": "chr1"}, out)
+         raw = out.read_bytes()
+         assert b"\r\n" in raw
+ 
+     def test_lf_preserved(self, tmp_path):
+         """A \\n input file stays \\n (no \\r injected)."""
+         row = '1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id "g1"\n'
+         gtf = _write(tmp_path / "in.gtf", row)
+         out = tmp_path / "out.gtf"
+-        harmonize_gtf(gtf, "add_chr", out)
++        harmonize_gtf(gtf, {"1": "chr1"}, out)
+         raw = out.read_bytes()
+         assert b"\r\n" not in raw
+         assert b"\n" in raw
+ 
+@@ -245,9 +376,9 @@ class TestHarmonizeGtf:
+         """A .gz input → .gz output that decompresses to the harmonized text."""
+         text = _gtf("1", "2")
+         gtf = _write_gz(tmp_path / "in.gtf.gz", text)
+         out = tmp_path / "out.gtf.gz"
+-        harmonize_gtf(gtf, "add_chr", out)
++        harmonize_gtf(gtf, {"1": "chr1", "2": "chr2"}, out)
+         with gzip.open(out, "rt") as fh:
+             result = fh.read()
+         assert "chr1\t" in result
+         assert "chr2\t" in result
+@@ -255,38 +386,38 @@ class TestHarmonizeGtf:
+     def test_plain_in_plain_out(self, tmp_path):
+         """Plain input → plain output (no gzip magic bytes)."""
+         gtf = _write(tmp_path / "in.gtf", _gtf("1"))
+         out = tmp_path / "out.gtf"
+-        harmonize_gtf(gtf, "add_chr", out)
++        harmonize_gtf(gtf, {"1": "chr1"}, out)
+         raw = out.read_bytes()
+         # gzip magic bytes are 1f 8b
+         assert not raw.startswith(b"\x1f\x8b")
+ 
+-    # --- idempotence / both directions -----------------------------------
++    # --- idempotence / no-op for unmapped names ---------------------------
+ 
+     def test_add_chr_already_prefixed_is_idempotent(self, tmp_path):
+-        """add_chr on a seqname that already starts with chr leaves it unchanged."""
++        """A seqname not present as a rename_map key is left unchanged."""
+         gtf = _write(tmp_path / "in.gtf", _gtf_row("chr1"))
+         out = tmp_path / "out.gtf"
+-        harmonize_gtf(gtf, "add_chr", out)
++        harmonize_gtf(gtf, {"1": "chr1"}, out)
+         result = out.read_text()
+         col1 = result.split("\t", 1)[0]
+         assert col1 == "chr1"
+ 
+     def test_strip_chr_already_bare_is_idempotent(self, tmp_path):
+-        """strip_chr on a seqname without chr prefix leaves it unchanged."""
++        """A seqname not present as a rename_map key is left unchanged."""
+         gtf = _write(tmp_path / "in.gtf", _gtf_row("1"))
+         out = tmp_path / "out.gtf"
+-        harmonize_gtf(gtf, "strip_chr", out)
++        harmonize_gtf(gtf, {"chr1": "1"}, out)
+         result = out.read_text()
+         col1 = result.split("\t", 1)[0]
+         assert col1 == "1"
+ 
+     def test_harmonize_gtf_returns_path(self, tmp_path):
+         """harmonize_gtf returns a Path object equal to out_path."""
+         gtf = _write(tmp_path / "in.gtf", _gtf("1"))
+         out = tmp_path / "out.gtf"
+-        result = harmonize_gtf(gtf, "add_chr", out)
++        result = harmonize_gtf(gtf, {"1": "chr1"}, out)
+         assert result == out
+         assert isinstance(result, Path)
+ 
+     # --- whitespace-padded seqname (strip-parity with gtf_contigs) -----------
+@@ -299,9 +430,9 @@ class TestHarmonizeGtf:
+         gtf_text = " 1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g1\"\n"
+         gtf_text += " 2\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g2\"\n"
+         gtf = _write(tmp_path / "genes.gtf", gtf_text)
+         out = tmp_path / "harmonized.gtf"
+-        harmonize_gtf(gtf, "add_chr", out)
++        harmonize_gtf(gtf, {"1": "chr1", "2": "chr2"}, out)
+         assert check_reference_consistency(fa, out) == []
+ 
+     def test_closed_loop_strip_chr_whitespace_seqname(self, tmp_path):
+         """GTF seqname with leading whitespace (' chr1') is still harmonized
+@@ -310,6 +441,6 @@ class TestHarmonizeGtf:
+         gtf_text = " chr1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g1\"\n"
+         gtf_text += " chr2\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g2\"\n"
+         gtf = _write(tmp_path / "genes.gtf", gtf_text)
+         out = tmp_path / "harmonized.gtf"
+-        harmonize_gtf(gtf, "strip_chr", out)
++        harmonize_gtf(gtf, {"chr1": "1", "chr2": "2"}, out)
+         assert check_reference_consistency(fa, out) == []
+diff --git a/tests/test_self_heal.py b/tests/test_self_heal.py
+index a4f7676..d7ed3f2 100644
+--- a/tests/test_self_heal.py
++++ b/tests/test_self_heal.py
+@@ -412,8 +412,138 @@ def test_finalize_no_harmonized_direction_leaves_identity_unchanged(tmp_path):
+     warn_checks = [r for r in record.qc_results if r.check == "reference_harmonized"]
+     assert len(warn_checks) == 0
+ 
+ 
++# ---------------------------------------------------------------------------
++# M8: the reference_harmonized breadcrumb must enumerate still-unmatched GTF
++# contigs, mirroring exactly what cli.py's pre-flight block does: swap
++# params["gtf"] to the harmonized scratch path BEFORE calling self_heal_run.
++# ---------------------------------------------------------------------------
++
++def _write_fasta(path, names):
++    path.write_text("".join(f">{n}\ndescribeme\n" for n in names))
++
++
++def _write_gtf(path, names):
++    path.write_text(
++        "".join(f"{n}\tsrc\texon\t1\t10\t.\t+\t.\tgene_id \"g\";\n" for n in names)
++    )
++
++
++def test_finalize_receives_the_harmonized_gtf_path_in_parameters(tmp_path):
++    # This is the RED/decision test for the CRITICAL correctness question: what
++    # does record.parameters["gtf"] hold at _finalize time? cli.py (line ~497)
++    # overwrites params["gtf"] with the harmonized scratch path BEFORE calling
++    # self_heal_run, so current_params (and thus record.parameters, set by
++    # run_pipeline as `parameters=params or {}`) carries the HARMONIZED path,
++    # never the original. This licenses recomputing the unmatched set in
++    # _finalize from record.parameters directly, rather than threading a new
++    # parameter through the whole self_heal_run call chain.
++    from contig.reference_harmonize import harmonize_gtf, plan_harmonization
++
++    fasta_path = tmp_path / "ref.fa"
++    orig_gtf_path = tmp_path / "orig.gtf"
++    _write_fasta(fasta_path, ["chr1", "chr2"])
++    _write_gtf(orig_gtf_path, ["1", "2"])
++
++    hplan = plan_harmonization(str(fasta_path), str(orig_gtf_path))
++    assert hplan is not None
++    harmonized_path = tmp_path / "harmonized.gtf"
++    harmonize_gtf(str(orig_gtf_path), hplan.rename_map, harmonized_path)
++
++    def executor(cmd, trace_path):
++        _write(trace_path, TRACE_OK, "done")
++        return 0
++
++    record = _heal(
++        tmp_path,
++        executor,
++        params={"fasta": str(fasta_path), "gtf": str(harmonized_path)},
++        harmonized_reference_direction=hplan.direction,
++    )
++
++    # The GROUND TRUTH: record.parameters["gtf"] is the harmonized path we
++    # passed in as `params["gtf"]`, NOT the original gtf path.
++    assert record.parameters["gtf"] == str(harmonized_path)
++    assert record.parameters["gtf"] != str(orig_gtf_path)
++
++
++def test_finalize_harmonized_warn_message_lists_unmatched_contig(tmp_path):
++    from contig.reference_harmonize import harmonize_gtf, plan_harmonization
++
++    fasta_path = tmp_path / "ref.fa"
++    orig_gtf_path = tmp_path / "orig.gtf"
++    _write_fasta(fasta_path, ["chr1", "chr2"])
++    # "weirdcontig" has no FASTA candidate at all -> lands in hplan.unmatched.
++    _write_gtf(orig_gtf_path, ["1", "2", "weirdcontig"])
++
++    hplan = plan_harmonization(str(fasta_path), str(orig_gtf_path))
++    assert hplan is not None
++    assert hplan.unmatched == ("weirdcontig",)
++
++    harmonized_path = tmp_path / "harmonized.gtf"
++    harmonize_gtf(str(orig_gtf_path), hplan.rename_map, harmonized_path)
++
++    def executor(cmd, trace_path):
++        _write(trace_path, TRACE_OK, "done")
++        return 0
++
++    record = _heal(
++        tmp_path,
++        executor,
++        params={"fasta": str(fasta_path), "gtf": str(harmonized_path)},
++        harmonized_reference_direction=hplan.direction,
++    )
++
++    warn_checks = [r for r in record.qc_results if r.check == "reference_harmonized"]
++    assert len(warn_checks) == 1
++    message = warn_checks[0].message
++    assert "weirdcontig" in message
++    assert "could not be matched" in message
++    assert "1" in message  # "1 GTF contig(s)"
++
++    # Existing invariants must still hold.
++    assert record.reference_identity.harmonized is True
++    assert record.reference_identity.harmonized_direction == hplan.direction
++    assert record.verdict == "warn"
++
++
++def test_finalize_harmonized_warn_message_omits_clause_when_fully_matched(tmp_path):
++    from contig.reference_harmonize import harmonize_gtf, plan_harmonization
++
++    fasta_path = tmp_path / "ref.fa"
++    orig_gtf_path = tmp_path / "orig.gtf"
++    _write_fasta(fasta_path, ["chr1", "chr2"])
++    _write_gtf(orig_gtf_path, ["1", "2"])  # every contig matches -> no unmatched
++
++    hplan = plan_harmonization(str(fasta_path), str(orig_gtf_path))
++    assert hplan is not None
++    assert hplan.unmatched == ()
++
++    harmonized_path = tmp_path / "harmonized.gtf"
++    harmonize_gtf(str(orig_gtf_path), hplan.rename_map, harmonized_path)
++
++    def executor(cmd, trace_path):
++        _write(trace_path, TRACE_OK, "done")
++        return 0
++
++    record = _heal(
++        tmp_path,
++        executor,
++        params={"fasta": str(fasta_path), "gtf": str(harmonized_path)},
++        harmonized_reference_direction=hplan.direction,
++    )
++
++    warn_checks = [r for r in record.qc_results if r.check == "reference_harmonized"]
++    assert len(warn_checks) == 1
++    message = warn_checks[0].message
++    assert "could not be matched" not in message
++    assert hplan.direction in message
++
++    assert record.reference_identity.harmonized is True
++    assert record.verdict == "warn"
++
++
+ # ---------------------------------------------------------------------------
+ # Ceiling-clamp + never-shrink tests (Task 1: resource-aware-retry)
+ # ---------------------------------------------------------------------------
+ 

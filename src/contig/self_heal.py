@@ -27,6 +27,7 @@ from contig.detect import diagnose_failure
 from contig.events import parse_resource_usage_file
 from contig.models import Diagnosis, ExecutionTarget, Patch, QCResult, RepairStep, RunRecord, RunSummary
 from contig.notify import emit_event
+from contig.reference_check import fasta_contigs, gtf_contigs
 from contig.repair import propose_patches
 from contig.runner import (
     Executor,
@@ -979,6 +980,29 @@ def self_heal_run(
             attempt += 1
 
 
+def _unmatched_harmonized_contigs(params: dict[str, object]) -> list[str]:
+    """Recompute the still-unmatched GTF contigs after harmonization.
+
+    ``params["gtf"]`` at ``_finalize`` time is the HARMONIZED scratch path (the
+    CLI swaps it in before calling ``self_heal_run``, see cli.py's pre-flight
+    block): every GTF seqname with a FASTA match has already been renamed to
+    its FASTA spelling. So whatever GTF seqname remains outside the FASTA
+    contig set is exactly the set ``plan_harmonization`` recorded as
+    ``HarmonizationPlan.unmatched`` — no need to thread that plan through the
+    whole self_heal_run call chain. Degrades to `[]` (never a crash, never a
+    fabricated list) if the paths are missing/unreadable, e.g. in tests that
+    exercise the breadcrumb with fake paths.
+    """
+    fasta = params.get("fasta")
+    gtf = params.get("gtf")
+    if not fasta or not gtf:
+        return []
+    try:
+        return sorted(gtf_contigs(gtf) - fasta_contigs(fasta))
+    except OSError:
+        return []
+
+
 def _finalize(
     record: RunRecord | None,
     repair_history: list[RepairStep],
@@ -1007,15 +1031,23 @@ def _finalize(
         record.harmonized_reference_direction = harmonized_reference_direction
         record.reference_identity.harmonized = True
         record.reference_identity.harmonized_direction = harmonized_reference_direction
+        unmatched = _unmatched_harmonized_contigs(record.parameters)
+        message = (
+            f"Reference harmonized ({harmonized_reference_direction}) to match "
+            f"the FASTA before the run. "
+        )
+        if unmatched:
+            names = ", ".join(unmatched)
+            message += (
+                f"Note: {len(unmatched)} GTF contig(s) could not be matched to "
+                f"the FASTA and were left as-is: {names}. "
+            )
+        message += "Confirm the reference was correct."
         record.qc_results.append(QCResult(
             kind="structural",
             check="reference_harmonized",
             status="warn",
-            message=(
-                f"Reference GTF seqnames were harmonized "
-                f"({harmonized_reference_direction}) to match the FASTA before the run. "
-                f"Confirm the reference was correct."
-            ),
+            message=message,
         ))
     trace_path = Path(run_dir) / "trace.txt"
     if trace_path.exists():

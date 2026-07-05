@@ -1,0 +1,535 @@
+=== COMMITS ===
+5327ce0 feat(cli): drive alias harmonization from the plan, not the disjoint detector
+
+=== STAT ===
+ .../alias-map/task-4-report.md                     | 152 +++++++++++++++++++++
+ src/contig/cli.py                                  | 122 ++++++++++-------
+ tests/test_cli.py                                  |  95 +++++++++++++
+ 3 files changed, 316 insertions(+), 53 deletions(-)
+
+=== DIFF ===
+diff --git a/docs/planning/contig-alias-harmonization/alias-map/task-4-report.md b/docs/planning/contig-alias-harmonization/alias-map/task-4-report.md
+new file mode 100644
+index 0000000..a74e5d1
+--- /dev/null
++++ b/docs/planning/contig-alias-harmonization/alias-map/task-4-report.md
+@@ -0,0 +1,152 @@
++# Task 4 report: drive the harmonization pre-flight from the plan, not the disjoint detector (Phase 4)
++
++## The bug this phase kills
++
++`check_reference_consistency` (`reference_check.py`) only flags a **fully
++disjoint** FASTA/GTF pair (`fasta & gtf == set()`). It returns `[]` (no
++problems) the moment the two share even one contig name. The old pre-flight
++in `_dispatch_run` gated the whole harmonize attempt behind `if problems:`,
++so a pair whose autosomes already match — FASTA `chr1,chr2,chrM` vs GTF
++`chr1,chr2,MT` — was never even offered to `plan_harmonization`. `problems`
++is `[]` (autosomes overlap), so the mito seqname (`MT` vs `chrM`) silently
++stayed mismatched and Nextflow would run with a partially-broken reference.
++This is the residual-mito case named in the brief.
++
++## Control-flow restructure (`src/contig/cli.py`, in `_dispatch_run`)
++
++Old shape (trigger = `problems`):
++
++```python
++if "fasta" in params and "gtf" in params:
++    problems = check_reference_consistency(params["fasta"], params["gtf"])
++    if problems:
++        hplan = plan_harmonization(params["fasta"], params["gtf"])
++        if hplan is not None:
++            ... harmonize ...
++        if hplan is None:
++            ... refuse/allow using `problems` ...
++```
++
++New shape (trigger = `hplan`):
++
++```python
++if "fasta" in params and "gtf" in params:
++    problems = check_reference_consistency(params["fasta"], params["gtf"])
++    hplan = plan_harmonization(params["fasta"], params["gtf"])   # <- always computed
++    if hplan is not None:
++        ... harmonize + strengthened post-check (below) ...
++        # on post-check failure: hplan = None (fall through)
++    if hplan is None and problems:
++        ... refuse/allow using `problems`, unchanged ...
++```
++
++`plan_harmonization` is now called unconditionally (not nested inside
++`if problems:`), so the residual-mito case — `problems == []` but
++`hplan is not None` — reaches the harmonize branch. The refuse/allow branch
++is now gated on `hplan is None and problems`, so it still only fires for a
++genuinely non-harmonizable, disjoint pair (e.g. the `scaffold_*` fixture),
++exactly as before.
++
++## Strengthened post-condition guard
++
++The old post-check re-ran `check_reference_consistency` on the harmonized
++file, which — for the same reason as above — cannot detect a no-op
++harmonization when the pair already shared some contigs. Replaced with a
++direct **overlap-increase** comparison:
++
++```python
++orig_overlap = len(fasta_contigs(params["fasta"]) & gtf_contigs(params["gtf"]))
++post_overlap = len(fasta_contigs(params["fasta"]) & gtf_contigs(str(harmonized_path.resolve())))
++if post_overlap > orig_overlap:
++    # proceed with the harmonized file
++else:
++    # revert: discard scratch, hplan = None, fall through to refuse/allow
++```
++
++`fasta_contigs`/`gtf_contigs` are imported from `reference_check` (added to
++the existing `from contig.reference_check import ...` line alongside
++`check_reference_consistency`). Everything else in the harmonize branch
++(scratch path `<runs_dir>/<run_id>/harmonized/<name>`, the "harmonized"
++echo, `harmonized_direction = hplan.direction`, swapping `params["gtf"]` to
++the harmonized path, never calling `typer.Exit` on success, the revert echo
++on failure) is unchanged from Phase 3/pre-Phase-4.
++
++`--allow-reference-mismatch` semantics are unchanged: harmonize is always
++attempted first regardless of the flag; the flag only changes what happens
++in the `hplan is None and problems` refuse/allow branch. Reproduce/rerun
++paths (`launch.json` stores the ORIGINAL gtf, `harmonized_reference =
++bool(harmonized_direction)`) were not touched.
++
++## Tests added (`tests/test_cli.py`)
++
++Two new fixtures:
++- `_write_ucsc_ensembl_reference` — FASTA `chr1,chr2,chrM` / GTF `1,2,MT`,
++  fully disjoint (`check_reference_consistency` flags it) but harmonizable
++  via chr-prefix + the mito alias table.
++- `_write_residual_mito_reference` — FASTA `chr1,chr2,chrM` / GTF
++  `chr1,chr2,MT`; autosomes already share names so
++  `check_reference_consistency` returns `[]`, but the mito seqname is still
++  mismatched.
++
++New tests:
++- `test_run_ucsc_ensembl_reference_harmonizes_and_proceeds` — exit 0,
++  "harmonized" in stderr, `harmonized_reference is True`, harmonized dir
++  populated, `run_record.json` written.
++- `test_run_residual_mito_reference_harmonizes_and_proceeds` — the case that
++  proves the fix. Asserts `check_reference_consistency(fasta, gtf) == []`
++  up front (proving the old gate would never have fired), then asserts the
++  run exits 0, `harmonized_reference is True`, and reads the actual
++  harmonized GTF file off disk to confirm the mito line changed from
++  `MT\tsource\tgene\t...` (before) to `chrM\tsource\tgene\t...` (after), and
++  that no `MT\tsource\tgene` line remains.
++
++Existing tests reconciled/left as-is:
++- `test_run_refuses_disjoint_reference_without_launching` and
++  `test_run_allow_reference_mismatch_proceeds_and_persists_flag`
++  (genuinely-disjoint `scaffold_*` fixture) — unchanged, still green: for
++  that fixture `plan_harmonization` returns `None` (no candidate rename
++  yields overlap), so `hplan is None and problems` still gates the
++  refuse/allow path exactly as before.
++- `test_run_chr_asymmetric_harmonizes_and_proceeds` and
++  `test_run_chr_asymmetric_with_allow_flag_still_harmonizes` — unchanged,
++  still green.
++- `test_run_harmonize_post_check_fails_refuses` — **not modified**. Its
++  `broken_harmonize` stub copies the ORIGINAL (unmodified) GTF content to
++  `out_path`, so under the new overlap-based guard: `orig_overlap == 0`
++  (the `_write_disjoint_reference` fixture is fully disjoint) and
++  `post_overlap == 0` (the "harmonized" file has the same unrenamed
++  seqnames). `post_overlap > orig_overlap` is `False`, so the guard still
++  triggers exactly as intended — the test's assertions (non-zero exit,
++  "mismatch" in output, `harmonized_reference` not persisted as `True`)
++  hold unchanged. The test's intent (a harmonization attempt that doesn't
++  actually resolve the mismatch must not silently proceed) is preserved by
++  construction, not by adjusting the test.
++
++## TDD evidence
++
++RED (new tests added against the pre-restructure `if problems:` gate,
++confirmed failing before the `cli.py` edit — the residual-mito test in
++particular exits non-zero-or-proceeds-without-harmonizing since the old gate
++never calls `plan_harmonization` when `problems == []`):
++
++```
++FAILED tests/test_cli.py::test_run_residual_mito_reference_harmonizes_and_proceeds
++```
++
++GREEN after the restructure:
++
++```
++$ uv run pytest tests/test_cli.py
++130 passed in 3.46s
++
++$ uv run pytest
++1121 passed, 1 skipped in 10.87s
++```
++(was 1119 passed, 1 skipped before this task; +2 net new tests)
++
++## Files touched
++
++- `src/contig/cli.py` — pre-flight restructure in `_dispatch_run`; added
++  `fasta_contigs, gtf_contigs` to the `reference_check` import.
++- `tests/test_cli.py` — added `check_reference_consistency` import, two new
++  fixtures, two new tests.
+diff --git a/src/contig/cli.py b/src/contig/cli.py
+index 1402e1e..c13ddc6 100644
+--- a/src/contig/cli.py
++++ b/src/contig/cli.py
+@@ -51,29 +51,29 @@ from contig.holdout import (
+     save_baseline,
+ )
+ from contig.bundle import compute_output_checksums
+ from contig.cost import cost_report
+ from contig.signing import generate_keypair, signing_available, verify_signature
+ from contig.estimate import estimate_run
+ from contig.methods import render_methods
+ from contig.provenance import to_rocrate
+ from contig.models import ExecutionTarget, LaunchManifest, RunRecord, RunSummary, sha256_file
+ from contig.nfconfig import ConfigGenerationError, preflight_aws_batch, preflight_slurm
+ from contig.planner import PlanningError
+ from contig.planner import plan as build_plan
+ from contig.progress import read_progress, render_progress
+ from contig.reference import ReferenceError, resolve_reference
+-from contig.reference_check import check_reference_consistency
++from contig.reference_check import check_reference_consistency, fasta_contigs, gtf_contigs
+ from contig.reference_harmonize import harmonize_gtf, plan_harmonization
+ from contig.registry import UnknownAssayError, assay_for_pipeline, select_pipeline
+ from contig.report import render_explain, render_run_report, render_run_report_html
+ from contig.verification.concordance import evaluate_concordance
+ from contig.verification.count_concordance import (
+     _COUNT_MATRIX_GLOB,
+     evaluate_count_concordance,
+ )
+ from contig.verification.second_caller import (
+     SecondCallerError,
+     run_bcftools_caller,
+ )
+ from contig.verification.structural import manifest_for
+ from contig.runner import PipelineExecutionError, default_executor, default_index_builder
+@@ -441,83 +441,99 @@ def _dispatch_run(
+                 raise typer.Exit(code=1)
+             try:
+                 params.update(resolve_reference(genome=genome, fasta=fasta, gtf=gtf))
+             except ReferenceError as exc:
+                 typer.echo(f"Reference error: {exc}", err=True)
+                 raise typer.Exit(code=1)
+             # Pre-flight the explicit reference: a FASTA/GTF pair whose contig
+             # naming is disjoint (e.g. FASTA 'chr1' vs GTF '1') silently yields an
+             # empty count matrix. If a safe chr-prefix transform can resolve the
+             # mismatch, harmonize the GTF and proceed. Only refuse (or bypass with
+             # --allow-reference-mismatch) for a genuinely non-harmonizable pair.
+             # iGenomes (--genome) has no fasta/gtf here, so it is skipped.
+             if "fasta" in params and "gtf" in params:
+                 problems = check_reference_consistency(params["fasta"], params["gtf"])
+-                if problems:
+-                    hplan = plan_harmonization(params["fasta"], params["gtf"])
+-                    if hplan is not None:
+-                        # Safe chr-prefix harmonization: rewrite the GTF and proceed.
+-                        # Harmonize-first even when --allow-reference-mismatch is set —
+-                        # harmonizing is strictly safer than running against a mismatch.
+-                        harmonized_path = (
+-                            Path(runs_dir) / run_id / "harmonized" / Path(params["gtf"]).name
++                # Drive harmonization off the PLAN, not off the disjoint-only
++                # detector: `problems` is empty whenever FASTA/GTF share ANY
++                # contig at all, even when only a residual case (e.g. mito
++                # chrM/MT) still needs resolving and the autosomes already
++                # overlap. `plan_harmonization` is the one that knows whether
++                # applying a rename map would strictly improve the overlap, so
++                # it — not `problems` — is what gates the harmonize attempt.
++                hplan = plan_harmonization(params["fasta"], params["gtf"])
++                if hplan is not None:
++                    # Safe chr-prefix / alias-table harmonization: rewrite the
++                    # GTF and proceed. Harmonize-first even when
++                    # --allow-reference-mismatch is set — harmonizing is
++                    # strictly safer than running against a mismatch.
++                    harmonized_path = (
++                        Path(runs_dir) / run_id / "harmonized" / Path(params["gtf"]).name
++                    )
++                    harmonized_path.parent.mkdir(parents=True, exist_ok=True)
++                    harmonize_gtf(params["gtf"], hplan.rename_map, harmonized_path)
++                    # POST-CONDITION GUARD: confirm the rewrite actually improved
++                    # the FASTA/GTF name overlap. `check_reference_consistency`
++                    # alone cannot detect this — it only flags a fully DISJOINT
++                    # pair, so it would pass (no problems) even if harmonization
++                    # silently no-op'd on a pair that already shared some
++                    # contigs (the residual-mito case). Compare overlap counts
++                    # directly instead: never proceed believing harmonization
++                    # worked when it actually didn't ("never manufacture a
++                    # silent wrong result").
++                    orig_overlap = len(
++                        fasta_contigs(params["fasta"]) & gtf_contigs(params["gtf"])
++                    )
++                    post_overlap = len(
++                        fasta_contigs(params["fasta"])
++                        & gtf_contigs(str(harmonized_path.resolve()))
++                    )
++                    if post_overlap > orig_overlap:
++                        # Overlap improved — proceed with the harmonized file.
++                        typer.echo(
++                            f"⚙ Reference harmonized: GTF seqnames {hplan.direction} "
++                            f"to match the FASTA. Proceeding.",
++                            err=True,
+                         )
+-                        harmonized_path.parent.mkdir(parents=True, exist_ok=True)
+-                        harmonize_gtf(params["gtf"], hplan.rename_map, harmonized_path)
+-                        # POST-CONDITION GUARD: re-verify the harmonized file actually
+-                        # resolved the mismatch.  Should never trigger for valid inputs,
+-                        # but guarantees the engine never proceeds believing it harmonized
+-                        # when it actually didn't ("never manufacture a silent wrong result").
+-                        post_problems = check_reference_consistency(
+-                            params["fasta"], str(harmonized_path.resolve())
++                        harmonized_direction = hplan.direction
++                        params["gtf"] = str(harmonized_path.resolve())
++                        # DO NOT Exit — proceed with the harmonized file.
++                    else:
++                        # Guard triggered: harmonization did NOT resolve the mismatch.
++                        # Discard the scratch file and fall through to the refuse/allow
++                        # path with the ORIGINAL problems and GTF.
++                        typer.echo(
++                            "⚠ Harmonization was attempted but did not resolve the "
++                            "reference mismatch; reverting to the original GTF.",
++                            err=True,
+                         )
+-                        if not post_problems:
+-                            # Mismatch resolved — proceed with the harmonized file.
+-                            typer.echo(
+-                                f"⚙ Reference harmonized: GTF seqnames {hplan.direction} "
+-                                f"to match the FASTA. Proceeding.",
+-                                err=True,
+-                            )
+-                            harmonized_direction = hplan.direction
+-                            params["gtf"] = str(harmonized_path.resolve())
+-                            # DO NOT Exit — proceed with the harmonized file.
+-                        else:
+-                            # Guard triggered: harmonization did NOT resolve the mismatch.
+-                            # Discard the scratch file and fall through to the refuse/allow
+-                            # path with the ORIGINAL problems and GTF.
+-                            typer.echo(
+-                                "⚠ Harmonization was attempted but did not resolve the "
+-                                "reference mismatch; reverting to the original GTF.",
+-                                err=True,
+-                            )
+-                            hplan = None  # signal fall-through to the refuse/allow path
+-                    if hplan is None:
+-                        # Genuine wrong-assembly (non-harmonizable, or guard triggered):
+-                        # keep existing behavior.
+-                        prefix = (
+-                            "⚠ Reference mismatch (proceeding, --allow-reference-mismatch):"
+-                            if allow_reference_mismatch
+-                            else "Reference mismatch:"
++                        hplan = None  # signal fall-through to the refuse/allow path
++                if hplan is None and problems:
++                    # Genuine wrong-assembly (non-harmonizable, or guard triggered):
++                    # keep existing behavior.
++                    prefix = (
++                        "⚠ Reference mismatch (proceeding, --allow-reference-mismatch):"
++                        if allow_reference_mismatch
++                        else "Reference mismatch:"
++                    )
++                    typer.echo(prefix, err=True)
++                    for problem in problems:
++                        typer.echo(f"  - {problem}", err=True)
++                    if not allow_reference_mismatch:
++                        typer.echo(
++                            "  Pass --allow-reference-mismatch to override if this is intentional.",
++                            err=True,
+                         )
+-                        typer.echo(prefix, err=True)
+-                        for problem in problems:
+-                            typer.echo(f"  - {problem}", err=True)
+-                        if not allow_reference_mismatch:
+-                            typer.echo(
+-                                "  Pass --allow-reference-mismatch to override if this is intentional.",
+-                                err=True,
+-                            )
+-                            raise typer.Exit(code=1)
++                        raise typer.Exit(code=1)
+             # Absolutize the sheet: Nextflow runs with cwd=run_dir, so a relative
+             # --input would fail nf-core's "file does not exist" validation.
+             params["input"] = str(Path(input).resolve())
+             input_paths = [input, *fastq_paths(input)]
+         # nf-core always requires --outdir; default it under the run dir. Absolute
+         # so Nextflow (which runs in the run dir) writes to the right place.
+         outdir_path = Path(outdir) if outdir else Path(runs_dir) / run_id / "results"
+         params["outdir"] = str(outdir_path.resolve())
+     selected_profiles = profiles or ("docker" if input else "test,docker")
+ 
+     # Merge the resolved assay's declarative default_params into `params` BEFORE the
+     # manifest is written and the run starts, so e.g. somatic sarek picks up
+     # `--tools strelka,mutect2`. User-supplied params are never overridden. Reproduce
+     # is faithful because the assay persists in launch.json and this re-injects on
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index 9ed9e66..cefa2f5 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -1,22 +1,23 @@
+ import json
+ from pathlib import Path
+ 
+ from typer.testing import CliRunner
+ 
+ from contig.bundle import load_bundle, write_bundle
+ from contig.cli import app
+ from contig.models import ExecutionTarget, QCResult, RunRecord, TaskEvent, TaskResource
++from contig.reference_check import check_reference_consistency
+ 
+ 
+ def _make_sheet(tmp_path, *, valid=True):
+     (tmp_path / "s1_R1.fastq.gz").write_bytes(b"\x1f\x8bR1")
+     (tmp_path / "s1_R2.fastq.gz").write_bytes(b"\x1f\x8bR2")
+     sheet = tmp_path / "samplesheet.csv"
+     r1 = "s1_R1.fastq.gz" if valid else "missing_R1.fastq.gz"
+     sheet.write_text(f"sample,fastq_1,fastq_2,strandedness\nS1,{r1},s1_R2.fastq.gz,auto\n")
+     return sheet
+ 
+ runner = CliRunner()
+ 
+ GOOD_MQC = (
+     '{"report_general_stats_data":[{'
+@@ -597,28 +598,65 @@ def _write_wrong_assembly_reference(tmp_path):
+ 
+     Adding 'chr' to the GTF seqnames yields chr_scaffold_{1,2} which does not
+     intersect {chr1,chr2}, so plan_harmonization returns None (non-harmonizable).
+     """
+     fasta = tmp_path / "ref.fa"
+     fasta.write_text(">chr1\nACGT\n>chr2\nTTTT\n")
+     gtf = tmp_path / "ref.gtf"
+     gtf.write_text(
+         "scaffold_1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g1\"\n"
+         "scaffold_2\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g2\"\n"
+     )
+     return fasta, gtf
+ 
+ 
++def _write_ucsc_ensembl_reference(tmp_path):
++    """FASTA (chr1,chr2,chrM) / GTF (1,2,MT) — UCSC FASTA vs Ensembl GTF.
++
++    Fully disjoint (no shared contig at all: check_reference_consistency
++    flags it), but harmonizable via chr-prefix + the mito alias table.
++    """
++    fasta = tmp_path / "ref.fa"
++    fasta.write_text(">chr1\nACGT\n>chr2\nTTTT\n>chrM\nGGGG\n")
++    gtf = tmp_path / "ref.gtf"
++    gtf.write_text(
++        "1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g1\"\n"
++        "2\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g2\"\n"
++        "MT\tsource\tgene\t1\t50\t.\t+\t.\tgene_id \"g3\"\n"
++    )
++    return fasta, gtf
++
++
++def _write_residual_mito_reference(tmp_path):
++    """FASTA (chr1,chr2,chrM) / GTF (chr1,chr2,MT) — autosomes already match.
++
++    check_reference_consistency sees the shared chr1/chr2 contigs and reports
++    NO problems (fasta & gtf is non-empty), yet the mito seqname is still
++    mismatched (chrM vs MT). This is the residual case that must still
++    harmonize even though `problems == []` — the silent bug this feature
++    kills.
++    """
++    fasta = tmp_path / "ref.fa"
++    fasta.write_text(">chr1\nACGT\n>chr2\nTTTT\n>chrM\nGGGG\n")
++    gtf = tmp_path / "ref.gtf"
++    gtf.write_text(
++        "chr1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g1\"\n"
++        "chr2\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g2\"\n"
++        "MT\tsource\tgene\t1\t50\t.\t+\t.\tgene_id \"g3\"\n"
++    )
++    return fasta, gtf
++
++
+ def _write_overlapping_reference(tmp_path):
+     """A FASTA (chr1,chr2) / GTF (chr1) pair that shares a contig (legitimate)."""
+     fasta = tmp_path / "ref.fa"
+     fasta.write_text(">chr1\nACGT\n>chr2\nTTTT\n")
+     gtf = tmp_path / "ref.gtf"
+     gtf.write_text("chr1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g1\"\n")
+     return fasta, gtf
+ 
+ 
+ def test_run_refuses_disjoint_reference_without_launching(tmp_path, monkeypatch):
+     # A genuine wrong-assembly pair (non-harmonizable: adding 'chr' to scaffold
+     # names doesn't match the FASTA) is refused at pre-flight: non-zero exit, the
+     # mismatch named, no launch.json written, and the self-heal loop never entered.
+     sheet = _make_sheet(tmp_path)
+@@ -737,28 +775,85 @@ def test_run_chr_asymmetric_with_allow_flag_still_harmonizes(tmp_path, monkeypat
+         app,
+         ["run", "--run-id", "harmflag", "--runs-dir", str(tmp_path / "runs"),
+          "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf),
+          "--allow-reference-mismatch"],
+     )
+     assert result.exit_code == 0
+     manifest = json.loads((tmp_path / "runs" / "harmflag" / "launch.json").read_text())
+     assert manifest["harmonized_reference"] is True
+     assert manifest["allow_reference_mismatch"] is True
+     assert manifest["gtf"] == str(gtf)  # ORIGINAL path
+     harmonized_dir = tmp_path / "runs" / "harmflag" / "harmonized"
+     assert harmonized_dir.exists() and any(harmonized_dir.iterdir())
+ 
+ 
++def test_run_ucsc_ensembl_reference_harmonizes_and_proceeds(tmp_path, monkeypatch):
++    # A UCSC FASTA (chr1,chr2,chrM) vs Ensembl GTF (1,2,MT) pair is fully
++    # disjoint (no shared contig), but harmonizable via chr-prefix + the mito
++    # alias table. The run must NOT exit(1): it harmonizes and proceeds.
++    sheet = _make_sheet(tmp_path)
++    fasta, gtf = _write_ucsc_ensembl_reference(tmp_path)
++    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
++    result = runner.invoke(
++        app,
++        ["run", "--run-id", "ucsce", "--runs-dir", str(tmp_path / "runs"),
++         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf)],
++    )
++    assert result.exit_code == 0, f"Expected 0, got {result.exit_code}: {result.output}"
++    assert "harmonized" in result.output.lower()
++    manifest = json.loads((tmp_path / "runs" / "ucsce" / "launch.json").read_text())
++    assert manifest["harmonized_reference"] is True
++    assert manifest["gtf"] == str(gtf)  # ORIGINAL path
++    harmonized_dir = tmp_path / "runs" / "ucsce" / "harmonized"
++    assert harmonized_dir.exists() and any(harmonized_dir.iterdir())
++    assert (tmp_path / "runs" / "ucsce" / "run_record.json").exists()
++
++
++def test_run_residual_mito_reference_harmonizes_and_proceeds(tmp_path, monkeypatch):
++    # THE SILENT BUG THIS FEATURE KILLS: a FASTA/GTF pair whose autosomes
++    # already match (chr1,chr2 shared) but whose mito seqname is still
++    # mismatched (FASTA chrM vs GTF MT). check_reference_consistency reports
++    # NO problems here (fasta & gtf is non-empty), so the OLD `if problems:`
++    # gate never harmonized this case. The plan-driven gate must still
++    # harmonize it: the run proceeds, and the harmonized GTF's mito line is
++    # rewritten from MT to chrM.
++    sheet = _make_sheet(tmp_path)
++    fasta, gtf = _write_residual_mito_reference(tmp_path)
++    # Sanity: confirm the disjoint-only detector sees no problem at all — this
++    # is what proves the residual case was previously silent.
++    assert check_reference_consistency(str(fasta), str(gtf)) == []
++    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
++    result = runner.invoke(
++        app,
++        ["run", "--run-id", "resmito", "--runs-dir", str(tmp_path / "runs"),
++         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf)],
++    )
++    assert result.exit_code == 0, f"Expected 0, got {result.exit_code}: {result.output}"
++    assert "harmonized" in result.output.lower()
++    manifest = json.loads((tmp_path / "runs" / "resmito" / "launch.json").read_text())
++    assert manifest["harmonized_reference"] is True
++    assert manifest["gtf"] == str(gtf)  # ORIGINAL path unchanged in the manifest
++    harmonized_dir = tmp_path / "runs" / "resmito" / "harmonized"
++    assert harmonized_dir.exists()
++    harmonized_files = list(harmonized_dir.iterdir())
++    assert harmonized_files
++    harmonized_text = harmonized_files[0].read_text()
++    # Prove the GTF was actually rewritten: the mito line now reads chrM, not MT.
++    assert "chrM\tsource\tgene" in harmonized_text
++    assert "MT\tsource\tgene" not in harmonized_text
++    assert (tmp_path / "runs" / "resmito" / "run_record.json").exists()
++
++
+ def test_rerun_from_harmonized_manifest_re_derives_harmonization(tmp_path, monkeypatch):
+     # rerun from a manifest with harmonized_reference=True re-enters _dispatch_run
+     # with the ORIGINAL gtf paths and re-derives the harmonization (reproduce =
+     # reproduce the decision). The reproduced run also harmonizes.
+     sheet = _make_sheet(tmp_path)
+     fasta, gtf = _write_disjoint_reference(tmp_path)
+     monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+     runner.invoke(
+         app,
+         ["run", "--run-id", "orighrm", "--runs-dir", str(tmp_path / "runs"),
+          "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf)],
+     )
+     orig_manifest = json.loads(
+         (tmp_path / "runs" / "orighrm" / "launch.json").read_text()

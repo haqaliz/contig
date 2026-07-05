@@ -145,6 +145,107 @@ class TestPlanHarmonization:
         with pytest.raises((AttributeError, TypeError)):
             plan.direction = "strip_chr"  # type: ignore[misc]
 
+    # --- alias-aware rename map (Phase 2) -----------------------------------
+
+    def test_ucsc_ensembl_full_alias_and_prefix_mix(self, tmp_path):
+        """FASTA UCSC {chr1,chr2,chrM} vs GTF Ensembl {1,2,MT}: mixed
+        prefix + mito-alias renames; direction is 'alias' since not every
+        rename follows a single uniform pattern."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2", "chrM"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("1", "2", "MT"))
+        plan = plan_harmonization(fa, gtf)
+        assert plan is not None
+        assert plan.rename_map == {"1": "chr1", "2": "chr2", "MT": "chrM"}
+        assert plan.direction == "alias"
+        assert plan.unmatched == ()
+
+    def test_residual_mito_only_rename(self, tmp_path):
+        """Autosomes already match; only the mitochondrion needs renaming."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2", "chrM"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("chr1", "chr2", "MT"))
+        plan = plan_harmonization(fa, gtf)
+        assert plan is not None
+        assert plan.rename_map == {"MT": "chrM"}
+
+    def test_pure_alias_both_chr_prefixed(self, tmp_path):
+        """Both sides chr-prefixed but mito spelled differently: chrMT -> chrM."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chrM"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("chr1", "chrMT"))
+        plan = plan_harmonization(fa, gtf)
+        assert plan is not None
+        assert plan.rename_map == {"chrMT": "chrM"}
+
+    def test_hybrid_fasta_lookup_wins(self, tmp_path):
+        """FASTA itself uses the hybrid spelling chrMT: GTF bare MT resolves
+        against the actual FASTA set, not a fixed convention."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chrMT"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("chr1", "MT"))
+        plan = plan_harmonization(fa, gtf)
+        assert plan is not None
+        assert plan.rename_map == {"MT": "chrMT"}
+
+    def test_pure_prefix_add_still_labeled_add_chr(self, tmp_path):
+        """Uniform add_chr rename set keeps the legacy 'add_chr' label."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("1", "2"))
+        plan = plan_harmonization(fa, gtf)
+        assert plan is not None
+        assert plan.rename_map == {"1": "chr1", "2": "chr2"}
+        assert plan.direction == "add_chr"
+
+    def test_pure_prefix_strip_still_labeled_strip_chr(self, tmp_path):
+        """Uniform strip_chr rename set keeps the legacy 'strip_chr' label."""
+        fa = _write(tmp_path / "ref.fa", _fasta("1", "2"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("chr1", "chr2"))
+        plan = plan_harmonization(fa, gtf)
+        assert plan is not None
+        assert plan.direction == "strip_chr"
+
+    def test_unmatched_contig_enumerated_rest_still_harmonized(self, tmp_path):
+        """A contig with no FASTA candidate lands in unmatched; the rest of
+        the GTF is still harmonized."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2", "chrM"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("1", "2", "MT", "weirdcontig"))
+        plan = plan_harmonization(fa, gtf)
+        assert plan is not None
+        assert plan.unmatched == ("weirdcontig",)
+        assert plan.rename_map == {"1": "chr1", "2": "chr2", "MT": "chrM"}
+
+    def test_wrong_assembly_no_candidates_refuses(self, tmp_path):
+        """No GTF contig has any FASTA candidate at all → refuse (None)."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("scaffold_1", "scaffold_2"))
+        assert plan_harmonization(fa, gtf) is None
+
+    # --- injectivity guard (refuse-on-ambiguity, no silent contig merge) ---
+
+    def test_colliding_targets_refuse(self, tmp_path):
+        """FASTA {chrM,chr1} + GTF {M,MT}: both M and MT resolve to the same
+        FASTA target chrM. Applying that rename map would silently merge two
+        distinct GTF seqnames onto one contig, so plan_harmonization must
+        refuse rather than hand back an ambiguous map."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chrM", "chr1"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("M", "MT"))
+        assert plan_harmonization(fa, gtf) is None
+
+    def test_renamed_collides_with_staying_contig_refuses(self, tmp_path):
+        """FASTA {chr1} + GTF {1,chr1}: renaming '1' -> 'chr1' collides with
+        the GTF's own already-matching 'chr1' seqname. Two distinct source
+        seqnames would land on the same target → refuse."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chr1"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("1", "chr1"))
+        assert plan_harmonization(fa, gtf) is None
+
+    def test_distinct_targets_still_harmonize(self, tmp_path):
+        """Positive control: a normal UCSC/Ensembl mix where every renamed
+        target is distinct must still produce a valid plan (the injectivity
+        guard must not over-refuse ordinary harmonizable input)."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2", "chrM"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("1", "2", "MT"))
+        plan = plan_harmonization(fa, gtf)
+        assert plan is not None
+        assert plan.rename_map == {"1": "chr1", "2": "chr2", "MT": "chrM"}
+
 
 # ===========================================================================
 # Part 2 — harmonize_gtf
@@ -156,20 +257,50 @@ class TestHarmonizeGtf:
     # --- closed-loop (CRITICAL) ------------------------------------------
 
     def test_closed_loop_add_chr_resolves_mismatch(self, tmp_path):
-        """harmonize GTF (add_chr) then check_reference_consistency == [] ."""
+        """harmonize GTF (add_chr-shaped rename map) then check_reference_consistency == [] ."""
         fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2"))
         gtf = _write(tmp_path / "genes.gtf", _gtf("1", "2"))
         out = tmp_path / "harmonized.gtf"
-        harmonize_gtf(gtf, "add_chr", out)
+        harmonize_gtf(gtf, {"1": "chr1", "2": "chr2"}, out)
         assert check_reference_consistency(fa, out) == []
 
     def test_closed_loop_strip_chr_resolves_mismatch(self, tmp_path):
-        """harmonize GTF (strip_chr) then check_reference_consistency == [] ."""
+        """harmonize GTF (strip_chr-shaped rename map) then check_reference_consistency == [] ."""
         fa = _write(tmp_path / "ref.fa", _fasta("1", "2"))
         gtf = _write(tmp_path / "genes.gtf", _gtf("chr1", "chr2"))
         out = tmp_path / "harmonized.gtf"
-        harmonize_gtf(gtf, "strip_chr", out)
+        harmonize_gtf(gtf, {"chr1": "1", "chr2": "2"}, out)
         assert check_reference_consistency(fa, out) == []
+
+    def test_closed_loop_alias_rename_mito(self, tmp_path):
+        """A mito alias rename map ({"MT": "chrM"}) rewrites the mito line's
+        col1 to chrM — an alias rename, not a uniform chr add/strip."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chrM"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("1", "MT"))
+        out = tmp_path / "harmonized.gtf"
+        harmonize_gtf(gtf, {"1": "chr1", "MT": "chrM"}, out)
+        assert check_reference_consistency(fa, out) == []
+        result = out.read_text()
+        cols1 = {line.split("\t", 1)[0] for line in result.splitlines() if line.strip()}
+        assert cols1 == {"chr1", "chrM"}
+
+    def test_contig_not_in_map_passes_through_unchanged(self, tmp_path):
+        """A contig absent from the rename map is left unchanged in column 1."""
+        gtf_text = _gtf_row("MT") + _gtf_row("chr1")
+        gtf = _write(tmp_path / "genes.gtf", gtf_text)
+        out = tmp_path / "harmonized.gtf"
+        harmonize_gtf(gtf, {"MT": "chrM"}, out)
+        result = out.read_text()
+        cols1 = [line.split("\t", 1)[0] for line in result.splitlines() if line.strip()]
+        assert cols1 == ["chrM", "chr1"]
+
+    def test_empty_rename_map_is_pure_passthrough(self, tmp_path):
+        """An empty rename_map leaves the file contents identical."""
+        content = _gtf("1", "chr2", "MT")
+        gtf = _write(tmp_path / "genes.gtf", content)
+        out = tmp_path / "out.gtf"
+        harmonize_gtf(gtf, {}, out)
+        assert out.read_text() == content
 
     # --- column fidelity -------------------------------------------------
 
@@ -178,7 +309,7 @@ class TestHarmonizeGtf:
         row = '1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id "g1"\n'
         gtf = _write(tmp_path / "in.gtf", row)
         out = tmp_path / "out.gtf"
-        harmonize_gtf(gtf, "add_chr", out)
+        harmonize_gtf(gtf, {"1": "chr1"}, out)
         result = out.read_text()
         lines = [l for l in result.splitlines(keepends=True) if l.strip() and not l.startswith("#")]
         assert len(lines) == 1
@@ -187,11 +318,11 @@ class TestHarmonizeGtf:
         assert rest == "source\tgene\t1\t100\t.\t+\t.\t" + 'gene_id "g1"\n'
 
     def test_column_fidelity_strip_chr(self, tmp_path):
-        """strip_chr: only column 1 changes."""
+        """strip_chr-shaped rename: only column 1 changes."""
         row = 'chr2\tsource\texon\t5\t50\t.\t-\t.\tgene_id "g2"\n'
         gtf = _write(tmp_path / "in.gtf", row)
         out = tmp_path / "out.gtf"
-        harmonize_gtf(gtf, "strip_chr", out)
+        harmonize_gtf(gtf, {"chr2": "2"}, out)
         result = out.read_text()
         lines = [l for l in result.splitlines(keepends=True) if l.strip() and not l.startswith("#")]
         col1, rest = lines[0].split("\t", 1)
@@ -211,7 +342,7 @@ class TestHarmonizeGtf:
         )
         gtf = _write(tmp_path / "in.gtf", content)
         out = tmp_path / "out.gtf"
-        harmonize_gtf(gtf, "add_chr", out)
+        harmonize_gtf(gtf, {"1": "chr1"}, out)
         result = out.read_text()
         assert result.startswith("# comment line\n")
         assert "\n\n" in result
@@ -225,7 +356,7 @@ class TestHarmonizeGtf:
         row = '1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id "g1"\r\n'
         gtf = _write(tmp_path / "in.gtf", row)
         out = tmp_path / "out.gtf"
-        harmonize_gtf(gtf, "add_chr", out)
+        harmonize_gtf(gtf, {"1": "chr1"}, out)
         raw = out.read_bytes()
         assert b"\r\n" in raw
 
@@ -234,7 +365,7 @@ class TestHarmonizeGtf:
         row = '1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id "g1"\n'
         gtf = _write(tmp_path / "in.gtf", row)
         out = tmp_path / "out.gtf"
-        harmonize_gtf(gtf, "add_chr", out)
+        harmonize_gtf(gtf, {"1": "chr1"}, out)
         raw = out.read_bytes()
         assert b"\r\n" not in raw
         assert b"\n" in raw
@@ -246,7 +377,7 @@ class TestHarmonizeGtf:
         text = _gtf("1", "2")
         gtf = _write_gz(tmp_path / "in.gtf.gz", text)
         out = tmp_path / "out.gtf.gz"
-        harmonize_gtf(gtf, "add_chr", out)
+        harmonize_gtf(gtf, {"1": "chr1", "2": "chr2"}, out)
         with gzip.open(out, "rt") as fh:
             result = fh.read()
         assert "chr1\t" in result
@@ -256,27 +387,27 @@ class TestHarmonizeGtf:
         """Plain input → plain output (no gzip magic bytes)."""
         gtf = _write(tmp_path / "in.gtf", _gtf("1"))
         out = tmp_path / "out.gtf"
-        harmonize_gtf(gtf, "add_chr", out)
+        harmonize_gtf(gtf, {"1": "chr1"}, out)
         raw = out.read_bytes()
         # gzip magic bytes are 1f 8b
         assert not raw.startswith(b"\x1f\x8b")
 
-    # --- idempotence / both directions -----------------------------------
+    # --- idempotence / no-op for unmapped names ---------------------------
 
     def test_add_chr_already_prefixed_is_idempotent(self, tmp_path):
-        """add_chr on a seqname that already starts with chr leaves it unchanged."""
+        """A seqname not present as a rename_map key is left unchanged."""
         gtf = _write(tmp_path / "in.gtf", _gtf_row("chr1"))
         out = tmp_path / "out.gtf"
-        harmonize_gtf(gtf, "add_chr", out)
+        harmonize_gtf(gtf, {"1": "chr1"}, out)
         result = out.read_text()
         col1 = result.split("\t", 1)[0]
         assert col1 == "chr1"
 
     def test_strip_chr_already_bare_is_idempotent(self, tmp_path):
-        """strip_chr on a seqname without chr prefix leaves it unchanged."""
+        """A seqname not present as a rename_map key is left unchanged."""
         gtf = _write(tmp_path / "in.gtf", _gtf_row("1"))
         out = tmp_path / "out.gtf"
-        harmonize_gtf(gtf, "strip_chr", out)
+        harmonize_gtf(gtf, {"chr1": "1"}, out)
         result = out.read_text()
         col1 = result.split("\t", 1)[0]
         assert col1 == "1"
@@ -285,7 +416,7 @@ class TestHarmonizeGtf:
         """harmonize_gtf returns a Path object equal to out_path."""
         gtf = _write(tmp_path / "in.gtf", _gtf("1"))
         out = tmp_path / "out.gtf"
-        result = harmonize_gtf(gtf, "add_chr", out)
+        result = harmonize_gtf(gtf, {"1": "chr1"}, out)
         assert result == out
         assert isinstance(result, Path)
 
@@ -300,7 +431,7 @@ class TestHarmonizeGtf:
         gtf_text += " 2\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g2\"\n"
         gtf = _write(tmp_path / "genes.gtf", gtf_text)
         out = tmp_path / "harmonized.gtf"
-        harmonize_gtf(gtf, "add_chr", out)
+        harmonize_gtf(gtf, {"1": "chr1", "2": "chr2"}, out)
         assert check_reference_consistency(fa, out) == []
 
     def test_closed_loop_strip_chr_whitespace_seqname(self, tmp_path):
@@ -311,5 +442,5 @@ class TestHarmonizeGtf:
         gtf_text += " chr2\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g2\"\n"
         gtf = _write(tmp_path / "genes.gtf", gtf_text)
         out = tmp_path / "harmonized.gtf"
-        harmonize_gtf(gtf, "strip_chr", out)
+        harmonize_gtf(gtf, {"chr1": "1", "chr2": "2"}, out)
         assert check_reference_consistency(fa, out) == []

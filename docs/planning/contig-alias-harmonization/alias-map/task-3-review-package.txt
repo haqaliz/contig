@@ -1,0 +1,514 @@
+=== COMMITS ===
+8d599d3 refactor(reference): harmonize_gtf applies a rename map
+
+=== STAT ===
+ .../alias-map/task-3-report.md                     | 118 +++++++++++++++++++++
+ src/contig/cli.py                                  |   2 +-
+ src/contig/reference_harmonize.py                  |  28 ++---
+ tests/test_reference_harmonize.py                  |  70 ++++++++----
+ 4 files changed, 180 insertions(+), 38 deletions(-)
+
+=== DIFF ===
+diff --git a/docs/planning/contig-alias-harmonization/alias-map/task-3-report.md b/docs/planning/contig-alias-harmonization/alias-map/task-3-report.md
+new file mode 100644
+index 0000000..a48ad6c
+--- /dev/null
++++ b/docs/planning/contig-alias-harmonization/alias-map/task-3-report.md
+@@ -0,0 +1,118 @@
++# Task 3 report: `harmonize_gtf` applies the rename map (Phase 3)
++
++## What changed
++
++`src/contig/reference_harmonize.py`:
++
++- **`harmonize_gtf(gtf_path, rename_map, out_path)`** — signature changed from
++  `(gtf_path, direction: HarmonizationDirection, out_path)`. The streaming loop
++  (gzip-transparent open/close, line-ending detection, blank/`#`-comment/no-tab
++  passthrough, `line.split("\t", 1)` boundary) is **untouched**. Only the
++  per-line column-1 transform changed:
++  - before: `new_col1 = _apply(col1.strip(), direction)` (uniform add/strip `chr`).
++  - after: `stripped_col1 = col1.strip(); new_col1 = rename_map.get(stripped_col1, stripped_col1)`
++    — a direct dict lookup with identity fallback, so any contig absent from
++    the map passes through unchanged.
++- **`_apply`** deleted. Confirmed via `grep -rn "_apply\b" src/ tests/` (excluding
++  `__pycache__`) that nothing else referenced it before deletion; grep is clean
++  after deletion too.
++- Docstrings (module header + `harmonize_gtf`) updated to describe the
++  rename-map semantics instead of the old uniform direction.
++- `HarmonizationDirection` (`Literal["add_chr","strip_chr"]`) and the
++  `HarmonizationDirection` import of `Literal` are left in place — the alias
++  is now otherwise unused (only self-referenced in its own definition) but
++  wasn't in the required change list, so it was left rather than pulled out
++  as an unrequested cleanup.
++
++`src/contig/cli.py` — the **one** call site (was line 465):
++
++```python
++harmonize_gtf(params["gtf"], hplan.direction, harmonized_path)
++```
++became
++```python
++harmonize_gtf(params["gtf"], hplan.rename_map, harmonized_path)
++```
++
++No other line in `cli.py` changed. The suite stayed green with only this
++one-line change — see "Forced cli.py changes" below.
++
++## Tests (`tests/test_reference_harmonize.py`, `TestHarmonizeGtf`)
++
++Reworked every existing call site from `harmonize_gtf(gtf, "add_chr"/"strip_chr", out)`
++to `harmonize_gtf(gtf, {...rename_map...}, out)`, preserving every byte-fidelity
++assertion (CRLF/LF preservation, comment/blank/track/browser passthrough,
++gz-in→gz-out, whitespace-padded seqname parity with `gtf_contigs`, returns-Path).
++
++New tests added:
++
++- `test_closed_loop_alias_rename_mito` — `{"1":"chr1","MT":"chrM"}` rewrites
++  the mito line's col1 to `chrM` (an alias rename, not a uniform prefix op);
++  asserts the closed loop via `check_reference_consistency` and asserts the
++  exact resulting col1 set.
++- `test_contig_not_in_map_passes_through_unchanged` — map `{"MT":"chrM"}`
++  applied to a GTF with rows `MT` and `chr1`; asserts `chr1` (absent from the
++  map) is left unchanged while `MT`→`chrM`.
++- `test_empty_rename_map_is_pure_passthrough` — `rename_map={}` leaves file
++  contents byte-identical (`out.read_text() == content`).
++
++Existing tests renamed in spirit only (docstrings say "rename map" instead of
++"direction") but kept their original names/assertions; `test_add_chr_already_prefixed_is_idempotent`
++and `test_strip_chr_already_bare_is_idempotent` now express "unmapped seqname
++stays unchanged" using a single-entry rename_map that doesn't include the
++input seqname, which is the closest faithful translation of the old
++idempotence claim into rename-map semantics.
++
++## TDD evidence
++
++**RED** (tests rewritten to the new 3-arg call before touching the implementation):
++
++```
++FAILED ...::test_closed_loop_add_chr_resolves_mismatch
++FAILED ...::test_closed_loop_alias_rename_mito
++FAILED ...::test_contig_not_in_map_passes_through_unchanged
++FAILED ...::test_empty_rename_map_is_pure_passthrough
++FAILED ...::test_column_fidelity_add_chr
++FAILED ...::test_gz_in_gz_out
++FAILED ...::test_add_chr_already_prefixed_is_idempotent
++FAILED ...::test_closed_loop_add_chr_whitespace_seqname
++```
++(Failures came from `check_reference_consistency` still finding a mismatch —
++the old `_apply(col1, direction)` call ignored the dict passed as `direction`
++and treated it as neither `"add_chr"` nor a recognized value, falling into the
++`else` (strip) branch, so several tests failed on assertion rather than on a
++`TypeError`; this is consistent with dict-as-direction being silently
++misinterpreted, exactly the RED signal expected before the fix.)
++
++**GREEN** — after the rewrite:
++
++```
++$ uv run pytest tests/test_reference_harmonize.py
++40 passed in 0.19s
++```
++
++**Full suite:**
++
++```
++$ uv run pytest
++1119 passed, 1 skipped in 10.88s
++```
++(was 1116 passed, 1 skipped before this task; +3 net new tests added here)
++
++## Forced cli.py changes: none beyond the one call site
++
++Updating only the call site at (now) line 465 —
++`harmonize_gtf(params["gtf"], hplan.rename_map, harmonized_path)` — was
++sufficient to keep the full suite green. No other line in `cli.py` needed to
++change:
++
++- `tests/test_cli.py::test_run_harmonize_post_check_fails_refuses` monkeypatches
++  `contig.cli.harmonize_gtf` with `def broken_harmonize(gtf_path, direction, out_path)`
++  — a purely positional stub that never inspects its second argument, so it is
++  unaffected by the second positional argument now being a `dict` instead of a
++  `str`.
++- No other test or call site referenced `hplan.direction` in a way coupled to
++  `harmonize_gtf`'s signature; `hplan.direction` itself (the label used for
++  the user-facing "harmonized ... to match the FASTA" message and
++  `harmonized_direction`/manifest persistence a few lines below the call
++  site) is untouched, per the Phase-4 boundary in the brief.
+diff --git a/src/contig/cli.py b/src/contig/cli.py
+index 5a6a4f3..1402e1e 100644
+--- a/src/contig/cli.py
++++ b/src/contig/cli.py
+@@ -453,25 +453,25 @@ def _dispatch_run(
+             if "fasta" in params and "gtf" in params:
+                 problems = check_reference_consistency(params["fasta"], params["gtf"])
+                 if problems:
+                     hplan = plan_harmonization(params["fasta"], params["gtf"])
+                     if hplan is not None:
+                         # Safe chr-prefix harmonization: rewrite the GTF and proceed.
+                         # Harmonize-first even when --allow-reference-mismatch is set —
+                         # harmonizing is strictly safer than running against a mismatch.
+                         harmonized_path = (
+                             Path(runs_dir) / run_id / "harmonized" / Path(params["gtf"]).name
+                         )
+                         harmonized_path.parent.mkdir(parents=True, exist_ok=True)
+-                        harmonize_gtf(params["gtf"], hplan.direction, harmonized_path)
++                        harmonize_gtf(params["gtf"], hplan.rename_map, harmonized_path)
+                         # POST-CONDITION GUARD: re-verify the harmonized file actually
+                         # resolved the mismatch.  Should never trigger for valid inputs,
+                         # but guarantees the engine never proceeds believing it harmonized
+                         # when it actually didn't ("never manufacture a silent wrong result").
+                         post_problems = check_reference_consistency(
+                             params["fasta"], str(harmonized_path.resolve())
+                         )
+                         if not post_problems:
+                             # Mismatch resolved — proceed with the harmonized file.
+                             typer.echo(
+                                 f"⚙ Reference harmonized: GTF seqnames {hplan.direction} "
+                                 f"to match the FASTA. Proceeding.",
+diff --git a/src/contig/reference_harmonize.py b/src/contig/reference_harmonize.py
+index 5e375ba..0b8edef 100644
+--- a/src/contig/reference_harmonize.py
++++ b/src/contig/reference_harmonize.py
+@@ -1,34 +1,33 @@
+ """Pure decision + stream-rewriter for GTF contig-name harmonization.
+ 
+ This module provides two public functions:
+ 
+ - ``plan_harmonization(fasta_path, gtf_path)`` — pure decision: builds a
+   FASTA-driven rename map for the GTF's seqnames (chr-prefix AND alias-table
+   aware — mitochondrion ``chrM``/``MT``, scaffolds) and returns a
+   ``HarmonizationPlan`` only when applying it would strictly improve the
+   FASTA/GTF contig-name overlap; ``None`` otherwise.
+ 
+-- ``harmonize_gtf(gtf_path, direction, out_path)`` — stream-rewrites the GTF
+-  applying the direction to column 1 only; byte-faithful everywhere else;
+-  gzip-transparent. (Still a uniform add_chr/strip_chr rewriter — applying a
+-  full ``rename_map`` is Phase 3's job.)
++- ``harmonize_gtf(gtf_path, rename_map, out_path)`` — stream-rewrites the GTF
++  applying *rename_map* to column 1 only; a seqname absent from the map
++  passes through unchanged; byte-faithful everywhere else; gzip-transparent.
+ 
+ No network, no subprocess, no mutations of input files.
+ """
+ 
+ import gzip
+ from dataclasses import dataclass
+ from pathlib import Path
+-from typing import Literal
++from typing import Literal, Mapping
+ 
+ from contig.contig_aliases import alias_group
+ from contig.reference_check import _sample, fasta_contigs, gtf_contigs
+ 
+ HarmonizationDirection = Literal["add_chr", "strip_chr"]
+ 
+ 
+ @dataclass(frozen=True)
+ class HarmonizationPlan:
+     rename_map: dict[str, str]  # GTF seqname -> FASTA seqname, renames only
+     direction: str              # "add_chr" | "strip_chr" | "alias"
+     unmatched: tuple[str, ...]  # GTF seqnames with no FASTA candidate at all
+@@ -137,56 +136,50 @@ def plan_harmonization(fasta_path, gtf_path) -> HarmonizationPlan | None:
+         rename_map=rename_map,
+         direction=direction,
+         unmatched=tuple(sorted(unmatched)),
+         fasta_sample=_sample(fa),
+         gtf_sample=_sample(gt),
+     )
+ 
+ 
+ # ---------------------------------------------------------------------------
+ # Internal helpers
+ # ---------------------------------------------------------------------------
+ 
+-def _apply(name: str, direction: HarmonizationDirection) -> str:
+-    """Apply the direction to a single seqname; idempotent."""
+-    if direction == "add_chr":
+-        return name if name.startswith("chr") else f"chr{name}"
+-    else:  # strip_chr
+-        return name[3:] if name.startswith("chr") else name
+-
+-
+ def _open_input(path: Path):
+     """Open path for reading; gzip-aware iff the filename ends with .gz."""
+     return gzip.open(path, "rt") if path.name.endswith(".gz") else open(path, "r", newline="")
+ 
+ 
+ def _open_output(path: Path):
+     """Open path for writing; gzip-aware iff the filename ends with .gz."""
+     if path.name.endswith(".gz"):
+         return gzip.open(path, "wt")
+     return open(path, "w", newline="")
+ 
+ 
+ # ---------------------------------------------------------------------------
+ # Public rewriter
+ # ---------------------------------------------------------------------------
+ 
+-def harmonize_gtf(gtf_path, direction: HarmonizationDirection, out_path) -> Path:
+-    """Stream-rewrite *gtf_path* applying *direction* to column 1 only.
++def harmonize_gtf(gtf_path, rename_map: Mapping[str, str], out_path) -> Path:
++    """Stream-rewrite *gtf_path* applying *rename_map* to column 1 only.
+ 
+     - Blank lines and lines starting with ``#`` are passed through unchanged.
+     - ``track`` / ``browser`` lines (no tab-delimited seqname) are passed
+       through unchanged.
+     - Column 1 is tokenized with the same boundary as ``gtf_contigs``
+-      (``split("\\t", 1)``); the token is transformed and re-joined.
++      (``split("\\t", 1)``); the (stripped) token is looked up in
++      *rename_map* and rewritten; a seqname absent from the map passes
++      through unchanged.
+     - Everything after the first tab is byte-identical in the output.
+     - Line endings (``\\n`` vs ``\\r\\n``) are preserved exactly.
+     - Input/output are gzip-compressed iff the respective path ends with ``.gz``.
+ 
+     Returns *out_path* as a :class:`~pathlib.Path`.
+     """
+     gtf_path = Path(gtf_path)
+     out_path = Path(out_path)
+ 
+     with _open_input(gtf_path) as fh_in, _open_output(out_path) as fh_out:
+         for raw_line in fh_in:
+             # Detect line ending without stripping the whole line.
+@@ -209,16 +202,17 @@ def harmonize_gtf(gtf_path, direction: HarmonizationDirection, out_path) -> Path
+ 
+             # Split on the first tab to isolate column 1.
+             if "\t" not in line:
+                 # No tab → not a standard GTF data line (e.g. track/browser).
+                 fh_out.write(raw_line)
+                 continue
+ 
+             col1, rest = line.split("\t", 1)
+             # Strip the token to match the boundary that gtf_contigs uses
+             # (.strip() on field0), so a malformed GTF with leading/trailing
+             # whitespace on the seqname is transformed consistently with what
+             # the detector sees.  Columns 2+ (rest) remain byte-identical.
+-            new_col1 = _apply(col1.strip(), direction)
++            stripped_col1 = col1.strip()
++            new_col1 = rename_map.get(stripped_col1, stripped_col1)
+             fh_out.write(new_col1 + "\t" + rest + ending)
+ 
+     return out_path
+diff --git a/tests/test_reference_harmonize.py b/tests/test_reference_harmonize.py
+index c96a0f3..f145e20 100644
+--- a/tests/test_reference_harmonize.py
++++ b/tests/test_reference_harmonize.py
+@@ -248,169 +248,199 @@ class TestPlanHarmonization:
+ 
+ 
+ # ===========================================================================
+ # Part 2 — harmonize_gtf
+ # ===========================================================================
+ 
+ 
+ class TestHarmonizeGtf:
+ 
+     # --- closed-loop (CRITICAL) ------------------------------------------
+ 
+     def test_closed_loop_add_chr_resolves_mismatch(self, tmp_path):
+-        """harmonize GTF (add_chr) then check_reference_consistency == [] ."""
++        """harmonize GTF (add_chr-shaped rename map) then check_reference_consistency == [] ."""
+         fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2"))
+         gtf = _write(tmp_path / "genes.gtf", _gtf("1", "2"))
+         out = tmp_path / "harmonized.gtf"
+-        harmonize_gtf(gtf, "add_chr", out)
++        harmonize_gtf(gtf, {"1": "chr1", "2": "chr2"}, out)
+         assert check_reference_consistency(fa, out) == []
+ 
+     def test_closed_loop_strip_chr_resolves_mismatch(self, tmp_path):
+-        """harmonize GTF (strip_chr) then check_reference_consistency == [] ."""
++        """harmonize GTF (strip_chr-shaped rename map) then check_reference_consistency == [] ."""
+         fa = _write(tmp_path / "ref.fa", _fasta("1", "2"))
+         gtf = _write(tmp_path / "genes.gtf", _gtf("chr1", "chr2"))
+         out = tmp_path / "harmonized.gtf"
+-        harmonize_gtf(gtf, "strip_chr", out)
++        harmonize_gtf(gtf, {"chr1": "1", "chr2": "2"}, out)
+         assert check_reference_consistency(fa, out) == []
+ 
++    def test_closed_loop_alias_rename_mito(self, tmp_path):
++        """A mito alias rename map ({"MT": "chrM"}) rewrites the mito line's
++        col1 to chrM — an alias rename, not a uniform chr add/strip."""
++        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chrM"))
++        gtf = _write(tmp_path / "genes.gtf", _gtf("1", "MT"))
++        out = tmp_path / "harmonized.gtf"
++        harmonize_gtf(gtf, {"1": "chr1", "MT": "chrM"}, out)
++        assert check_reference_consistency(fa, out) == []
++        result = out.read_text()
++        cols1 = {line.split("\t", 1)[0] for line in result.splitlines() if line.strip()}
++        assert cols1 == {"chr1", "chrM"}
++
++    def test_contig_not_in_map_passes_through_unchanged(self, tmp_path):
++        """A contig absent from the rename map is left unchanged in column 1."""
++        gtf_text = _gtf_row("MT") + _gtf_row("chr1")
++        gtf = _write(tmp_path / "genes.gtf", gtf_text)
++        out = tmp_path / "harmonized.gtf"
++        harmonize_gtf(gtf, {"MT": "chrM"}, out)
++        result = out.read_text()
++        cols1 = [line.split("\t", 1)[0] for line in result.splitlines() if line.strip()]
++        assert cols1 == ["chrM", "chr1"]
++
++    def test_empty_rename_map_is_pure_passthrough(self, tmp_path):
++        """An empty rename_map leaves the file contents identical."""
++        content = _gtf("1", "chr2", "MT")
++        gtf = _write(tmp_path / "genes.gtf", content)
++        out = tmp_path / "out.gtf"
++        harmonize_gtf(gtf, {}, out)
++        assert out.read_text() == content
++
+     # --- column fidelity -------------------------------------------------
+ 
+     def test_column_fidelity_add_chr(self, tmp_path):
+         """Only column 1 changes; everything after the first tab is byte-identical."""
+         row = '1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id "g1"\n'
+         gtf = _write(tmp_path / "in.gtf", row)
+         out = tmp_path / "out.gtf"
+-        harmonize_gtf(gtf, "add_chr", out)
++        harmonize_gtf(gtf, {"1": "chr1"}, out)
+         result = out.read_text()
+         lines = [l for l in result.splitlines(keepends=True) if l.strip() and not l.startswith("#")]
+         assert len(lines) == 1
+         col1, rest = lines[0].split("\t", 1)
+         assert col1 == "chr1"
+         assert rest == "source\tgene\t1\t100\t.\t+\t.\t" + 'gene_id "g1"\n'
+ 
+     def test_column_fidelity_strip_chr(self, tmp_path):
+-        """strip_chr: only column 1 changes."""
++        """strip_chr-shaped rename: only column 1 changes."""
+         row = 'chr2\tsource\texon\t5\t50\t.\t-\t.\tgene_id "g2"\n'
+         gtf = _write(tmp_path / "in.gtf", row)
+         out = tmp_path / "out.gtf"
+-        harmonize_gtf(gtf, "strip_chr", out)
++        harmonize_gtf(gtf, {"chr2": "2"}, out)
+         result = out.read_text()
+         lines = [l for l in result.splitlines(keepends=True) if l.strip() and not l.startswith("#")]
+         col1, rest = lines[0].split("\t", 1)
+         assert col1 == "2"
+         assert rest == "source\texon\t5\t50\t.\t-\t.\t" + 'gene_id "g2"\n'
+ 
+     # --- pass-through lines -----------------------------------------------
+ 
+     def test_passthrough_comment_and_blank_and_track_browser(self, tmp_path):
+         """Comment, blank, track, and browser lines are passed through unchanged."""
+         content = (
+             "# comment line\n"
+             "\n"
+             "track name=foo\n"
+             "browser position chr1:1-100\n"
+             '1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id "g1"\n'
+         )
+         gtf = _write(tmp_path / "in.gtf", content)
+         out = tmp_path / "out.gtf"
+-        harmonize_gtf(gtf, "add_chr", out)
++        harmonize_gtf(gtf, {"1": "chr1"}, out)
+         result = out.read_text()
+         assert result.startswith("# comment line\n")
+         assert "\n\n" in result
+         assert "track name=foo\n" in result
+         assert "browser position chr1:1-100\n" in result
+ 
+     # --- line endings -------------------------------------------------------
+ 
+     def test_crlf_preserved(self, tmp_path):
+         """A \\r\\n input file stays \\r\\n."""
+         row = '1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id "g1"\r\n'
+         gtf = _write(tmp_path / "in.gtf", row)
+         out = tmp_path / "out.gtf"
+-        harmonize_gtf(gtf, "add_chr", out)
++        harmonize_gtf(gtf, {"1": "chr1"}, out)
+         raw = out.read_bytes()
+         assert b"\r\n" in raw
+ 
+     def test_lf_preserved(self, tmp_path):
+         """A \\n input file stays \\n (no \\r injected)."""
+         row = '1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id "g1"\n'
+         gtf = _write(tmp_path / "in.gtf", row)
+         out = tmp_path / "out.gtf"
+-        harmonize_gtf(gtf, "add_chr", out)
++        harmonize_gtf(gtf, {"1": "chr1"}, out)
+         raw = out.read_bytes()
+         assert b"\r\n" not in raw
+         assert b"\n" in raw
+ 
+     # --- gzip ---------------------------------------------------------------
+ 
+     def test_gz_in_gz_out(self, tmp_path):
+         """A .gz input → .gz output that decompresses to the harmonized text."""
+         text = _gtf("1", "2")
+         gtf = _write_gz(tmp_path / "in.gtf.gz", text)
+         out = tmp_path / "out.gtf.gz"
+-        harmonize_gtf(gtf, "add_chr", out)
++        harmonize_gtf(gtf, {"1": "chr1", "2": "chr2"}, out)
+         with gzip.open(out, "rt") as fh:
+             result = fh.read()
+         assert "chr1\t" in result
+         assert "chr2\t" in result
+ 
+     def test_plain_in_plain_out(self, tmp_path):
+         """Plain input → plain output (no gzip magic bytes)."""
+         gtf = _write(tmp_path / "in.gtf", _gtf("1"))
+         out = tmp_path / "out.gtf"
+-        harmonize_gtf(gtf, "add_chr", out)
++        harmonize_gtf(gtf, {"1": "chr1"}, out)
+         raw = out.read_bytes()
+         # gzip magic bytes are 1f 8b
+         assert not raw.startswith(b"\x1f\x8b")
+ 
+-    # --- idempotence / both directions -----------------------------------
++    # --- idempotence / no-op for unmapped names ---------------------------
+ 
+     def test_add_chr_already_prefixed_is_idempotent(self, tmp_path):
+-        """add_chr on a seqname that already starts with chr leaves it unchanged."""
++        """A seqname not present as a rename_map key is left unchanged."""
+         gtf = _write(tmp_path / "in.gtf", _gtf_row("chr1"))
+         out = tmp_path / "out.gtf"
+-        harmonize_gtf(gtf, "add_chr", out)
++        harmonize_gtf(gtf, {"1": "chr1"}, out)
+         result = out.read_text()
+         col1 = result.split("\t", 1)[0]
+         assert col1 == "chr1"
+ 
+     def test_strip_chr_already_bare_is_idempotent(self, tmp_path):
+-        """strip_chr on a seqname without chr prefix leaves it unchanged."""
++        """A seqname not present as a rename_map key is left unchanged."""
+         gtf = _write(tmp_path / "in.gtf", _gtf_row("1"))
+         out = tmp_path / "out.gtf"
+-        harmonize_gtf(gtf, "strip_chr", out)
++        harmonize_gtf(gtf, {"chr1": "1"}, out)
+         result = out.read_text()
+         col1 = result.split("\t", 1)[0]
+         assert col1 == "1"
+ 
+     def test_harmonize_gtf_returns_path(self, tmp_path):
+         """harmonize_gtf returns a Path object equal to out_path."""
+         gtf = _write(tmp_path / "in.gtf", _gtf("1"))
+         out = tmp_path / "out.gtf"
+-        result = harmonize_gtf(gtf, "add_chr", out)
++        result = harmonize_gtf(gtf, {"1": "chr1"}, out)
+         assert result == out
+         assert isinstance(result, Path)
+ 
+     # --- whitespace-padded seqname (strip-parity with gtf_contigs) -----------
+ 
+     def test_closed_loop_add_chr_whitespace_seqname(self, tmp_path):
+         """GTF seqname with leading/trailing whitespace (' 1 ') is still harmonized
+         to match FASTA 'chr1': the closed loop holds even for whitespace-padded col1."""
+         fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2"))
+         # seqnames have leading space — a malformed but real-world edge case
+         gtf_text = " 1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g1\"\n"
+         gtf_text += " 2\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g2\"\n"
+         gtf = _write(tmp_path / "genes.gtf", gtf_text)
+         out = tmp_path / "harmonized.gtf"
+-        harmonize_gtf(gtf, "add_chr", out)
++        harmonize_gtf(gtf, {"1": "chr1", "2": "chr2"}, out)
+         assert check_reference_consistency(fa, out) == []
+ 
+     def test_closed_loop_strip_chr_whitespace_seqname(self, tmp_path):
+         """GTF seqname with leading whitespace (' chr1') is still harmonized
+         to match bare FASTA '1': the closed loop holds in both directions."""
+         fa = _write(tmp_path / "ref.fa", _fasta("1", "2"))
+         gtf_text = " chr1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g1\"\n"
+         gtf_text += " chr2\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g2\"\n"
+         gtf = _write(tmp_path / "genes.gtf", gtf_text)
+         out = tmp_path / "harmonized.gtf"
+-        harmonize_gtf(gtf, "strip_chr", out)
++        harmonize_gtf(gtf, {"chr1": "1", "chr2": "2"}, out)
+         assert check_reference_consistency(fa, out) == []

@@ -6,6 +6,7 @@ from typer.testing import CliRunner
 from contig.bundle import load_bundle, write_bundle
 from contig.cli import app
 from contig.models import ExecutionTarget, QCResult, RunRecord, TaskEvent, TaskResource
+from contig.reference_check import check_reference_consistency
 
 
 def _make_sheet(tmp_path, *, valid=True):
@@ -608,6 +609,43 @@ def _write_wrong_assembly_reference(tmp_path):
     return fasta, gtf
 
 
+def _write_ucsc_ensembl_reference(tmp_path):
+    """FASTA (chr1,chr2,chrM) / GTF (1,2,MT) — UCSC FASTA vs Ensembl GTF.
+
+    Fully disjoint (no shared contig at all: check_reference_consistency
+    flags it), but harmonizable via chr-prefix + the mito alias table.
+    """
+    fasta = tmp_path / "ref.fa"
+    fasta.write_text(">chr1\nACGT\n>chr2\nTTTT\n>chrM\nGGGG\n")
+    gtf = tmp_path / "ref.gtf"
+    gtf.write_text(
+        "1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g1\"\n"
+        "2\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g2\"\n"
+        "MT\tsource\tgene\t1\t50\t.\t+\t.\tgene_id \"g3\"\n"
+    )
+    return fasta, gtf
+
+
+def _write_residual_mito_reference(tmp_path):
+    """FASTA (chr1,chr2,chrM) / GTF (chr1,chr2,MT) — autosomes already match.
+
+    check_reference_consistency sees the shared chr1/chr2 contigs and reports
+    NO problems (fasta & gtf is non-empty), yet the mito seqname is still
+    mismatched (chrM vs MT). This is the residual case that must still
+    harmonize even though `problems == []` — the silent bug this feature
+    kills.
+    """
+    fasta = tmp_path / "ref.fa"
+    fasta.write_text(">chr1\nACGT\n>chr2\nTTTT\n>chrM\nGGGG\n")
+    gtf = tmp_path / "ref.gtf"
+    gtf.write_text(
+        "chr1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g1\"\n"
+        "chr2\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g2\"\n"
+        "MT\tsource\tgene\t1\t50\t.\t+\t.\tgene_id \"g3\"\n"
+    )
+    return fasta, gtf
+
+
 def _write_overlapping_reference(tmp_path):
     """A FASTA (chr1,chr2) / GTF (chr1) pair that shares a contig (legitimate)."""
     fasta = tmp_path / "ref.fa"
@@ -746,6 +784,63 @@ def test_run_chr_asymmetric_with_allow_flag_still_harmonizes(tmp_path, monkeypat
     assert manifest["gtf"] == str(gtf)  # ORIGINAL path
     harmonized_dir = tmp_path / "runs" / "harmflag" / "harmonized"
     assert harmonized_dir.exists() and any(harmonized_dir.iterdir())
+
+
+def test_run_ucsc_ensembl_reference_harmonizes_and_proceeds(tmp_path, monkeypatch):
+    # A UCSC FASTA (chr1,chr2,chrM) vs Ensembl GTF (1,2,MT) pair is fully
+    # disjoint (no shared contig), but harmonizable via chr-prefix + the mito
+    # alias table. The run must NOT exit(1): it harmonizes and proceeds.
+    sheet = _make_sheet(tmp_path)
+    fasta, gtf = _write_ucsc_ensembl_reference(tmp_path)
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "ucsce", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf)],
+    )
+    assert result.exit_code == 0, f"Expected 0, got {result.exit_code}: {result.output}"
+    assert "harmonized" in result.output.lower()
+    manifest = json.loads((tmp_path / "runs" / "ucsce" / "launch.json").read_text())
+    assert manifest["harmonized_reference"] is True
+    assert manifest["gtf"] == str(gtf)  # ORIGINAL path
+    harmonized_dir = tmp_path / "runs" / "ucsce" / "harmonized"
+    assert harmonized_dir.exists() and any(harmonized_dir.iterdir())
+    assert (tmp_path / "runs" / "ucsce" / "run_record.json").exists()
+
+
+def test_run_residual_mito_reference_harmonizes_and_proceeds(tmp_path, monkeypatch):
+    # THE SILENT BUG THIS FEATURE KILLS: a FASTA/GTF pair whose autosomes
+    # already match (chr1,chr2 shared) but whose mito seqname is still
+    # mismatched (FASTA chrM vs GTF MT). check_reference_consistency reports
+    # NO problems here (fasta & gtf is non-empty), so the OLD `if problems:`
+    # gate never harmonized this case. The plan-driven gate must still
+    # harmonize it: the run proceeds, and the harmonized GTF's mito line is
+    # rewritten from MT to chrM.
+    sheet = _make_sheet(tmp_path)
+    fasta, gtf = _write_residual_mito_reference(tmp_path)
+    # Sanity: confirm the disjoint-only detector sees no problem at all — this
+    # is what proves the residual case was previously silent.
+    assert check_reference_consistency(str(fasta), str(gtf)) == []
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "resmito", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf)],
+    )
+    assert result.exit_code == 0, f"Expected 0, got {result.exit_code}: {result.output}"
+    assert "harmonized" in result.output.lower()
+    manifest = json.loads((tmp_path / "runs" / "resmito" / "launch.json").read_text())
+    assert manifest["harmonized_reference"] is True
+    assert manifest["gtf"] == str(gtf)  # ORIGINAL path unchanged in the manifest
+    harmonized_dir = tmp_path / "runs" / "resmito" / "harmonized"
+    assert harmonized_dir.exists()
+    harmonized_files = list(harmonized_dir.iterdir())
+    assert harmonized_files
+    harmonized_text = harmonized_files[0].read_text()
+    # Prove the GTF was actually rewritten: the mito line now reads chrM, not MT.
+    assert "chrM\tsource\tgene" in harmonized_text
+    assert "MT\tsource\tgene" not in harmonized_text
+    assert (tmp_path / "runs" / "resmito" / "run_record.json").exists()
 
 
 def test_rerun_from_harmonized_manifest_re_derives_harmonization(tmp_path, monkeypatch):

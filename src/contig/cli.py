@@ -62,7 +62,7 @@ from contig.planner import PlanningError
 from contig.planner import plan as build_plan
 from contig.progress import read_progress, render_progress
 from contig.reference import ReferenceError, resolve_reference
-from contig.reference_check import check_reference_consistency
+from contig.reference_check import check_reference_consistency, fasta_contigs, gtf_contigs
 from contig.reference_harmonize import harmonize_gtf, plan_harmonization
 from contig.registry import UnknownAssayError, assay_for_pipeline, select_pipeline
 from contig.report import render_explain, render_run_report, render_run_report_html
@@ -452,61 +452,77 @@ def _dispatch_run(
             # iGenomes (--genome) has no fasta/gtf here, so it is skipped.
             if "fasta" in params and "gtf" in params:
                 problems = check_reference_consistency(params["fasta"], params["gtf"])
-                if problems:
-                    hplan = plan_harmonization(params["fasta"], params["gtf"])
-                    if hplan is not None:
-                        # Safe chr-prefix harmonization: rewrite the GTF and proceed.
-                        # Harmonize-first even when --allow-reference-mismatch is set —
-                        # harmonizing is strictly safer than running against a mismatch.
-                        harmonized_path = (
-                            Path(runs_dir) / run_id / "harmonized" / Path(params["gtf"]).name
+                # Drive harmonization off the PLAN, not off the disjoint-only
+                # detector: `problems` is empty whenever FASTA/GTF share ANY
+                # contig at all, even when only a residual case (e.g. mito
+                # chrM/MT) still needs resolving and the autosomes already
+                # overlap. `plan_harmonization` is the one that knows whether
+                # applying a rename map would strictly improve the overlap, so
+                # it — not `problems` — is what gates the harmonize attempt.
+                hplan = plan_harmonization(params["fasta"], params["gtf"])
+                if hplan is not None:
+                    # Safe chr-prefix / alias-table harmonization: rewrite the
+                    # GTF and proceed. Harmonize-first even when
+                    # --allow-reference-mismatch is set — harmonizing is
+                    # strictly safer than running against a mismatch.
+                    harmonized_path = (
+                        Path(runs_dir) / run_id / "harmonized" / Path(params["gtf"]).name
+                    )
+                    harmonized_path.parent.mkdir(parents=True, exist_ok=True)
+                    harmonize_gtf(params["gtf"], hplan.rename_map, harmonized_path)
+                    # POST-CONDITION GUARD: confirm the rewrite actually improved
+                    # the FASTA/GTF name overlap. `check_reference_consistency`
+                    # alone cannot detect this — it only flags a fully DISJOINT
+                    # pair, so it would pass (no problems) even if harmonization
+                    # silently no-op'd on a pair that already shared some
+                    # contigs (the residual-mito case). Compare overlap counts
+                    # directly instead: never proceed believing harmonization
+                    # worked when it actually didn't ("never manufacture a
+                    # silent wrong result").
+                    orig_overlap = len(
+                        fasta_contigs(params["fasta"]) & gtf_contigs(params["gtf"])
+                    )
+                    post_overlap = len(
+                        fasta_contigs(params["fasta"])
+                        & gtf_contigs(str(harmonized_path.resolve()))
+                    )
+                    if post_overlap > orig_overlap:
+                        # Overlap improved — proceed with the harmonized file.
+                        typer.echo(
+                            f"⚙ Reference harmonized: GTF seqnames {hplan.direction} "
+                            f"to match the FASTA. Proceeding.",
+                            err=True,
                         )
-                        harmonized_path.parent.mkdir(parents=True, exist_ok=True)
-                        harmonize_gtf(params["gtf"], hplan.direction, harmonized_path)
-                        # POST-CONDITION GUARD: re-verify the harmonized file actually
-                        # resolved the mismatch.  Should never trigger for valid inputs,
-                        # but guarantees the engine never proceeds believing it harmonized
-                        # when it actually didn't ("never manufacture a silent wrong result").
-                        post_problems = check_reference_consistency(
-                            params["fasta"], str(harmonized_path.resolve())
+                        harmonized_direction = hplan.direction
+                        params["gtf"] = str(harmonized_path.resolve())
+                        # DO NOT Exit — proceed with the harmonized file.
+                    else:
+                        # Guard triggered: harmonization did NOT resolve the mismatch.
+                        # Discard the scratch file and fall through to the refuse/allow
+                        # path with the ORIGINAL problems and GTF.
+                        typer.echo(
+                            "⚠ Harmonization was attempted but did not resolve the "
+                            "reference mismatch; reverting to the original GTF.",
+                            err=True,
                         )
-                        if not post_problems:
-                            # Mismatch resolved — proceed with the harmonized file.
-                            typer.echo(
-                                f"⚙ Reference harmonized: GTF seqnames {hplan.direction} "
-                                f"to match the FASTA. Proceeding.",
-                                err=True,
-                            )
-                            harmonized_direction = hplan.direction
-                            params["gtf"] = str(harmonized_path.resolve())
-                            # DO NOT Exit — proceed with the harmonized file.
-                        else:
-                            # Guard triggered: harmonization did NOT resolve the mismatch.
-                            # Discard the scratch file and fall through to the refuse/allow
-                            # path with the ORIGINAL problems and GTF.
-                            typer.echo(
-                                "⚠ Harmonization was attempted but did not resolve the "
-                                "reference mismatch; reverting to the original GTF.",
-                                err=True,
-                            )
-                            hplan = None  # signal fall-through to the refuse/allow path
-                    if hplan is None:
-                        # Genuine wrong-assembly (non-harmonizable, or guard triggered):
-                        # keep existing behavior.
-                        prefix = (
-                            "⚠ Reference mismatch (proceeding, --allow-reference-mismatch):"
-                            if allow_reference_mismatch
-                            else "Reference mismatch:"
+                        hplan = None  # signal fall-through to the refuse/allow path
+                if hplan is None and problems:
+                    # Genuine wrong-assembly (non-harmonizable, or guard triggered):
+                    # keep existing behavior.
+                    prefix = (
+                        "⚠ Reference mismatch (proceeding, --allow-reference-mismatch):"
+                        if allow_reference_mismatch
+                        else "Reference mismatch:"
+                    )
+                    typer.echo(prefix, err=True)
+                    for problem in problems:
+                        typer.echo(f"  - {problem}", err=True)
+                    if not allow_reference_mismatch:
+                        typer.echo(
+                            "  Pass --allow-reference-mismatch to override if this is intentional.",
+                            err=True,
                         )
-                        typer.echo(prefix, err=True)
-                        for problem in problems:
-                            typer.echo(f"  - {problem}", err=True)
-                        if not allow_reference_mismatch:
-                            typer.echo(
-                                "  Pass --allow-reference-mismatch to override if this is intentional.",
-                                err=True,
-                            )
-                            raise typer.Exit(code=1)
+                        raise typer.Exit(code=1)
             # Absolutize the sheet: Nextflow runs with cwd=run_dir, so a relative
             # --input would fail nf-core's "file does not exist" validation.
             params["input"] = str(Path(input).resolve())

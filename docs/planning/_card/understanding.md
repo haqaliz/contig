@@ -1,73 +1,93 @@
-# Understanding — feat/eval-holdout-guard (C6 slice 1: held-out split + regression guard)
+# Understanding: contig-alias-harmonization
 
-Fast-track Phase-2 dig. Grounded in a full code map (path:line cited inline), from direct
-reads plus a code-mapping agent pass. No `graphify-out/` graph exists in this worktree.
+Written after mapping the v0.9.0 harmonizer seam (Phase 2 dig). Every claim carries a `file:line`.
 
 ## What the work is really asking
 
-The first concrete slice of C6 (`CAPABILITY_ROADMAP.md:390-414`): stop scoring the detector
-over the *whole* corpus and instead (1) freeze a **held-out** set, (2) score the current
-detector against it, and (3) add a **regression guard** — a command that exits non-zero when a
-corpus or detector change lowers held-out accuracy, so a regression is caught *before it ships*.
-This is moat #2 (accumulated eval data) turned into a measured loop.
+When a user supplies a **UCSC-style FASTA** (`chr1…chr22, chrX, chrY, chrM`) and an
+**Ensembl-style GTF** (`1…22, X, Y, MT`), today's chr-prefix harmonizer
+(`reference_harmonize.py:39-79`) harmonizes the **autosomes** correctly but produces the
+**wrong mitochondrial name** and lets the run proceed with the mito contig silently
+mismatched. The feature closes that silent gap by resolving the mitochondrial alias
+(`M`↔`MT`) as part of harmonization, while preserving the refuse-on-wrong-assembly
+invariant.
 
-## The machinery to reuse (do NOT rebuild)
+## Why today's harmonizer mishandles the canonical case (the concrete bug)
 
-- **Corpus:** `src/contig/data/detector_corpus.jsonl` — 23 `FailureCase` lines
-  (`models.py:358-366`: `case_id, description, source, events, log_text, expected_class`).
-  Loaded by `load_corpus` (`corpus.py:40-47`). Confirmed/live/synthetic is carried in the
-  `source` prefix (`corpus.py:282-288`), not a field. **No split/held-out field exists.**
-- **Eval:** `evaluate_detector(cases, detector) -> DetectorEvalReport` (`corpus.py:50-104`);
-  accuracy = exact-match rate of predicted vs `expected_class` over ALL cases handed in
-  (`corpus.py:71,101`). Report fields: `total, correct, accuracy, mismatches, per_class`
-  (`models.py:387-394`).
-- **Detector registry:** `get_detector(name)` → `rules` / `rules-strict` (pure) / `llm`
-  (env-gated) (`detect.py:585-614`). Guard default must be a deterministic detector.
-- **History:** `EvalSnapshot` (`models.py:397-414`: `timestamp, corpus_size, corpus_sha,
-  accuracy, per_class, contig_version, detector`), `snapshot_from_report` + `append_snapshot`
-  + `load_history` (`eval_history.py:22-66`), committed at `data/eval_history.jsonl`.
-- **CLI:** `eval-detector` Typer command (`cli.py:1485-1553`); siblings `coverage`, `clusters`,
-  `corpus-promote` share the exact option/guard/render style a new command must mirror.
-  `sha256_file` at `models.py:17`.
+Trace `plan_harmonization({chr1,chr2,chrM}, {1,2,MT})`:
+- `_all_chr_prefixed(fa)=True`, `_all_chr_prefixed(gt)=False` → `direction="add_chr"`
+  (`reference_harmonize.py:59-61`).
+- `transformed = {f"chr{n}" for n in gt}` = `{chr1, chr2, chrMT}` (`:61`). **`chrMT ≠ chrM`.**
+- Intersection guard `transformed & fa` = `{chr1, chr2}` — non-empty → **passes** (`:71`).
+- `harmonize_gtf` rewrites GTF col1 with `_apply` (pure `chr`-add, `:86-91`) → GTF mito
+  becomes `chrMT`.
+- Post-condition re-check `check_reference_consistency(fasta, harmonized_gtf)` is
+  **disjoint-only** (`reference_check.py:51-53`): `{chr1,chr2,chrM}` shares `{chr1,chr2}`
+  with `{chr1,chr2,chrMT}` → **not disjoint → returns `[]` → run proceeds** (`cli.py:470-481`).
 
-## Affected areas (likely touch points)
+Result: mito gene annotations sit on `chrMT` while the FASTA/BAM contig is `chrM` →
+mito-region quantification silently yields nothing. This is the "residual case" the brief
+names as the real target.
 
-- `src/contig/corpus.py` — held-out load/split helper.
-- `src/contig/cli.py` — a new guard command (or flags on `eval-detector`).
-- Possibly `src/contig/models.py` — only if a marker field is chosen over a separate file.
-- `src/contig/data/` — the frozen held-out artifact + a committed baseline.
-- `tests/test_eval_holdout.py` (new) — mirror `test_corpus.py` / `test_cli.py:1797-1936`.
+## Affected areas (the seam)
 
-## The three real design decisions (for the interview / PRD)
+| Concern | Location |
+|---|---|
+| Prefix direction predicate to widen | `reference_harmonize.py:59-67` |
+| The per-name transform (`_apply`, pure chr add/strip) | `reference_harmonize.py:86-91` |
+| Post-transform intersection guard (refuse invariant) | `reference_harmonize.py:71` |
+| `HarmonizationDirection` literal (persisted as free-form `str`) | `reference_harmonize.py:29`; models `models.py:203,283` |
+| GTF col1 stream-rewriter | `harmonize_gtf` `reference_harmonize.py:110-161` |
+| Detector disjoint-only rule (pre-flight refuse) | `reference_check.py:48-64` |
+| Launch chokepoint (invoke, scratch path, post-check, thread to finalize) | `cli.py:453-509, 530-551, 571` |
+| WARN `reference_harmonized` breadcrumb | `self_heal.py:1005-1019` |
+| Reproduce re-derivation (rerun/resume re-enter dispatch with original GTF) | `cli.py:619-640, 1269-1289` |
+| Existing tests to extend | `tests/test_reference_harmonize.py`, `tests/test_reference_check.py`, `tests/test_cli.py:582-745`, `tests/test_self_heal.py:363-420` |
 
-1. **Split mechanism — separate frozen file vs. a marker field.** The card and the leakage
-   gotcha (`issue.md:57-63`; agent gotcha #1) favor a **physically separate frozen file**
-   (`detector_corpus_holdout.jsonl`) because the existing whole-corpus path
-   (`cli.py:1527,1570,1604`) can never accidentally score it. A `split`/`held_out` field on
-   `FailureCase` is back-compat-safe (default) but requires filtering at *every* corpus load
-   site or held-out cases leak. **Leaning: separate file.**
-2. **How the held-out set is populated given only 23 cases.** Carving cases out of the tiny,
-   class-imbalanced corpus (`missing_index`=9, most classes =1; gotcha #6) shrinks training/eval
-   and can empty whole classes. Options: (a) curate a *distinct* held-out set of new/reserved
-   cases; (b) reserve a documented subset by `case_id`. Must not assume balanced per-class support.
-3. **What "regression" means — the guard's comparison basis.** Roadmap acceptance names both a
-   **threshold floor** ("scores above a threshold") and a **delta** ("a change that *lowers*
-   accuracy"). Likely a committed baseline (floor number and/or a baseline snapshot) that the
-   guard compares against, with a non-zero exit + clear message on drop. Decide: floor only,
-   delta-vs-baseline only, or both; and the tolerance.
+## Design decisions / ambiguities (for the PRD interview)
 
-## Guardrails honored / scope flags
+1. **Alias-table scope.** Recommend slice 1 = **the mitochondrial alias `M`↔`MT` only**
+   (the canonical, unambiguous pair named in every deferral note). The wider
+   UCSC↔Ensembl↔GenBank **scaffold/accession** tables (`GL…`, `KI…`) are
+   assembly-specific and ambiguous — no reliable universal source — a real "no source"
+   risk like the deferred GTF-version resolution (v0.7.0 deferrals).
+   **Defer scaffolds explicitly.** Structure the alias map so extending it later is trivial.
 
-- **Layer 2** (verification/eval infra), founder's-edge engineering — no drift toward Layer 1.
-- **Honest scope:** this slice scores the **labeled failure-class detector corpus only**.
-  Folding in the WARN-capped, unlabeled C1 concordance / C3 plausibility signals is a **later
-  slice** needing its own labeling design — explicitly out of scope here (`issue.md:46-64`).
-- Deterministic, local, no network in tests; committed eval data stays reproducible
-  (snapshots pin `corpus_sha`).
+2. **Directional canonicalization rule.** The mito spelling correlates with the naming
+   convention: `add_chr` ⇒ FASTA is UCSC-style ⇒ mito is `chrM`; `strip_chr` ⇒ FASTA is
+   Ensembl-style ⇒ mito is `MT`. So the transform is: apply the prefix op, then
+   canonicalize a bare `{M,MT}` token to `M` (for `add_chr`) or `MT` (for `strip_chr`).
+   Then `_apply("MT","add_chr") = "chrM"` and `_apply("chrM","strip_chr") = "MT"`. Verify
+   in tests against the canonical UCSC↔Ensembl pairing.
 
-## Contradiction / caveat surfaced
+3. **How the plan represents the transform.** Two options — (A) keep `direction` as the
+   prefix decision and always apply mito canonicalization as a composed step (smallest
+   blast radius; signature stable); (B) generalize the plan to a concrete per-contig
+   rename map (cleaner, generalizes to future aliases, but changes `direction` semantics
+   and the breadcrumb). Lean (A) for the slice; note (B) as the future shape. Either way
+   `direction`/`harmonized_direction` are free-form `str` (`models.py:203,283`) → **no
+   schema migration**. The breadcrumb message must make the alias visible.
 
-The roadmap prose ("fold C1–C5 outcomes into one accuracy number", `CAPABILITY_ROADMAP.md:402`)
-over-reaches: concordance/plausibility are corroboration signals with no ground truth, so they
-cannot enter a classification-accuracy guard. The PRD must scope to the labeled corpus and name
-the unified-number version as future work — not paper over the gap.
+## ⚠️ Two contradictions between the brief and the shipped v0.9.0 precedent (must resolve)
+
+1. **"Seed a golden corpus case" (brief) vs. v0.9.0 precedent.** The contig-naming
+   mismatch is a **pre-flight gate, not a runtime `FailureClass`** — the detector corpus
+   (`detector_corpus.jsonl`, `FailureCase` `models.py:358-366`) has **no** reference-
+   mismatch class, and v0.9.0 shipped the prefix harmonizer **provenance-only** ("eval
+   capture is provenance-only in this slice", CHANGELOG v0.9.0; v0.7.0 explicitly deferred
+   "seeding a `reference_mismatch` corpus class"). **Recommendation:** match the v0.9.0
+   precedent — **no new detector-corpus case**; eval capture is the provenance breadcrumb.
+   Introducing a `reference_mismatch` FailureClass is out of scope (still deferred).
+
+2. **"Record in launch manifest + `ReferenceIdentity`" (brief).** Already done by the
+   v0.9.0 plumbing (`cli.py:546,571`; `self_heal.py:1005-1019`) — this slice **reuses** it
+   unchanged (`harmonized_reference: bool`, `harmonized_direction: str`), it does not add
+   new persistence. The only change is the *direction label* value + breadcrumb wording so
+   the alias is visible. No new fields.
+
+## Guardrail check (CLAUDE.md)
+
+Pure **Layer 2** self-heal/verify hardening. No Layer-1 authoring, no wet-lab/clinical,
+no raw-read egress (operates on reference contig-name strings on the user's compute),
+no correctness over-claiming (a WARN breadcrumb, run still proceeds). Test-first with
+synthetic FASTA/GTF fixtures — no real nf-core run. ✅

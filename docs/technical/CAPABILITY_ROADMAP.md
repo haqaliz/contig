@@ -163,6 +163,22 @@ the original GTF path (no scratch path baked into the manifest). A WARN-level
 `reference_harmonized` QC breadcrumb is appended in `_finalize` so the rewrite is visible in
 every verdict surface. Built on top of the C5 mismatch detector (v0.7.0), which detected and
 refused this class of mismatch; it now also repairs it.
+**Shipped (per-contig alias harmonization slice — Unreleased):** the harmonizer is widened
+from pure `chr`-prefix add/strip to a **general per-contig rename map** driven by a lookup
+against the actual FASTA contig set. Mitochondrion `M`↔`MT` is treated as universal (a code
+constant); a small curated, extensible GRCh38 scaffold table
+(`src/contig/data/contig_aliases.tsv`, sourced from UCSC chromAlias) covers common unplaced
+scaffolds, with the loader failing loud on malformed/duplicate rows. `plan_harmonization` now
+resolves each GTF contig to whichever spelling actually exists in the FASTA (prefix variants ∪
+alias group ∩ FASTA), so it also handles the case where the autosomes already match but the
+mito spelling differs — previously silently skipped because harmonization was gated behind
+the disjoint-only detector. A non-injective rename map (two GTF contigs collapsing onto one
+FASTA target) is refused, never a silent contig merge; a genuine wrong-assembly is still
+refused. The CLI pre-flight is now driven by the plan itself rather than the disjoint-only
+detector, with a strengthened overlap-increase post-check. The `reference_harmonized`
+breadcrumb now enumerates any GTF contigs left unmatched, so a partial harmonization stays
+visible. Provenance-only eval capture, matching v0.9.0 — no new `reference_mismatch`
+`FailureClass` or detector-corpus case.
 **Shipped (STAR/BWA directory-index slice — Unreleased):** the missing-index family now
 extends past single-file indexes to a **directory-shaped aligner index**. A missing/aborted
 STAR index (`could not open genome file … genomeParameters.txt`) or a version-incompatible
@@ -196,9 +212,9 @@ informed scaling (needs a refactor — `resource_usage` is only populated at fin
 the patch decision); the still-missing single-file index kind (the BAM/CRAM form of
 `.csi`) plus stale-index detection on the same seam; and the wider failure catalog — the
 assembly-signature form of reference/build mismatch (no sample-side contig signal in raw
-FASTQ or finished bundle), per-contig name mapping (e.g., `chrM`↔`MT`), known-sites/GTF-
-version consistency, a runtime `reference_mismatch` detector-corpus case, format
-conversion, and pin conflict.
+FASTQ or finished bundle), exhaustive per-assembly alias-table completeness beyond the
+GRCh38 seed, known-sites/GTF-version consistency, a runtime `reference_mismatch`
+detector-corpus case, format conversion, and pin conflict.
 
 Expand the failure-mode catalog and repair strategies well past the current set,
 and make repairs resource-aware. This is the most directly "gets better with
@@ -440,7 +456,7 @@ no ground-truth labels); and a held-out-accuracy trend over corpus/detector vers
 | ID | Capability | Window | Leverage |
 |----|-----------|--------|----------|
 | C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) + somatic slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap + somatic auto `somatic_site_overlap` PASS-site Jaccard, Mutect2 vs Strelka2, no user input; auto-run second germline/RNA tool + single-cell deferred) |
-| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); bwa-mem2/classic-BWA build+redirect, peak-RSS, assembly-signature + wider catalog pending) | Unattended-completion rate, corpus fuel |
+| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; per-contig alias harmonization (mito `M`↔`MT` + GRCh38 scaffold seed) shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); bwa-mem2/classic-BWA build+redirect, peak-RSS, assembly-signature + exhaustive per-assembly alias completeness pending) | Unattended-completion rate, corpus fuel |
 | C3 | Biological-plausibility verification | SHIPPED v0.3.0 | Verdict gets smarter about biology (germline Ti/Tv, het/hom; other assays deferred) |
 | C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased); Strelka2-native VAF, FAIL severity + PON reference wiring deferred | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
