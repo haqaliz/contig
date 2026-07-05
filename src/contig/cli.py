@@ -43,6 +43,13 @@ from contig.eval_history import (
     load_history,
     snapshot_from_report,
 )
+from contig.holdout import (
+    compare_to_baseline,
+    default_baseline_path,
+    default_holdout_path,
+    load_baseline,
+    save_baseline,
+)
 from contig.bundle import compute_output_checksums
 from contig.cost import cost_report
 from contig.signing import generate_keypair, signing_available, verify_signature
@@ -1551,6 +1558,122 @@ def eval_detector(
         typer.echo(f"  {cls}: precision {s.precision:.2f}  recall {s.recall:.2f}  (support {s.support})")
     for m in report.mismatches:
         typer.echo(f"  MISS {m.case_id}: expected {m.expected}, predicted {m.predicted}")
+
+
+@app.command(name="eval-guard")
+def eval_guard(
+    holdout: str = typer.Option(None, "--holdout", help="Held-out corpus JSONL (defaults to the shipped frozen set)."),
+    baseline: str = typer.Option(None, "--baseline", help="Baseline JSON (defaults to the shipped one)."),
+    detector: str = typer.Option("rules", "--detector", help="Which detector to guard (rules, rules-strict, ...)."),
+    tolerance: float = typer.Option(1e-9, "--tolerance", help="Float tolerance; accuracy below (baseline - tolerance) is a regression."),
+    update_baseline: bool = typer.Option(False, "--update-baseline", help="(Re)freeze the baseline to the current held-out accuracy. Deliberate, reviewed act."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the guard result as JSON."),
+) -> None:
+    """Guard detector accuracy against a frozen held-out set (moat #2, C6 slice 1).
+
+    Scores `detector` against a held-out corpus it was never tuned against and
+    compares the accuracy to a committed baseline, exiting non-zero on a real
+    regression so a detector or corpus change never regresses diagnosis
+    silently. `--update-baseline` deliberately (re)freezes the baseline instead
+    of guarding; that always exits 0.
+    """
+    holdout_path = Path(holdout) if holdout else default_holdout_path()
+    baseline_path = Path(baseline) if baseline else default_baseline_path()
+
+    try:
+        detector_fn = get_detector(detector)
+    except KeyError as exc:
+        typer.echo(str(exc).strip("\"'"), err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        cases = load_corpus(holdout_path)
+    except FileNotFoundError:
+        typer.echo(f"Held-out corpus not found: {holdout_path}", err=True)
+        raise typer.Exit(code=1)
+
+    report = evaluate_detector(cases, detector_fn)
+    holdout_sha = sha256_file(holdout_path)
+
+    if update_baseline:
+        snapshot = snapshot_from_report(
+            report,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            corpus_size=len(cases),
+            corpus_sha=holdout_sha,
+            contig_version=_pkg_version("contig"),
+            detector=detector,
+        )
+        save_baseline(snapshot, baseline_path)
+        typer.echo(
+            f"Baseline updated: accuracy {report.accuracy:.1%} over {len(cases)} held-out "
+            f"cases (detector={detector}, sha {holdout_sha[:12]}...)"
+        )
+        return
+
+    baseline_snapshot = load_baseline(baseline_path)
+    result = compare_to_baseline(
+        report,
+        baseline=baseline_snapshot,
+        holdout_sha=holdout_sha,
+        holdout_size=len(cases),
+        detector=detector,
+        tolerance=tolerance,
+    )
+
+    if json_out:
+        typer.echo(result.model_dump_json())
+
+    if not result.has_baseline:
+        typer.echo(
+            f"No held-out baseline at {baseline_path}; run 'contig eval-guard "
+            "--update-baseline' to freeze one.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if result.sha_mismatch:
+        typer.echo(
+            f"Held-out set changed (sha {holdout_sha[:12]} != baseline "
+            f"{(result.baseline_sha or '')[:12]}); the delta crosses different sets — "
+            "refreeze with --update-baseline.",
+            err=True,
+        )
+    if result.detector_mismatch:
+        typer.echo(
+            f"Baseline was measured with detector '{baseline_snapshot.detector}', guarding "
+            f"'{detector}' — comparison crosses detectors.",
+            err=True,
+        )
+
+    if not json_out:
+        delta_pp = (result.delta or 0.0) * 100
+        typer.echo(
+            f"Guard: accuracy {result.accuracy:.1%} vs baseline {result.baseline_accuracy:.1%} "
+            f"(delta {delta_pp:+.1f}pp) over {result.holdout_size} held-out cases [{detector}]"
+        )
+        for m in result.mismatches:
+            typer.echo(f"  MISS {m.case_id}: expected {m.expected}, predicted {m.predicted}")
+
+    if result.regressed:
+        delta_pp = (result.delta or 0.0) * 100
+        typer.echo(
+            f"REGRESSION: accuracy {result.accuracy:.1%} below baseline "
+            f"{result.baseline_accuracy:.1%} (delta {delta_pp:+.1f}pp).",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if result.improved:
+        if not json_out:
+            typer.echo(
+                f"Held-out accuracy improved ({result.accuracy:.1%} > baseline "
+                f"{result.baseline_accuracy:.1%}); consider --update-baseline to lock it in."
+            )
+        return
+
+    if not json_out:
+        typer.echo(f"Guard PASS: accuracy {result.accuracy:.1%} ≥ baseline {result.baseline_accuracy:.1%}.")
 
 
 @app.command()

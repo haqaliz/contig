@@ -4,21 +4,25 @@ A frozen, non-leaking held-out corpus lets us catch a detector or corpus
 change that regresses diagnosis before it ships: score the `rules` detector
 against cases it has never trained/tuned against, compare to a committed
 baseline, and fail loud on a real drop. This file covers Phase A (the
-held-out corpus + loader) and Phase B (the baseline record + pure
-comparator) only; the `eval-guard` CLI command is a later slice.
+held-out corpus + loader), Phase B (the baseline record + pure comparator),
+and Phase C (the `eval-guard` CLI command).
 """
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
+from contig.cli import app
 from contig.corpus import (
     _source_kind,
     default_corpus_path,
     evaluate_detector,
     load_corpus,
+    save_corpus,
 )
 from contig.holdout import (
     compare_to_baseline,
@@ -34,6 +38,8 @@ from contig.models import (
     EvalSnapshot,
     TaskEvent,
 )
+
+runner = CliRunner()
 
 # --- Phase A: held-out corpus + loader ------------------------------------
 
@@ -235,3 +241,85 @@ def test_worse_detector_scores_lower_than_rules_on_holdout():
     rules_report = evaluate_detector(cases)
 
     assert worse_report.accuracy < rules_report.accuracy
+
+
+# --- Phase C: `eval-guard` CLI command --------------------------------------
+
+
+def test_guard_update_then_pass(tmp_path):
+    baseline_path = tmp_path / "baseline.json"
+
+    freeze = runner.invoke(app, ["eval-guard", "--update-baseline", "--baseline", str(baseline_path)])
+    assert freeze.exit_code == 0
+    assert "Baseline updated" in freeze.output
+    assert baseline_path.exists()
+
+    guard = runner.invoke(app, ["eval-guard", "--baseline", str(baseline_path)])
+    assert guard.exit_code == 0
+    assert "Guard PASS" in guard.output
+
+
+def test_guard_regression_worse_detector(tmp_path, monkeypatch):
+    import contig.detect
+
+    def _worse(events: list[TaskEvent], log_text: str) -> Diagnosis:
+        return Diagnosis(failure_class="unknown", root_cause="stub", confidence=0.1)
+
+    monkeypatch.setitem(contig.detect.DETECTORS, "worse", _worse)
+
+    baseline_path = tmp_path / "baseline.json"
+    freeze = runner.invoke(
+        app, ["eval-guard", "--update-baseline", "--detector", "rules", "--baseline", str(baseline_path)]
+    )
+    assert freeze.exit_code == 0
+
+    guard = runner.invoke(app, ["eval-guard", "--detector", "worse", "--baseline", str(baseline_path)])
+    assert guard.exit_code == 1
+    assert "REGRESSION" in guard.output
+
+
+def test_guard_no_baseline(tmp_path):
+    baseline_path = tmp_path / "does_not_exist.json"
+
+    guard = runner.invoke(app, ["eval-guard", "--baseline", str(baseline_path)])
+    assert guard.exit_code == 1
+    assert "No held-out baseline" in guard.stderr
+
+
+def test_guard_sha_mismatch_warns(tmp_path):
+    holdout_a = tmp_path / "holdout_a.jsonl"
+    shutil.copy(default_holdout_path(), holdout_a)
+    baseline_path = tmp_path / "baseline.json"
+
+    freeze = runner.invoke(
+        app,
+        ["eval-guard", "--update-baseline", "--holdout", str(holdout_a), "--baseline", str(baseline_path)],
+    )
+    assert freeze.exit_code == 0
+
+    cases = load_corpus(holdout_a)
+    extra = cases[0].model_copy(update={"case_id": "holdout-extra"})
+    holdout_b = tmp_path / "holdout_b.jsonl"
+    save_corpus(cases + [extra], holdout_b)
+
+    guard = runner.invoke(
+        app,
+        ["eval-guard", "--holdout", str(holdout_b), "--baseline", str(baseline_path)],
+    )
+    assert guard.exit_code == 0
+    assert "changed" in guard.stderr.lower()
+    assert "sha" in guard.stderr.lower()
+
+
+def test_guard_json(tmp_path):
+    baseline_path = tmp_path / "baseline.json"
+    freeze = runner.invoke(app, ["eval-guard", "--update-baseline", "--baseline", str(baseline_path)])
+    assert freeze.exit_code == 0
+
+    import json
+
+    guard = runner.invoke(app, ["eval-guard", "--baseline", str(baseline_path), "--json"])
+    assert guard.exit_code == 0
+    data = json.loads(guard.output)
+    assert "regressed" in data
+    assert data["has_baseline"] is True
