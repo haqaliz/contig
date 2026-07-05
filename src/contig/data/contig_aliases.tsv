@@ -1,0 +1,14 @@
+# Contig alias equivalence table (scaffolds only).
+#
+# Source: UCSC hg38.chromAlias.txt (GRCh38 scaffold naming).
+# Mitochondrion (M <-> MT) is NOT listed here: it is a code constant
+# (`_MITO` in contig_aliases.py) since it is universal across references,
+# not reference-specific like these scaffolds.
+#
+# To extend: add one row per line, tab-separated, `ensembl_name<TAB>ucsc_name`.
+# Each row forms a bidirectional equivalence group (either spelling maps to
+# both). This seed set is intentionally small (a handful of rows) -- full
+# GRCh38 scaffold coverage is explicitly not required for this phase.
+GL000191.1	chrUn_GL000191v1
+GL000192.1	chrUn_GL000192v1
+KI270711.1	chr1_KI270711v1
