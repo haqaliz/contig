@@ -93,9 +93,13 @@ def plan_harmonization(fasta_path, gtf_path) -> HarmonizationPlan | None:
         if chosen != g:
             rename_map[g] = chosen
 
-    # Step 4: overlap before vs. after applying the rename map.
+    # Step 4: overlap before vs. after applying the rename map. Keep the
+    # post-harmonization names as a list (not just a set) so a collision
+    # between two distinct GTF seqnames is still visible for the
+    # injectivity check below.
     overlap_before = len(fa & gt)
-    mapped = {rename_map.get(g, g) for g in gt}
+    mapped_list = [rename_map.get(g, g) for g in gt]
+    mapped = set(mapped_list)
     overlap_after = len(fa & mapped)
 
     # Step 5: refuse / no-op — nothing resolvable, already consistent,
@@ -106,6 +110,16 @@ def plan_harmonization(fasta_path, gtf_path) -> HarmonizationPlan | None:
     # Step 6: explicit disjoint guard (redundant with step 5, kept explicit
     # per spec) — a wrong-assembly pair must never be "resolved".
     if not (fa & mapped):
+        return None
+
+    # Step 6b: injectivity guard — refuse if the rename map is not injective.
+    # Two distinct GTF seqnames must never land on the same post-harmonization
+    # name, whether both get renamed onto a shared target (e.g. GTF {M, MT}
+    # both resolving to FASTA chrM) or one gets renamed onto a name another
+    # seqname already has unchanged. Applying such a map would silently merge
+    # two distinct contigs into one downstream; refuse rather than corrupt
+    # the data.
+    if len(mapped_list) != len(mapped):
         return None
 
     # Step 7: derive the direction label. Preserve the legacy "add_chr" /

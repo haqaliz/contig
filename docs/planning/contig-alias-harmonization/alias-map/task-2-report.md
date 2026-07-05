@@ -80,3 +80,44 @@ No failures anywhere, including `test_cli.py`. Confirmed why: the existing `test
 
 1. **cli.py latent gap (expected, not fixed here):** `cli.py` line ~465 calls `harmonize_gtf(params["gtf"], hplan.direction, harmonized_path)`. `harmonize_gtf`'s `_apply` only branches on `"add_chr"` vs. else-treated-as-`"strip_chr"`. If `plan_harmonization` ever returns `direction == "alias"` in production, `cli.py` will silently apply a `strip_chr` transform instead of the real rename map — producing wrong output, not a clean failure. No test currently exercises this path (all cli fixtures are pure-prefix), so the full suite is green, but this is a real correctness gap until Phase 3 (apply the rename map in `harmonize_gtf`) and Phase 4 (wire `cli.py` to the new shape) land. Flagging per the task brief's explicit instruction not to fix `cli.py` in this phase.
 2. The `_candidate_names` double-expansion (prefix → alias → prefix) is a generalization beyond the brief's literal single-level formula; documented in code and above so Phase 3/4 authors aren't surprised by it. Verified by hand against every listed test case, not just asserted — worth a second pair of eyes given it's the trickiest part of this phase.
+
+## Fix — injectivity guard
+
+**Defect (from review):** `plan_harmonization`'s rename map was not guaranteed injective. Concrete repro: FASTA `{chrM, chr1}` + GTF `{M, MT}` → both `M` and `MT` resolved to `chrM`, so `rename_map == {"M": "chrM", "MT": "chrM"}`. The overlap-improvement check computed `mapped` as a *set* comprehension (`{rename_map.get(g, g) for g in gt}`), which silently collapsed the collision before it could be detected — the function happily returned a plan, and a downstream rewriter applying that map literally would silently merge two distinct contigs. Per CLAUDE.md's no-silent-failure stance, this must refuse instead of corrupt.
+
+**Change:** in `src/contig/reference_harmonize.py::plan_harmonization`, `mapped` is now built as a list first (`mapped_list = [rename_map.get(g, g) for g in gt]`) so duplicates stay visible, with `mapped = set(mapped_list)` derived from it for the existing overlap arithmetic (unchanged). A new **Step 6b** injectivity guard, placed after the existing overlap/refuse and disjoint gates and before direction-label derivation, refuses (`return None`) whenever `len(mapped_list) != len(mapped)` — i.e. whenever two distinct source GTF seqnames would land on the same post-harmonization name. This applies uniformly: it catches both two-freshly-renamed-siblings colliding (`M`/`MT` → `chrM`) and a renamed contig colliding with one that stays unchanged (`1`→`chr1` colliding with GTF's own already-present `chr1`).
+
+**New tests** (`tests/test_reference_harmonize.py`, class `TestPlanHarmonization`):
+- `test_colliding_targets_refuse` — FASTA `{chrM, chr1}`, GTF `{M, MT}` → `plan_harmonization(...) is None`.
+- `test_renamed_collides_with_staying_contig_refuses` — FASTA `{chr1}`, GTF `{1, chr1}` → `None` (this one was already refused by the pre-existing no-strict-improvement gate at Step 5, so it passed immediately, but stays as an explicit regression test for that collision shape).
+- `test_distinct_targets_still_harmonize` — positive control: FASTA `{chr1, chr2, chrM}`, GTF `{1, 2, MT}` → valid plan with `rename_map == {"1": "chr1", "2": "chr2", "MT": "chrM"}` (all targets distinct; guard does not over-refuse ordinary input).
+
+**Test-hygiene fix (also this commit):** `test_unmatched_contig_enumerated_rest_still_harmonized` tightened from `assert "weirdcontig" in plan.unmatched` to `assert plan.unmatched == ("weirdcontig",)`, asserting the exact tuple; its other assertions (`plan is not None`, exact `rename_map`) are unchanged.
+
+**RED** (new tests against pre-fix code):
+
+```
+$ uv run pytest tests/test_reference_harmonize.py -k "colliding_targets_refuse or renamed_collides_with_staying or distinct_targets_still_harmonize or unmatched_contig_enumerated" -v
+FAILED tests/test_reference_harmonize.py::TestPlanHarmonization::test_colliding_targets_refuse
+  AssertionError: assert HarmonizationPlan(rename_map={'MT': 'chrM', 'M': 'chrM'}, direction='alias', ...) is None
+3 passed, 1 failed
+```
+(`test_renamed_collides_with_staying_contig_refuses`, `test_distinct_targets_still_harmonize`, and the tightened `test_unmatched_contig_enumerated_rest_still_harmonized` already passed pre-fix; `test_colliding_targets_refuse` was the true RED, confirming the defect.)
+
+**GREEN** (after adding the Step 6b guard):
+
+```
+$ uv run pytest tests/test_reference_harmonize.py -v
+37 passed
+```
+
+**Full suite:**
+
+```
+$ uv run pytest
+1116 passed, 1 skipped in 10.88s
+```
+
+(1113 baseline + 3 new tests = 1116; no regressions.)
+
+**Commit:** `fix(reference): refuse a non-injective rename map (no silent contig merge)` — see git log for hash.

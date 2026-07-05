@@ -208,7 +208,7 @@ class TestPlanHarmonization:
         gtf = _write(tmp_path / "genes.gtf", _gtf("1", "2", "MT", "weirdcontig"))
         plan = plan_harmonization(fa, gtf)
         assert plan is not None
-        assert "weirdcontig" in plan.unmatched
+        assert plan.unmatched == ("weirdcontig",)
         assert plan.rename_map == {"1": "chr1", "2": "chr2", "MT": "chrM"}
 
     def test_wrong_assembly_no_candidates_refuses(self, tmp_path):
@@ -216,6 +216,35 @@ class TestPlanHarmonization:
         fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2"))
         gtf = _write(tmp_path / "genes.gtf", _gtf("scaffold_1", "scaffold_2"))
         assert plan_harmonization(fa, gtf) is None
+
+    # --- injectivity guard (refuse-on-ambiguity, no silent contig merge) ---
+
+    def test_colliding_targets_refuse(self, tmp_path):
+        """FASTA {chrM,chr1} + GTF {M,MT}: both M and MT resolve to the same
+        FASTA target chrM. Applying that rename map would silently merge two
+        distinct GTF seqnames onto one contig, so plan_harmonization must
+        refuse rather than hand back an ambiguous map."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chrM", "chr1"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("M", "MT"))
+        assert plan_harmonization(fa, gtf) is None
+
+    def test_renamed_collides_with_staying_contig_refuses(self, tmp_path):
+        """FASTA {chr1} + GTF {1,chr1}: renaming '1' -> 'chr1' collides with
+        the GTF's own already-matching 'chr1' seqname. Two distinct source
+        seqnames would land on the same target → refuse."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chr1"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("1", "chr1"))
+        assert plan_harmonization(fa, gtf) is None
+
+    def test_distinct_targets_still_harmonize(self, tmp_path):
+        """Positive control: a normal UCSC/Ensembl mix where every renamed
+        target is distinct must still produce a valid plan (the injectivity
+        guard must not over-refuse ordinary harmonizable input)."""
+        fa = _write(tmp_path / "ref.fa", _fasta("chr1", "chr2", "chrM"))
+        gtf = _write(tmp_path / "genes.gtf", _gtf("1", "2", "MT"))
+        plan = plan_harmonization(fa, gtf)
+        assert plan is not None
+        assert plan.rename_map == {"1": "chr1", "2": "chr2", "MT": "chrM"}
 
 
 # ===========================================================================
