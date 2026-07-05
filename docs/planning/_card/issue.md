@@ -1,53 +1,71 @@
-# Card: feat/somatic-concordance
+# Card: feat/eval-holdout-guard
 
-Source: inline brief from the `contig-next` handoff (no GitHub issue; slug-based work).
-Type: feat · id/slug: somatic-concordance · owner: aliz · branch: feat/somatic-concordance/aliz
+- **Type:** feat
+- **Id/slug:** eval-holdout-guard
+- **Owner:** aliz
+- **Branch:** feat/eval-holdout-guard/aliz
+- **Source:** inline brief (no GitHub issue; produced by the `contig-next` handoff)
 
 ## Brief
 
-Add a C1-style cross-tool concordance axis to the **somatic** verdict, corroborating
-the run's Mutect2 VCF against the Strelka2 VCF that the *same* sarek
-`--tools strelka,mutect2` run already emitted. Unlike germline concordance there is
-**no second caller to run and no user-supplied input** — both call sets are already
-first-class outputs of the same run bundle.
+Build the first concrete slice of **C6 — eval flywheel as a continuous loop**
+(`docs/technical/CAPABILITY_ROADMAP.md` §C6, lines 390-414). C6 is the one pending
+engine capability whose dependencies (C1–C5) have now all shipped through v0.16.0, and
+it is not started: there is no held-out corpus split and no regression-guard command in
+`src/` today (grep confirms "held-out" appears only as a to-build in `CAPABILITY_ROADMAP.md:404-407`
+and `ROADMAP.md:168`).
 
-Reuse the `evaluate_concordance` primitive and the `kind="concordance"` reporting
-path, gated to `assay == "somatic_variant_calling"`, capped at WARN, and `unverified`
-(never a false pass) when a VCF is missing or the two share no comparable PASS sites.
+**The slice:**
 
-### Key caveat to dig on first
+- Freeze a **held-out split** of the labeled detector corpus.
+- Add a single command that scores the current detector against that held-out split.
+- Add a **regression guard**: a corpus or detector change that lowers held-out accuracy is
+  flagged before it ships.
 
-Strelka2 somatic SNVs carry **no standard `GT`**, so the shipped germline
-`genotype_concordance` metric won't transfer. The honest metric here is
-**PASS-site overlap / shared-call fraction** (F1 of one caller's PASS calls against
-the other), keyed on `(CHROM,POS,REF,ALT)`. The real work is in the somatic-specific
-representation: FILTER/`PASS` conventions per caller, indel normalization, and how
-Strelka2 splits SNV vs indel output (`somatic.snvs.vcf.gz` / `somatic.indels.vcf.gz`).
+**Reuse, don't rebuild.** The pieces C6 consumes are already shipped: `EvalSnapshot`
+(`src/contig/models.py:397`), the committed `eval_history.jsonl` +
+`src/contig/eval_history.py`, `contig eval-detector --snapshot/--history`
+(`src/contig/cli.py:1485`), and the `benchmark`/`coverage`/`clusters` commands. This slice
+wraps that machinery with a held-out split and a guard — it does not reinvent the detector
+eval.
 
-### Guardrails (from CLAUDE.md / CAPABILITY_ROADMAP)
+**Test-first acceptance** (the roadmap's own, `CAPABILITY_ROADMAP.md:409-411`):
+a frozen held-out set; a known-good detector scores above a threshold; a deliberately worse
+detector is flagged as a regression.
 
-- Corroboration only — at most WARN, never promotes UNVERIFIED to PASS.
-- No raw-read egress: operates on VCFs on the user's compute.
-- Test-first with synthetic two-caller somatic VCF fixtures; no real nf-core/sarek run in CI.
-- Layer 2 only (verify axis), no Layer 1 workflow authoring.
-- Research-use only; a somatic verdict is "ran correctly and reproducibly," never a cancer diagnosis.
+## Why this is the moat (grounding)
 
-## Provenance in the docs (where this work is named)
+- It is **moat #2 made real** — `CLAUDE.md`: the moat is "execution/verification/reproducibility
+  infrastructure **+ accumulated workflow-evaluation data**." C6 turns the accumulated eval
+  data into a measured, regression-guarded loop so every other shipped verdict compounds
+  instead of silently drifting.
+- It **gets better as base models improve and can't be made redundant by them** (`CLAUDE.md`
+  constraint #3): the model-swap harness already exists (`FEATURES.md:225`); a held-out
+  benchmark is what lets a better diagnoser be *proven* better rather than asserted.
+- It is **Layer 2** (verification/eval infrastructure), inside the founder's edge (pure
+  engineering, no wet-lab/clinical), and its only prior blocker ("consumes C1–C5") is now
+  satisfied.
 
-- `CAPABILITY_ROADMAP.md:311` — C4: "A concordance hook (C1) against a second somatic caller."
-- `CAPABILITY_ROADMAP.md:288-293` — VAF-plausibility slice defers "the second-somatic-caller concordance hook (C1-style — Strelka2 vs Mutect2)."
-- `CHANGELOG.md:44-45` (v0.14.0) — defers "the Strelka2-vs-Mutect2 somatic concordance hook (C1)."
-- `CHANGELOG.md:76-80` (v0.13.0) — somatic launches sarek with `--tools strelka,mutect2` (both callers in one run).
-- `FEATURES.md:253` — "the Strelka2-vs-Mutect2 concordance hook ... deferred."
+## Known caveat / the one real design decision (from the contig-next dig)
 
-## Shipped concordance precedent to mirror
+The roadmap's aspirational framing folds "C1–C5 outcomes" into one accuracy number, but
+**concordance (C1) and plausibility (C3) signals are WARN-capped corroboration WITHOUT
+ground-truth labels** — they cannot be scored as classification accuracy the way the labeled
+failure-class detector corpus can. So the honest first slice is:
 
-- Germline `--concordance-vcf` (v0.2.0) and `--concordance-auto` (v0.4.0).
-- RNA-seq `--concordance-counts` (v0.12.0).
-- All via `verification/concordance.py` `evaluate_concordance`, `kind="concordance"`, WARN-capped, `unverified` below a comparability floor.
+> **a frozen held-out split of the labeled failure-class corpus + a detector-accuracy
+> regression guard** — NOT a grand unified "verification accuracy" folding in unlabeled
+> signals.
 
-## Shipped somatic precedent to reuse
+The one real design decision is the **split boundary**: where the held-out split physically
+lives so it can never leak into the training/eval corpus that `eval-detector` already scores
+over the whole of. Folding in the unlabeled C1/C3 signals is explicitly a **later slice** that
+needs its own labeling design; flag it, don't build it here.
 
-- `verification/somatic_plausibility.py` (v0.14.0) — how the somatic Mutect2 VCF is
-  located (path component below run dir), how the tumor sample is identified
-  (`##tumor_sample=` header), and how `_discover_qc` gates on `assay == "somatic_variant_calling"`.
+## Strategic guardrails (must hold)
+
+- No Layer-1 workflow authoring as a product surface.
+- No raw-read egress; deterministic, local, no network in tests.
+- Nothing needing wet-lab/clinical credentials or proprietary datasets.
+- No correctness over-claiming; UNVERIFIED is never rendered as PASS.
+- Test-first: every unit lands with its failing test written first.
