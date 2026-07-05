@@ -14,17 +14,17 @@ class Contig < Formula
   on_macos do
     on_arm do
       url "https://github.com/haqaliz/contig/releases/download/v0.16.0/contig-macos-arm64"
-      sha256 "9cf4346dfa0f5f18a7702888f35a5806dff274164e16352df4a141e4dc7ebad7"
+      sha256 "0c84e7dc41fb1987e61921a12254e42a8333e90104b1e6b1f3a67d165bdfc808"
     end
     on_intel do
       url "https://github.com/haqaliz/contig/releases/download/v0.16.0/contig-macos-x86_64"
-      sha256 "3b5cd963747a48cf2645d76bc2134166227d22a3f25145e10eb3d623dca9839a"
+      sha256 "e9eb4e0bb159e363de8af632ce2e0b9cffee37a8e240784d0b6c7d0f66335f44"
     end
   end
 
   on_linux do
     url "https://github.com/haqaliz/contig/releases/download/v0.16.0/contig-linux-x86_64"
-    sha256 "4ec8ddf6b2279cab1f1d74afc9e27f717c5d5db08ee9f57b79c0aed90b766ebc"
+    sha256 "d8e1a508453445b66c12a75a105a3b5e309fd5083ec9da8d261e9d8f4ffa65b7"
   end
 
   def install
