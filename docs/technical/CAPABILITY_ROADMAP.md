@@ -425,8 +425,9 @@ those rules exist. **Honest scope, unchanged from the PRD:** this slice guards t
 the unlabeled C1 concordance / C3 plausibility corroboration signals and repair-loop
 (whole self-heal) accuracy into one number (the "fold C1–C5 into one accuracy number"
 framing above is *not yet built* — it needs its own labeling design since C1/C3 carry
-no ground-truth labels); a held-out-accuracy trend over corpus/detector versions
-(mirroring `eval-detector --history`); wiring the guard into CI.
+no ground-truth labels); and a held-out-accuracy trend over corpus/detector versions
+(mirroring `eval-detector --history`). The guard is wired into CI
+(`.github/workflows/ci.yml`), so a regression fails the build.
 
 **Eval data captured:** this *is* the capture loop; it closes over all the above.
 

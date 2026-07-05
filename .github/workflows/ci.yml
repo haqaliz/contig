@@ -18,6 +18,9 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
       - run: uv run pytest
+      # C6 regression guard: fail the build if the detector's accuracy on the frozen
+      # held-out set drops below the committed baseline (holdout_baseline.json).
+      - run: uv run contig eval-guard
 
   dashboard:
     name: Dashboard (tsc, lint, e2e)

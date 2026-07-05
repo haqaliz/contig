@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-07-05
+
 ### Added
 
 - **Held-out regression guard for the diagnosis detector** (capability C6, eval
@@ -31,8 +33,10 @@ All notable changes to Contig are recorded here. The format follows
   only**. Folding in the unlabeled C1 concordance / C3 plausibility corroboration
   signals (no ground-truth labels, so not classification-accuracy scoreable) and
   repair-loop (whole self-heal) accuracy into the same guard are **deferred**
-  follow-on slices, as is wiring the guard into CI. Local, deterministic, no
-  network; `llm` is never the guard's default detector.
+  follow-on slices. The guard now runs in CI (`.github/workflows/ci.yml`, after the
+  pytest step), so a detector or corpus change that regresses held-out accuracy fails
+  the build. Local, deterministic, no network; `llm` is never the guard's default
+  detector.
 
 ## [0.16.0] - 2026-07-05
 
