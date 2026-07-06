@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-07-07
+
 ### Added
 
 - **Walltime-informed scaling for the `time_limit` self-heal** (capability C2, self-heal
@@ -672,6 +674,7 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.20.0]: https://github.com/haqaliz/contig/releases/tag/v0.20.0
 [0.19.0]: https://github.com/haqaliz/contig/releases/tag/v0.19.0
 [0.18.0]: https://github.com/haqaliz/contig/releases/tag/v0.18.0
 [0.14.0]: https://github.com/haqaliz/contig/releases/tag/v0.14.0
