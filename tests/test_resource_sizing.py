@@ -1,10 +1,11 @@
 """Tests for the pure peak-RSS memory sizing helper (capability C2).
 
 `peak_informed_memory_gb` sizes an OOM memory retry from the observed peak_rss
-in the run's trace via a fallback ladder (OOM'd task own peak -> same-process
-sibling peak -> unavailable). Pure: no I/O, no run. The ceiling-clamp and
-never-shrink math live later in apply_patch, so these tests assert the raw
-sized target the helper returns.
+in the run's trace via an honest two-tier ladder (OOM'd task's own observed peak
+-> unavailable/blind). Pure: no I/O, no run. The ceiling-clamp and never-shrink
+math live later in apply_patch, so these tests assert the raw sized target the
+helper returns. (Same-process sibling rescue is a deferred follow-on requiring a
+coarse process column in the trace parser.)
 """
 
 import math
@@ -58,7 +59,12 @@ def test_multi_task_oom_sizes_off_max_peak():
     assert result.target_gb == math.ceil(9216 / 1024 * 1.5)
 
 
-def test_tier_b_sibling_when_own_row_was_killed():
+def test_same_process_sibling_is_not_rescued():
+    # Scoped-out follow-on: rescuing an OOM whose own peak is a dash (0) from a
+    # same-`process` but different-`name` sibling that carries a real peak needs a
+    # coarse process column in the trace parser (today process == name, so the
+    # sibling key can never diverge from the own-task key). Until that lands we
+    # DELIBERATELY do not rescue via a sibling -> the honest answer is unavailable.
     events = [_oom_event("STAR_ALIGN", "STAR_ALIGN (S1)")]
     usage = [
         _usage("STAR_ALIGN", "STAR_ALIGN (S1)", 0.0),  # killed, dash -> 0
@@ -67,9 +73,7 @@ def test_tier_b_sibling_when_own_row_was_killed():
 
     result = peak_informed_memory_gb(events, usage, factor=1.5)
 
-    assert result.tier == "sibling"
-    assert result.observed_peak_mb == 6144.0
-    assert result.target_gb == math.ceil(6144 / 1024 * 1.5)
+    assert result == PeakSizing(target_gb=None, tier="unavailable", observed_peak_mb=None)
 
 
 def test_tier_c_unavailable_when_no_positive_same_process_row():

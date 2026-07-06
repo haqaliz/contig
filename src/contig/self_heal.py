@@ -418,8 +418,8 @@ def _oom_memory_sizing(diagnosis, run_dir, events) -> tuple[int | None, str | No
     """Size an OOM memory retry from the run's observed peak RSS.
 
     For an OOM failure, parse the run's (partial) trace and size the retry to the
-    failed task's observed peak via ``peak_informed_memory_gb`` (own peak ->
-    same-process sibling -> blind fallback), returning the pre-clamp target GB for
+    failed task's observed peak via ``peak_informed_memory_gb`` (own observed peak
+    -> blind fallback), returning the pre-clamp target GB for
     ``apply_patch`` plus a ``RepairStep.detail`` telemetry line. For any other
     failure class this is a no-op ``(None, None)`` -- sizing only touches OOM /
     memory; the blind ``x2`` bump and the ``time_limit`` branch are unchanged.

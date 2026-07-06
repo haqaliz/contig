@@ -2497,56 +2497,6 @@ def test_self_heal_sizes_oom_retry_from_observed_peak(tmp_path):
     assert "oom_task" in step.detail
 
 
-def test_self_heal_sizes_oom_retry_from_sibling_peak(tmp_path, monkeypatch):
-    # The killed task's own row lost its peak (a dash -> 0), but a same-process
-    # sibling that completed retains one. The sizer's sibling rung must supply
-    # the 60 GB peak (-> 90 GB retry) and the detail must name the "sibling" tier.
-    #
-    # The trace parser collapses process -> the full task `name`, so a same-
-    # process/different-name sibling row cannot be expressed as raw TSV through
-    # it; we inject the sibling-shaped usage the wiring reads (the shape a trace
-    # with a distinct `process` column would yield). The OOM event itself still
-    # flows from the real attempt-1 trace.
-    from contig.models import TaskResource
-
-    oom_trace = _peak_trace("FAILED", 137, "-")
-    ok_trace = _peak_trace("COMPLETED", 0, "20 GB")
-
-    def fake_usage(_path):
-        proc = "NFCORE_RNASEQ:STAR_ALIGN (S1)"
-        return [
-            TaskResource(process=proc, name=proc, realtime_sec=1.0, peak_rss_mb=0.0, pct_cpu=100.0),
-            TaskResource(
-                process=proc,
-                name="NFCORE_RNASEQ:STAR_ALIGN (S2)",
-                realtime_sec=1.0,
-                peak_rss_mb=61440.0,
-                pct_cpu=100.0,
-            ),
-        ]
-
-    monkeypatch.setattr("contig.self_heal.parse_resource_usage_file", fake_usage)
-    state = {"n": 0, "retry_cfg": None}
-
-    def executor(cmd, trace_path):
-        state["n"] += 1
-        if state["n"] == 1:
-            _write(trace_path, oom_trace, "out of memory exit 137")
-            return 1
-        state["retry_cfg"] = (Path(trace_path).parent / "nextflow.config").read_text()
-        _write(trace_path, ok_trace, "done")
-        return 0
-
-    record = _heal(tmp_path, executor)
-    assert RunSummary.from_events(record.events).succeeded is True
-    assert "process.resourceLimits = [ memory: 90.GB ]" in state["retry_cfg"]
-    assert record.target.resource_limits["memory"] == "90.GB"
-    step = record.repair_history[0]
-    assert step.outcome == "patched_and_retried"
-    assert "observed peak" in step.detail
-    assert "sibling" in step.detail
-
-
 def test_self_heal_oom_falls_back_to_blind_bump_without_usable_peak(tmp_path):
     # No usable observed peak in the trace (the killed row has no peak_rss) ->
     # the retry must scale the OLD blind x2 way (8 GB -> 16 GB) and the detail
