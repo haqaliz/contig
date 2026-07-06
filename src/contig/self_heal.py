@@ -29,6 +29,7 @@ from contig.models import Diagnosis, ExecutionTarget, Patch, QCResult, RepairSte
 from contig.notify import emit_event
 from contig.reference_check import fasta_contigs, gtf_contigs
 from contig.repair import propose_patches
+from contig.resource_sizing import PEAK_RSS_SAFETY_FACTOR, peak_informed_memory_gb
 from contig.runner import (
     Executor,
     IndexBuilder,
@@ -413,12 +414,38 @@ def _resource_ceiling_block(diagnosis, target, ceiling) -> str | None:
     return None
 
 
+def _oom_memory_sizing(diagnosis, run_dir, events) -> tuple[int | None, str | None]:
+    """Size an OOM memory retry from the run's observed peak RSS.
+
+    For an OOM failure, parse the run's (partial) trace and size the retry to the
+    failed task's observed peak via ``peak_informed_memory_gb`` (own observed peak
+    -> blind fallback), returning the pre-clamp target GB for
+    ``apply_patch`` plus a ``RepairStep.detail`` telemetry line. For any other
+    failure class this is a no-op ``(None, None)`` -- sizing only touches OOM /
+    memory; the blind ``x2`` bump and the ``time_limit`` branch are unchanged.
+    """
+    if diagnosis.failure_class != "oom":
+        return None, None
+    trace_path = run_dir / "trace.txt"
+    usage = parse_resource_usage_file(trace_path) if trace_path.exists() else []
+    sizing = peak_informed_memory_gb(events, usage)
+    if sizing.target_gb is not None:
+        detail = (
+            f"scaled memory to ~{sizing.target_gb} GB from observed peak "
+            f"{sizing.observed_peak_mb:.0f} MB (x{PEAK_RSS_SAFETY_FACTOR}, {sizing.tier})"
+        )
+    else:
+        detail = "no usable observed peak; blind x2 fallback (unavailable)"
+    return sizing.target_gb, detail
+
+
 def apply_patch(
     target: ExecutionTarget,
     patch: Patch,
     params: dict[str, object] | None = None,
     *,
     ceiling: dict[str, int] | None = None,
+    observed_target_gb: int | None = None,
 ) -> tuple[ExecutionTarget, dict[str, object]]:
     """Apply a patch to the run inputs, returning the updated (target, params).
 
@@ -428,7 +455,10 @@ def apply_patch(
       old `--max_memory` params are ignored). The `ceiling` kwarg (default:
       ``{"memory": CEILING_MEMORY_GB, "time": CEILING_TIME_H}``) sets an absolute
       upper bound on each auto-scaled value. A pre-existing value that already
-      exceeds the ceiling is preserved as-is (never-shrink rule).
+      exceeds the ceiling is preserved as-is (never-shrink rule). When
+      ``observed_target_gb`` is supplied it overrides the blind memory
+      multiplier as the pre-clamp target; the ceiling clamp and never-shrink
+      rule still apply to it unchanged (time is unaffected).
     - `param`: merge `set_param` (its concrete key/value swap) into the pipeline
       params so the corrected parameter reaches the re-run's command.
     - `reference`: merge `set_param` (the reference swap, e.g. igenomes_ignore)
@@ -449,7 +479,11 @@ def apply_patch(
         limits = dict(target.resource_limits)
         if "memory" in mult:
             current = _lead_number(limits.get("memory"), _DEFAULT_MEMORY_GB)
-            bumped = int(current * int(mult["memory"]))
+            bumped = (
+                observed_target_gb
+                if observed_target_gb is not None
+                else int(current * int(mult["memory"]))
+            )
             capped = min(bumped, ceiling["memory"])
             final = max(capped, int(current))
             limits["memory"] = f"{final}.GB"
@@ -971,11 +1005,16 @@ def self_heal_run(
                     runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
                     harmonized_reference_direction=harmonized_reference_direction)
 
-            current_target, current_params = apply_patch(current_target, safe, current_params, ceiling=resource_ceiling)
+            observed_target_gb, detail = _oom_memory_sizing(diagnosis, run_dir, events)
+            current_target, current_params = apply_patch(
+                current_target, safe, current_params,
+                ceiling=resource_ceiling, observed_target_gb=observed_target_gb,
+            )
             _record_attempt(
                 run_dir,
                 repair_history,
-                RepairStep(attempt=attempt, diagnosis=diagnosis, patch=safe, outcome="patched_and_retried"),
+                RepairStep(attempt=attempt, diagnosis=diagnosis, patch=safe,
+                           outcome="patched_and_retried", detail=detail),
             )
             attempt += 1
 

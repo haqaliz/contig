@@ -1,93 +1,87 @@
-# Understanding: contig-alias-harmonization
+# Understanding — peak-rss-resource-scaling (Phase 2 deep dig)
 
-Written after mapping the v0.9.0 harmonizer seam (Phase 2 dig). Every claim carries a `file:line`.
+Synthesized from two read-only mapping agents + a direct config check. All refs are
+`src/contig/*` in this worktree; line numbers exact at dig time.
 
-## What the work is really asking
+## What the work really asks
 
-When a user supplies a **UCSC-style FASTA** (`chr1…chr22, chrX, chrY, chrM`) and an
-**Ensembl-style GTF** (`1…22, X, Y, MT`), today's chr-prefix harmonizer
-(`reference_harmonize.py:39-79`) harmonizes the **autosomes** correctly but produces the
-**wrong mitochondrial name** and lets the run proceed with the mito contig silently
-mismatched. The feature closes that silent gap by resolving the mitochondrial alias
-(`M`↔`MT`) as part of harmonization, while preserving the refuse-on-wrong-assembly
-invariant.
+Replace the blind memory multiplier in the OOM self-heal with an **evidence-based**
+retry: size the memory bump to the failed task's **observed peak memory**
+(`TaskResource.peak_rss_mb`) parsed from the run's partial `trace.txt` at heal time,
+falling back to the existing blind multiplier when no usable observed peak exists.
+Layer 2, deepens unattended-completion, captures richer eval data.
 
-## Why today's harmonizer mishandles the canonical case (the concrete bug)
+## Feasibility — RESOLVED (the make-or-break checks)
 
-Trace `plan_harmonization({chr1,chr2,chrM}, {1,2,MT})`:
-- `_all_chr_prefixed(fa)=True`, `_all_chr_prefixed(gt)=False` → `direction="add_chr"`
-  (`reference_harmonize.py:59-61`).
-- `transformed = {f"chr{n}" for n in gt}` = `{chr1, chr2, chrMT}` (`:61`). **`chrMT ≠ chrM`.**
-- Intersection guard `transformed & fa` = `{chr1, chr2}` — non-empty → **passes** (`:71`).
-- `harmonize_gtf` rewrites GTF col1 with `_apply` (pure `chr`-add, `:86-91`) → GTF mito
-  becomes `chrMT`.
-- Post-condition re-check `check_reference_consistency(fasta, harmonized_gtf)` is
-  **disjoint-only** (`reference_check.py:51-53`): `{chr1,chr2,chrM}` shares `{chr1,chr2}`
-  with `{chr1,chr2,chrMT}` → **not disjoint → returns `[]` → run proceeds** (`cli.py:470-481`).
+1. **`peak_rss` IS emitted on real runs.** `nfconfig.py:49` `generate_nextflow_config`
+   writes **no `trace {}` block**, so `-with-trace <path>` (`runner.py:230`) uses
+   Nextflow's *default* trace field set, which includes `peak_rss` / `%cpu`. The parser
+   `events.parse_resource_usage_file` (`events.py:106-142`) resolves columns by header
+   *name*, so it reads them regardless of order. → The feature is **not inert**.
+2. **The trace is on disk at heal time.** The executor guarantees `run_dir/trace.txt`
+   exists when `run_pipeline` returns (`runner.py:123-125, 270`); the heal loop has
+   `run_dir` in scope (`self_heal.py:737`) and already imports
+   `parse_resource_usage_file` (`self_heal.py:27`). `_finalize` reads the same path
+   (`self_heal.py:1052-1054`) — but only at finalize; `exc.record.resource_usage` is
+   still `[]` at heal time. We parse it ourselves at the patch site.
+3. **The OOM'd task is identifiable.** `Diagnosis` (`models.py:228-234`) carries no
+   task name — only `failure_class`, `evidence` (free-text). But `exc.record.events`
+   (`self_heal.py:771`) holds `TaskEvent{process, name, status, exit, is_failure}`
+   (`models.py:107-115`); the OOM'd task is the `exit == 137` event
+   (`detect.py:42`), joined to the `TaskResource` row by `process`/`name` (shared,
+   `models.py:126-127`).
 
-Result: mito gene annotations sit on `chrMT` while the FASTA/BAM contig is `chrM` →
-mito-region quantification silently yields nothing. This is the "residual case" the brief
-names as the real target.
+## The exact seam
 
-## Affected areas (the seam)
+- OOM is a **safe** patch (`repair.py:16-25`, `operation={"multiply":{"memory":2}}`),
+  so it bypasses the gated branches (829/871/922) and is applied on the **safe path at
+  `self_heal.py:974`**, then recorded as `RepairStep(outcome="patched_and_retried")`
+  (975-979, `detail` currently unset).
+- `apply_patch` (`self_heal.py:416-475`) is **pure** — only `target, patch, params,
+  ceiling`; no run_dir. The memory math is 447-455: `bumped = int(current*mult)`,
+  `capped = min(bumped, ceiling)`, `final = max(capped, int(current))` (**never-shrink**),
+  written as `f"{final}.GB"`.
+- Ceiling give-up pre-check `_resource_ceiling_block` (404-413, called at 965) →
+  `gave_up_at_ceiling`. Loop bound = `max_attempts` (default 3, `self_heal.py:718`).
 
-| Concern | Location |
-|---|---|
-| Prefix direction predicate to widen | `reference_harmonize.py:59-67` |
-| The per-name transform (`_apply`, pure chr add/strip) | `reference_harmonize.py:86-91` |
-| Post-transform intersection guard (refuse invariant) | `reference_harmonize.py:71` |
-| `HarmonizationDirection` literal (persisted as free-form `str`) | `reference_harmonize.py:29`; models `models.py:203,283` |
-| GTF col1 stream-rewriter | `harmonize_gtf` `reference_harmonize.py:110-161` |
-| Detector disjoint-only rule (pre-flight refuse) | `reference_check.py:48-64` |
-| Launch chokepoint (invoke, scratch path, post-check, thread to finalize) | `cli.py:453-509, 530-551, 571` |
-| WARN `reference_harmonized` breadcrumb | `self_heal.py:1005-1019` |
-| Reproduce re-derivation (rerun/resume re-enter dispatch with original GTF) | `cli.py:619-640, 1269-1289` |
-| Existing tests to extend | `tests/test_reference_harmonize.py`, `tests/test_reference_check.py`, `tests/test_cli.py:582-745`, `tests/test_self_heal.py:363-420` |
+**Design implication:** compute the peak-informed target *at line 974* (where `run_dir`
++ `events` are in scope) and feed it into the patch, rather than threading run_dir into
+the pure `apply_patch`. Keep the ceiling clamp + never-shrink + `gave_up_at_ceiling`.
 
-## Design decisions / ambiguities (for the PRD interview)
+## Open questions for the PRD interview (design decisions, not code facts)
 
-1. **Alias-table scope.** Recommend slice 1 = **the mitochondrial alias `M`↔`MT` only**
-   (the canonical, unambiguous pair named in every deferral note). The wider
-   UCSC↔Ensembl↔GenBank **scaffold/accession** tables (`GL…`, `KI…`) are
-   assembly-specific and ambiguous — no reliable universal source — a real "no source"
-   risk like the deferred GTF-version resolution (v0.7.0 deferrals).
-   **Defer scaffolds explicitly.** Structure the alias map so extending it later is trivial.
+1. **Safety factor.** Target = `observed_peak × factor`. Default factor? (e.g. 1.5×.)
+2. **Fallback ladder when the OOM'd row lacks a usable peak.** A signal-killed task's
+   own `peak_rss` may be `-` → parser yields `0.0` (**must treat 0/absent as "unknown,"
+   not "0 MB"**, `events.py:51-55`). Ladder: (a) OOM'd task's own peak → (b) max peak of
+   *same-process* completed rows in the partial trace → (c) blind multiplier (today's
+   behavior). Confirm the ladder + that (c) never regresses a working heal.
+3. **Never-shrink interaction.** For an OOM-killed task, observed peak ≈ the cgroup cap
+   ≈ current request, so `peak × factor (≥1)` exceeds `current` and survives
+   `max(capped, current)`. If observed peak < current (mislabeled/sibling row), the
+   never-shrink rule protects it. Confirm this is the intended semantics.
+4. **Engine scope.** Nextflow only. Snakemake's artifact is `stats.json`
+   (`runner.py:260`), which the TSV parser doesn't read → snakemake falls back to the
+   blind multiplier. Confirm scope = Nextflow-only this slice.
+5. **Walltime (`time_limit`) symmetry.** Brief says "OOM/walltime." `realtime_sec` is in
+   the same trace. Scope decision: memory-only this slice, or also size walltime to
+   `observed_realtime × factor`? (Recommend memory-first; walltime as a stated
+   follow-on, unless cheap to include.)
+6. **Eval-data capture depth.** Minimal: put observed-peak-vs-requested + which fallback
+   fired into `RepairStep.detail` (free-text `str | None`, no model change). Deeper:
+   extend `FailureCase`/`failure_case_from_run` (`corpus.py:107-129`) with the observed
+   peak. Confirm slice depth.
 
-2. **Directional canonicalization rule.** The mito spelling correlates with the naming
-   convention: `add_chr` ⇒ FASTA is UCSC-style ⇒ mito is `chrM`; `strip_chr` ⇒ FASTA is
-   Ensembl-style ⇒ mito is `MT`. So the transform is: apply the prefix op, then
-   canonicalize a bare `{M,MT}` token to `M` (for `add_chr`) or `MT` (for `strip_chr`).
-   Then `_apply("MT","add_chr") = "chrM"` and `_apply("chrM","strip_chr") = "MT"`. Verify
-   in tests against the canonical UCSC↔Ensembl pairing.
+## TDD fixtures to extend (from the dig)
 
-3. **How the plan represents the transform.** Two options — (A) keep `direction` as the
-   prefix decision and always apply mito canonicalization as a composed step (smallest
-   blast radius; signature stable); (B) generalize the plan to a concrete per-contig
-   rename map (cleaner, generalizes to future aliases, but changes `direction` semantics
-   and the breadcrumb). Lean (A) for the slice; note (B) as the future shape. Either way
-   `direction`/`harmonized_direction` are free-form `str` (`models.py:203,283`) → **no
-   schema migration**. The breadcrumb message must make the alias visible.
+- `tests/test_self_heal.py:105-125` `test_self_heal_populates_resource_usage_from_trace`
+  — closest heal-path fixture (fake executor writes a trace with peak_rss=1228.8).
+- `tests/test_resource.py` `_trace(...)` helper (header incl. `peak_rss %cpu`), MB/GB/KB
+  + dash→0 + header-order-independence cases.
+- `tests/test_events.py:19,38-77` — the `exit 137 / FAILED` trace-row fixtures (event
+  level, no peak_rss column yet) → extend to assert peak-on-OOM'd-row behavior.
 
-## ⚠️ Two contradictions between the brief and the shipped v0.9.0 precedent (must resolve)
+## Guardrail check
 
-1. **"Seed a golden corpus case" (brief) vs. v0.9.0 precedent.** The contig-naming
-   mismatch is a **pre-flight gate, not a runtime `FailureClass`** — the detector corpus
-   (`detector_corpus.jsonl`, `FailureCase` `models.py:358-366`) has **no** reference-
-   mismatch class, and v0.9.0 shipped the prefix harmonizer **provenance-only** ("eval
-   capture is provenance-only in this slice", CHANGELOG v0.9.0; v0.7.0 explicitly deferred
-   "seeding a `reference_mismatch` corpus class"). **Recommendation:** match the v0.9.0
-   precedent — **no new detector-corpus case**; eval capture is the provenance breadcrumb.
-   Introducing a `reference_mismatch` FailureClass is out of scope (still deferred).
-
-2. **"Record in launch manifest + `ReferenceIdentity`" (brief).** Already done by the
-   v0.9.0 plumbing (`cli.py:546,571`; `self_heal.py:1005-1019`) — this slice **reuses** it
-   unchanged (`harmonized_reference: bool`, `harmonized_direction: str`), it does not add
-   new persistence. The only change is the *direction label* value + breadcrumb wording so
-   the alias is visible. No new fields.
-
-## Guardrail check (CLAUDE.md)
-
-Pure **Layer 2** self-heal/verify hardening. No Layer-1 authoring, no wet-lab/clinical,
-no raw-read egress (operates on reference contig-name strings on the user's compute),
-no correctness over-claiming (a WARN breadcrumb, run still proceeds). Test-first with
-synthetic FASTA/GTF fixtures — no real nf-core run. ✅
+Layer 2 (self-heal), local, deterministic, no raw-read egress (reads the run's own
+trace on the user's compute). No Layer-1 drift. ✅
