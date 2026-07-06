@@ -12,7 +12,9 @@ while never regressing when no usable peak is available.
 ## In scope
 
 - A pure sizing helper `(events, resource_usage, factor) → PeakSizing(target_gb|None, tier, observed_peak_mb)`.
-- Full fallback ladder: OOM'd task's own peak → same-`process` positive-peak sibling row → `None` (blind).
+- **Two-tier** ladder (corrected from three during impl): OOM'd task's own positive peak →
+  `None` (blind). The same-`process` sibling rung was **cut** — unreachable because the
+  parser sets `process == name` (see the risk note); deferred as its own slice.
 - Thread the sized target into `apply_patch` (memory branch only), preserving ceiling
   clamp + never-shrink.
 - Telemetry (observed peak, tier, sized-vs-current) into `RepairStep.detail` at the OOM
@@ -42,10 +44,11 @@ verdict/exit-code/`FailureClass` change.
 Helper (Phase 1) → `apply_patch` seam (Phase 2) → heal-site wiring + integration
 (Phase 3) → changelog/refactor (Phase 4). No new deps.
 
-## Aspect-specific risk
+## Aspect-specific risk (resolved during impl)
 
-The `TaskEvent.process`/`name` ↔ `TaskResource.process`/`name` **join key** — the two are
-parsed from different sources (weblog events vs trace TSV). Phase 1's first test must pin
-the join against realistic field values (read `parse_events` vs
-`parse_resource_usage_text` to confirm), or the ladder silently never matches → always
-tier `unavailable`.
+The `TaskEvent`↔`TaskResource` **join key** turned out exact — both set `process`/`name`
+from the same trace `name` column (`events.py:91/95,127/131`). That same fact is what made
+the **sibling rung unreachable** (`process` can never diverge from `name`), so tier b was
+cut. Tier a (own-task peak) joins reliably. The residual risk is empirical, outside the
+code: whether Nextflow records a usable `peak_rss` on a signal-killed row — if not, sizing
+falls through to blind (the honest, non-regressing default).

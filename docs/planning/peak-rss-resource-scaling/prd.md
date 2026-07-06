@@ -70,16 +70,25 @@ which tier fired to `RepairStep.detail` is what will surface that.
    (`list[TaskResource]`), the current memory request, the ceiling, and the safety factor,
    and returns either a sized absolute memory target (GB) **or** `None` (→ fall back).
    Pure `(inputs) → target | None`, no I/O, so it is unit-tested without a run.
-2. **Fallback ladder (full).**
+2. **Fallback ladder (honest two-tier — see the correction note).**
    a. OOM'd task's own `peak_rss_mb` (matched via `exit==137` `TaskEvent.process`/`name`
       joined to `TaskResource`), if `> 0`. **When more than one task OOM'd in the partial
       trace, use the max observed peak among them** — the resource patch bumps
       `process.resourceLimits` globally (`nfconfig.py:62-68`), so it must satisfy the
       hungriest OOM'd task.
-   b. else max `peak_rss_mb` over **same-process** `COMPLETED` rows in the partial trace.
-   c. else `None` → the existing blind multiplier path runs unchanged.
+   b. else `None` → the existing blind multiplier path runs unchanged.
    A `peak_rss` of `0.0`/absent is treated as **unknown**, never as "0 MB"
    (`events.py:51-55`).
+
+   > **Correction (during implementation).** This shipped as a **two-tier** ladder, not
+   > the three-tier "own → same-process sibling → blind" originally speced. The middle
+   > "same-process sibling" rung is **unreachable on real runs**: the trace parser sets
+   > `TaskResource.process == TaskResource.name` (both from the trace `name` column,
+   > `events.py:91/95,127/131`), so a same-`process` sibling can never diverge from the
+   > OOM'd task's own key. It was cut rather than shipped dormant. **Same-process sibling
+   > rescue is a deferred follow-on** (see Out of Scope) that first needs the trace parser
+   > to carry a *coarse* process name distinct from the per-task `name` (which has a
+   > `progress.py` blast radius, hence its own slice).
 3. **Sizing formula.** `target_gb = min(ceiling, max(ceil(peak_mb/1024 × FACTOR), current))`.
    `FACTOR = 1.5`, a module constant, code-overridable (mirroring `resource_ceiling`).
    Binary GB (1 GB = 1024 MB, matching the parser and Nextflow `MemoryUnit`). **A sized
@@ -143,6 +152,9 @@ which tier fired to `RepairStep.detail` is what will surface that.
 
 ## Out of Scope
 
+- **Same-process sibling-peak rescue** (the cut tier b). Needs the trace parser to emit a
+  coarse `process` distinct from the per-task `name` (blast radius on `progress.py` + its
+  tests). Deferred to its own slice.
 - **Walltime / `time_limit` sizing** to observed `realtime_sec`. Symmetric follow-on slice.
 - **Corpus-schema capture** (`FailureCase`/`failure_case_from_run`). Telemetry rides in
   `RepairStep.detail` only this slice.

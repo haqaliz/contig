@@ -6,6 +6,41 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Peak-RSS-informed memory scaling for the OOM self-heal** (capability C2, self-heal
+  breadth — the "peak-RSS-informed scaling" slice deferred by v0.5.0's bounded-ceiling
+  work). When a task is OOM-killed (`exit 137`), the retry is no longer a blind
+  `memory × 2` guess: the engine now parses the run's **own partial `trace.txt`** at
+  heal-decision time and sizes the retry to the failed task's **observed peak resident
+  memory** — `target = ceil(peak_rss_mb / 1024 × 1.5)` binary GB — so a task that needs
+  ~5× lands in **one** retry instead of climbing 2×→4×→8× and exhausting the bounded
+  retry budget or the 128 GB ceiling first. A new pure `resource_sizing.peak_informed_memory_gb`
+  computes the target from the trace (joining the `exit==137` task events to their
+  `TaskResource` rows; multiple OOM'd tasks size off the **max** peak, since
+  `process.resourceLimits` is global), and `apply_patch` gained an `observed_target_gb`
+  seam that overrides the multiplier while the **ceiling clamp, the never-shrink rule, and
+  the `gave_up_at_ceiling` give-up stay exactly as before**. Every heal records the
+  observed peak, the sizing, and the evidence tier into `RepairStep.detail` (surfaced in
+  `repair_history` and `repair_progress.jsonl`) — the instrument that will show, in the
+  field, how often real OOM'd tasks even carry a usable `peak_rss`.
+  - **Honest two-tier ladder (not the three-tier originally speced).** (a) the OOM'd
+    task's own observed peak, else (b) **unavailable → today's blind `× 2` fallback runs
+    unchanged**, so a signal-killed task whose trace row reports a `-`/0 peak, a
+    trace-less run, or a snakemake run never regresses. A `peak_rss` of 0/absent is
+    treated as **unknown, never "0 MB."** A sized target below the current request is
+    expected (never-shrink holds the current value), so the retry is never *worse* than
+    before.
+  - **Deferred (deliberately, with a named blocker):** the **same-process sibling rescue**
+    (borrowing a surviving shard's peak when the killed row's own peak is a dash) was cut
+    rather than shipped dormant — it can never fire while the trace parser sets
+    `process == name` for every row, so it first needs a coarse `process` column in the
+    parser (which has a `progress.py` blast radius). Also deferred: **walltime** sizing to
+    observed `realtime`, and folding the observed peak into the `FailureCase` corpus
+    schema (telemetry rides in `RepairStep.detail` for now). Memory-only, Nextflow-only,
+    no verdict / exit-code / `FailureClass` change. Local, deterministic, no raw-read
+    egress; fully covered by injected trace/executor fixtures (no real pipeline run in CI).
+
 ## [0.18.0] - 2026-07-06
 
 ### Added
