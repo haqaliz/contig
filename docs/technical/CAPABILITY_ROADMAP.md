@@ -204,12 +204,32 @@ with no live trigger**: nf-core/sarek auto-builds a missing bwa-mem2 index, AWS-
 ships a classic BWA index (not bwa-mem2), and Contig exposes no flag to supply a broken
 one — so the failure cannot be produced by a Contig-launched run today. The run ends in an
 honest FAIL (`index_unresolvable`), never a false pass.
+**Shipped (peak-RSS memory-scaling slice — Unreleased):** the OOM retry is no longer a
+blind `memory × 2` guess. On `exit 137` the engine parses the run's **own partial
+`trace.txt`** at heal-decision time (resolving the earlier "`resource_usage` is only
+populated at finalize" blocker by parsing the trace directly in the loop rather than
+waiting for the record) and sizes the retry to the failed task's **observed peak resident
+memory** — `ceil(peak_rss_mb / 1024 × 1.5)` binary GB — so a task that needs ~5× lands in
+one retry instead of climbing 2×→4×→8× and exhausting the bounded budget or the 128 GB
+ceiling first. A new pure `resource_sizing.peak_informed_memory_gb` computes the target
+(multiple OOM'd tasks size off the **max** peak, since `process.resourceLimits` is global),
+and `apply_patch` gained an `observed_target_gb` seam that overrides the multiplier while
+the **ceiling clamp, never-shrink, and `gave_up_at_ceiling` give-up stay unchanged**. The
+observed peak, the sizing, and the evidence tier are recorded into `RepairStep.detail`. It
+is an **honest two-tier ladder** — the OOM'd task's own observed peak, else **blind `× 2`
+fallback** (a signal-killed task reporting a `-`/0 peak, a trace-less or snakemake run
+never regresses; a 0/absent peak is treated as *unknown*, never "0 MB"). Memory-only,
+Nextflow-only; no verdict/exit-code/`FailureClass` change; test-first with injected
+trace/executor fixtures. **Deferred here:** the **same-process sibling-peak rescue** (cut
+rather than shipped dormant — the trace parser sets `process == name` for every row, so a
+sibling key can never diverge; it needs a coarse `process` column, which has a `progress.py`
+blast radius); **walltime** sizing to observed `realtime`; and folding the observed peak
+into the `FailureCase` corpus schema (telemetry rides in `RepairStep.detail` for now).
 **Deferred to later C2 slices:** bwa-mem2 **build/redirect** (detection shipped v0.11.0;
 build blocked until a live trigger exists) and the classic-vs-mem2 aligner-mismatch heal;
 classic-BWA index build/redirect (needs a supported `bwa index` target, e.g. sarek
-`--aligner bwa-mem`); a corrupt/partial STAR index signature; peak-RSS-
-informed scaling (needs a refactor — `resource_usage` is only populated at finalize, after
-the patch decision); the still-missing single-file index kind (the BAM/CRAM form of
+`--aligner bwa-mem`); a corrupt/partial STAR index signature; the still-missing single-file
+index kind (the BAM/CRAM form of
 `.csi`) plus stale-index detection on the same seam; and the wider failure catalog — the
 assembly-signature form of reference/build mismatch (no sample-side contig signal in raw
 FASTQ or finished bundle), exhaustive per-assembly alias-table completeness beyond the
@@ -456,7 +476,7 @@ no ground-truth labels); and a held-out-accuracy trend over corpus/detector vers
 | ID | Capability | Window | Leverage |
 |----|-----------|--------|----------|
 | C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) + somatic slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap + somatic auto `somatic_site_overlap` PASS-site Jaccard, Mutect2 vs Strelka2, no user input; auto-run second germline/RNA tool + single-cell deferred) |
-| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; per-contig alias harmonization (mito `M`↔`MT` + GRCh38 scaffold seed) shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); bwa-mem2/classic-BWA build+redirect, peak-RSS, assembly-signature + exhaustive per-assembly alias completeness pending) | Unattended-completion rate, corpus fuel |
+| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; per-contig alias harmonization (mito `M`↔`MT` + GRCh38 scaffold seed) shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); peak-RSS-informed OOM memory scaling shipped (Unreleased, honest two-tier: own-peak → blind fallback; sibling rescue + walltime deferred); bwa-mem2/classic-BWA build+redirect, assembly-signature + exhaustive per-assembly alias completeness pending) | Unattended-completion rate, corpus fuel |
 | C3 | Biological-plausibility verification | SHIPPED v0.3.0 | Verdict gets smarter about biology (germline Ti/Tv, het/hom; other assays deferred) |
 | C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased); Strelka2-native VAF, FAIL severity + PON reference wiring deferred | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
