@@ -286,7 +286,7 @@ corpus; repair success-rate analytics gain new classes.
 
 ---
 
-## C3. Biological-plausibility verification  ·  SHIPPED v0.3.0 (germline slice)
+## C3. Biological-plausibility verification  ·  SHIPPED v0.3.0 (germline) + RNA-seq slice (v0.6.0) + single-cell ingestion slice (Unreleased)
 
 **Shipped (germline slice) in v0.3.0.** The germline plausibility rules (Ti/Tv and
 het/hom ratios) already existed in `VARIANT_RULE_PACK` but were dormant because
@@ -305,6 +305,23 @@ UNVERIFIED-when-absent guarantee absorbs a wrong/missing slug. **Deferred:**
 gene-body-coverage evenness (needs a new RSeQC compute path), doublet rate
 (single-cell), sex-check, coverage-from-VCF, multi-sample, and FAIL severity until
 the bands are calibrated on real data.
+
+**Shipped (single-cell ingestion slice, Unreleased).** The single-cell (`scrnaseq`)
+assay already had a biological pack (`SCRNASEQ_RULE_PACK`: recovered cells, median
+genes per cell, fraction reads in cells) but it **silently no-oped** — its metrics were
+read only from MultiQC general-stats, where the base `nf-core/scrnaseq@4.1.0` pipeline
+does not put single-cell cell-level QC (default `simpleaf` emits AlevinQC/QCatch HTML;
+the stock MultiQC STAR module does not parse STARsolo `Summary.csv`). A new
+`verification/scrnaseq_metrics.py` now parses the aligner's own cell-QC artifact —
+STARsolo `Summary.csv` and Cell Ranger `metrics_summary.csv` (comma-thousands +
+percent→fraction unit normalization) — and a dedicated `_discover_qc` gate (Cell Ranger
+preferred per sample) drives the pack, so the single-cell verdict fires for the first
+time. The default simpleaf path degrades to an honest **UNVERIFIED** (no confirmed
+machine-readable artifact; no HTML scraping). The dead `pct_reads_mito` check was removed
+(base pipeline never produces it — needs downstream scanpy); the grossly-failed-capture
+FAIL bands were kept (consistent with the sibling did-it-run packs). **Deferred:** a
+structured QCatch-JSON recognizer for the default simpleaf path, and mitochondrial-fraction
+/ doublet-rate plausibility (need a downstream scanpy/scDblFinder step).
 
 Deepen the verdict scientifically with **assay-aware sanity checks** that encode
 what a biologically reasonable result looks like, beyond generic QC thresholds.
@@ -496,7 +513,7 @@ no ground-truth labels); and a held-out-accuracy trend over corpus/detector vers
 |----|-----------|--------|----------|
 | C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) + somatic slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap + somatic auto `somatic_site_overlap` PASS-site Jaccard, Mutect2 vs Strelka2, no user input; auto-run second germline/RNA tool + single-cell deferred) |
 | C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; per-contig alias harmonization (mito `M`↔`MT` + GRCh38 scaffold seed) shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); peak-RSS-informed OOM memory scaling shipped (Unreleased, honest two-tier: own-peak → blind fallback; sibling rescue deferred); walltime-informed `time_limit` scaling shipped (Unreleased, floored at blind — censored realtime, tail-only win + field instrument); bwa-mem2/classic-BWA build+redirect, assembly-signature + exhaustive per-assembly alias completeness pending) | Unattended-completion rate, corpus fuel |
-| C3 | Biological-plausibility verification | SHIPPED v0.3.0 | Verdict gets smarter about biology (germline Ti/Tv, het/hom; other assays deferred) |
+| C3 | Biological-plausibility verification | SHIPPED v0.3.0 (germline) + RNA-seq (v0.6.0) + single-cell ingestion (Unreleased) | Verdict gets smarter about biology (germline Ti/Tv, het/hom; RNA-seq dup/rRNA; single-cell cell-QC now *fires* via STARsolo/Cell Ranger ingestion — was a dormant no-op; mito/doublet deferred) |
 | C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased); Strelka2-native VAF, FAIL severity + PON reference wiring deferred | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
 | C6 | Eval flywheel as a continuous loop | M6 (held-out set + regression-guard slice 1 SHIPPED, Unreleased — honestly 0.833/10:12, two classes structurally unreachable; folding C1/C3 signals + repair-loop accuracy + CI wiring pending) | Compounding accuracy from real runs |

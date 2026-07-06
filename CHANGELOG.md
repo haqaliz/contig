@@ -6,6 +6,48 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Single-cell (scrnaseq) cell-QC ingestion — the dormant single-cell verdict now
+  fires** (capability C3, biological-plausibility verification — single-cell slice). The
+  scrnaseq assay already carried a biological QC pack (`SCRNASEQ_RULE_PACK`: recovered
+  cells, median genes per cell, fraction reads in cells, and a mitochondrial-fraction
+  check), but it **silently no-oped on every real run**: the pack's metrics are only read
+  from MultiQC general-stats, and the base `nf-core/scrnaseq@4.1.0` pipeline does not route
+  single-cell cell-level QC there (its default `simpleaf`/alevin-fry aligner emits
+  AlevinQC/QCatch HTML; the stock MultiQC STAR module does not parse STARsolo's
+  `Summary.csv`). Because `evaluate()` skips any absent metric, the single-cell verdict
+  degraded to UNVERIFIED while reading as "wired." This slice makes the checks **fire** by
+  ingesting the cell-QC the aligner writes to disk:
+  - A new `verification/scrnaseq_metrics.py` with deterministic, stdlib-only parsers:
+    `parse_starsolo_summary` (STARsolo `Summary.csv`), `parse_cellranger_metrics`
+    (Cell Ranger `metrics_summary.csv`, handling comma-thousands and normalizing a
+    `"92.3%"` rate to the `0.923` **fraction** the pack band expects), and
+    `parse_simpleaf_metrics` at its honest **floor** — the default simpleaf path has no
+    confirmed machine-readable cell-QC artifact, so it returns `{}` (→ UNVERIFIED, never a
+    false pass; **no HTML scraping**). A metric that is absent or non-numeric is omitted,
+    never guessed.
+  - A dedicated `_discover_qc` gate (mirroring the germline VCF gate, not the MultiQC path)
+    that locates the aligner artifact under the run dir, derives a per-sample id, evaluates
+    `SCRNASEQ_RULE_PACK`, and — for a located-but-unparseable file — emits one explicit
+    `scrnaseq_cell_qc:<sample>` **UNVERIFIED** rather than a silent no-op. No artifact at
+    all skips silently (structural QC owns a missing required output). **Cell Ranger takes
+    deterministic precedence over STARsolo** for the same sample (no merge of two aligners'
+    numbers). Gated strictly to `assay == "scrnaseq"`; all other assays unchanged.
+  - **Kept the FAIL bands** on the three grossly-failed-capture checks (a near-empty
+    capture genuinely FAILs), consistent with the sibling did-it-run packs
+    (methylseq/ampliseq/mag). **Removed** the dead `pct_reads_mito` check — the base
+    pipeline never produces it (needs a downstream scanpy step), so it could never fire;
+    mitochondrial-fraction and doublet-rate are deferred until a downstream
+    scanpy/scDblFinder step exists. No band re-calibration (illustrative engineering
+    defaults, unchanged).
+  - Additive to the verdict only: no detector/`FailureClass`, model, or persisted-record
+    change; no new dependency. Local, deterministic, no raw-read egress (parsers read small
+    summary files on the user's compute). Built test-first with synthetic CSV fixtures — no
+    real nf-core/scrnaseq run in CI. **Deferred:** a structured QCatch-JSON recognizer for
+    the default simpleaf path (if a real fixture ever confirms one — a clean follow-on, no
+    redesign), and mitochondrial-fraction/doublet-rate plausibility.
+
 ## [0.20.0] - 2026-07-07
 
 ### Added
