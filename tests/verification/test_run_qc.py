@@ -1,5 +1,7 @@
 import gzip
 
+import pytest
+
 from contig.models import ExecutionTarget, RunRecord, TaskEvent
 from contig.runner import _discover_qc
 from contig.verification.run_qc import evaluate_run_qc, run_qc
@@ -523,3 +525,125 @@ def test_discover_qc_no_somatic_concordance_for_rnaseq_assay(tmp_path):
     results = _discover_qc(run_dir, assay="rnaseq")
 
     assert not any(r.check == "somatic_site_overlap" for r in results)
+
+
+# --------------------------------------------------------------------------- #
+# scrnaseq cell-QC ingestion gate (single-cell metric ingestion).
+# The base pipeline does not route these metrics into MultiQC, so a dedicated
+# gate parses the aligner's cell-QC file and drives SCRNASEQ_RULE_PACK.
+# --------------------------------------------------------------------------- #
+
+_STARSOLO_HEALTHY = (
+    "Estimated Number of Cells,5000\n"
+    "Median Gene per Cell,1800\n"
+    "Fraction of Unique Reads in Cells,0.85\n"
+)
+_STARSOLO_NEAR_EMPTY = (
+    "Estimated Number of Cells,50\n"
+    "Median Gene per Cell,1800\n"
+    "Fraction of Unique Reads in Cells,0.85\n"
+)
+_CELLRANGER_HEALTHY = (
+    '"Estimated Number of Cells","Median Genes per Cell","Fraction Reads in Cells"\n'
+    '"6,000","2,000","91.0%"\n'
+)
+
+
+def _write_starsolo(run_dir, sample, text):
+    p = run_dir / "star" / sample / f"{sample}.Solo.out" / "Gene" / "Summary.csv"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+    return p
+
+
+def _write_cellranger(run_dir, sample, text):
+    p = run_dir / "cellranger" / "count" / sample / "outs" / "metrics_summary.csv"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+    return p
+
+
+def test_discover_qc_starsolo_healthy_passes(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_starsolo(run_dir, "S1", _STARSOLO_HEALTHY)
+
+    results = _discover_qc(run_dir, assay="scrnaseq")
+    checks = {r.check: r for r in results}
+    assert "estimated_cells:S1" in checks
+    assert checks["estimated_cells:S1"].status == "pass"
+    assert checks["estimated_cells:S1"].value == 5000.0
+
+
+def test_discover_qc_starsolo_near_empty_fails(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_starsolo(run_dir, "S1", _STARSOLO_NEAR_EMPTY)
+
+    results = _discover_qc(run_dir, assay="scrnaseq")
+    checks = {r.check: r for r in results}
+    assert checks["estimated_cells:S1"].status == "fail"
+
+
+def test_discover_qc_cellranger_fraction_normalized(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_cellranger(run_dir, "S1", _CELLRANGER_HEALTHY)
+
+    results = _discover_qc(run_dir, assay="scrnaseq")
+    checks = {r.check: r for r in results}
+    # 91.0% -> 0.91 (a fraction) so it clears the 0.7 warn band -> pass, not a
+    # spurious warn from comparing 91.0 to 0.7.
+    assert checks["fraction_reads_in_cells:S1"].status == "pass"
+    assert checks["fraction_reads_in_cells:S1"].value == pytest.approx(0.91)
+
+
+def test_discover_qc_scrnaseq_empty_file_is_unverified(tmp_path):
+    # A cell-QC file present but carrying no mappable metric -> explicit UNVERIFIED
+    # for that sample, never a silent no-op and never a pass.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_starsolo(run_dir, "S1", "Number of Reads,1000000\n")  # nothing mappable
+
+    results = _discover_qc(run_dir, assay="scrnaseq")
+    statuses = {r.status for r in results if r.check.endswith(":S1") or "S1" in r.check}
+    assert results, "expected an explicit unverified, not an empty list"
+    assert all(r.status != "pass" for r in results)
+    assert any(r.status == "unverified" for r in results)
+
+
+def test_discover_qc_scrnaseq_no_file_skips_silently(tmp_path):
+    # No cell-QC artifact at all (e.g. simpleaf HTML-only) -> the gate adds nothing;
+    # structural QC covers a missing required output. Mirrors the germline no-VCF path.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    results = _discover_qc(run_dir, assay="scrnaseq")
+    assert not any(r.check.startswith("estimated_cells:") for r in results)
+    assert not any(r.check.startswith("scrnaseq_cell_qc:") for r in results)
+
+
+def test_discover_qc_scrnaseq_prefers_cellranger_over_starsolo(tmp_path):
+    # Both aligners' outputs for the same sample -> deterministic Cell Ranger
+    # preference, no merge: exactly one estimated_cells:S1 with the CR value.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_starsolo(run_dir, "S1", _STARSOLO_HEALTHY)          # estimated_cells 5000
+    _write_cellranger(run_dir, "S1", _CELLRANGER_HEALTHY)      # estimated_cells 6000
+
+    results = _discover_qc(run_dir, assay="scrnaseq")
+    est = [r for r in results if r.check == "estimated_cells:S1"]
+    assert len(est) == 1
+    assert est[0].value == 6000.0  # Cell Ranger won
+
+
+def test_discover_qc_scrnaseq_gate_not_applied_to_other_assays(tmp_path):
+    # A Summary.csv present but the assay is rnaseq/variant_calling -> the scrnaseq
+    # gate must not fire (strict assay gate).
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_starsolo(run_dir, "S1", _STARSOLO_HEALTHY)
+
+    for assay in ("rnaseq", "variant_calling"):
+        results = _discover_qc(run_dir, assay=assay)
+        assert not any(r.check.startswith("estimated_cells:") for r in results)
