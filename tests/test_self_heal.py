@@ -2445,3 +2445,153 @@ def test_self_heal_finalize_reference_identity_none_when_no_reference_keys(tmp_p
 
     record = _heal(tmp_path, executor, params={"input": "sheet.csv"})
     assert record.reference_identity is None
+
+
+# --- Phase 3: peak-RSS-informed OOM retry sizing (C2) -----------------------
+#
+# These drive the real self_heal loop through a fake executor that writes a
+# partial trace, exercising the OOM safe-path wiring that sizes the memory
+# retry from the run's observed peak RSS (helper: peak_informed_memory_gb) and
+# records the observed peak + fallback tier into RepairStep.detail.
+
+_TRACE_HEADER = (
+    "task_id\thash\tnative_id\tname\tstatus\texit\tsubmit\t"
+    "duration\trealtime\t%cpu\tpeak_rss\n"
+)
+
+
+def _peak_trace(status, exit_code, peak_rss, name="NFCORE_RNASEQ:STAR_ALIGN (S1)"):
+    # A trace row carrying the resource columns (incl. peak_rss) the sizer reads.
+    return _TRACE_HEADER + (
+        f"1\tab/cd\t1\t{name}\t{status}\t{exit_code}\t2026-01-01\t"
+        f"10m\t9m\t180.0%\t{peak_rss}\n"
+    )
+
+
+def test_self_heal_sizes_oom_retry_from_observed_peak(tmp_path):
+    # The killed STAR_ALIGN row carries a real 60 GB peak. The retry must be
+    # sized to ceil(60 GB * 1.5) = 90 GB (clamped to the 128 GB ceiling, never
+    # below the 8 GB current) -- NOT the blind x2 (16 GB) -- and the retained
+    # RepairStep.detail must name the observed peak and the "oom_task" tier.
+    oom_trace = _peak_trace("FAILED", 137, "60 GB")
+    ok_trace = _peak_trace("COMPLETED", 0, "20 GB")
+    state = {"n": 0, "retry_cfg": None}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, oom_trace, "out of memory exit 137")
+            return 1
+        state["retry_cfg"] = (Path(trace_path).parent / "nextflow.config").read_text()
+        _write(trace_path, ok_trace, "done")
+        return 0
+
+    record = _heal(tmp_path, executor)
+    assert RunSummary.from_events(record.events).succeeded is True
+    assert "process.resourceLimits = [ memory: 90.GB ]" in state["retry_cfg"]
+    assert record.target.resource_limits["memory"] == "90.GB"
+    step = record.repair_history[0]
+    assert step.diagnosis.failure_class == "oom"
+    assert step.outcome == "patched_and_retried"
+    assert "observed peak" in step.detail
+    assert "oom_task" in step.detail
+
+
+def test_self_heal_sizes_oom_retry_from_sibling_peak(tmp_path, monkeypatch):
+    # The killed task's own row lost its peak (a dash -> 0), but a same-process
+    # sibling that completed retains one. The sizer's sibling rung must supply
+    # the 60 GB peak (-> 90 GB retry) and the detail must name the "sibling" tier.
+    #
+    # The trace parser collapses process -> the full task `name`, so a same-
+    # process/different-name sibling row cannot be expressed as raw TSV through
+    # it; we inject the sibling-shaped usage the wiring reads (the shape a trace
+    # with a distinct `process` column would yield). The OOM event itself still
+    # flows from the real attempt-1 trace.
+    from contig.models import TaskResource
+
+    oom_trace = _peak_trace("FAILED", 137, "-")
+    ok_trace = _peak_trace("COMPLETED", 0, "20 GB")
+
+    def fake_usage(_path):
+        proc = "NFCORE_RNASEQ:STAR_ALIGN (S1)"
+        return [
+            TaskResource(process=proc, name=proc, realtime_sec=1.0, peak_rss_mb=0.0, pct_cpu=100.0),
+            TaskResource(
+                process=proc,
+                name="NFCORE_RNASEQ:STAR_ALIGN (S2)",
+                realtime_sec=1.0,
+                peak_rss_mb=61440.0,
+                pct_cpu=100.0,
+            ),
+        ]
+
+    monkeypatch.setattr("contig.self_heal.parse_resource_usage_file", fake_usage)
+    state = {"n": 0, "retry_cfg": None}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, oom_trace, "out of memory exit 137")
+            return 1
+        state["retry_cfg"] = (Path(trace_path).parent / "nextflow.config").read_text()
+        _write(trace_path, ok_trace, "done")
+        return 0
+
+    record = _heal(tmp_path, executor)
+    assert RunSummary.from_events(record.events).succeeded is True
+    assert "process.resourceLimits = [ memory: 90.GB ]" in state["retry_cfg"]
+    assert record.target.resource_limits["memory"] == "90.GB"
+    step = record.repair_history[0]
+    assert step.outcome == "patched_and_retried"
+    assert "observed peak" in step.detail
+    assert "sibling" in step.detail
+
+
+def test_self_heal_oom_falls_back_to_blind_bump_without_usable_peak(tmp_path):
+    # No usable observed peak in the trace (the killed row has no peak_rss) ->
+    # the retry must scale the OLD blind x2 way (8 GB -> 16 GB) and the detail
+    # must say the observed peak was unavailable. This is the regression guard:
+    # a peakless OOM heal must behave exactly as it did before sizing existed.
+    state = {"n": 0, "retry_cfg": None}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, TRACE_OOM, "out of memory exit 137")
+            return 1
+        state["retry_cfg"] = (Path(trace_path).parent / "nextflow.config").read_text()
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor)
+    assert RunSummary.from_events(record.events).succeeded is True
+    assert "process.resourceLimits = [ memory: 16.GB ]" in state["retry_cfg"]
+    assert record.target.resource_limits["memory"] == "16.GB"
+    step = record.repair_history[0]
+    assert step.diagnosis.failure_class == "oom"
+    assert step.outcome == "patched_and_retried"
+    assert "unavailable" in step.detail
+
+
+def test_self_heal_time_limit_retry_is_untouched_by_sizing(tmp_path):
+    # Sizing is memory/OOM-only. A time_limit heal must still scale time x2
+    # (4h -> 8h) and its patched_and_retried step must carry no sizing detail.
+    time_trace = _trace("FAILED", 140)
+    state = {"n": 0, "retry_cfg": None}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, time_trace, "Terminated due to time limit")
+            return 1
+        state["retry_cfg"] = (Path(trace_path).parent / "nextflow.config").read_text()
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor)
+    assert RunSummary.from_events(record.events).succeeded is True
+    step = record.repair_history[0]
+    assert step.diagnosis.failure_class == "time_limit"
+    assert step.outcome == "patched_and_retried"
+    assert record.target.resource_limits["time"] == "8.h"
+    assert step.detail is None

@@ -29,6 +29,7 @@ from contig.models import Diagnosis, ExecutionTarget, Patch, QCResult, RepairSte
 from contig.notify import emit_event
 from contig.reference_check import fasta_contigs, gtf_contigs
 from contig.repair import propose_patches
+from contig.resource_sizing import PEAK_RSS_SAFETY_FACTOR, peak_informed_memory_gb
 from contig.runner import (
     Executor,
     IndexBuilder,
@@ -411,6 +412,31 @@ def _resource_ceiling_block(diagnosis, target, ceiling) -> str | None:
         if _lead_number(target.resource_limits.get("time"), _DEFAULT_TIME_HOURS) >= ceiling["time"]:
             return f"Time limit persists at the {ceiling['time']} h ceiling; needs a longer walltime allowance."
     return None
+
+
+def _oom_memory_sizing(diagnosis, run_dir, events) -> tuple[int | None, str | None]:
+    """Size an OOM memory retry from the run's observed peak RSS.
+
+    For an OOM failure, parse the run's (partial) trace and size the retry to the
+    failed task's observed peak via ``peak_informed_memory_gb`` (own peak ->
+    same-process sibling -> blind fallback), returning the pre-clamp target GB for
+    ``apply_patch`` plus a ``RepairStep.detail`` telemetry line. For any other
+    failure class this is a no-op ``(None, None)`` -- sizing only touches OOM /
+    memory; the blind ``x2`` bump and the ``time_limit`` branch are unchanged.
+    """
+    if diagnosis.failure_class != "oom":
+        return None, None
+    trace_path = run_dir / "trace.txt"
+    usage = parse_resource_usage_file(trace_path) if trace_path.exists() else []
+    sizing = peak_informed_memory_gb(events, usage)
+    if sizing.target_gb is not None:
+        detail = (
+            f"scaled memory to ~{sizing.target_gb} GB from observed peak "
+            f"{sizing.observed_peak_mb:.0f} MB (x{PEAK_RSS_SAFETY_FACTOR}, {sizing.tier})"
+        )
+    else:
+        detail = "no usable observed peak; blind x2 fallback (unavailable)"
+    return sizing.target_gb, detail
 
 
 def apply_patch(
@@ -979,11 +1005,16 @@ def self_heal_run(
                     runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
                     harmonized_reference_direction=harmonized_reference_direction)
 
-            current_target, current_params = apply_patch(current_target, safe, current_params, ceiling=resource_ceiling)
+            observed_target_gb, detail = _oom_memory_sizing(diagnosis, run_dir, events)
+            current_target, current_params = apply_patch(
+                current_target, safe, current_params,
+                ceiling=resource_ceiling, observed_target_gb=observed_target_gb,
+            )
             _record_attempt(
                 run_dir,
                 repair_history,
-                RepairStep(attempt=attempt, diagnosis=diagnosis, patch=safe, outcome="patched_and_retried"),
+                RepairStep(attempt=attempt, diagnosis=diagnosis, patch=safe,
+                           outcome="patched_and_retried", detail=detail),
             )
             attempt += 1
 
