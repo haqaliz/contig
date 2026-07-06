@@ -1,85 +1,68 @@
-# Card: feat / self-heal-walltime-scaling
+# Card: single-cell RNA-seq biological-plausibility verification
 
 - **Type:** feat
-- **Id/slug:** self-heal-walltime-scaling
+- **Slug:** single-cell-plausibility
 - **Owner:** aliz
-- **Branch:** feat/self-heal-walltime-scaling/aliz
-- **Source:** inline brief (no GitHub issue — slug work, handed off from `contig-next`)
+- **Branch:** feat/single-cell-plausibility/aliz
+- **Source:** inline brief (no GitHub issue) — selected by `contig-next` on 2026-07-07
+- **Capability:** C3 (biological-plausibility verification), single-cell follow-on slice
 
 ## Brief
 
-Ship the **symmetric walltime follow-on** to v0.19.0's peak-RSS OOM memory scaling
-(capability C2, self-heal breadth). When a Nextflow task is killed for exceeding its
-walltime (the `time_limit` repair), size the retry to the failed task's **observed
-`realtime`** parsed from the run's own partial `trace.txt` at heal-decision time,
-instead of the current blind `time × 2`.
+Extend C3 biological-plausibility verification to the already-shipped single-cell
+RNA-seq (`scrnaseq`) assay, which today gets structural/QC checks but **no biological
+verdict** (confirmed: `runner.py:_discover_qc` wires plausibility only for
+`variant_calling`, `somatic_variant_calling`, and `rnaseq` — lines 67–120).
 
-Reuse the exact seams v0.19.0 built:
-- the pure `resource_sizing` module — add a walltime-sizing function symmetric to
-  `peak_informed_memory_gb`,
-- in-loop partial-`trace.txt` parsing at heal-decision time,
-- the `apply_patch` `observed_target_*` override seam.
+Add a `SCRNASEQ_PLAUSIBILITY_PACK` and an `evaluate_scrnaseq_plausibility` wrapper
+modeled exactly on `verification/rnaseq_plausibility.py`, gated to `assay == "scrnaseq"`
+in `_discover_qc`, capped at WARN, emitting explicit `unverified` for any absent metric.
 
-Keep it a **two-tier ladder**: (a) the killed task's observed `realtime × multiplier`,
-else (b) blind `× 2` fallback when no usable `realtime` exists (trace-less, snakemake,
-`-`/0 value). The 72 h ceiling clamp (`CEILING_TIME_H`), the never-shrink rule, and the
-`gave_up_at_ceiling` give-up all stay exactly as in the memory slice. Nextflow-only; no
-verdict / exit-code / `FailureClass` change. Surface the observed `realtime`, the sizing,
-and the evidence tier in `RepairStep.detail`, exactly as the peak-RSS slice does.
+Start with the metrics the standard nf-core/scrnaseq MultiQC actually reports
+(recovered-cell band, fraction-reads-in-cells as a knee-point proxy) and **defer**
+mito-fraction / doublet-rate if they require a downstream compute path the base
+pipeline doesn't run. Verify slug availability early, since unconfirmed slugs will all
+degrade to UNVERIFIED.
 
-## The one honest caveat (right-censoring — weaker signal than peak RSS)
+Build **test-first** with synthetic metric fixtures inside and outside each band (no real
+nf-core run in CI), matching how the v0.6.0 RNA-seq plausibility slice shipped.
 
-Walltime observations are **right-censored** in a way peak RSS is not. A task killed at
-the limit reports `realtime ≈ current limit`, so its own observation only proves
-"needed ≥ current" — a genuinely weaker signal than a true observed memory peak (which
-is a real maximum below the limit). Design implications to resolve in the PRD:
+## Why this was picked (moat grounding)
 
-1. The multiplier must be chosen deliberately so a task that just grazed the limit still
-   gets a sensible bump (not a blind double, but not a no-op either).
-2. Prefer a **non-killed sibling task's** `realtime` where the trace carries one — an
-   uncensored observation is stronger than the killed task's censored one. (Mirror-caveat
-   to the peak-RSS "same-process sibling rescue" that was deferred because the parser sets
-   `process == name` for every row — confirm whether that blocks sibling use here too.)
-3. Scope the win honestly: this is a smaller, more-censored win than the memory slice.
+- **Not shipped, not blocker-deferred.** `CAPABILITY_ROADMAP.md:322–325` specs the
+  single-cell checks (doublet-rate band, mito-fraction distribution, knee-point sanity,
+  recovered-cell band) and line 306 marks them deferred to "a later slice" — a slice, not
+  a blocker. `runner.py:114–120` confirms the `scrnaseq` plausibility slot is empty.
+- **Deepens the moat's strongest axis** — "the verdict gets smarter about biology"
+  (`CAPABILITY_ROADMAP.md:313`) — and does it **depth-first on an assay already on the
+  engine** (`USE_CASE_UNIVERSE.md:68`), so no demand-pull and no new-assay integration risk.
+  Captures per-assay plausibility distributions into the eval corpus (moat #2).
+- **Clear, testable slice today**, reusing the germline/RNA-seq pattern: a
+  `*_PLAUSIBILITY_PACK`, a wrapper that emits explicit `unverified` for absent metrics
+  (`rnaseq_plausibility.py`), fixtures inside/outside each band, no real nf-core run in CI.
 
-## Confirmed code facts (from the peak-RSS predecessor card — re-verify in Phase 2)
+## Known caveat (feasibility)
 
-- `self_heal.py:43-47` — `_DEFAULT_MEMORY_GB = 8`, `CEILING_MEMORY_GB = 128`,
-  `CEILING_TIME_H = 72`.
-- `self_heal.py:404-412` — `_resource_ceiling_block` gates `gave_up_at_ceiling` for
-  `oom` (memory) and `time_limit` (time).
-- `self_heal.py:446-464` — `apply_patch` resource branch: blind `current * mult`,
-  `min(bumped, ceiling)`, `max(capped, current)` never-shrink. v0.19.0 added an
-  `observed_target_gb` override here — the walltime analogue overrides the time branch.
-- `models.py:118-131` — `TaskResource{process, name, realtime_sec, peak_rss_mb, pct_cpu}`.
-  Walltime sizing reads `realtime_sec` (the memory slice read `peak_rss_mb`).
-- `events.py` — `parse_resource_usage_text` / `parse_resource_usage_file` (the same trace
-  reader the memory slice reused in-loop).
-- `resource_sizing.py` — new module from v0.19.0 with `peak_informed_memory_gb`; add the
-  symmetric `realtime_informed_time_h` (or similarly named) here.
+The real open question is **which metric slugs nf-core/scrnaseq's MultiQC actually
+emits.** Recovered-cell count and fraction-reads-in-cells are standard STARsolo/cellranger
+QC; **mito-fraction and doublet-rate often need a downstream step (scanpy/scDblFinder)
+the base pipeline may not run** — so those two may need deferring or degrade to UNVERIFIED.
+That is acceptable and by-design: the same UNVERIFIED-when-absent contract that carried the
+RNA-seq slice absorbs unknown/wrong slugs, so the slice is buildable and testable
+regardless. Bands are uncalibrated engineering defaults, WARN-capped, no FAIL until real
+data — same posture as every prior plausibility slice.
 
-## Definition of done (from the brief)
+## Guardrails (must hold)
 
-- Build **test-first** with injected trace/executor fixtures (no real pipeline run in CI).
-- Sized `time_limit` retry when observed `realtime` is present; blind-`×2` fallback when absent.
-- 72 h ceiling clamp + `gave_up_at_ceiling` give-up preserved; never-shrink preserved.
-- Memory path (peak-RSS scaling) untouched.
-- Capture observed-`realtime`-vs-requested + sized-retry outcome / evidence tier in
-  `RepairStep.detail` for the corpus.
+- Layer-2 only (verify), no Layer-1 workflow authoring.
+- No raw-read egress — operates on already-ingested MultiQC metrics on the user's compute.
+- No correctness over-claiming — WARN-capped, UNVERIFIED never rendered as PASS.
+- Research-use only; a single-cell verdict means "ran correctly and reproducibly."
+- Test-first; no real nf-core run in CI.
 
-## Grounding references (moat — files, not memory)
+## Alternates considered (not picked)
 
-- `CHANGELOG.md` v0.19.0 — peak-RSS OOM memory scaling (the slice this mirrors; names the
-  walltime follow-on as deferred).
-- `docs/technical/CAPABILITY_ROADMAP.md` C2 (`:227`) — "**walltime** sizing to observed
-  `realtime`" named as deferred.
-- `docs/planning/peak-rss-resource-scaling/prd.md:158` — "Walltime / `time_limit` sizing
-  to observed `realtime_sec`. Symmetric follow-on slice."
-- `docs/planning/peak-rss-resource-scaling/sizing/` — the tech plan for the memory slice
-  to mirror structurally.
-
-## Strategic guardrail check
-
-Stays in **Layer 2** (run/self-heal/verify/reproduce). No Layer-1 workflow authoring,
-no wet-lab/clinical credentials, no raw-read egress (operates on the run's own trace on
-the user's compute). ✅
+- RNA-seq concordance autorun (C1 follow-on) — lower risk but narrower (automates an
+  already-shipped manual concordance).
+- C6 slice 2 (held-out accuracy trend) — folding C1/C3 unlabeled signals is blocked on a
+  labeling design; slice 1 just shipped (v0.17.0).

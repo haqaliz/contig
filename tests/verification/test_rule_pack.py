@@ -6,6 +6,7 @@ from contig.verification.rule_pack import (
     RNASEQ_RULE_PACK,
     SCRNASEQ_RULE_PACK,
     VARIANT_RULE_PACK,
+    _status_for,
     evaluate,
     rule_pack_for,
 )
@@ -205,27 +206,42 @@ def test_rule_pack_for_scrnaseq_returns_the_scrnaseq_pack():
 
 
 def test_scrnaseq_pack_covers_the_per_cell_qc_metrics():
+    # Exactly the three "did it run" metrics the base nf-core/scrnaseq pipeline
+    # actually emits. pct_reads_mito (and doublet rate) need a downstream scanpy/
+    # scDblFinder step the base pipeline never runs, so they are deferred, not shipped.
     metrics = {c["metric"] for c in SCRNASEQ_RULE_PACK}
-    assert "estimated_cells" in metrics
-    assert "median_genes_per_cell" in metrics
-    assert "fraction_reads_in_cells" in metrics
-    assert "pct_reads_mito" in metrics
+    assert metrics == {
+        "estimated_cells",
+        "median_genes_per_cell",
+        "fraction_reads_in_cells",
+    }
+
+
+def test_scrnaseq_pack_has_no_dead_mito_check():
+    # The base pipeline never produces pct_reads_mito, so no check may reference it.
+    assert all(c["metric"] != "pct_reads_mito" for c in SCRNASEQ_RULE_PACK)
+    assert all(c["check"] != "pct_reads_mito" for c in SCRNASEQ_RULE_PACK)
+
+
+def test_scrnaseq_pack_has_exactly_three_checks_each_with_a_fail_band():
+    assert len(SCRNASEQ_RULE_PACK) == 3
+    # Each surviving check keeps its FAIL band (a legitimate did-it-run pack).
+    assert all("fail_below" in c for c in SCRNASEQ_RULE_PACK)
 
 
 def _healthy_scrnaseq_sample():
     # A clean 10x run: thousands of cells, hundreds of median genes, most reads
-    # inside cells, modest mitochondrial fraction.
+    # inside cells.
     return {
         "estimated_cells": 5000.0,
         "median_genes_per_cell": 1800.0,
         "fraction_reads_in_cells": 0.85,
-        "pct_reads_mito": 8.0,
     }
 
 
 def test_healthy_scrnaseq_sample_passes_every_check():
     results = evaluate({"SAMPLE_10x": _healthy_scrnaseq_sample()}, SCRNASEQ_RULE_PACK)
-    assert len(results) == 4
+    assert len(results) == 3
     assert all(r.status == "pass" for r in results)
 
 
@@ -252,12 +268,22 @@ def test_low_fraction_reads_in_cells_fails():
     assert frac and any(r.status == "fail" for r in frac)
 
 
-def test_high_mito_fraction_fails():
-    # A high mitochondrial read fraction flags stressed or dying cells.
-    sample = _healthy_scrnaseq_sample() | {"pct_reads_mito": 60.0}
-    results = evaluate({"BAD": sample}, SCRNASEQ_RULE_PACK)
-    mito = [r for r in results if r.value == 60.0]
-    assert mito and any(r.status == "fail" for r in mito)
+def _estimated_cells_check():
+    return next(c for c in SCRNASEQ_RULE_PACK if c["metric"] == "estimated_cells")
+
+
+def test_status_for_near_empty_estimated_cells_fails():
+    # A near-empty capture (a failed run) lands below the fail band.
+    assert _status_for(50.0, _estimated_cells_check()) == "fail"
+
+
+def test_status_for_healthy_estimated_cells_passes():
+    assert _status_for(5000.0, _estimated_cells_check()) == "pass"
+
+
+def test_status_for_mid_band_estimated_cells_warns():
+    # Between fail_below (100) and warn_below (500): a suspicious but not failed run.
+    assert _status_for(300.0, _estimated_cells_check()) == "warn"
 
 
 def test_scrnaseq_goal_routes_through_registry_to_pack_that_fires_pass_and_fail():

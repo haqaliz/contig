@@ -1,94 +1,74 @@
-# Understanding — self-heal-walltime-scaling (Phase 2 deep dig)
+# Understanding: single-cell-plausibility (Phase 2 deep dig)
 
-Synthesized from a read-only code-mapping agent over this worktree (master, incl.
-v0.19.0 peak-RSS memory scaling). Refs are `src/contig/*`; line numbers exact at dig time.
+## What the work was assumed to be
 
-## What the work asks (as briefed)
+The `contig-next` pick assumed scrnaseq is a shipped assay with **no biological
+verdict**, and the task was to add a `SCRNASEQ_PLAUSIBILITY_PACK` + evaluator +
+`_discover_qc` gate, mirroring the RNA-seq plausibility slice.
 
-Mirror v0.19.0's peak-RSS OOM memory scaling for **walltime**: when a task is killed for
-exceeding its time limit (`time_limit` repair), size the retry to the failed task's
-**observed `realtime`** from the run's partial `trace.txt`, instead of the blind
-`time × 2`. Same seams: a pure sizing fn in `resource_sizing.py`, in-loop trace parse,
-an `apply_patch` `observed_target_h` override, two-tier ladder (observed → blind),
-telemetry in `RepairStep.detail`. Ceiling (72h) + never-shrink + `gave_up_at_ceiling`
-unchanged.
+## What the code + research actually show (the contradiction)
 
-## The mechanical mirror is clean — every seam already exists
+**1. A scrnaseq biological pack already exists.** `rule_pack.py:87–116`
+`SCRNASEQ_RULE_PACK` already scores the exact metrics C3 names for single cell —
+`estimated_cells`, `median_genes_per_cell`, `fraction_reads_in_cells`,
+`pct_reads_mito` — and it is **registered** in `_RULE_PACKS` (rule_pack.py:281–288),
+so it runs today via `rule_pack_for("scrnaseq")` → `evaluate_run_qc`. It even carries
+**FAIL bands** (e.g. `estimated_cells` fail_below 100, `pct_reads_mito` fail_above 50).
+So the premise "no biological verdict" is wrong: the checks are wired.
 
-- `resource_sizing.peak_informed_memory_gb` (`resource_sizing.py:42-71`) is the template:
-  add `realtime_informed_time_h(events, usage, *, factor)` → `TimeSizing(target_h|None,
-  tier, observed_realtime_sec|None)`, `math.ceil(sec/3600 × factor)`, `>0` guard, else
-  `("unavailable", None)`.
-- `apply_patch` time branch (`self_heal.py:490-495`) is still blind `× mult`; add a
-  keyword `observed_target_h` exactly like `observed_target_gb` (`:480-489`). Ceiling
-  clamp + never-shrink math untouched.
-- `_resource_ceiling_block` (`self_heal.py:405-414`) **already** gates `time_limit` at
-  `CEILING_TIME_H` — no change.
-- Heal-site wiring: add a `_time_limit_sizing(diagnosis, run_dir, events)` sibling to
-  `_oom_memory_sizing` (`self_heal.py:417-439`), dispatch at the safe-path call site
-  (`self_heal.py:1008-1018`), pass both overrides into `apply_patch`.
-- `realtime_sec` is already parsed (`events.py:128-135`), already on `TaskResource`
-  (`models.py:118-130`); dash/blank → `0.0` (same `>0` guard transfers). **No parser or
-  model change needed.** Unit is seconds in the trace, **hours** in the config (`{final}.h`).
-- Tests: mirror `tests/test_resource_sizing.py` (pure helper) + the `apply_patch` seam
-  tests (`tests/test_self_heal.py:630-738`) + the Phase-3 integration block
-  (`:2450-2548`). Note `test_self_heal_time_limit_retry_is_untouched_by_sizing`
-  (`:2526-2547`) currently asserts time stays blind `4h→8h` — this slice **replaces** it.
+**2. But they almost never fire — the metrics aren't ingested on the default path.**
+The pinned `nf-core/scrnaseq@4.1.0` default aligner is **`simpleaf` (alevin-fry)**,
+not STARsolo/Cell Ranger. On that default path the cell-level QC lives in
+**AlevinQC/QCatch standalone HTML**, not MultiQC `general_stats`. The stock MultiQC
+**STAR module does not parse STARsolo `Summary.csv`**; only the **Cell Ranger** module
+surfaces `estimated cells / genes-per-cell / fraction-in-cells` into general stats.
+Since `evaluate()` (rule_pack.py:332–351) **silently skips any absent metric**, the
+existing scrnaseq pack **degrades to UNVERIFIED on an out-of-the-box run** — it reads
+as "wired" but produces no verdict.
 
-## ⚠ The sharp finding: the walltime signal is fundamentally weaker than memory's
+**3. Two of the C3 single-cell checks can't fire at all on the base pipeline:**
+- `pct_reads_mito` needs downstream **scanpy** (`pct_counts_mt`); the base 4.1.0
+  pipeline does not run scanpy QC → this check is silently dead on every real run.
+- **doublet rate** needs scDblFinder/scrublet, which the base pipeline does not run at
+  all → cannot be added meaningfully.
 
-The dig confirmed a signal asymmetry that the `contig-next` caveat only hinted at. It is
-the crux of whether this slice is worth building **as briefed**:
+**4. The existing FAIL bands are uncalibrated** (rule_pack.py:85 "illustrative,
+tunable engineering defaults"), which sits uneasily with the standing C3 posture
+"WARN-capped, no FAIL until calibrated on real data" that every plausibility slice has
+honored.
 
-- **Memory (why v0.19.0 works):** an OOM'd task's `peak_rss` is the **actual high-water
-  mark** it reached before the kernel killed it — a real (≈) measure of its *demand*.
-  `peak × 1.5` = demand + headroom. Even under cgroup enforcement where peak ≈ request,
-  it's a truthful anchor.
-- **Walltime (the problem):** a walltime-killed task **did not finish**, so its `realtime`
-  is only a **lower bound** on the time it needed — and it is **hard-censored at ≈ the
-  current limit** (the scheduler's timer fires right at the cap; unlike memory there is
-  essentially no overshoot). Detection is log-text only, no exit-code high-water mark
-  (`detect.py:55-64`).
-- **Consequence:** a naive factor-mirror sizes the retry to `realtime × 1.5 ≈ current × 1.5`,
-  which is **LESS aggressive than today's blind `× 2`**. It would slow convergence and
-  burn more of the bounded retry budget (`max_attempts`) — i.e. a **regression in the
-  common case**, violating the "never regress a working heal" invariant the memory slice
-  held.
+## So the real gap is NOT "add a pack" — it is "make the pack fire"
 
-**Where observed realtime *does* carry real signal (the tail):** the trace shows a
-`realtime` **above** the current limit — a task with a higher process label that also
-timed out, a mis-classified `time_limit` (something else killed a long-running task), or
-grace/staging overrun recorded past the cap. There, `observed × factor > blind`.
+The genuine Layer-2 hole the dig uncovered: **single-cell cell-level QC metrics never
+reach the verdict on a default run.** The metrics the pipeline *does* write to disk
+(STARsolo `Summary.csv`, Cell Ranger `metrics_summary.csv`) are not parsed into the
+`{sample: {slug: value}}` dict that the checks consume. Fixing that is what turns a
+dormant single-cell verdict into a live one.
 
-### Honest design to stay never-worse-than-blind
+## Affected code (file:line anchors from the dig)
 
-Do **not** ship the naive mirror. Either:
-- **(a)** `target = max(blind_×2, ceil(observed_realtime/3600 × factor))` — floor at blind,
-  only rises in the tail; **or**
-- **(b)** a walltime factor ≥ 2 so `observed ≈ current` ties blind and only the tail wins.
+- `verification/rule_pack.py` — `SCRNASEQ_RULE_PACK` (87–116); `evaluate()` skips absent
+  metric (338–339); `_status_for` WARN-cap (299–318); `_RULE_PACKS` (281–288).
+- `verification/rnaseq_plausibility.py` — the evaluator+unverified template (whole file).
+- `verification/qc_ingest.py` — `parse_multiqc_general_stats_file` → `{sample:{slug:val}}`
+  (the only current metric source; 5–30).
+- `runner.py:_discover_qc` (40–121) — assay-gated plausibility; rnaseq gate at 118–120.
+- `registry.py:42–48` — scrnaseq entry, pinned `4.1.0`; default aligner is simpleaf.
+- `verification/structural.py:262–264` — scrnaseq manifest (`*.h5ad`, `*matrix.mtx*`).
+- Tests to mirror: `tests/verification/test_rule_pack.py` (203–278 scrnaseq pack;
+  487–561 rnaseq-plausibility pack), `tests/verification/test_rnaseq_plausibility.py`,
+  `tests/verification/test_run_qc.py:119–142` (runner-gate integration).
+- Precedent planning docs: `docs/planning/rnaseq-plausibility/` (prd + spec + plan).
 
-Both make the feature **blind-equivalent in the common censored case + a small win in the
-tail + a field instrument**: record observed-realtime-vs-limit in `RepairStep.detail` to
-learn how often a walltime kill even carries a usable signal — exactly the posture
-v0.19.0's CHANGELOG took for `peak_rss` ("the instrument that will show, in the field...").
+## Guardrails check
 
-**Net:** this is a legitimate, safe, symmetric slice — but a **materially smaller** win
-than the memory slice, not the equal-value mirror the brief implies. That is the user's
-call to make before we invest in PRD/plan (below).
+Layer-2 (verify) ✓. No raw-read egress — a Summary.csv/metrics_summary.csv parser reads
+small text QC files on the user's compute ✓. No over-claiming — keep WARN-capped,
+UNVERIFIED-when-absent ✓. No Layer-1 ✓. Research-use only ✓. Test-first with synthetic
+fixtures, no real nf-core run in CI ✓.
 
-## Sibling-rescue is blocked here too (same as memory)
+## Open decision for the review (before the PRD)
 
-The parser sets `process == name` for every row (`events.py:127,131`), so a
-"borrow a sibling task's uncensored realtime" tier is unreachable — identical to the
-deferred memory sibling-rescue. Unblocking it needs a coarse `process` column (a
-`progress.py` blast radius). Defer, same as v0.19.0.
-
-## Guardrail check
-
-Layer 2 (self-heal), local, deterministic, no raw-read egress (reads the run's own trace
-on the user's compute), Nextflow-only, no verdict/exit-code/`FailureClass` change. ✅
-
-## Decision needed before Phase 3 (PRD)
-
-The mechanical path is trivial; the **product-value question is real**. See the fork put
-to the user at the Phase-2/3 boundary.
+The finding forks the scope; see the three options presented to the user. The
+recommended direction is the metric-ingestion slice (make the checks fire), not the
+thin duplicate-pack slice the brief literally described.

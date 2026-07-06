@@ -29,12 +29,78 @@ from contig.nfconfig import generate_nextflow_config
 from contig.snakemake import build_snakemake_command, parse_snakemake_stats_file
 from contig.verification.qc_ingest import parse_multiqc_general_stats_file
 from contig.verification.rnaseq_plausibility import evaluate_rnaseq_plausibility
-from contig.verification.rule_pack import rule_pack_for
+from contig.verification.rule_pack import SCRNASEQ_RULE_PACK, evaluate, rule_pack_for
+from contig.verification.scrnaseq_metrics import (
+    parse_cellranger_metrics,
+    parse_starsolo_summary,
+)
 from contig.verification.somatic_concordance import evaluate_somatic_concordance_from_run
 from contig.verification.somatic_plausibility import evaluate_somatic_plausibility
 from contig.verification.run_qc import evaluate_run_qc
 from contig.verification.structural import evaluate_structural, manifest_for
 from contig.verification.variant_metrics import evaluate_variant_plausibility
+
+
+# STARsolo writes a Summary.csv under each metric subdir (Gene/, GeneFull/, ...);
+# the enclosing dir named "<sample>.Solo.out" carries the sample id. These are the
+# STARsolo internal dir names to skip when falling back to a plain ancestor name.
+_STARSOLO_INTERNAL = {
+    "Gene",
+    "GeneFull",
+    "GeneFull_Ex50pAS",
+    "GeneFull_ExonOverIntron",
+    "Velocyto",
+    "Solo.out",
+    "raw",
+    "filtered",
+}
+
+
+def _sample_from_starsolo(path: Path) -> str:
+    """Derive the sample id from a STARsolo Summary.csv path.
+
+    Prefers the `<sample>.Solo.out` ancestor (strip the suffix); otherwise the
+    nearest ancestor that is not a STARsolo internal directory.
+    """
+    for parent in path.parents:
+        if parent.name.endswith(".Solo.out"):
+            return parent.name[: -len(".Solo.out")]
+    for parent in path.parents:
+        if parent.name and parent.name not in _STARSOLO_INTERNAL:
+            return parent.name
+    return path.stem
+
+
+def _sample_from_cellranger(path: Path) -> str:
+    """Derive the sample id from a Cell Ranger metrics_summary.csv path.
+
+    Cell Ranger writes `<sample>/outs/metrics_summary.csv`, so the sample is the
+    directory above `outs`.
+    """
+    parent = path.parent
+    if parent.name == "outs":
+        return parent.parent.name
+    return parent.name
+
+
+def _locate_scrnaseq_qc(run_dir: Path) -> dict[str, dict[str, float]]:
+    """Find single-cell cell-QC artifacts under a run dir → {sample: {slug: value}}.
+
+    Cell Ranger takes deterministic precedence over STARsolo for the same sample
+    (no merge of two aligners' numbers). A located-but-unparseable file maps the
+    sample to an empty dict so the gate can emit an explicit UNVERIFIED. The
+    default simpleaf/alevin-fry path has no machine-readable artifact, so it
+    contributes nothing here (→ the sample is simply absent).
+    """
+    located: dict[str, dict[str, float]] = {}
+    for path in sorted(run_dir.rglob("metrics_summary.csv")):
+        located[_sample_from_cellranger(path)] = parse_cellranger_metrics(path)
+    for path in sorted(run_dir.rglob("Summary.csv")):
+        sample = _sample_from_starsolo(path)
+        if sample in located:
+            continue  # Cell Ranger already won this sample, or an earlier Summary.csv
+        located[sample] = parse_starsolo_summary(path)
+    return located
 
 
 def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
@@ -118,6 +184,29 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
     if assay == "rnaseq" and multiqc is not None:
         metrics = parse_multiqc_general_stats_file(multiqc)
         results.extend(evaluate_rnaseq_plausibility(metrics))
+    # Single-cell cell-QC (capability C3, scrnaseq slice). The base nf-core/scrnaseq
+    # pipeline does NOT route cell-level metrics into MultiQC general-stats, so a
+    # dedicated gate parses the aligner's own cell-QC artifact (STARsolo Summary.csv
+    # / Cell Ranger metrics_summary.csv) and drives SCRNASEQ_RULE_PACK. A located file
+    # with no usable metric yields one explicit UNVERIFIED (never a silent no-op or a
+    # false pass); no artifact at all skips silently (structural QC owns a missing
+    # output, mirroring the germline no-VCF path). Gated strictly to scrnaseq.
+    if assay == "scrnaseq":
+        for sample, sample_metrics in _locate_scrnaseq_qc(run_dir).items():
+            if sample_metrics:
+                results.extend(evaluate({sample: sample_metrics}, SCRNASEQ_RULE_PACK))
+            else:
+                results.append(
+                    QCResult(
+                        check=f"scrnaseq_cell_qc:{sample}",
+                        status="unverified",
+                        message=(
+                            f"{sample}: cell-QC file found but no usable metric parsed"
+                        ),
+                        value=None,
+                        kind="metric",
+                    )
+                )
     return results
 
 # An executor runs the Nextflow argv and is responsible for the trace file
