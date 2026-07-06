@@ -419,6 +419,7 @@ def apply_patch(
     params: dict[str, object] | None = None,
     *,
     ceiling: dict[str, int] | None = None,
+    observed_target_gb: int | None = None,
 ) -> tuple[ExecutionTarget, dict[str, object]]:
     """Apply a patch to the run inputs, returning the updated (target, params).
 
@@ -428,7 +429,10 @@ def apply_patch(
       old `--max_memory` params are ignored). The `ceiling` kwarg (default:
       ``{"memory": CEILING_MEMORY_GB, "time": CEILING_TIME_H}``) sets an absolute
       upper bound on each auto-scaled value. A pre-existing value that already
-      exceeds the ceiling is preserved as-is (never-shrink rule).
+      exceeds the ceiling is preserved as-is (never-shrink rule). When
+      ``observed_target_gb`` is supplied it overrides the blind memory
+      multiplier as the pre-clamp target; the ceiling clamp and never-shrink
+      rule still apply to it unchanged (time is unaffected).
     - `param`: merge `set_param` (its concrete key/value swap) into the pipeline
       params so the corrected parameter reaches the re-run's command.
     - `reference`: merge `set_param` (the reference swap, e.g. igenomes_ignore)
@@ -449,7 +453,11 @@ def apply_patch(
         limits = dict(target.resource_limits)
         if "memory" in mult:
             current = _lead_number(limits.get("memory"), _DEFAULT_MEMORY_GB)
-            bumped = int(current * int(mult["memory"]))
+            bumped = (
+                observed_target_gb
+                if observed_target_gb is not None
+                else int(current * int(mult["memory"]))
+            )
             capped = min(bumped, ceiling["memory"])
             final = max(capped, int(current))
             limits["memory"] = f"{final}.GB"

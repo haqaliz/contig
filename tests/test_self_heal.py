@@ -626,6 +626,117 @@ def test_apply_patch_scales_normally_below_ceiling():
     assert result.resource_limits["memory"] == "16.GB"
 
 
+# ---------------------------------------------------------------------------
+# observed_target_gb override (Task C2: peak-RSS resource scaling, Phase 2)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_patch_observed_target_overrides_blind_multiplier():
+    # A supplied observed target replaces the blind ×2 as the pre-clamp target.
+    # 8 GB current, observed 12 GB, ceiling 128 -> 12 GB (not 16 from ×2).
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"memory": 2}},
+        rationale="OOM retry",
+        risk="safe",
+        expected_signal="no OOM exit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"memory": "8.GB"},
+    )
+    result, _ = apply_patch(
+        target, patch, ceiling={"memory": 128, "time": 72}, observed_target_gb=12
+    )
+    assert result.resource_limits["memory"] == "12.GB"
+
+
+def test_apply_patch_observed_target_none_preserves_blind_behavior():
+    # Default observed_target_gb=None -> unchanged blind ×2: 8 GB -> 16 GB.
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"memory": 2}},
+        rationale="OOM retry",
+        risk="safe",
+        expected_signal="no OOM exit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"memory": "8.GB"},
+    )
+    result, _ = apply_patch(
+        target, patch, ceiling={"memory": 128, "time": 72}, observed_target_gb=None
+    )
+    assert result.resource_limits["memory"] == "16.GB"
+
+
+def test_apply_patch_observed_target_never_shrinks_below_current():
+    # Observed 2 GB is below the current 8 GB request; never-shrink holds 8 GB.
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"memory": 2}},
+        rationale="OOM retry",
+        risk="safe",
+        expected_signal="no OOM exit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"memory": "8.GB"},
+    )
+    result, _ = apply_patch(
+        target, patch, ceiling={"memory": 128, "time": 72}, observed_target_gb=2
+    )
+    assert result.resource_limits["memory"] == "8.GB"
+
+
+def test_apply_patch_observed_target_clamped_to_ceiling():
+    # Observed 999 GB exceeds the 128 GB ceiling -> clamped to 128 GB.
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"memory": 2}},
+        rationale="OOM retry",
+        risk="safe",
+        expected_signal="no OOM exit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"memory": "8.GB"},
+    )
+    result, _ = apply_patch(
+        target, patch, ceiling={"memory": 128, "time": 72}, observed_target_gb=999
+    )
+    assert result.resource_limits["memory"] == "128.GB"
+
+
+def test_apply_patch_observed_target_leaves_time_branch_unaffected():
+    # observed_target_gb only affects memory; a time multiply still scales ×2.
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"time": 2}},
+        rationale="timeout retry",
+        risk="safe",
+        expected_signal="pipeline completes within time limit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"time": "4.h"},
+    )
+    result, _ = apply_patch(
+        target, patch, ceiling={"memory": 128, "time": 72}, observed_target_gb=12
+    )
+    assert result.resource_limits["time"] == "8.h"
+
+
 def test_self_heal_first_execute_has_no_resume_by_default(tmp_path):
     seen = {}
 
