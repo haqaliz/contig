@@ -6,6 +6,42 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Walltime-informed scaling for the `time_limit` self-heal** (capability C2, self-heal
+  breadth — the symmetric walltime follow-on to v0.19.0's peak-RSS OOM memory scaling).
+  When a task is killed for exceeding its wall-clock limit, the retry is no longer a blind
+  `time × 2` guess: the engine parses the run's **own partial `trace.txt`** at heal-decision
+  time and sizes the retry from the **longest observed `realtime`** across the trace rows —
+  `target = ceil(max_realtime_sec / 3600 × 1.5)` hours (new pure
+  `resource_sizing.realtime_informed_time_h`, mirroring `peak_informed_memory_gb`), threaded
+  through a new `apply_patch(observed_target_h=…)` seam while the **72 h ceiling clamp, the
+  never-shrink rule, and the `gave_up_at_ceiling` give-up stay exactly as before**.
+  - **Honest about a weaker signal than memory — floored at blind, never worse.** Unlike an
+    OOM'd task's `peak_rss` (a real high-water mark ≈ the task's demand), a walltime-killed
+    task **never finished**, so its `realtime` is only a **lower bound** on the time needed
+    and is **hard-censored at ≈ the current limit**. So the observed override is **floored at
+    the blind `× 2` bump** (`max(observed, blind)`) — the one intentional asymmetry vs the
+    memory branch — which means it **ties blind in the common censored case** and only rises
+    in the **tail** (the trace carries a `realtime` above the current limit: a higher-label
+    sibling process that also timed out, a mis-classified `time_limit`, or a grace/staging
+    overrun). It is thus **never worse than today's behavior**, and a trace-less run, a
+    snakemake run, or a dash/0 `realtime` degrades to the unchanged blind `× 2` fallback.
+  - **Shipped mostly as a field instrument.** Every walltime heal records the observed
+    `realtime`, the applied (post-floor/clamp) walltime, the evidence tier, and whether it
+    **beat or tied blind** into `RepairStep.detail` — the instrument that will show, in the
+    field, how often a walltime kill even carries a usable signal. **Revisit trigger:** after
+    ≥ 20 observed walltime heals, if the tail case fires in < ~20% of them, do **not** invest
+    further in walltime sizing (no sibling-rescue tier, no calibration) — redirect C2 effort
+    to a new failure class. The decision trigger is a deliverable alongside the code.
+  - **Deferred (deliberately):** the **same-process sibling rescue** (borrowing an uncensored
+    sibling task's `realtime` when the killed row's own is censored) — unreachable while the
+    trace parser sets `process == name` for every row, exactly as for the memory slice's
+    deferred sibling rung; and factor/ceiling calibration on real data. Memory-only path
+    untouched; Nextflow-only; no verdict / exit-code / `FailureClass` / model / parser
+    change. Local, deterministic, no raw-read egress; fully covered by injected
+    trace/executor fixtures (no real pipeline run in CI).
+
 ## [0.19.0] - 2026-07-06
 
 ### Added

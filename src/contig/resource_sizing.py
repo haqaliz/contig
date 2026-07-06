@@ -69,3 +69,50 @@ def peak_informed_memory_gb(
 def _sized(peak_mb: float, factor: float) -> int:
     """Scale an observed peak (MB) into a binary-GB target with headroom."""
     return math.ceil(peak_mb / 1024 * factor)
+
+
+# Headroom over the observed walltime: retrying at exactly the observed runtime
+# would race the same clock. 1.5× is the default; code-overridable via `factor`.
+WALLTIME_SAFETY_FACTOR = 1.5
+
+
+class TimeSizing(NamedTuple):
+    """The sized walltime target plus the evidence tier it was derived from.
+
+    `target_h` is the wall-hour request to retry with (None when unavailable);
+    `tier` records which rung produced it ("realtime" | "unavailable");
+    `observed_realtime_sec` is the raw longest realtime the size came from.
+    """
+
+    target_h: int | None
+    tier: str
+    observed_realtime_sec: float | None
+
+
+def realtime_informed_time_h(
+    events: list[TaskEvent],
+    usage: list[TaskResource],
+    *,
+    factor: float = WALLTIME_SAFETY_FACTOR,
+) -> TimeSizing:
+    """Size a walltime retry from the observed realtime in the trace.
+
+    Unlike the memory sizer, a `time_limit` kill has no `exit == 137` join key,
+    so this keys on the MAX realtime across all usage rows rather than a specific
+    failed task. `events` is kept in the signature only for symmetry with the
+    memory sizer; the pure walltime sizer reads `usage` alone. A realtime of 0
+    (a dash in the trace) is treated as unknown and excluded by the `> 0` filter.
+
+    Honest two-tier ladder:
+      a. longest observed realtime across usage rows, scaled by `factor`, else
+      c. unavailable — no usable realtime, caller falls back to a blind bump.
+
+    A `realtime` recorded at a walltime kill is a CENSORED LOWER BOUND (the task
+    was killed before finishing), so the floor-at-blind lives in
+    ``self_heal.apply_patch``, not here; this helper returns the raw sized target.
+    """
+    observed = [r.realtime_sec for r in usage if r.realtime_sec > 0]
+    if not observed:
+        return TimeSizing(None, "unavailable", None)
+    longest = max(observed)
+    return TimeSizing(math.ceil(longest / 3600 * factor), "realtime", longest)

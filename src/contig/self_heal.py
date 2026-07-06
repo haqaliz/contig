@@ -29,7 +29,13 @@ from contig.models import Diagnosis, ExecutionTarget, Patch, QCResult, RepairSte
 from contig.notify import emit_event
 from contig.reference_check import fasta_contigs, gtf_contigs
 from contig.repair import propose_patches
-from contig.resource_sizing import PEAK_RSS_SAFETY_FACTOR, peak_informed_memory_gb
+from contig.resource_sizing import (
+    PEAK_RSS_SAFETY_FACTOR,
+    WALLTIME_SAFETY_FACTOR,
+    TimeSizing,
+    peak_informed_memory_gb,
+    realtime_informed_time_h,
+)
 from contig.runner import (
     Executor,
     IndexBuilder,
@@ -439,6 +445,47 @@ def _oom_memory_sizing(diagnosis, run_dir, events) -> tuple[int | None, str | No
     return sizing.target_gb, detail
 
 
+def _time_limit_sizing(diagnosis, run_dir, events) -> tuple[int | None, TimeSizing | None]:
+    """Size a time_limit retry from the run's observed realtime.
+
+    The walltime mirror of ``_oom_memory_sizing``: parse the run's (partial) trace
+    and size the retry to the longest observed realtime via
+    ``realtime_informed_time_h``, returning the RAW pre-clamp target hours for
+    ``apply_patch`` plus the ``TimeSizing`` itself so the caller can build the
+    ``RepairStep.detail`` off the APPLIED (post floor-at-blind / ceiling-clamp)
+    time rather than the raw sized value. A no-op ``(None, None)`` for any other
+    failure class -- sizing only touches ``time_limit``; the blind ``x2`` bump and
+    the OOM branch are unchanged.
+    """
+    if diagnosis.failure_class != "time_limit":
+        return None, None
+    trace_path = run_dir / "trace.txt"
+    usage = parse_resource_usage_file(trace_path) if trace_path.exists() else []
+    sizing = realtime_informed_time_h(events, usage)
+    return sizing.target_h, sizing
+
+
+def _time_limit_detail(target, sizing, prev_time_h) -> str:
+    """Build the ``RepairStep.detail`` for a time_limit heal from the APPLIED time.
+
+    ``prev_time_h`` is the pre-patch walltime, so ``blind = prev_time_h * 2`` is the
+    old blind bump the observed override was floored against; ``sizing.target_h`` is
+    the raw sized value. Reading the applied hours off the patched target keeps the
+    telemetry honest to what actually shipped (a realtime at a walltime kill is a
+    censored lower bound, so ``apply_patch`` floors the override at blind).
+    """
+    if sizing.target_h is None:
+        return "no usable observed realtime; blind x2 fallback (unavailable)"
+    applied_h = int(_lead_number(target.resource_limits.get("time"), _DEFAULT_TIME_HOURS))
+    blind = prev_time_h * 2
+    verb = "beat" if sizing.target_h > blind else "tied"
+    return (
+        f"scaled time to ~{applied_h}h from observed realtime "
+        f"{sizing.observed_realtime_sec:.0f}s (x{WALLTIME_SAFETY_FACTOR}, {sizing.tier}); "
+        f"{verb} blind x2"
+    )
+
+
 def apply_patch(
     target: ExecutionTarget,
     patch: Patch,
@@ -446,6 +493,7 @@ def apply_patch(
     *,
     ceiling: dict[str, int] | None = None,
     observed_target_gb: int | None = None,
+    observed_target_h: int | None = None,
 ) -> tuple[ExecutionTarget, dict[str, object]]:
     """Apply a patch to the run inputs, returning the updated (target, params).
 
@@ -458,7 +506,12 @@ def apply_patch(
       exceeds the ceiling is preserved as-is (never-shrink rule). When
       ``observed_target_gb`` is supplied it overrides the blind memory
       multiplier as the pre-clamp target; the ceiling clamp and never-shrink
-      rule still apply to it unchanged (time is unaffected).
+      rule still apply to it unchanged. When ``observed_target_h`` is supplied it
+      overrides the blind time multiplier, but is FLOORED at the blind ×N bump
+      (``max(observed, blind)``) -- unlike memory -- because a walltime
+      ``realtime`` observation is a censored lower bound and must never make the
+      retry weaker than today's blind bump. The ceiling clamp and never-shrink
+      rule then apply unchanged.
     - `param`: merge `set_param` (its concrete key/value swap) into the pipeline
       params so the corrected parameter reaches the re-run's command.
     - `reference`: merge `set_param` (the reference swap, e.g. igenomes_ignore)
@@ -489,7 +542,8 @@ def apply_patch(
             limits["memory"] = f"{final}.GB"
         if "time" in mult:
             current = _lead_number(limits.get("time"), _DEFAULT_TIME_HOURS)
-            bumped = int(current * int(mult["time"]))
+            blind = int(current * int(mult["time"]))
+            bumped = max(observed_target_h, blind) if observed_target_h is not None else blind
             capped = min(bumped, ceiling["time"])
             final = max(capped, int(current))
             limits["time"] = f"{final}.h"
@@ -1005,11 +1059,24 @@ def self_heal_run(
                     runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
                     harmonized_reference_direction=harmonized_reference_direction)
 
-            observed_target_gb, detail = _oom_memory_sizing(diagnosis, run_dir, events)
+            observed_target_gb, mem_detail = _oom_memory_sizing(diagnosis, run_dir, events)
+            observed_target_h, time_sizing = _time_limit_sizing(diagnosis, run_dir, events)
+            prev_time_h = int(_lead_number(current_target.resource_limits.get("time"), _DEFAULT_TIME_HOURS))
             current_target, current_params = apply_patch(
                 current_target, safe, current_params,
-                ceiling=resource_ceiling, observed_target_gb=observed_target_gb,
+                ceiling=resource_ceiling,
+                observed_target_gb=observed_target_gb,
+                observed_target_h=observed_target_h,
             )
+            # Only one of the two sizers is non-None per failure class (OOM vs
+            # time_limit); the time detail is built AFTER apply_patch so it reports
+            # the applied (post floor-at-blind / clamp) walltime, not the raw size.
+            time_detail = (
+                _time_limit_detail(current_target, time_sizing, prev_time_h)
+                if time_sizing is not None
+                else None
+            )
+            detail = mem_detail or time_detail
             _record_attempt(
                 run_dir,
                 repair_history,

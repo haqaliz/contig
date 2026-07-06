@@ -737,6 +737,168 @@ def test_apply_patch_observed_target_leaves_time_branch_unaffected():
     assert result.resource_limits["time"] == "8.h"
 
 
+# ---------------------------------------------------------------------------
+# observed_target_h override (walltime scaling; realtime is a censored lower
+# bound so the time override is FLOORED at the blind ×2 bump, unlike memory)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_patch_observed_target_h_overrides_blind_multiplier_when_higher():
+    # observed 15 h beats the blind ×2 (4 -> 8) -> pre-clamp target 15 h.
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"time": 2}},
+        rationale="timeout retry",
+        risk="safe",
+        expected_signal="pipeline completes within time limit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"time": "4.h"},
+    )
+    result, _ = apply_patch(
+        target, patch, ceiling={"memory": 128, "time": 72}, observed_target_h=15
+    )
+    assert result.resource_limits["time"] == "15.h"
+
+
+def test_apply_patch_observed_target_h_floored_at_blind_bump():
+    # observed 6 h is BELOW the blind ×2 (4 -> 8); realtime is a censored lower
+    # bound, so the blind floor wins -> 8 h (the walltime-specific behavior).
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"time": 2}},
+        rationale="timeout retry",
+        risk="safe",
+        expected_signal="pipeline completes within time limit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"time": "4.h"},
+    )
+    result, _ = apply_patch(
+        target, patch, ceiling={"memory": 128, "time": 72}, observed_target_h=6
+    )
+    assert result.resource_limits["time"] == "8.h"
+
+
+def test_apply_patch_observed_target_h_none_preserves_blind_behavior():
+    # Default observed_target_h=None -> unchanged blind ×2: 4 h -> 8 h.
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"time": 2}},
+        rationale="timeout retry",
+        risk="safe",
+        expected_signal="pipeline completes within time limit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"time": "4.h"},
+    )
+    result, _ = apply_patch(
+        target, patch, ceiling={"memory": 128, "time": 72}, observed_target_h=None
+    )
+    assert result.resource_limits["time"] == "8.h"
+
+
+def test_apply_patch_observed_target_h_clamped_to_ceiling():
+    # observed 200 h exceeds the default 72 h ceiling -> clamped to 72 h.
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"time": 2}},
+        rationale="timeout retry",
+        risk="safe",
+        expected_signal="pipeline completes within time limit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"time": "40.h"},
+    )
+    result, _ = apply_patch(target, patch, observed_target_h=200)
+    assert result.resource_limits["time"] == "72.h"
+
+
+def test_apply_patch_observed_target_h_never_shrinks_below_current():
+    # current 10 h, blind ×2 -> 20 h, observed 5 h; max(max(5,20),10)=20 h.
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"time": 2}},
+        rationale="timeout retry",
+        risk="safe",
+        expected_signal="pipeline completes within time limit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"time": "10.h"},
+    )
+    result, _ = apply_patch(
+        target, patch, ceiling={"memory": 128, "time": 72}, observed_target_h=5
+    )
+    assert result.resource_limits["time"] == "20.h"
+
+
+def test_apply_patch_observed_target_h_leaves_memory_branch_unaffected():
+    # observed_target_h only affects time; memory scales via the blind ×2.
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"memory": 2, "time": 2}},
+        rationale="OOM + timeout retry",
+        risk="safe",
+        expected_signal="no OOM and completes within time limit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"memory": "8.GB", "time": "4.h"},
+    )
+    result, _ = apply_patch(
+        target,
+        patch,
+        ceiling={"memory": 128, "time": 72},
+        observed_target_gb=None,
+        observed_target_h=15,
+    )
+    assert result.resource_limits["memory"] == "16.GB"
+    assert result.resource_limits["time"] == "15.h"
+
+
+def test_apply_patch_both_observed_overrides_honored_independently():
+    # Memory override 90 GB and time override 15 h both applied on one patch.
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"memory": 2, "time": 2}},
+        rationale="OOM + timeout retry",
+        risk="safe",
+        expected_signal="no OOM and completes within time limit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"memory": "8.GB", "time": "4.h"},
+    )
+    result, _ = apply_patch(
+        target,
+        patch,
+        ceiling={"memory": 128, "time": 72},
+        observed_target_gb=90,
+        observed_target_h=15,
+    )
+    assert result.resource_limits["memory"] == "90.GB"
+    assert result.resource_limits["time"] == "15.h"
+
+
 def test_self_heal_first_execute_has_no_resume_by_default(tmp_path):
     seen = {}
 
@@ -2523,10 +2685,29 @@ def test_self_heal_oom_falls_back_to_blind_bump_without_usable_peak(tmp_path):
     assert "unavailable" in step.detail
 
 
-def test_self_heal_time_limit_retry_is_untouched_by_sizing(tmp_path):
-    # Sizing is memory/OOM-only. A time_limit heal must still scale time x2
-    # (4h -> 8h) and its patched_and_retried step must carry no sizing detail.
-    time_trace = _trace("FAILED", 140)
+# --- Phase 3: realtime-informed time_limit retry sizing ---------------------
+#
+# Supersedes the old "time_limit is untouched by sizing" test: a time_limit heal
+# now sizes the walltime retry from the run's observed realtime (helper:
+# realtime_informed_time_h), floored at the blind x2 bump (a walltime kill's
+# realtime is a censored lower bound), and records the observed realtime + tier
+# into RepairStep.detail.
+
+
+def _realtime_trace(status, exit_code, realtime, name="NFCORE_RNASEQ:STAR_ALIGN (S1)"):
+    # A trace row whose realtime column drives the walltime sizer.
+    return _TRACE_HEADER + (
+        f"1\tab/cd\t1\t{name}\t{status}\t{exit_code}\t2026-01-01\t"
+        f"{realtime}\t{realtime}\t180.0%\t-\n"
+    )
+
+
+def test_self_heal_sizes_time_limit_retry_from_observed_realtime(tmp_path):
+    # attempt-1's trace shows a max realtime of ~10h. A walltime kill must size the
+    # retry to ceil(10h * 1.5) = 15h, which BEATS the blind x2 (8h) off the 4h
+    # default -- and the retained detail must name the observed realtime seconds,
+    # the applied 15h, and that it beat blind.
+    time_trace = _realtime_trace("FAILED", 140, "10h")
     state = {"n": 0, "retry_cfg": None}
 
     def executor(cmd, trace_path):
@@ -2540,8 +2721,64 @@ def test_self_heal_time_limit_retry_is_untouched_by_sizing(tmp_path):
 
     record = _heal(tmp_path, executor)
     assert RunSummary.from_events(record.events).succeeded is True
+    assert record.target.resource_limits["time"] == "15.h"
     step = record.repair_history[0]
     assert step.diagnosis.failure_class == "time_limit"
     assert step.outcome == "patched_and_retried"
+    assert "36000" in step.detail  # observed realtime seconds
+    assert "15h" in step.detail  # the APPLIED (post-floor/clamp) walltime
+    assert "beat" in step.detail  # beat the blind x2
+
+
+def test_self_heal_time_limit_sizing_floors_at_blind_bump(tmp_path):
+    # A censored realtime of ~4h scales to ceil(4h * 1.5) = 6h, which is BELOW the
+    # blind x2 (8h). apply_patch floors the observed override at blind, so the
+    # applied time is 8h (ties blind) and the detail records the observed realtime
+    # and that it tied/floored blind rather than beating it.
+    time_trace = _realtime_trace("FAILED", 140, "4h")
+    state = {"n": 0, "retry_cfg": None}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, time_trace, "Terminated due to time limit")
+            return 1
+        state["retry_cfg"] = (Path(trace_path).parent / "nextflow.config").read_text()
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor)
+    assert RunSummary.from_events(record.events).succeeded is True
     assert record.target.resource_limits["time"] == "8.h"
-    assert step.detail is None
+    step = record.repair_history[0]
+    assert step.diagnosis.failure_class == "time_limit"
+    assert step.outcome == "patched_and_retried"
+    assert "14400" in step.detail  # observed realtime seconds
+    assert "8h" in step.detail  # applied walltime (floored at blind)
+    assert "tied" in step.detail  # tied/floored the blind x2
+
+
+def test_self_heal_time_limit_falls_back_to_blind_bump_without_realtime(tmp_path):
+    # No usable observed realtime in the trace (the killed row's realtime is a
+    # dash) -> the retry must scale the OLD blind x2 way (4h -> 8h) and the detail
+    # must say the observed realtime was unavailable. Regression guard: a
+    # realtime-less time_limit heal must behave exactly as it did before sizing.
+    time_trace = _realtime_trace("FAILED", 140, "-")
+    state = {"n": 0, "retry_cfg": None}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, time_trace, "Terminated due to time limit")
+            return 1
+        state["retry_cfg"] = (Path(trace_path).parent / "nextflow.config").read_text()
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor)
+    assert RunSummary.from_events(record.events).succeeded is True
+    assert record.target.resource_limits["time"] == "8.h"
+    step = record.repair_history[0]
+    assert step.diagnosis.failure_class == "time_limit"
+    assert step.outcome == "patched_and_retried"
+    assert step.detail == "no usable observed realtime; blind x2 fallback (unavailable)"

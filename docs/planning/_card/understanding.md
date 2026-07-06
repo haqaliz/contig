@@ -1,87 +1,94 @@
-# Understanding — peak-rss-resource-scaling (Phase 2 deep dig)
+# Understanding — self-heal-walltime-scaling (Phase 2 deep dig)
 
-Synthesized from two read-only mapping agents + a direct config check. All refs are
-`src/contig/*` in this worktree; line numbers exact at dig time.
+Synthesized from a read-only code-mapping agent over this worktree (master, incl.
+v0.19.0 peak-RSS memory scaling). Refs are `src/contig/*`; line numbers exact at dig time.
 
-## What the work really asks
+## What the work asks (as briefed)
 
-Replace the blind memory multiplier in the OOM self-heal with an **evidence-based**
-retry: size the memory bump to the failed task's **observed peak memory**
-(`TaskResource.peak_rss_mb`) parsed from the run's partial `trace.txt` at heal time,
-falling back to the existing blind multiplier when no usable observed peak exists.
-Layer 2, deepens unattended-completion, captures richer eval data.
+Mirror v0.19.0's peak-RSS OOM memory scaling for **walltime**: when a task is killed for
+exceeding its time limit (`time_limit` repair), size the retry to the failed task's
+**observed `realtime`** from the run's partial `trace.txt`, instead of the blind
+`time × 2`. Same seams: a pure sizing fn in `resource_sizing.py`, in-loop trace parse,
+an `apply_patch` `observed_target_h` override, two-tier ladder (observed → blind),
+telemetry in `RepairStep.detail`. Ceiling (72h) + never-shrink + `gave_up_at_ceiling`
+unchanged.
 
-## Feasibility — RESOLVED (the make-or-break checks)
+## The mechanical mirror is clean — every seam already exists
 
-1. **`peak_rss` IS emitted on real runs.** `nfconfig.py:49` `generate_nextflow_config`
-   writes **no `trace {}` block**, so `-with-trace <path>` (`runner.py:230`) uses
-   Nextflow's *default* trace field set, which includes `peak_rss` / `%cpu`. The parser
-   `events.parse_resource_usage_file` (`events.py:106-142`) resolves columns by header
-   *name*, so it reads them regardless of order. → The feature is **not inert**.
-2. **The trace is on disk at heal time.** The executor guarantees `run_dir/trace.txt`
-   exists when `run_pipeline` returns (`runner.py:123-125, 270`); the heal loop has
-   `run_dir` in scope (`self_heal.py:737`) and already imports
-   `parse_resource_usage_file` (`self_heal.py:27`). `_finalize` reads the same path
-   (`self_heal.py:1052-1054`) — but only at finalize; `exc.record.resource_usage` is
-   still `[]` at heal time. We parse it ourselves at the patch site.
-3. **The OOM'd task is identifiable.** `Diagnosis` (`models.py:228-234`) carries no
-   task name — only `failure_class`, `evidence` (free-text). But `exc.record.events`
-   (`self_heal.py:771`) holds `TaskEvent{process, name, status, exit, is_failure}`
-   (`models.py:107-115`); the OOM'd task is the `exit == 137` event
-   (`detect.py:42`), joined to the `TaskResource` row by `process`/`name` (shared,
-   `models.py:126-127`).
+- `resource_sizing.peak_informed_memory_gb` (`resource_sizing.py:42-71`) is the template:
+  add `realtime_informed_time_h(events, usage, *, factor)` → `TimeSizing(target_h|None,
+  tier, observed_realtime_sec|None)`, `math.ceil(sec/3600 × factor)`, `>0` guard, else
+  `("unavailable", None)`.
+- `apply_patch` time branch (`self_heal.py:490-495`) is still blind `× mult`; add a
+  keyword `observed_target_h` exactly like `observed_target_gb` (`:480-489`). Ceiling
+  clamp + never-shrink math untouched.
+- `_resource_ceiling_block` (`self_heal.py:405-414`) **already** gates `time_limit` at
+  `CEILING_TIME_H` — no change.
+- Heal-site wiring: add a `_time_limit_sizing(diagnosis, run_dir, events)` sibling to
+  `_oom_memory_sizing` (`self_heal.py:417-439`), dispatch at the safe-path call site
+  (`self_heal.py:1008-1018`), pass both overrides into `apply_patch`.
+- `realtime_sec` is already parsed (`events.py:128-135`), already on `TaskResource`
+  (`models.py:118-130`); dash/blank → `0.0` (same `>0` guard transfers). **No parser or
+  model change needed.** Unit is seconds in the trace, **hours** in the config (`{final}.h`).
+- Tests: mirror `tests/test_resource_sizing.py` (pure helper) + the `apply_patch` seam
+  tests (`tests/test_self_heal.py:630-738`) + the Phase-3 integration block
+  (`:2450-2548`). Note `test_self_heal_time_limit_retry_is_untouched_by_sizing`
+  (`:2526-2547`) currently asserts time stays blind `4h→8h` — this slice **replaces** it.
 
-## The exact seam
+## ⚠ The sharp finding: the walltime signal is fundamentally weaker than memory's
 
-- OOM is a **safe** patch (`repair.py:16-25`, `operation={"multiply":{"memory":2}}`),
-  so it bypasses the gated branches (829/871/922) and is applied on the **safe path at
-  `self_heal.py:974`**, then recorded as `RepairStep(outcome="patched_and_retried")`
-  (975-979, `detail` currently unset).
-- `apply_patch` (`self_heal.py:416-475`) is **pure** — only `target, patch, params,
-  ceiling`; no run_dir. The memory math is 447-455: `bumped = int(current*mult)`,
-  `capped = min(bumped, ceiling)`, `final = max(capped, int(current))` (**never-shrink**),
-  written as `f"{final}.GB"`.
-- Ceiling give-up pre-check `_resource_ceiling_block` (404-413, called at 965) →
-  `gave_up_at_ceiling`. Loop bound = `max_attempts` (default 3, `self_heal.py:718`).
+The dig confirmed a signal asymmetry that the `contig-next` caveat only hinted at. It is
+the crux of whether this slice is worth building **as briefed**:
 
-**Design implication:** compute the peak-informed target *at line 974* (where `run_dir`
-+ `events` are in scope) and feed it into the patch, rather than threading run_dir into
-the pure `apply_patch`. Keep the ceiling clamp + never-shrink + `gave_up_at_ceiling`.
+- **Memory (why v0.19.0 works):** an OOM'd task's `peak_rss` is the **actual high-water
+  mark** it reached before the kernel killed it — a real (≈) measure of its *demand*.
+  `peak × 1.5` = demand + headroom. Even under cgroup enforcement where peak ≈ request,
+  it's a truthful anchor.
+- **Walltime (the problem):** a walltime-killed task **did not finish**, so its `realtime`
+  is only a **lower bound** on the time it needed — and it is **hard-censored at ≈ the
+  current limit** (the scheduler's timer fires right at the cap; unlike memory there is
+  essentially no overshoot). Detection is log-text only, no exit-code high-water mark
+  (`detect.py:55-64`).
+- **Consequence:** a naive factor-mirror sizes the retry to `realtime × 1.5 ≈ current × 1.5`,
+  which is **LESS aggressive than today's blind `× 2`**. It would slow convergence and
+  burn more of the bounded retry budget (`max_attempts`) — i.e. a **regression in the
+  common case**, violating the "never regress a working heal" invariant the memory slice
+  held.
 
-## Open questions for the PRD interview (design decisions, not code facts)
+**Where observed realtime *does* carry real signal (the tail):** the trace shows a
+`realtime` **above** the current limit — a task with a higher process label that also
+timed out, a mis-classified `time_limit` (something else killed a long-running task), or
+grace/staging overrun recorded past the cap. There, `observed × factor > blind`.
 
-1. **Safety factor.** Target = `observed_peak × factor`. Default factor? (e.g. 1.5×.)
-2. **Fallback ladder when the OOM'd row lacks a usable peak.** A signal-killed task's
-   own `peak_rss` may be `-` → parser yields `0.0` (**must treat 0/absent as "unknown,"
-   not "0 MB"**, `events.py:51-55`). Ladder: (a) OOM'd task's own peak → (b) max peak of
-   *same-process* completed rows in the partial trace → (c) blind multiplier (today's
-   behavior). Confirm the ladder + that (c) never regresses a working heal.
-3. **Never-shrink interaction.** For an OOM-killed task, observed peak ≈ the cgroup cap
-   ≈ current request, so `peak × factor (≥1)` exceeds `current` and survives
-   `max(capped, current)`. If observed peak < current (mislabeled/sibling row), the
-   never-shrink rule protects it. Confirm this is the intended semantics.
-4. **Engine scope.** Nextflow only. Snakemake's artifact is `stats.json`
-   (`runner.py:260`), which the TSV parser doesn't read → snakemake falls back to the
-   blind multiplier. Confirm scope = Nextflow-only this slice.
-5. **Walltime (`time_limit`) symmetry.** Brief says "OOM/walltime." `realtime_sec` is in
-   the same trace. Scope decision: memory-only this slice, or also size walltime to
-   `observed_realtime × factor`? (Recommend memory-first; walltime as a stated
-   follow-on, unless cheap to include.)
-6. **Eval-data capture depth.** Minimal: put observed-peak-vs-requested + which fallback
-   fired into `RepairStep.detail` (free-text `str | None`, no model change). Deeper:
-   extend `FailureCase`/`failure_case_from_run` (`corpus.py:107-129`) with the observed
-   peak. Confirm slice depth.
+### Honest design to stay never-worse-than-blind
 
-## TDD fixtures to extend (from the dig)
+Do **not** ship the naive mirror. Either:
+- **(a)** `target = max(blind_×2, ceil(observed_realtime/3600 × factor))` — floor at blind,
+  only rises in the tail; **or**
+- **(b)** a walltime factor ≥ 2 so `observed ≈ current` ties blind and only the tail wins.
 
-- `tests/test_self_heal.py:105-125` `test_self_heal_populates_resource_usage_from_trace`
-  — closest heal-path fixture (fake executor writes a trace with peak_rss=1228.8).
-- `tests/test_resource.py` `_trace(...)` helper (header incl. `peak_rss %cpu`), MB/GB/KB
-  + dash→0 + header-order-independence cases.
-- `tests/test_events.py:19,38-77` — the `exit 137 / FAILED` trace-row fixtures (event
-  level, no peak_rss column yet) → extend to assert peak-on-OOM'd-row behavior.
+Both make the feature **blind-equivalent in the common censored case + a small win in the
+tail + a field instrument**: record observed-realtime-vs-limit in `RepairStep.detail` to
+learn how often a walltime kill even carries a usable signal — exactly the posture
+v0.19.0's CHANGELOG took for `peak_rss` ("the instrument that will show, in the field...").
+
+**Net:** this is a legitimate, safe, symmetric slice — but a **materially smaller** win
+than the memory slice, not the equal-value mirror the brief implies. That is the user's
+call to make before we invest in PRD/plan (below).
+
+## Sibling-rescue is blocked here too (same as memory)
+
+The parser sets `process == name` for every row (`events.py:127,131`), so a
+"borrow a sibling task's uncensored realtime" tier is unreachable — identical to the
+deferred memory sibling-rescue. Unblocking it needs a coarse `process` column (a
+`progress.py` blast radius). Defer, same as v0.19.0.
 
 ## Guardrail check
 
-Layer 2 (self-heal), local, deterministic, no raw-read egress (reads the run's own
-trace on the user's compute). No Layer-1 drift. ✅
+Layer 2 (self-heal), local, deterministic, no raw-read egress (reads the run's own trace
+on the user's compute), Nextflow-only, no verdict/exit-code/`FailureClass` change. ✅
+
+## Decision needed before Phase 3 (PRD)
+
+The mechanical path is trivial; the **product-value question is real**. See the fork put
+to the user at the Phase-2/3 boundary.

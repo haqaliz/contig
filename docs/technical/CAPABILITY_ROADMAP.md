@@ -223,8 +223,27 @@ Nextflow-only; no verdict/exit-code/`FailureClass` change; test-first with injec
 trace/executor fixtures. **Deferred here:** the **same-process sibling-peak rescue** (cut
 rather than shipped dormant — the trace parser sets `process == name` for every row, so a
 sibling key can never diverge; it needs a coarse `process` column, which has a `progress.py`
-blast radius); **walltime** sizing to observed `realtime`; and folding the observed peak
+blast radius); and folding the observed peak
 into the `FailureCase` corpus schema (telemetry rides in `RepairStep.detail` for now).
+**Shipped (walltime-scaling slice — Unreleased):** the symmetric follow-on for the
+`time_limit` self-heal. A walltime-killed retry is sized from the run's own partial
+`trace.txt` to the **longest observed `realtime`** — `ceil(max_realtime_sec / 3600 × 1.5)`
+hours (new pure `resource_sizing.realtime_informed_time_h`) — through a new
+`apply_patch(observed_target_h=…)` seam, with the 72 h ceiling, never-shrink, and
+`gave_up_at_ceiling` give-up unchanged. **Honest about a weaker signal:** unlike an OOM'd
+task's `peak_rss` (a real high-water mark), a walltime-killed task never finished, so its
+`realtime` is a **censored lower bound ≈ the current limit** — so the observed override is
+**floored at the blind `× 2` bump** (`max(observed, blind)`, the one intentional asymmetry
+vs the memory branch). It therefore **ties blind in the common censored case** and only
+rises in the **tail** (a trace `realtime` above the current limit: a higher-label sibling
+that also timed out, a mis-classified `time_limit`, grace overrun) — **never worse than
+today**. Shipped mostly as a **field instrument**: `RepairStep.detail` records the observed
+`realtime`, the applied walltime, the tier, and beat-vs-tied-blind, with a committed
+**revisit trigger** (≥ 20 heals, tail < ~20% → stop investing here, redirect C2). Two-tier
+ladder (observed `realtime` → blind fallback); memory path untouched; Nextflow-only; no
+verdict/exit-code/`FailureClass` change; test-first with injected fixtures. **Deferred:**
+the same-process sibling-`realtime` rescue (same `process == name` blocker as memory) and
+factor/ceiling calibration on real data.
 **Deferred to later C2 slices:** bwa-mem2 **build/redirect** (detection shipped v0.11.0;
 build blocked until a live trigger exists) and the classic-vs-mem2 aligner-mismatch heal;
 classic-BWA index build/redirect (needs a supported `bwa index` target, e.g. sarek
@@ -476,7 +495,7 @@ no ground-truth labels); and a held-out-accuracy trend over corpus/detector vers
 | ID | Capability | Window | Leverage |
 |----|-----------|--------|----------|
 | C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) + somatic slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap + somatic auto `somatic_site_overlap` PASS-site Jaccard, Mutect2 vs Strelka2, no user input; auto-run second germline/RNA tool + single-cell deferred) |
-| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; per-contig alias harmonization (mito `M`↔`MT` + GRCh38 scaffold seed) shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); peak-RSS-informed OOM memory scaling shipped (Unreleased, honest two-tier: own-peak → blind fallback; sibling rescue + walltime deferred); bwa-mem2/classic-BWA build+redirect, assembly-signature + exhaustive per-assembly alias completeness pending) | Unattended-completion rate, corpus fuel |
+| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; per-contig alias harmonization (mito `M`↔`MT` + GRCh38 scaffold seed) shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); peak-RSS-informed OOM memory scaling shipped (Unreleased, honest two-tier: own-peak → blind fallback; sibling rescue deferred); walltime-informed `time_limit` scaling shipped (Unreleased, floored at blind — censored realtime, tail-only win + field instrument); bwa-mem2/classic-BWA build+redirect, assembly-signature + exhaustive per-assembly alias completeness pending) | Unattended-completion rate, corpus fuel |
 | C3 | Biological-plausibility verification | SHIPPED v0.3.0 | Verdict gets smarter about biology (germline Ti/Tv, het/hom; other assays deferred) |
 | C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased); Strelka2-native VAF, FAIL severity + PON reference wiring deferred | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
