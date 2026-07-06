@@ -2685,10 +2685,29 @@ def test_self_heal_oom_falls_back_to_blind_bump_without_usable_peak(tmp_path):
     assert "unavailable" in step.detail
 
 
-def test_self_heal_time_limit_retry_is_untouched_by_sizing(tmp_path):
-    # Sizing is memory/OOM-only. A time_limit heal must still scale time x2
-    # (4h -> 8h) and its patched_and_retried step must carry no sizing detail.
-    time_trace = _trace("FAILED", 140)
+# --- Phase 3: realtime-informed time_limit retry sizing ---------------------
+#
+# Supersedes the old "time_limit is untouched by sizing" test: a time_limit heal
+# now sizes the walltime retry from the run's observed realtime (helper:
+# realtime_informed_time_h), floored at the blind x2 bump (a walltime kill's
+# realtime is a censored lower bound), and records the observed realtime + tier
+# into RepairStep.detail.
+
+
+def _realtime_trace(status, exit_code, realtime, name="NFCORE_RNASEQ:STAR_ALIGN (S1)"):
+    # A trace row whose realtime column drives the walltime sizer.
+    return _TRACE_HEADER + (
+        f"1\tab/cd\t1\t{name}\t{status}\t{exit_code}\t2026-01-01\t"
+        f"{realtime}\t{realtime}\t180.0%\t-\n"
+    )
+
+
+def test_self_heal_sizes_time_limit_retry_from_observed_realtime(tmp_path):
+    # attempt-1's trace shows a max realtime of ~10h. A walltime kill must size the
+    # retry to ceil(10h * 1.5) = 15h, which BEATS the blind x2 (8h) off the 4h
+    # default -- and the retained detail must name the observed realtime seconds,
+    # the applied 15h, and that it beat blind.
+    time_trace = _realtime_trace("FAILED", 140, "10h")
     state = {"n": 0, "retry_cfg": None}
 
     def executor(cmd, trace_path):
@@ -2702,8 +2721,64 @@ def test_self_heal_time_limit_retry_is_untouched_by_sizing(tmp_path):
 
     record = _heal(tmp_path, executor)
     assert RunSummary.from_events(record.events).succeeded is True
+    assert record.target.resource_limits["time"] == "15.h"
     step = record.repair_history[0]
     assert step.diagnosis.failure_class == "time_limit"
     assert step.outcome == "patched_and_retried"
+    assert "36000" in step.detail  # observed realtime seconds
+    assert "15h" in step.detail  # the APPLIED (post-floor/clamp) walltime
+    assert "beat" in step.detail  # beat the blind x2
+
+
+def test_self_heal_time_limit_sizing_floors_at_blind_bump(tmp_path):
+    # A censored realtime of ~4h scales to ceil(4h * 1.5) = 6h, which is BELOW the
+    # blind x2 (8h). apply_patch floors the observed override at blind, so the
+    # applied time is 8h (ties blind) and the detail records the observed realtime
+    # and that it tied/floored blind rather than beating it.
+    time_trace = _realtime_trace("FAILED", 140, "4h")
+    state = {"n": 0, "retry_cfg": None}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, time_trace, "Terminated due to time limit")
+            return 1
+        state["retry_cfg"] = (Path(trace_path).parent / "nextflow.config").read_text()
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor)
+    assert RunSummary.from_events(record.events).succeeded is True
     assert record.target.resource_limits["time"] == "8.h"
-    assert step.detail is None
+    step = record.repair_history[0]
+    assert step.diagnosis.failure_class == "time_limit"
+    assert step.outcome == "patched_and_retried"
+    assert "14400" in step.detail  # observed realtime seconds
+    assert "8h" in step.detail  # applied walltime (floored at blind)
+    assert "tied" in step.detail  # tied/floored the blind x2
+
+
+def test_self_heal_time_limit_falls_back_to_blind_bump_without_realtime(tmp_path):
+    # No usable observed realtime in the trace (the killed row's realtime is a
+    # dash) -> the retry must scale the OLD blind x2 way (4h -> 8h) and the detail
+    # must say the observed realtime was unavailable. Regression guard: a
+    # realtime-less time_limit heal must behave exactly as it did before sizing.
+    time_trace = _realtime_trace("FAILED", 140, "-")
+    state = {"n": 0, "retry_cfg": None}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, time_trace, "Terminated due to time limit")
+            return 1
+        state["retry_cfg"] = (Path(trace_path).parent / "nextflow.config").read_text()
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor)
+    assert RunSummary.from_events(record.events).succeeded is True
+    assert record.target.resource_limits["time"] == "8.h"
+    step = record.repair_history[0]
+    assert step.diagnosis.failure_class == "time_limit"
+    assert step.outcome == "patched_and_retried"
+    assert step.detail == "no usable observed realtime; blind x2 fallback (unavailable)"
