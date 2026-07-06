@@ -446,6 +446,7 @@ def apply_patch(
     *,
     ceiling: dict[str, int] | None = None,
     observed_target_gb: int | None = None,
+    observed_target_h: int | None = None,
 ) -> tuple[ExecutionTarget, dict[str, object]]:
     """Apply a patch to the run inputs, returning the updated (target, params).
 
@@ -458,7 +459,12 @@ def apply_patch(
       exceeds the ceiling is preserved as-is (never-shrink rule). When
       ``observed_target_gb`` is supplied it overrides the blind memory
       multiplier as the pre-clamp target; the ceiling clamp and never-shrink
-      rule still apply to it unchanged (time is unaffected).
+      rule still apply to it unchanged. When ``observed_target_h`` is supplied it
+      overrides the blind time multiplier, but is FLOORED at the blind ×N bump
+      (``max(observed, blind)``) -- unlike memory -- because a walltime
+      ``realtime`` observation is a censored lower bound and must never make the
+      retry weaker than today's blind bump. The ceiling clamp and never-shrink
+      rule then apply unchanged.
     - `param`: merge `set_param` (its concrete key/value swap) into the pipeline
       params so the corrected parameter reaches the re-run's command.
     - `reference`: merge `set_param` (the reference swap, e.g. igenomes_ignore)
@@ -489,7 +495,8 @@ def apply_patch(
             limits["memory"] = f"{final}.GB"
         if "time" in mult:
             current = _lead_number(limits.get("time"), _DEFAULT_TIME_HOURS)
-            bumped = int(current * int(mult["time"]))
+            blind = int(current * int(mult["time"]))
+            bumped = max(observed_target_h, blind) if observed_target_h is not None else blind
             capped = min(bumped, ceiling["time"])
             final = max(capped, int(current))
             limits["time"] = f"{final}.h"

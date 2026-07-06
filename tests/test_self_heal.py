@@ -737,6 +737,168 @@ def test_apply_patch_observed_target_leaves_time_branch_unaffected():
     assert result.resource_limits["time"] == "8.h"
 
 
+# ---------------------------------------------------------------------------
+# observed_target_h override (walltime scaling; realtime is a censored lower
+# bound so the time override is FLOORED at the blind ×2 bump, unlike memory)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_patch_observed_target_h_overrides_blind_multiplier_when_higher():
+    # observed 15 h beats the blind ×2 (4 -> 8) -> pre-clamp target 15 h.
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"time": 2}},
+        rationale="timeout retry",
+        risk="safe",
+        expected_signal="pipeline completes within time limit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"time": "4.h"},
+    )
+    result, _ = apply_patch(
+        target, patch, ceiling={"memory": 128, "time": 72}, observed_target_h=15
+    )
+    assert result.resource_limits["time"] == "15.h"
+
+
+def test_apply_patch_observed_target_h_floored_at_blind_bump():
+    # observed 6 h is BELOW the blind ×2 (4 -> 8); realtime is a censored lower
+    # bound, so the blind floor wins -> 8 h (the walltime-specific behavior).
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"time": 2}},
+        rationale="timeout retry",
+        risk="safe",
+        expected_signal="pipeline completes within time limit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"time": "4.h"},
+    )
+    result, _ = apply_patch(
+        target, patch, ceiling={"memory": 128, "time": 72}, observed_target_h=6
+    )
+    assert result.resource_limits["time"] == "8.h"
+
+
+def test_apply_patch_observed_target_h_none_preserves_blind_behavior():
+    # Default observed_target_h=None -> unchanged blind ×2: 4 h -> 8 h.
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"time": 2}},
+        rationale="timeout retry",
+        risk="safe",
+        expected_signal="pipeline completes within time limit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"time": "4.h"},
+    )
+    result, _ = apply_patch(
+        target, patch, ceiling={"memory": 128, "time": 72}, observed_target_h=None
+    )
+    assert result.resource_limits["time"] == "8.h"
+
+
+def test_apply_patch_observed_target_h_clamped_to_ceiling():
+    # observed 200 h exceeds the default 72 h ceiling -> clamped to 72 h.
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"time": 2}},
+        rationale="timeout retry",
+        risk="safe",
+        expected_signal="pipeline completes within time limit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"time": "40.h"},
+    )
+    result, _ = apply_patch(target, patch, observed_target_h=200)
+    assert result.resource_limits["time"] == "72.h"
+
+
+def test_apply_patch_observed_target_h_never_shrinks_below_current():
+    # current 10 h, blind ×2 -> 20 h, observed 5 h; max(max(5,20),10)=20 h.
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"time": 2}},
+        rationale="timeout retry",
+        risk="safe",
+        expected_signal="pipeline completes within time limit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"time": "10.h"},
+    )
+    result, _ = apply_patch(
+        target, patch, ceiling={"memory": 128, "time": 72}, observed_target_h=5
+    )
+    assert result.resource_limits["time"] == "20.h"
+
+
+def test_apply_patch_observed_target_h_leaves_memory_branch_unaffected():
+    # observed_target_h only affects time; memory scales via the blind ×2.
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"memory": 2, "time": 2}},
+        rationale="OOM + timeout retry",
+        risk="safe",
+        expected_signal="no OOM and completes within time limit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"memory": "8.GB", "time": "4.h"},
+    )
+    result, _ = apply_patch(
+        target,
+        patch,
+        ceiling={"memory": 128, "time": 72},
+        observed_target_gb=None,
+        observed_target_h=15,
+    )
+    assert result.resource_limits["memory"] == "16.GB"
+    assert result.resource_limits["time"] == "15.h"
+
+
+def test_apply_patch_both_observed_overrides_honored_independently():
+    # Memory override 90 GB and time override 15 h both applied on one patch.
+    patch = Patch(
+        kind="resource",
+        operation={"multiply": {"memory": 2, "time": 2}},
+        rationale="OOM + timeout retry",
+        risk="safe",
+        expected_signal="no OOM and completes within time limit",
+    )
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir="w",
+        resource_limits={"memory": "8.GB", "time": "4.h"},
+    )
+    result, _ = apply_patch(
+        target,
+        patch,
+        ceiling={"memory": 128, "time": 72},
+        observed_target_gb=90,
+        observed_target_h=15,
+    )
+    assert result.resource_limits["memory"] == "90.GB"
+    assert result.resource_limits["time"] == "15.h"
+
+
 def test_self_heal_first_execute_has_no_resume_by_default(tmp_path):
     seen = {}
 
