@@ -81,9 +81,14 @@ VARIANT_RULE_PACK: list[dict] = [
 # below are the slugified names we read out of MultiQC general stats; the exact
 # MultiQC slug can vary by aligner/version, so they are chosen to mirror the
 # documented STARsolo/Cell Ranger fields (Estimated Number of Cells, Median Genes
-# per Cell, Fraction Reads in Cells, % reads mapped to mitochondrial genes). The
-# thresholds are illustrative, tunable engineering defaults for catching a grossly
-# failed capture (almost no cells, near-empty droplets), not biological claims.
+# per Cell, Fraction Reads in Cells). The thresholds are illustrative, tunable
+# engineering defaults for catching a grossly failed capture (almost no cells,
+# near-empty droplets), not biological claims.
+# Deferred, deliberately NOT shipped here: mitochondrial-read fraction and
+# doublet rate. Both need a downstream scanpy/scDblFinder step that the base
+# nf-core/scrnaseq pipeline does not run, so its MultiQC report never carries
+# them; wiring a check against a metric the pipeline never emits would be dead
+# and misleading. Add them only once that downstream step is part of the run.
 SCRNASEQ_RULE_PACK: list[dict] = [
     {
         "check": "estimated_cells",
@@ -105,13 +110,6 @@ SCRNASEQ_RULE_PACK: list[dict] = [
         "warn_below": 0.7,
         "fail_below": 0.5,
         "message": "fraction of reads assigned to called cells (not ambient droplets)",
-    },
-    {
-        "check": "pct_reads_mito",
-        "metric": "pct_reads_mito",
-        "warn_above": 20.0,
-        "fail_above": 50.0,
-        "message": "percent of reads mapping to mitochondrial genes",
     },
 ]
 
