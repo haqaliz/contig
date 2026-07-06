@@ -13,8 +13,11 @@ import math
 from contig.models import TaskEvent, TaskResource
 from contig.resource_sizing import (
     PEAK_RSS_SAFETY_FACTOR,
+    WALLTIME_SAFETY_FACTOR,
     PeakSizing,
+    TimeSizing,
     peak_informed_memory_gb,
+    realtime_informed_time_h,
 )
 
 
@@ -113,3 +116,76 @@ def test_empty_inputs_are_unavailable():
 
 def test_default_factor_is_the_module_constant():
     assert PEAK_RSS_SAFETY_FACTOR == 1.5
+
+
+def _usage_rt(process: str, name: str, realtime_sec: float) -> TaskResource:
+    return TaskResource(
+        process=process,
+        name=name,
+        realtime_sec=realtime_sec,
+        peak_rss_mb=1024.0,
+        pct_cpu=100.0,
+    )
+
+
+def test_time_sizes_off_single_realtime_row():
+    usage = [_usage_rt("BSMAP", "BSMAP (S1)", 36000.0)]  # 10h
+
+    result = realtime_informed_time_h([], usage)
+
+    assert result == TimeSizing(target_h=15, tier="realtime", observed_realtime_sec=36000.0)
+
+
+def test_time_sizes_off_max_realtime_across_rows():
+    usage = [
+        _usage_rt("BSMAP", "BSMAP (S1)", 3600.0),
+        _usage_rt("BSMAP", "BSMAP (S2)", 36000.0),
+        _usage_rt("BSMAP", "BSMAP (S3)", 7200.0),
+    ]
+
+    result = realtime_informed_time_h([], usage)
+
+    assert result.tier == "realtime"
+    assert result.observed_realtime_sec == 36000.0
+    assert result.target_h == 15
+
+
+def test_time_returns_raw_target_without_blind_floor():
+    # The floor-to-blind (a walltime kill is a censored lower bound) lives in
+    # apply_patch; the helper just returns the raw sized target.
+    usage = [_usage_rt("BSMAP", "BSMAP (S1)", 14400.0)]  # 4h
+
+    result = realtime_informed_time_h([], usage)
+
+    assert result.target_h == 6  # ceil(4 * 1.5)
+
+
+def test_time_unavailable_when_all_realtime_zero():
+    usage = [
+        _usage_rt("BSMAP", "BSMAP (S1)", 0.0),
+        _usage_rt("BSMAP", "BSMAP (S2)", 0.0),
+    ]
+
+    result = realtime_informed_time_h([], usage)
+
+    assert result == TimeSizing(target_h=None, tier="unavailable", observed_realtime_sec=None)
+
+
+def test_time_unavailable_when_usage_empty():
+    assert realtime_informed_time_h([], []) == TimeSizing(
+        target_h=None, tier="unavailable", observed_realtime_sec=None
+    )
+
+
+def test_time_rounds_up_at_ceil_boundary():
+    # 3601s -> 3601/3600*1.5 = 1.50041... -> ceil -> 2
+    usage = [_usage_rt("BSMAP", "BSMAP (S1)", 3601.0)]
+
+    result = realtime_informed_time_h([], usage)
+
+    assert result.target_h == 2
+    assert result.target_h == math.ceil(3601 / 3600 * 1.5)
+
+
+def test_walltime_default_factor_is_the_module_constant():
+    assert WALLTIME_SAFETY_FACTOR == 1.5
