@@ -74,7 +74,7 @@ If releasing, follow `RELEASING.md` (the source of truth) from the **primary** c
 **Release identity, do not get this wrong:** the release belongs to the **haqaliz** account, never `playdolphia`. The tag push uses the repo's git/SSH identity (haqaliz). Any manual asset upload or tap push must run with `gh` active as haqaliz (`gh auth switch --user haqaliz`). Never run `gh release create` by hand; the workflow creates the Release as `github-actions[bot]`.
 
 1. **Pick the version.** Ask the user, or propose a semver bump from the work type: `feat` → minor, `bug`/`chore`/`task` → patch. Confirm the exact `vX.Y.Z`.
-2. **Bump and changelog.** Edit `version` in `pyproject.toml` and add a `CHANGELOG.md` section for `vX.Y.Z`. Commit and push to `master`. Wait for CI to go green.
+2. **Bump and changelog.** Edit `version` in `pyproject.toml` (the single `version = "..."` line under `[project]`). Then finalize `CHANGELOG.md` the Keep-a-Changelog way: insert a dated `## [X.Y.Z] - YYYY-MM-DD` header **immediately below the `## [Unreleased]` line** (leaving `[Unreleased]` in place and empty above it, so the entries already accumulated under Unreleased become this version's notes — do **not** retype them), and add a `[X.Y.Z]: https://github.com/haqaliz/contig/releases/tag/vX.Y.Z` link reference in the link block at the bottom. Commit (`chore(release): bump to vX.Y.Z (<slug>)`) and push to `master`. Wait for CI to go green before tagging.
 3. **Tag and push** (this triggers `.github/workflows/release.yml`):
 
    ```bash
