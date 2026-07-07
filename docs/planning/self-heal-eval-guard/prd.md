@@ -274,8 +274,13 @@ end researcher:
 - `FailureClass`es not reachable by `diagnose_failure` today (`qc_anomaly`,
   `no_progress`).
 - Failure kinds with **no injectable seam** in CI beyond `executor`/`index_builder`/
-  `poll` (enumerated as deferred, not silently omitted): `bad_param`,
+  `poll` (enumerated as deferred, not silently omitted):
   `container_pull_failed`, `download_failed`, `disk_full`, `permission_denied`,
   `conda_solve_failed`, etc. — future scenarios.
+  *(Update, as-built: `bad_param` was listed here at draft time but proved injectable
+  via the param-validation log + a `needs_confirmation` patch approved under
+  `auto_approve` — it shipped as scenario #6 (`approved_and_retried`) and is a COVERED
+  class in the baseline. The shipped `covered_classes` = `{bad_param, missing_index,
+  oom, time_limit, tool_crash}`.)*
 - Any dashboard surface (`eval-guard`/`holdout` have none; CLI + CI only).
 - Any Layer-1 (NL → workflow) surface.
