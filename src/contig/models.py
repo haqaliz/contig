@@ -514,10 +514,14 @@ class HealEvalReport(BaseModel):
 
 
 class HealSnapshot(BaseModel):
-    """One heal-eval result tied to a corpus version; mirrors EvalSnapshot.
+    """One heal-eval result tied to a corpus version; mirrors EvalSnapshot's
+    fields, but not its storage: there is exactly one frozen baseline, not a
+    history.
 
-    Appended to a committed JSONL history so self-heal outcome-match rate over
-    time is auditable and the dashboard can render the trend.
+    Serialized as the single committed baseline (one pretty-printed JSON
+    object, NOT JSONL) that `evaluate_heal`'s outcome-match rate is compared
+    against on every run. There is no history file and no dashboard trend --
+    `--history` is explicitly deferred.
     """
 
     timestamp: str

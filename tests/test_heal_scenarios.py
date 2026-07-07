@@ -335,3 +335,57 @@ def test_shipped_heal_report_does_not_regress_against_baseline():
     assert result.regressed is False
     assert result.sha_mismatch is False
     assert result.outcome_match_rate == 1.0
+
+
+def test_evaluate_heal_is_deterministic_over_the_shipped_scenarios():
+    """PRD R8: the same scenario corpus, run twice through the real self-heal
+    loop, must yield identical rates -- proving the scored path has no run-to-
+    run nondeterminism (flaky timing, ordering, etc.) that could mask or fake a
+    regression."""
+    scenarios = load_heal_scenarios(default_heal_scenarios_path())
+
+    first = evaluate_heal(scenarios)
+    second = evaluate_heal(scenarios)
+
+    assert first.outcome_match_rate == second.outcome_match_rate
+    assert first.recovery_rate == second.recovery_rate
+    assert first.matched == second.matched
+    assert first.total == second.total
+
+
+# --- run_heal_scenario's defensive PipelineExecutionError branch -----------
+
+
+def test_run_heal_scenario_handles_pipeline_execution_error(monkeypatch, tmp_path):
+    """Unit-tests the driver's `except PipelineExecutionError` branch (never hit
+    by the shipped scenario set) by monkeypatching the `self_heal_run` name
+    `contig.heal` imports, so a hard executor/nextflow-launch failure still
+    yields an honest 'no_record' result instead of an uncaught exception. This
+    only stubs the loop inside this dedicated error-path test -- the shipped
+    scored path above still drives the real loop end to end."""
+    import contig.heal as heal_module
+    from contig.runner import PipelineExecutionError
+
+    def _boom(*args, **kwargs):
+        raise PipelineExecutionError(1, None)
+
+    monkeypatch.setattr(heal_module, "self_heal_run", _boom)
+
+    scn = HealScenario(
+        scenario_id="pipeline-execution-error-1",
+        description="Hard nextflow-launch failure never reaches repair_history",
+        source="synthetic",
+        expected_class="oom",
+        attempts=[
+            AttemptSpec(status="FAILED", exit=137, log_text="Process killed: out of memory (exit 137)"),
+        ],
+        expected_recovered=True,
+        expected_outcome="patched_and_retried",
+    )
+
+    result = heal_module.run_heal_scenario(scn, tmp_path)
+
+    assert result.recovered is False
+    assert result.actual_outcome == "no_record"
+    assert result.diagnosed_class is None
+    assert result.matched is False
