@@ -824,12 +824,18 @@ def _apply_patch_and_maybe_build(
     ceiling: dict[str, int] | None,
     default_outcome: str,
 ) -> tuple[ExecutionTarget, dict[str, object], str, str | None, bool]:
-    """Apply a gated patch, and if it's a build_index reference patch, build it.
+    """Apply a gated patch, and if it's a build_index/recompress_reference
+    reference patch, do that work too.
 
     Returns ``(target, params, outcome, detail, continue_)``:
 
-    - A non-build patch applies normally and returns ``(default_outcome, None, True)``
-      — the loop should retry.
+    - A non-build, non-recompress patch applies normally and returns
+      ``(default_outcome, None, True)`` — the loop should retry.
+    - A ``recompress_reference`` reference patch delegates entirely to
+      ``_recompress_reference`` (see its docstring for the full branch table):
+      it decompresses a plain-gzip FASTA into a run-scoped scratch copy and
+      redirects the retry, or gives up honestly (unresolvable / already-BGZF /
+      decompress failure / already recompressed this run).
     - A ``build_index`` reference patch parses the missing index path from the
       diagnosis (supports .fai/.bai/.tbi/.csi/.dict) and runs the builder.
       Branches honestly:
@@ -848,6 +854,8 @@ def _apply_patch_and_maybe_build(
     picks up the freshly built index from ``run_dir``.
     """
     target, params = apply_patch(target, patch, params, ceiling=ceiling)
+    if patch.kind == "reference" and patch.operation.get("recompress_reference"):
+        return _recompress_reference(target, params, run_dir=run_dir, built_paths=built_paths)
     if not (patch.kind == "reference" and patch.operation.get("build_index")):
         return target, params, default_outcome, None, True
     parsed = _parse_missing_index(diagnosis)

@@ -1667,6 +1667,145 @@ def test_self_heal_unparseable_index_path_fails_honestly(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# recompress-reference: a plain-gzip'd reference is decompressed and retried
+# (self-heal-bgzip-reference, Phase 4 — the loop wiring for _recompress_reference)
+# ---------------------------------------------------------------------------
+
+_BGZF_FAI_LOG = (
+    "[E::fai_build3_core] Cannot index files compressed with gzip, please use bgzip\n"
+    "[faidx] Could not build fai index /work/ref.fa.gz.fai"
+)
+
+# The canonical 28-byte BGZF EOF block: magic 1f8b, FEXTRA set, "BC" subfield.
+_BGZF_REF_BYTES = bytes.fromhex(
+    "1f8b08040000000000ff0600424302001b0003000000000000000000"
+)
+
+_PLAIN_REF_FASTA = b">chr1\nACGT\n"
+
+
+def _bgzip_ref_executor(state, *, succeed_on_retry=True):
+    """Fail attempt 1 with the faidx not-BGZF log; (optionally) succeed on retry."""
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, TRACE_INDEX, _BGZF_FAI_LOG)
+            return 1
+        if not succeed_on_retry:
+            _write(trace_path, TRACE_INDEX, _BGZF_FAI_LOG)
+            return 1
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+    return executor
+
+
+def test_self_heal_recompresses_reference_and_retries(tmp_path):
+    # AC4: a plain-gzip reference is decompressed to scratch and the pipeline
+    # re-runs, redirected at the scratch copy, to success.
+    import gzip
+
+    state = {"n": 0}
+    fasta = tmp_path / "ref.fa.gz"
+    fasta.write_bytes(gzip.compress(_PLAIN_REF_FASTA))
+
+    record = _heal(
+        tmp_path,
+        _bgzip_ref_executor(state),
+        auto_approve=True,
+        params={"fasta": str(fasta)},
+    )
+
+    assert RunSummary.from_events(record.events).succeeded is True
+    last = record.repair_history[-1]
+    assert last.outcome == "recompressed_reference_and_retried"
+    assert last.patch.operation == {"recompress_reference": True}
+    scratch = tmp_path / "runs" / "r" / "healed_reference" / "ref.fa"
+    assert scratch.is_file()
+    assert scratch.read_bytes() == _PLAIN_REF_FASTA
+    assert record.parameters["fasta"] == str(scratch)
+    assert state["n"] == 2  # the re-run actually happened
+
+
+def test_self_heal_recompress_persisting_failure_gives_up_once(tmp_path):
+    # AC5: one-per-run guard. The same faidx failure on both attempts means the
+    # scratch copy is already in built_paths on the retry -- give up honestly
+    # instead of looping, bounded by max_attempts.
+    import gzip
+
+    state = {"n": 0}
+    fasta = tmp_path / "ref.fa.gz"
+    fasta.write_bytes(gzip.compress(_PLAIN_REF_FASTA))
+
+    record = _heal(
+        tmp_path,
+        _bgzip_ref_executor(state, succeed_on_retry=False),
+        auto_approve=True,
+        params={"fasta": str(fasta)},
+    )
+
+    outcomes = [step.outcome for step in record.repair_history]
+    assert outcomes.count("recompressed_reference_and_retried") == 1
+    assert outcomes[-1] == "reference_recompress_unresolvable"
+    assert record.verdict == "fail"
+    assert state["n"] == 2  # exactly one retry attempted, then an honest give-up
+
+
+def test_self_heal_recompress_no_fasta_gives_up(tmp_path):
+    # give-up: no params["fasta"] at all (e.g. an iGenomes --genome KEY path).
+    state = {"n": 0}
+
+    record = _heal(
+        tmp_path,
+        _bgzip_ref_executor(state),
+        auto_approve=True,
+    )
+
+    last = record.repair_history[-1]
+    assert last.outcome == "reference_recompress_unresolvable"
+    assert record.verdict == "fail"
+    assert not RunSummary.from_events(record.events).succeeded
+
+
+def test_self_heal_recompress_bgzf_reference_left_untouched(tmp_path):
+    # give-up: a valid BGZF reference misfiled as the failure is left untouched.
+    state = {"n": 0}
+    fasta = tmp_path / "ref.fa.gz"
+    fasta.write_bytes(_BGZF_REF_BYTES)
+
+    record = _heal(
+        tmp_path,
+        _bgzip_ref_executor(state),
+        auto_approve=True,
+        params={"fasta": str(fasta)},
+    )
+
+    last = record.repair_history[-1]
+    assert last.outcome == "reference_recompress_unresolvable"
+    assert record.verdict == "fail"
+    assert not (tmp_path / "runs" / "r" / "healed_reference").exists()
+
+
+def test_self_heal_recompress_decompress_failure_gives_up(tmp_path):
+    # give-up: a corrupt gzip fails to decompress -- honest FAIL, never a false pass.
+    state = {"n": 0}
+    fasta = tmp_path / "ref.fa.gz"
+    fasta.write_bytes(b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff" + b"\x00" * 4)
+
+    record = _heal(
+        tmp_path,
+        _bgzip_ref_executor(state),
+        auto_approve=True,
+        params={"fasta": str(fasta)},
+    )
+
+    last = record.repair_history[-1]
+    assert last.outcome == "reference_recompress_failed"
+    assert record.verdict == "fail"
+    assert not RunSummary.from_events(record.events).succeeded
+
+
+# ---------------------------------------------------------------------------
 # Phase 4: build a missing GATK .dict and retry (G1–G3)
 # ---------------------------------------------------------------------------
 
