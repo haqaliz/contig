@@ -493,13 +493,39 @@ nudge. The committed baseline is honestly **0.833 (10/12)** — `qc_anomaly` and
 `no_progress` are currently structurally unreachable by `diagnose_failure` (no rule
 branch emits them), a deliberate gap that leaves headroom for the nudge to fire once
 those rules exist. **Honest scope, unchanged from the PRD:** this slice guards the
-**labeled failure-class detector corpus only**. **Pending follow-on slices:** folding
-the unlabeled C1 concordance / C3 plausibility corroboration signals and repair-loop
-(whole self-heal) accuracy into one number (the "fold C1–C5 into one accuracy number"
-framing above is *not yet built* — it needs its own labeling design since C1/C3 carry
-no ground-truth labels); and a held-out-accuracy trend over corpus/detector versions
-(mirroring `eval-detector --history`). The guard is wired into CI
+**labeled failure-class detector corpus only**. **Pending follow-on slices (at the
+time):** folding the unlabeled C1 concordance / C3 plausibility corroboration
+signals and repair-loop (whole self-heal) accuracy into one number (the "fold
+C1–C5 into one accuracy number" framing above is *not yet built* — it needs its
+own labeling design since C1/C3 carry no ground-truth labels); and a
+held-out-accuracy trend over corpus/detector versions (mirroring
+`eval-detector --history`). The guard is wired into CI
 (`.github/workflows/ci.yml`), so a regression fails the build.
+
+**Slice 2 — SHIPPED (Unreleased).** The repair-loop half of slice 1's pending
+list. A `contig heal-guard` command and a `HealScenario` driver
+(`src/contig/heal.py`) replay a frozen `src/contig/data/heal_scenarios.jsonl`
+(7 synthetic cases) through the **real** `self_heal_run`
+detect→diagnose→patch→retry loop — the detector and `propose` are never
+stubbed (PRD R2) — via scripted executor/index-builder/poll seams. It guards
+the loop's **outcome-match rate** (right `FailureClass` diagnosed *and* the
+scenario's declared terminal outcome reached), a different axis from slice 1's
+detector-only classification accuracy, against a committed baseline
+(`src/contig/data/heal_baseline.json`, pinning
+`corpus_sha`/`covered_classes`/`contig_version`); `--update-baseline`
+(re)freezes it as a deliberate act; a loud sha-mismatch warning; an
+improvement nudge. The committed baseline is honestly **outcome-match 1.0
+(7/7)** over the 5 classes the frozen set currently covers (`bad_param`,
+`missing_index`, `oom`, `time_limit`, `tool_crash`); `recovery_rate` (4/7) is
+reported alongside as an **informational-only sub-metric, never guarded**
+(some declared outcomes are an honest give-up: `gave_up`,
+`index_unresolvable`, `approval_timed_out`). **Honest scope:** 7 SYNTHETIC
+scenarios, not a field recovery rate; `qc_anomaly`/`no_progress` remain
+structurally unreachable, and the wider failure-class catalog (container,
+download, disk, permission, missing-reference families) has no scenario yet.
+Wired into CI immediately after `eval-guard`. **Still pending:** folding the
+unlabeled C1/C3 corroboration signals into one eval number, and a
+held-out-accuracy trend over corpus/loop versions.
 
 **Eval data captured:** this *is* the capture loop; it closes over all the above.
 
@@ -516,7 +542,7 @@ no ground-truth labels); and a held-out-accuracy trend over corpus/detector vers
 | C3 | Biological-plausibility verification | SHIPPED v0.3.0 (germline) + RNA-seq (v0.6.0) + single-cell ingestion (Unreleased) | Verdict gets smarter about biology (germline Ti/Tv, het/hom; RNA-seq dup/rRNA; single-cell cell-QC now *fires* via STARsolo/Cell Ranger ingestion — was a dormant no-op; mito/doublet deferred) |
 | C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased); Strelka2-native VAF, FAIL severity + PON reference wiring deferred | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
-| C6 | Eval flywheel as a continuous loop | M6 (held-out set + regression-guard slice 1 SHIPPED, Unreleased — honestly 0.833/10:12, two classes structurally unreachable; folding C1/C3 signals + repair-loop accuracy + CI wiring pending) | Compounding accuracy from real runs |
+| C6 | Eval flywheel as a continuous loop | M6 (detector held-out guard slice 1 SHIPPED, Unreleased — honestly 0.833/10:12, two classes structurally unreachable; repair-loop outcome-match guard slice 2 SHIPPED, Unreleased — honestly 1.0/7:7, 5 classes covered; both wired into CI; folding C1/C3 signals + held-out-accuracy trend pending) | Compounding accuracy from real runs |
 
 **One-line mantra:** make every verdict harder to fool, recover more failures
 without a human, and let every run make the next verdict smarter.

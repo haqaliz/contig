@@ -1719,6 +1719,14 @@ def heal_guard(
     starts diverging from a scenario's declared outcome. `--update-baseline`
     deliberately (re)freezes the baseline instead of guarding; that always
     exits 0.
+
+    Honest scope: the number is over **7 SYNTHETIC scenarios**, not a field
+    recovery rate. Covered failure classes: bad_param, missing_index, oom,
+    time_limit, tool_crash. Not covered: qc_anomaly and no_progress are
+    currently structurally unreachable (no diagnose_failure rule branch emits
+    them yet); container_pull_failed, container_unavailable, conda_solve_failed,
+    platform_unsupported, disk_full, download_failed, permission_denied, and
+    missing_reference have no scenario yet and are deferred follow-on slices.
     """
     scenarios_path = Path(scenarios) if scenarios else default_heal_scenarios_path()
     baseline_path = Path(baseline) if baseline else default_heal_baseline_path()
