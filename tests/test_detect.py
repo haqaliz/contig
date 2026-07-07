@@ -296,6 +296,32 @@ def test_bwamem2_generic_unable_to_open_without_index_token_is_not_missing_index
     assert d.failure_class != "missing_index"
 
 
+def test_gzip_reference_is_reference_not_bgzf() -> None:
+    # samtools faidx refuses a plain-gzip'd (non-BGZF) reference FASTA. This is
+    # a distinct, recoverable class (recompress to plain uncompressed .fa),
+    # not an opaque tool_crash.
+    events = [TaskEvent(process="SAMTOOLS_FAIDX", status="FAILED", exit=1)]
+    log = (
+        "[E::fai_build_core] File truncated at line 1\n"
+        "[E::fai_build3_core] Cannot index files compressed with gzip, please use bgzip\n"
+        "[faidx] Could not build fai index /work/ref.fa.gz.fai"
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "reference_not_bgzf"
+    assert any("cannot index files compressed with gzip" in e.lower() for e in d.evidence)
+
+
+def test_vcf_please_use_bgzip_without_faidx_token_is_not_reference_not_bgzf() -> None:
+    # tabix/bcftools also say "please use bgzip" -- but for VCFs, a different
+    # fix entirely. Only the faidx-specific "cannot index files compressed
+    # with gzip" phrase should trigger reference_not_bgzf; the bare
+    # "please use bgzip" phrasing must not be over-matched.
+    events = [TaskEvent(process="TABIX", status="FAILED", exit=1)]
+    log = "[tabix] was bgzip used to compress this file? please use bgzip"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class != "reference_not_bgzf"
+
+
 # --- broader failure classes for common nf-core failures (contract D) ----------
 
 

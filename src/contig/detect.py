@@ -317,6 +317,25 @@ def diagnose_failure(events: list[TaskEvent], log_text: str) -> Diagnosis:
             confidence=0.7,
         )
 
+    # samtools faidx refuses a plain-gzip'd (non-BGZF) reference FASTA. Narrow
+    # on purpose: anchor on the faidx-specific "cannot index files compressed
+    # with gzip" phrase, NOT the bare "please use bgzip" -- tabix/bcftools
+    # emit that same trailing phrase for VCFs, a different fix entirely.
+    bgzf_lines = _matching_lines(
+        log_text, ("cannot index files compressed with gzip",)
+    )
+    if bgzf_lines:
+        fai_lines = _matching_lines(log_text, ("could not build fai index",))
+        return Diagnosis(
+            failure_class="reference_not_bgzf",
+            root_cause=(
+                "Reference FASTA is gzip-compressed, not BGZF; samtools faidx "
+                "cannot index it."
+            ),
+            evidence=bgzf_lines + fai_lines,
+            confidence=0.85,
+        )
+
     # No specific signal matched. If a task did fail, the tool itself crashed
     # for a reason we could not classify; otherwise we have nothing to go on.
     if any(e.is_failure for e in events):
