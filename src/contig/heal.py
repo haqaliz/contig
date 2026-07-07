@@ -14,6 +14,7 @@ single classification.
 from __future__ import annotations
 
 import tempfile
+from os import PathLike
 from pathlib import Path
 from typing import Callable
 
@@ -22,8 +23,10 @@ from contig.models import (
     ExecutionTarget,
     HealClassScore,
     HealEvalReport,
+    HealGuardResult,
     HealScenario,
     HealScenarioResult,
+    HealSnapshot,
     RunSummary,
 )
 from contig.runner import IndexBuilder, PipelineExecutionError, default_index_builder
@@ -197,4 +200,131 @@ def evaluate_heal(scenarios: list[HealScenario]) -> HealEvalReport:
         recovery_rate=recovery_rate,
         per_class=per_class,
         mismatches=mismatches,
+    )
+
+
+# --- guard I/O + pure compare (C6 slice 2, mirrors holdout.py) -----------------
+# A frozen scenario set plus a committed baseline let us catch a self-heal
+# regression (a change to the loop, a detector, or a patch that starts
+# diverging from the scenario's expected outcome) before it ships: replay
+# `evaluate_heal` over the frozen set and compare outcome-match rate to the
+# pinned baseline, exactly as `holdout.py` does for detector accuracy.
+
+
+def default_heal_scenarios_path() -> Path:
+    """Path to the frozen self-heal scenario set shipped with the package."""
+    return Path(__file__).parent / "data" / "heal_scenarios.jsonl"
+
+
+def default_heal_baseline_path() -> Path:
+    """Path to the committed self-heal baseline shipped with the package.
+
+    A single `HealSnapshot` serialized as one pretty-printed JSON object (NOT
+    JSONL) -- there is exactly one frozen baseline to compare against, not a
+    trend.
+    """
+    return Path(__file__).parent / "data" / "heal_baseline.json"
+
+
+def load_heal_scenarios(path: str | PathLike[str]) -> list[HealScenario]:
+    """Read a JSONL scenario set into HealScenario objects (blank lines skipped)."""
+    text = Path(path).read_text()
+    return [
+        HealScenario.model_validate_json(line)
+        for line in text.splitlines()
+        if line.strip()
+    ]
+
+
+def save_heal_baseline(snapshot: HealSnapshot, path: str | PathLike[str]) -> None:
+    """Write the baseline as one pretty-printed JSON object (diffs cleanly)."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(snapshot.model_dump_json(indent=2) + "\n")
+
+
+def load_heal_baseline(path: str | PathLike[str]) -> HealSnapshot | None:
+    """Read the committed baseline; a missing file means "no baseline yet"."""
+    p = Path(path)
+    if not p.exists():
+        return None
+    return HealSnapshot.model_validate_json(p.read_text())
+
+
+def snapshot_from_heal_report(
+    report: HealEvalReport,
+    *,
+    corpus_sha: str,
+    covered_classes: list[str],
+    contig_version: str | None,
+    timestamp: str,
+) -> HealSnapshot:
+    """Build a HealSnapshot from a heal-eval report plus the corpus identity.
+
+    The timestamp and corpus_sha are passed in (computed by the caller) so this
+    stays a pure projection of the report -- mirrors
+    `eval_history.py:snapshot_from_report`.
+    """
+    return HealSnapshot(
+        timestamp=timestamp,
+        scenario_count=report.total,
+        corpus_sha=corpus_sha,
+        outcome_match_rate=report.outcome_match_rate,
+        recovery_rate=report.recovery_rate,
+        per_class=report.per_class,
+        covered_classes=covered_classes,
+        contig_version=contig_version,
+    )
+
+
+def compare_heal_to_baseline(
+    report: HealEvalReport,
+    *,
+    baseline: HealSnapshot | None,
+    corpus_sha: str,
+    tolerance: float,
+) -> HealGuardResult:
+    """Compare a heal-eval report to the committed baseline (pure, no I/O).
+
+    A real drop below `baseline.outcome_match_rate - tolerance` is `regressed`;
+    a real rise above `baseline.outcome_match_rate + tolerance` is `improved`;
+    the tolerance band between the two absorbs float noise so an unchanged
+    rate is neither. `sha_mismatch` flags when the comparison crosses a
+    different scenario set than the baseline was measured against --
+    informational, not a failure by itself (the CLI layer decides what to do
+    with a missing baseline or this warning; this function stays pure so it is
+    fast and deterministic to test). Mirrors `holdout.py:compare_to_baseline`.
+    """
+    if baseline is None:
+        return HealGuardResult(
+            scenario_count=report.total,
+            outcome_match_rate=report.outcome_match_rate,
+            baseline_match_rate=None,
+            delta=None,
+            tolerance=tolerance,
+            regressed=False,
+            improved=False,
+            recovery_rate=report.recovery_rate,
+            corpus_sha=corpus_sha,
+            baseline_sha=None,
+            sha_mismatch=False,
+            has_baseline=False,
+            mismatches=report.mismatches,
+        )
+
+    delta = report.outcome_match_rate - baseline.outcome_match_rate
+    return HealGuardResult(
+        scenario_count=report.total,
+        outcome_match_rate=report.outcome_match_rate,
+        baseline_match_rate=baseline.outcome_match_rate,
+        delta=delta,
+        tolerance=tolerance,
+        regressed=report.outcome_match_rate < baseline.outcome_match_rate - tolerance,
+        improved=report.outcome_match_rate > baseline.outcome_match_rate + tolerance,
+        recovery_rate=report.recovery_rate,
+        corpus_sha=corpus_sha,
+        baseline_sha=baseline.corpus_sha,
+        sha_mismatch=corpus_sha != baseline.corpus_sha,
+        has_baseline=True,
+        mismatches=report.mismatches,
     )
