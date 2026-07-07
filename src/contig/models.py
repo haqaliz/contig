@@ -438,3 +438,114 @@ class HoldoutGuardResult(BaseModel):
     detector_mismatch: bool = False  # baseline.detector != detector
     has_baseline: bool = True
     mismatches: list[DetectorMismatch] = []
+
+
+# --- Self-heal scenario eval + guard (moat #2: self-heal outcome-match rate) ----
+# A labeled scenario replaying one self-heal loop attempt sequence, so the eval
+# can score the whole detect->diagnose->patch->outcome loop's outcome-match rate
+# against a frozen held-out corpus, mirroring FailureCase/EvalSnapshot/
+# HoldoutGuardResult above but for the self-heal loop rather than the detector
+# alone.
+
+
+class AttemptSpec(BaseModel):
+    """One attempt's single-task trace row + log; mirrors FailureCase's inputs."""
+
+    status: str
+    exit: int
+    log_text: str = ""
+
+
+class HealScenario(BaseModel):
+    """One labeled self-heal scenario: attempt trace(s) plus the true outcome.
+
+    Mirrors FailureCase, but carries a full attempt sequence and the expected
+    recovery outcome instead of a single expected failure class.
+    """
+
+    scenario_id: str
+    description: str
+    source: str  # provenance: a run id, or "synthetic"
+    expected_class: FailureClass
+    attempts: list[AttemptSpec]
+    auto_approve: bool = False
+    poll_decision: Literal["approve", "reject", "timeout"] | None = None
+    resource_ceiling: dict[str, int] | None = None
+    index_builder_result: Literal["success", "fail"] | None = None
+    max_attempts: int = 3
+    assay: str = "rnaseq"
+    expected_recovered: bool
+    expected_outcome: str
+
+
+class HealClassScore(BaseModel):
+    """Per-class outcome-match rate over the scenario corpus; mirrors ClassScore."""
+
+    matched: int
+    total: int
+    rate: float
+
+
+class HealScenarioResult(BaseModel):
+    """A scenario the self-heal loop diverged on; mirrors DetectorMismatch."""
+
+    scenario_id: str
+    diagnosed_class: str | None
+    recovered: bool
+    actual_outcome: str | None
+    matched: bool
+    divergence: list[str]
+
+
+class HealEvalReport(BaseModel):
+    """The result of replaying the self-heal loop over a scenario corpus.
+
+    Mirrors DetectorEvalReport, but scores outcome-match rate and recovery
+    rate for the whole loop rather than detector accuracy alone.
+    """
+
+    total: int
+    matched: int
+    outcome_match_rate: float
+    healed: int
+    recovery_rate: float
+    per_class: dict[str, HealClassScore] = {}
+    mismatches: list[HealScenarioResult] = []
+
+
+class HealSnapshot(BaseModel):
+    """One heal-eval result tied to a corpus version; mirrors EvalSnapshot.
+
+    Appended to a committed JSONL history so self-heal outcome-match rate over
+    time is auditable and the dashboard can render the trend.
+    """
+
+    timestamp: str
+    scenario_count: int
+    corpus_sha: str
+    outcome_match_rate: float
+    recovery_rate: float
+    per_class: dict[str, HealClassScore] = {}
+    covered_classes: list[str] = []
+    contig_version: str | None = None
+
+
+class HealGuardResult(BaseModel):
+    """The result of scoring the self-heal loop against a frozen held-out
+    scenario set and comparing it to a committed baseline; mirrors
+    HoldoutGuardResult (C6 slice 2: the self-heal regression guard).
+    """
+
+    scenario_count: int
+    outcome_match_rate: float
+    baseline_match_rate: float | None = None
+    delta: float | None = None  # outcome_match_rate - baseline_match_rate
+    tolerance: float
+    regressed: bool = False
+    improved: bool = False
+    recovery_rate: float
+    corpus_sha: str
+    baseline_sha: str | None = None
+    sha_mismatch: bool = False
+    has_baseline: bool = True
+    mismatches: list[HealScenarioResult] = []
