@@ -872,6 +872,91 @@ def test_rerun_from_harmonized_manifest_re_derives_harmonization(tmp_path, monke
     assert (tmp_path / "runs" / "copyhrm" / "run_record.json").exists()
 
 
+_BGZF_FAI_LOG = (
+    "[E::fai_build3_core] Cannot index files compressed with gzip, please use bgzip\n"
+    "[faidx] Could not build fai index /work/ref.fa.gz.fai"
+)
+
+
+def _bgzip_fail_then_succeed_executor(state):
+    """Fail attempt 1 with the faidx not-BGZF signature; succeed on retry."""
+
+    def execute(cmd, trace_path):
+        state["n"] += 1
+        trace_path = Path(trace_path)
+        if state["n"] == 1:
+            trace_path.write_text(TRACE_FAIL)
+            (trace_path.parent / "run.log").write_text(_BGZF_FAI_LOG)
+            return 1
+        trace_path.write_text(TRACE_RUN_OK)
+        d = trace_path.parent / "results" / "multiqc"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "multiqc_data.json").write_text(GOOD_MQC)
+        return 0
+
+    return execute
+
+
+def test_run_recompress_reference_keeps_original_fasta_in_launch_json(tmp_path, monkeypatch):
+    # Phase 5 (self-heal-bgzip-reference, reproduce-safety, M6/R2): when the
+    # recompress-reference self-heal fires, it redirects params["fasta"] to a
+    # run-scoped scratch path FOR THE LIVE RETRY ONLY (mirrors STAR's
+    # star_index redirect). The persisted launch.json -- the ONLY thing
+    # `rerun`/`resume` read to reproduce -- must still carry the user's
+    # ORIGINAL plain-gzip --fasta path, never the ephemeral scratch copy.
+    # Otherwise a later `contig rerun`/`resume` would point at a scratch file
+    # that may not even exist.
+    import gzip
+
+    sheet = _make_sheet(tmp_path)
+    fasta = tmp_path / "ref.fa.gz"
+    fasta.write_bytes(gzip.compress(b">chr1\nACGT\n"))
+    gtf = tmp_path / "ref.gtf"
+    gtf.write_text('chr1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id "g1"\n')
+
+    state = {"n": 0}
+    monkeypatch.setattr(
+        "contig.cli.default_executor", _bgzip_fail_then_succeed_executor(state)
+    )
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "bgzref", "--runs-dir", str(tmp_path / "runs"),
+         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf),
+         "--auto-approve"],
+    )
+    assert result.exit_code == 0, f"Expected 0, got {result.exit_code}: {result.output}"
+    assert state["n"] == 2  # the heal actually retried once
+
+    scratch = tmp_path / "runs" / "bgzref" / "healed_reference" / "ref.fa"
+    assert scratch.is_file()  # sanity: the in-memory redirect really happened
+
+    manifest = json.loads((tmp_path / "runs" / "bgzref" / "launch.json").read_text())
+    assert manifest["fasta"] == str(fasta)  # ORIGINAL plain-gzip path
+    assert manifest["fasta"] != str(scratch)
+
+    record = json.loads((tmp_path / "runs" / "bgzref" / "run_record.json").read_text())
+    assert record["repair_history"][-1]["outcome"] == "recompressed_reference_and_retried"
+    # The live RunRecord's operational parameters DO show the scratch redirect
+    # (that's the correct in-memory behavior for the run that actually
+    # executed) -- it is only the reproduce-source launch.json that must not.
+    assert record["parameters"]["fasta"] == str(scratch)
+
+    # `rerun`/`resume` read ONLY launch.json to reproduce (never run_record.json
+    # / the in-memory RunRecord.parameters) -- confirmed above. Since the
+    # manifest's fasta is the original, still-existing, still-plain-gzip file,
+    # a rerun would re-enter _dispatch_run with it and re-derive the same heal
+    # (LaunchManifest validates the field is a plain string path, not parsed
+    # further here to keep this test fast and independent of the gated
+    # approval loop's poll timeout).
+    from contig.models import LaunchManifest
+
+    manifest_obj = LaunchManifest.model_validate_json(
+        (tmp_path / "runs" / "bgzref" / "launch.json").read_text()
+    )
+    assert manifest_obj.fasta == str(fasta)
+    assert Path(manifest_obj.fasta).exists()  # a real, re-derivable path
+
+
 def test_run_harmonize_post_check_fails_refuses(tmp_path, monkeypatch):
     # GUARD: when harmonize_gtf writes a file that STILL fails check_reference_consistency
     # the engine must discard the attempt and refuse with Exit(1) — never proceed
