@@ -12,6 +12,7 @@ is bounded by `max_attempts`.
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import re
@@ -693,6 +694,122 @@ def _read_star_genome_version(scratch: Path) -> str | None:
             if version:
                 return version
     return None
+
+
+def _gzip_kind(path: str | Path) -> str:
+    """Classify a file as ``"plain_gzip"``, ``"bgzf"``, or ``"not_gzip"``.
+
+    BGZF is a valid gzip stream whose first member carries a FLG.FEXTRA
+    subfield tagged ``SI1='B', SI2='C'`` (the samtools/htslib "BC" marker).
+    Distinguishing it from a plain gzip stream matters because a valid BGZF
+    reference must be left untouched (R2): recompressing it would be
+    pointless churn on an already-correct file. Never raises — a short,
+    unreadable, or malformed file is honestly reported as ``"not_gzip"``.
+    """
+    try:
+        with open(path, "rb") as fh:
+            header = fh.read(12)
+            if len(header) < 12 or header[0:2] != b"\x1f\x8b":
+                return "not_gzip"
+            if not (header[3] & 0x04):
+                return "plain_gzip"
+            xlen = int.from_bytes(header[10:12], "little")
+            extra = fh.read(xlen)
+    except OSError:
+        return "not_gzip"
+    # Walk the FEXTRA subfields looking for the "BC" (SI1=0x42, SI2=0x43) tag.
+    i = 0
+    while i + 4 <= len(extra):
+        si1, si2 = extra[i], extra[i + 1]
+        slen = int.from_bytes(extra[i + 2 : i + 4], "little")
+        if si1 == 0x42 and si2 == 0x43:
+            return "bgzf"
+        i += 4 + slen
+    return "plain_gzip"
+
+
+def _recompress_reference(
+    target: ExecutionTarget,
+    params: dict[str, object],
+    *,
+    run_dir: Path,
+    built_paths: set[str],
+) -> tuple[ExecutionTarget, dict[str, object], str, str | None, bool]:
+    """Decompress a plain-gzip reference FASTA into a run-scoped scratch copy.
+
+    samtools faidx requires BGZF (or uncompressed) FASTA, not plain gzip. This
+    stream-decompresses the reference with stdlib ``gzip`` (no external tool —
+    the fix target is a plain uncompressed ``.fa``, see plan §0) into
+    ``run_dir/healed_reference`` and, on success, redirects the retry by
+    setting ``params["fasta"]`` to the scratch path. The user's original file
+    is never touched.
+
+    Branches honestly, mirroring ``_build_star_index``'s shape:
+      * no ``fasta`` in params        → ``reference_recompress_unresolvable``
+      * fasta already recompressed    → ``reference_recompress_unresolvable`` (give up)
+      * fasta is not plain gzip       → ``reference_recompress_unresolvable`` (BGZF or
+                                          not-gzip left untouched — R2)
+      * decompression raises          → ``reference_recompress_failed``
+      * success                       → ``recompressed_reference_and_retried`` (redirected)
+
+    Bounded to ONE recompress per run: both the original fasta and the
+    scratch target are added to ``built_paths`` before decompressing, so a
+    persisting failure after a successful recompress gives up instead of
+    looping.
+    """
+    fasta = params.get("fasta")
+    if not fasta:
+        return (
+            target,
+            params,
+            "reference_recompress_unresolvable",
+            "No FASTA in params to recompress.",
+            False,
+        )
+    fasta = str(fasta)
+    if fasta in built_paths:
+        return (
+            target,
+            params,
+            "reference_recompress_unresolvable",
+            f"Already recompressed {fasta}; failure persists.",
+            False,
+        )
+    kind = _gzip_kind(fasta)
+    if kind != "plain_gzip":
+        reason = "is already BGZF-compressed" if kind == "bgzf" else "is not gzip-compressed"
+        return (
+            target,
+            params,
+            "reference_recompress_unresolvable",
+            f"Reference {fasta} {reason}; nothing to recompress.",
+            False,
+        )
+    scratch = Path(run_dir) / "healed_reference"
+    # Fresh scratch dir: wipe any residue before each recompress (mirrors STAR).
+    shutil.rmtree(scratch, ignore_errors=True)
+    scratch.mkdir(parents=True, exist_ok=True)
+    basename = Path(fasta).name
+    stem = basename[: -len(".gz")] if basename.endswith(".gz") else basename
+    target_file = scratch / stem
+    # Bound the recompress to ONE per run: mark both the original fasta and
+    # the scratch target as built before decompressing.
+    built_paths.add(fasta)
+    built_paths.add(str(target_file))
+    try:
+        with gzip.open(fasta, "rb") as src, open(target_file, "wb") as dst:
+            shutil.copyfileobj(src, dst, length=1 << 20)
+    except (OSError, EOFError, gzip.BadGzipFile) as exc:
+        return (
+            target,
+            params,
+            "reference_recompress_failed",
+            f"Decompressing {fasta} failed: {exc}.",
+            False,
+        )
+    params["fasta"] = str(target_file)
+    detail = f"Decompressed {fasta} into {target_file} (plain gzip is not BGZF-indexable)."
+    return target, params, "recompressed_reference_and_retried", detail, True
 
 
 def _apply_patch_and_maybe_build(

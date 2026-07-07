@@ -2782,3 +2782,147 @@ def test_self_heal_time_limit_falls_back_to_blind_bump_without_realtime(tmp_path
     assert step.diagnosis.failure_class == "time_limit"
     assert step.outcome == "patched_and_retried"
     assert step.detail == "no usable observed realtime; blind x2 fallback (unavailable)"
+
+
+# ---------------------------------------------------------------------------
+# _gzip_kind / _recompress_reference (recompress-reference, Phase 3)
+# ---------------------------------------------------------------------------
+
+# The canonical 28-byte BGZF EOF block: magic 1f8b, FEXTRA set, "BC" subfield.
+_BGZF_EOF_BLOCK = bytes.fromhex(
+    "1f8b08040000000000ff0600424302001b0003000000000000000000"
+)
+
+_PLAIN_FASTA = b">chr1\nACGT\n"
+
+
+def test_gzip_kind_plain_gzip(tmp_path):
+    import gzip
+
+    from contig.self_heal import _gzip_kind
+
+    path = tmp_path / "ref.fa.gz"
+    path.write_bytes(gzip.compress(_PLAIN_FASTA))
+    assert _gzip_kind(path) == "plain_gzip"
+
+
+def test_gzip_kind_not_gzip(tmp_path):
+    from contig.self_heal import _gzip_kind
+
+    path = tmp_path / "ref.fa"
+    path.write_bytes(_PLAIN_FASTA)
+    assert _gzip_kind(path) == "not_gzip"
+
+
+def test_gzip_kind_bgzf(tmp_path):
+    from contig.self_heal import _gzip_kind
+
+    path = tmp_path / "ref.fa.gz"
+    path.write_bytes(_BGZF_EOF_BLOCK)
+    assert _gzip_kind(path) == "bgzf"
+
+
+def test_recompress_reference_success(tmp_path):
+    import gzip
+
+    from contig.models import ExecutionTarget
+    from contig.self_heal import _recompress_reference
+
+    fasta = tmp_path / "ref.fa.gz"
+    fasta.write_bytes(gzip.compress(_PLAIN_FASTA))
+    target = ExecutionTarget(backend="local", container_runtime="docker", work_dir="w")
+    params = {"fasta": str(fasta)}
+    built_paths = set()
+
+    result_target, result_params, outcome, detail, continue_ = _recompress_reference(
+        target, params, run_dir=tmp_path, built_paths=built_paths
+    )
+
+    assert outcome == "recompressed_reference_and_retried"
+    assert continue_ is True
+    scratch = tmp_path / "healed_reference" / "ref.fa"
+    assert scratch.is_file()
+    assert scratch.read_bytes() == _PLAIN_FASTA
+    assert result_params["fasta"] == str(scratch)
+    assert str(fasta) in built_paths
+    assert str(scratch) in built_paths
+    assert detail is not None and str(fasta) in detail
+
+
+def test_recompress_reference_no_fasta_gives_up(tmp_path):
+    from contig.models import ExecutionTarget
+    from contig.self_heal import _recompress_reference
+
+    target = ExecutionTarget(backend="local", container_runtime="docker", work_dir="w")
+    params: dict[str, object] = {}
+    built_paths: set[str] = set()
+
+    result_target, result_params, outcome, detail, continue_ = _recompress_reference(
+        target, params, run_dir=tmp_path, built_paths=built_paths
+    )
+
+    assert outcome == "reference_recompress_unresolvable"
+    assert continue_ is False
+    assert "fasta" not in result_params
+    assert not (tmp_path / "healed_reference").exists()
+
+
+def test_recompress_reference_bgzf_input_left_untouched(tmp_path):
+    from contig.models import ExecutionTarget
+    from contig.self_heal import _recompress_reference
+
+    fasta = tmp_path / "ref.fa.gz"
+    fasta.write_bytes(_BGZF_EOF_BLOCK)
+    target = ExecutionTarget(backend="local", container_runtime="docker", work_dir="w")
+    params = {"fasta": str(fasta)}
+    built_paths: set[str] = set()
+
+    result_target, result_params, outcome, detail, continue_ = _recompress_reference(
+        target, params, run_dir=tmp_path, built_paths=built_paths
+    )
+
+    assert outcome == "reference_recompress_unresolvable"
+    assert continue_ is False
+    assert result_params["fasta"] == str(fasta)
+    assert not (tmp_path / "healed_reference").exists()
+
+
+def test_recompress_reference_already_built_gives_up(tmp_path):
+    from contig.models import ExecutionTarget
+    from contig.self_heal import _recompress_reference
+
+    fasta = tmp_path / "ref.fa.gz"
+    fasta.write_bytes(b"not gzip at all")
+    target = ExecutionTarget(backend="local", container_runtime="docker", work_dir="w")
+    params = {"fasta": str(fasta)}
+    built_paths = {str(fasta)}
+
+    result_target, result_params, outcome, detail, continue_ = _recompress_reference(
+        target, params, run_dir=tmp_path, built_paths=built_paths
+    )
+
+    assert outcome == "reference_recompress_unresolvable"
+    assert continue_ is False
+    assert result_params["fasta"] == str(fasta)
+    assert not (tmp_path / "healed_reference").exists()
+
+
+def test_recompress_reference_decompress_failure(tmp_path):
+    from contig.models import ExecutionTarget
+    from contig.self_heal import _recompress_reference
+
+    # Gzip magic present (so _gzip_kind sees "plain_gzip") but truncated body
+    # that fails to decompress.
+    fasta = tmp_path / "ref.fa.gz"
+    fasta.write_bytes(b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff" + b"\x00" * 4)
+    target = ExecutionTarget(backend="local", container_runtime="docker", work_dir="w")
+    params = {"fasta": str(fasta)}
+    built_paths: set[str] = set()
+
+    result_target, result_params, outcome, detail, continue_ = _recompress_reference(
+        target, params, run_dir=tmp_path, built_paths=built_paths
+    )
+
+    assert outcome == "reference_recompress_failed"
+    assert continue_ is False
+    assert result_params["fasta"] == str(fasta)
