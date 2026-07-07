@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-07-07
+
 ### Added
 
 - **Held-out regression guard for the self-heal loop's outcome-match rate**
@@ -759,6 +761,7 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.22.0]: https://github.com/haqaliz/contig/releases/tag/v0.22.0
 [0.21.0]: https://github.com/haqaliz/contig/releases/tag/v0.21.0
 [0.20.0]: https://github.com/haqaliz/contig/releases/tag/v0.20.0
 [0.19.0]: https://github.com/haqaliz/contig/releases/tag/v0.19.0
