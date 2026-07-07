@@ -60,6 +60,16 @@ def test_missing_index_needs_confirmation_build() -> None:
     assert p.operation == {"build_index": True}
 
 
+def test_reference_not_bgzf_needs_confirmation_recompresses() -> None:
+    patches = propose_patches(diag("reference_not_bgzf"))
+    assert len(patches) == 1
+    p = patches[0]
+    assert p.kind == "reference"
+    assert p.risk == "needs_confirmation"
+    assert p.operation == {"recompress_reference": True}
+    assert has_safe_patch(diag("reference_not_bgzf")) is False
+
+
 def test_missing_reference_needs_confirmation_swaps_reference_param() -> None:
     patches = propose_patches(diag("missing_reference"))
     assert len(patches) == 1

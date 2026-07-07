@@ -63,6 +63,19 @@ def propose_patches(diagnosis: Diagnosis) -> list[Patch]:
                 expected_signal="index present",
             )
         ]
+    if diagnosis.failure_class == "reference_not_bgzf":
+        return [
+            Patch(
+                kind="reference",
+                operation={"recompress_reference": True},
+                rationale=(
+                    "Reference FASTA is gzip-compressed, not BGZF; decompress "
+                    "it and retry."
+                ),
+                risk="needs_confirmation",
+                expected_signal="reference readable by samtools faidx",
+            )
+        ]
     if diagnosis.failure_class == "missing_reference":
         return [
             Patch(
