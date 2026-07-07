@@ -6,6 +6,47 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Held-out regression guard for the self-heal loop's outcome-match rate**
+  (capability C6, eval flywheel — slice 2). Where `contig eval-guard` (slice 1)
+  guards only the detector's classification accuracy on a labeled corpus, this
+  slice guards the **whole self-heal loop's outcome-match rate**: did the loop
+  both diagnose the right `FailureClass` *and* reach the scenario's declared
+  terminal outcome (`patched_and_retried`, `built_index_and_retried`,
+  `approved_and_retried`, `gave_up`, `index_unresolvable`,
+  `approval_timed_out`)? A new `HealScenario` driver (`src/contig/heal.py`) replays each case
+  through the **real** `self_heal_run` detect→diagnose→patch→retry loop — the
+  detector and `propose` are never stubbed (PRD R2) — via scripted
+  executor/index-builder/poll seams, so this measures the actual loop, not a
+  mock of it. A new frozen `src/contig/data/heal_scenarios.jsonl` (7 synthetic
+  cases) is scored by a new `contig heal-guard` command, which fails the build
+  (`exit 1`, `REGRESSION: ...`) when the current outcome-match rate drops below
+  a committed baseline (`src/contig/data/heal_baseline.json`, pinning
+  `corpus_sha`, `covered_classes`, and `contig_version`) minus a small float
+  tolerance. `--update-baseline` (re)freezes the baseline as a deliberate,
+  reviewed act — never an automatic side effect of running the guard. The
+  guard also warns loudly (non-failing, stderr) on a scenario-sha mismatch
+  (set changed but baseline not refreshed), and nudges
+  (`consider --update-baseline`) when the rate improves beyond tolerance. The
+  committed baseline is honestly **outcome-match 1.0 (7/7)** over the 5 failure
+  classes the frozen set currently covers (`bad_param`, `missing_index`, `oom`,
+  `time_limit`, `tool_crash`); a `recovery_rate` (`healed`/total, currently
+  4/7) is also reported as an **informational-only sub-metric — never
+  guarded**, since some declared outcomes are an honest give-up
+  (`gave_up`, `index_unresolvable`, `approval_timed_out`) rather than a
+  recovery. **Honest scope:** this number is over **7 SYNTHETIC scenarios**,
+  not a field recovery rate; `qc_anomaly`
+  and `no_progress` remain structurally unreachable by the detector (as noted
+  in slice 1), and the wider failure-class catalog (container, download, disk,
+  permission, missing-reference families) has no scenario yet. Folding the
+  unlabeled C1 concordance / C3 plausibility corroboration signals into a
+  single eval number remains **deferred**, as does a held-out-accuracy trend
+  over corpus/loop versions. The guard now runs in CI
+  (`.github/workflows/ci.yml`, immediately after `eval-guard`), so a change to
+  the self-heal loop, a detector, or a patch that regresses outcome-match on
+  the frozen synthetic set fails the build. Local, deterministic, no network.
+
 ## [0.21.0] - 2026-07-07
 
 ### Added

@@ -21,6 +21,10 @@ jobs:
       # C6 regression guard: fail the build if the detector's accuracy on the frozen
       # held-out set drops below the committed baseline (holdout_baseline.json).
       - run: uv run contig eval-guard
+      # C6 slice 2 regression guard: fail the build if the self-heal loop's
+      # outcome-match rate on the frozen synthetic scenarios drops below the
+      # committed baseline (heal_baseline.json).
+      - run: uv run contig heal-guard
 
   dashboard:
     name: Dashboard (tsc, lint, e2e)

@@ -50,6 +50,16 @@ from contig.holdout import (
     load_baseline,
     save_baseline,
 )
+from contig.heal import (
+    compare_heal_to_baseline,
+    default_heal_baseline_path,
+    default_heal_scenarios_path,
+    evaluate_heal,
+    load_heal_baseline,
+    load_heal_scenarios,
+    save_heal_baseline,
+    snapshot_from_heal_report,
+)
 from contig.bundle import compute_output_checksums
 from contig.cost import cost_report
 from contig.signing import generate_keypair, signing_available, verify_signature
@@ -1690,6 +1700,124 @@ def eval_guard(
 
     if not json_out:
         typer.echo(f"Guard PASS: accuracy {result.accuracy:.1%} ≥ baseline {result.baseline_accuracy:.1%}.")
+
+
+@app.command(name="heal-guard")
+def heal_guard(
+    scenarios: str = typer.Option(None, "--scenarios", help="Self-heal scenario JSONL (defaults to the shipped synthetic set)."),
+    baseline: str = typer.Option(None, "--baseline", help="Baseline JSON (defaults to the shipped one)."),
+    tolerance: float = typer.Option(1e-9, "--tolerance", help="Float tolerance; outcome-match rate below (baseline - tolerance) is a regression."),
+    update_baseline: bool = typer.Option(False, "--update-baseline", help="(Re)freeze the baseline to the current outcome-match rate. Deliberate, reviewed act."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the guard result as JSON."),
+) -> None:
+    """Guard the self-heal loop's outcome-match rate against a frozen synthetic scenario set (C6 slice 2).
+
+    Replays `evaluate_heal` -- the REAL detect->diagnose->patch->retry loop,
+    never a mock of it -- over a frozen scenario corpus and compares the
+    outcome-match rate to a committed baseline, exiting non-zero on a real
+    regression so a change to the loop, a detector, or a patch never silently
+    starts diverging from a scenario's declared outcome. `--update-baseline`
+    deliberately (re)freezes the baseline instead of guarding; that always
+    exits 0.
+
+    Honest scope: the number is over **7 SYNTHETIC scenarios**, not a field
+    recovery rate. Covered failure classes: bad_param, missing_index, oom,
+    time_limit, tool_crash. Not covered: qc_anomaly and no_progress are
+    currently structurally unreachable (no diagnose_failure rule branch emits
+    them yet); container_pull_failed, container_unavailable, conda_solve_failed,
+    platform_unsupported, disk_full, download_failed, permission_denied, and
+    missing_reference have no scenario yet and are deferred follow-on slices.
+    """
+    scenarios_path = Path(scenarios) if scenarios else default_heal_scenarios_path()
+    baseline_path = Path(baseline) if baseline else default_heal_baseline_path()
+
+    try:
+        cases = load_heal_scenarios(scenarios_path)
+    except FileNotFoundError:
+        typer.echo(f"Heal scenarios not found: {scenarios_path}", err=True)
+        raise typer.Exit(code=1)
+
+    report = evaluate_heal(cases)
+    corpus_sha = sha256_file(scenarios_path)
+    covered_classes = sorted({s.expected_class for s in cases})
+
+    if update_baseline:
+        snapshot = snapshot_from_heal_report(
+            report,
+            corpus_sha=corpus_sha,
+            covered_classes=covered_classes,
+            contig_version=_pkg_version("contig"),
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+        save_heal_baseline(snapshot, baseline_path)
+        typer.echo(
+            f"Baseline updated: outcome-match {report.outcome_match_rate:.0%} over "
+            f"{report.total} synthetic scenarios; recovery {report.healed}/{report.total}; "
+            f"covered: {', '.join(covered_classes)}"
+        )
+        return
+
+    baseline_snapshot = load_heal_baseline(baseline_path)
+    result = compare_heal_to_baseline(
+        report,
+        baseline=baseline_snapshot,
+        corpus_sha=corpus_sha,
+        tolerance=tolerance,
+    )
+
+    if json_out:
+        typer.echo(result.model_dump_json())
+
+    if not result.has_baseline:
+        typer.echo(
+            f"No heal-guard baseline at {baseline_path}; run 'contig heal-guard "
+            "--update-baseline' to freeze one.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if result.sha_mismatch:
+        typer.echo(
+            f"Scenario set changed (sha {corpus_sha[:12]} != baseline "
+            f"{(result.baseline_sha or '')[:12]}); the delta crosses different sets — "
+            "refreeze with --update-baseline.",
+            err=True,
+        )
+
+    if not json_out:
+        delta_pp = (result.delta or 0.0) * 100
+        typer.echo(
+            f"Heal-guard: outcome-match {result.outcome_match_rate:.0%} vs baseline "
+            f"{result.baseline_match_rate:.0%} (delta {delta_pp:+.1f}pp) over "
+            f"{result.scenario_count} synthetic scenarios; recovery {report.healed}/{report.total}; "
+            f"covered: {', '.join(covered_classes)}"
+        )
+        for m in result.mismatches:
+            typer.echo(f"  MISS {m.scenario_id}: {'; '.join(m.divergence)}")
+
+    if result.regressed:
+        delta_pp = (result.delta or 0.0) * 100
+        mismatch_ids = ", ".join(m.scenario_id for m in result.mismatches)
+        typer.echo(
+            f"REGRESSION: outcome-match {result.outcome_match_rate:.0%} below baseline "
+            f"{result.baseline_match_rate:.0%} (delta {delta_pp:+.1f}pp): {mismatch_ids}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if result.improved:
+        if not json_out:
+            typer.echo(
+                f"Heal-guard improved (outcome-match {result.outcome_match_rate:.0%} > baseline "
+                f"{result.baseline_match_rate:.0%}); consider --update-baseline to lock it in."
+            )
+        return
+
+    if not json_out:
+        typer.echo(
+            f"Heal-guard PASS: outcome-match {result.outcome_match_rate:.0%} "
+            f"≥ baseline {result.baseline_match_rate:.0%}."
+        )
 
 
 @app.command()
