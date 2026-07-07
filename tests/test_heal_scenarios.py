@@ -268,3 +268,70 @@ def test_evaluate_heal_aggregates_rates(tmp_path):
     assert report.per_class["tool_crash"].matched == 1
     assert len(report.mismatches) == 1
     assert report.mismatches[0].scenario_id == "tool-crash-mismatch"
+
+
+# --- Shipped Core-mix scenario set (Task 4: the frozen 7 + committed baseline) --
+
+from contig.heal import (  # noqa: E402
+    compare_heal_to_baseline,
+    default_heal_baseline_path,
+    default_heal_scenarios_path,
+    load_heal_baseline,
+    load_heal_scenarios,
+)
+from contig.models import sha256_file  # noqa: E402
+
+
+def test_shipped_heal_scenarios_all_reproduce_their_declared_outcomes():
+    """The frozen Core-mix set (PRD R7) must score outcome_match_rate == 1.0
+    when driven through the REAL self-heal loop: every shipped scenario behaves
+    exactly as it declares."""
+    scenarios = load_heal_scenarios(default_heal_scenarios_path())
+    report = evaluate_heal(scenarios)
+
+    assert report.total == 7
+    assert report.outcome_match_rate == 1.0, [
+        (m.scenario_id, m.divergence) for m in report.mismatches
+    ]
+    assert report.healed == 4
+    assert report.recovery_rate == pytest.approx(4 / 7)
+
+    covered = {s.expected_class for s in scenarios}
+    assert covered >= {"oom", "time_limit", "missing_index", "tool_crash"}
+
+
+def test_shipped_heal_baseline_matches_shipped_scenarios():
+    """The committed baseline is measured against the shipped scenario file
+    (corpus_sha matches) and pins outcome_match_rate == 1.0."""
+    scenarios_path = default_heal_scenarios_path()
+    baseline = load_heal_baseline(default_heal_baseline_path())
+
+    assert baseline is not None
+    assert baseline.scenario_count == 7
+    assert baseline.outcome_match_rate == 1.0
+    assert baseline.recovery_rate == pytest.approx(4 / 7)
+    assert baseline.corpus_sha == sha256_file(scenarios_path)
+    assert set(baseline.covered_classes) >= {
+        "oom",
+        "time_limit",
+        "missing_index",
+        "tool_crash",
+    }
+
+
+def test_shipped_heal_report_does_not_regress_against_baseline():
+    """Replaying the frozen set and comparing to the committed baseline shows no
+    regression (this is the guard Task 5's CLI wraps)."""
+    scenarios_path = default_heal_scenarios_path()
+    scenarios = load_heal_scenarios(scenarios_path)
+    report = evaluate_heal(scenarios)
+    baseline = load_heal_baseline(default_heal_baseline_path())
+    result = compare_heal_to_baseline(
+        report,
+        baseline=baseline,
+        corpus_sha=sha256_file(scenarios_path),
+        tolerance=0.0,
+    )
+    assert result.regressed is False
+    assert result.sha_mismatch is False
+    assert result.outcome_match_rate == 1.0
