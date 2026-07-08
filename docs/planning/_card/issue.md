@@ -1,58 +1,73 @@
-# Card: self-heal-bgzip-reference (feat)
+# Card: rnaseq-concordance-autorun (feat)
 
-Type: feat · id/slug: `self-heal-bgzip-reference` · owner: aliz
-Branch: `feat/self-heal-bgzip-reference/aliz`
-Source: no GitHub issue — inline brief from `/contig-next` handoff (2026-07-08).
-Capability: **C2 (self-heal breadth), input-format-conversion class — first slice.**
+Type: feat · id/slug: `rnaseq-concordance-autorun` · owner: aliz
+Branch: `feat/rnaseq-concordance-autorun/aliz`
+Source: no GitHub issue — inline brief from `/contig-next` handoff (2026-07-08), after the
+`self-heal-corrupt-star-index` pick was found blocked in the Phase 2 dig and the user chose
+this alternate.
+Capability: **C1 (cross-tool concordance verification), RNA-seq slice — the turnkey autorun
+follow-on.**
 
 ## Brief
 
-Add a C2 self-heal slice that recovers a plain-`gzip`-compressed (non-BGZF)
-reference FASTA — the `samtools faidx` "not BGZF" failure — by re-compressing it
-with `bgzip` into run-scoped scratch, redirecting the retried run at the fixed
-copy, and recording the recovery, as the first slice of C2's still-unbuilt
-**input-format conversion** class.
+Make RNA-seq cross-tool concordance **turnkey**: add a `contig verify <run>
+--concordance-counts-auto …` path that runs a **second, independent quantifier** on the
+run's own inputs — behind an **injectable seam** — to produce a second gene-count matrix,
+then feeds it into the **already-shipped** `verification/count_concordance.py` machinery
+(v0.12.0). This is the exact follow-on the docs name: it mirrors how the germline autorun
+`--concordance-auto` (v0.4.0) followed the user-supplied germline `--concordance-vcf`
+(v0.2.0) one release later — here it follows the user-supplied RNA-seq `--concordance-counts`
+(v0.12.0).
 
-Reuse the existing scratch + `params`-redirect + `rerun`/`resume` re-derivation
-seam already shipped for STAR-index rebuild (v0.10.0) and GTF harmonization
-(v0.9.0). Add a new `FailureClass`, one detector-corpus seed, and an
-injected-builder fixture, test-first, no real pipeline run in CI.
+### Contract (mirror germline `--concordance-auto` exactly)
+- Second quantifier lives behind an **injectable seam**, so it is **never executed in CI**;
+  a missing binary, missing input, or quantifier failure prints a **clear skip note**,
+  **never a false pass**, and **never changes the verify exit code**.
+- Corroboration only: **at most WARN**, structurally incapable of promoting UNVERIFIED→PASS.
+- **Mutually exclusive** with `--concordance-counts` (user-supplied matrix) and with the
+  germline `--concordance-vcf` / `--concordance-auto` flags.
+- Reuses the existing Spearman / fraction-agreeing / gene-overlap checks and the
+  UNVERIFIED-below-10-shared-genes guarantee — no new metric math.
+- RNA-seq (`rnaseq`) assay only.
 
-## Known caveat (dig this FIRST, before PRD)
+## Open questions for the Phase 2 dig (answer from code, not memory)
 
-Confirm a Contig-launched nf-core run actually hits the non-BGZF failure on the
-user-supplied `--fasta` **before** nf-core re-bgzips it in its own prep step.
-This is the exact live-trigger question that turned the BWA (v0.10.0) and
-bwa-mem2 (v0.11.0) slices detector-only. The bgzip case is more favorable — the
-failure is on the *user-supplied* FASTA path, which several tools consume
-directly — but if no launched run can produce it, this correctly narrows to a
-**detector + corpus seed** slice (still real corpus fuel), not a full
-build/redirect. Scope the trigger before committing to the redirect.
+1. **Germline autorun shape** — read the v0.4.0 `--concordance-auto` implementation end to
+   end: the injectable second-caller seam signature, CLI wiring, skip-note behavior,
+   mutual-exclusion enforcement, and its tests. This is the template to copy.
+2. **What second quantifier + what inputs?** Germline autorun took `--bam <bam> --ref <ref>`
+   and ran bcftools. RNA-seq quantification needs **reads (FASTQ) + a transcriptome/index**.
+   Determine what inputs are available at `verify` time (the run record / sample sheet /
+   params), what a realistic second quantifier is (e.g. Salmon vs the primary, or kallisto),
+   and therefore the seam's input signature. This is the main design decision.
+3. **Primary matrix locator** — reuse v0.12.0's `*salmon.merged.gene_counts*` glob; confirm
+   the path and how the primary matrix is found so the autorun corroborates against it.
+4. **Mutual exclusion / flag surface** — where the existing `--concordance-counts` /
+   `--concordance-vcf` / `--concordance-auto` flags are validated for exclusivity, so the
+   new flag joins that guard.
 
-## Moat framing (from contig-next ranking)
+## Why this pick (moat framing, from contig-next ranking)
 
-- C2 is the headline-metric capability: unattended-completion rate
-  (ROADMAP Phase 1 gate ≥70%), "the most directly 'gets better with better
-  models' surface and the richest corpus fuel"
-  (docs/technical/CAPABILITY_ROADMAP.md).
-- Input-format conversion (bgzip / CRAM↔BAM) is explicitly named in C2's "What
-  we build" (`CAPABILITY_ROADMAP.md:274`) and listed among still-pending items
-  (`CAPABILITY_ROADMAP.md:256`) — not blocker-deferred.
-- Double moat hit: raises unattended-completion (moat #1) + drops a golden
-  corpus case (moat #2).
+- Deepens **moat #1**, the novel cross-tool verdict axis: "no incumbent issues a
+  correctness verdict, let alone a cross-tool one" (`CAPABILITY_ROADMAP.md` C1).
+- **Turnkey follow-on of a shipped manual feature** — an explicitly-blessed high-leverage
+  candidate class (contig-next rule 6); precedented exactly by germline v0.4.0.
+- **Unblocked, low feasibility risk**: the seam pattern is proven, the concordance math
+  already ships, and the second tool is never run in CI (injected seam) — so no fabrication
+  or CI-dependency risk.
 
-## Prior-art seams to reuse (verify in Phase 2 dig)
+## Honest caveats (carry into the PRD)
 
-- STAR directory-index rebuild → run-scoped scratch + `params["star_index"]`
-  redirect + `rerun`/`resume` re-derivation (v0.10.0).
-- GTF harmonization → stream-rewrite into `<run_id>/harmonized/`, original file
-  untouched, decision re-derived on rerun (v0.9.0).
-- `IndexBuilder` injectable seam + one-build-per-path guard (v0.8.0).
-- Detector-corpus seeding pattern (one golden case per new kind).
+- Concordance is **WARN-only corroboration** and never changes the exit code — this makes
+  a manual feature turnkey; it does not add a new verdict lever. Bounded marginal value,
+  same as germline v0.4.0 (which shipped anyway).
+- Like germline autorun, this proves the **wiring**, not a real second-tool run (the seam is
+  injected in tests; the real quantifier is never executed in CI).
+- **No corpus fuel**: concordance is not a `FailureClass`, so unlike a C2 self-heal slice
+  this adds no golden detector-corpus case (moat #2). Deepens moat #1 only.
 
 ## Non-goals (this slice)
 
-- CRAM↔BAM conversion (the *other* half of the input-format class — a later
-  slice; this slice is bgzip-reference only).
-- FAIL-severity / band calibration on real data.
+- Single-cell concordance; a dashboard "corroborated by" line; FAIL severity / band
+  calibration on real data (all deferred per `CAPABILITY_ROADMAP.md` C1).
 - Any Layer-1 (NL → workflow) surface.
