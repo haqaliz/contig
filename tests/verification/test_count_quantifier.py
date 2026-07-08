@@ -134,3 +134,18 @@ def test_missing_index_raises(tmp_path):
         run_kallisto_quantifier(str(reads), str(missing_index), str(out_dir))
 
     assert "index" in str(excinfo.value).lower()
+
+
+def test_malformed_reads_sheet_raises_second_quantifier_error(tmp_path):
+    # The sheet exists but is missing the required `fastq_1` column, so
+    # `contig.samplesheet.fastq_paths` raises a bare ValueError when parsing it.
+    # `run_kallisto_quantifier` must fold that into the one named
+    # SecondQuantifierError, never leaking the bare ValueError.
+    reads = tmp_path / "malformed.csv"
+    reads.write_text("sample,strandedness\nS1,auto\n")
+    index = tmp_path / "index"
+    index.mkdir()
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(SecondQuantifierError):
+        run_kallisto_quantifier(str(reads), str(index), str(out_dir))

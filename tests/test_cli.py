@@ -1608,6 +1608,30 @@ def test_verify_concordance_flags_mutually_exclusive(tmp_path):
     assert "choose one" in result.output.lower()
 
 
+def test_verify_concordance_counts_auto_mutually_exclusive_with_others(tmp_path):
+    _write_rnaseq_run_with_counts(tmp_path, "r5", _COUNTS_PRIMARY)
+    concordant = _write_second_counts(tmp_path, "second_ok.tsv", _COUNTS_CONCORDANT)
+    reads, index = _write_reads_and_index(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "r5",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-counts",
+            str(concordant),
+            "--concordance-counts-auto",
+            "--reads",
+            str(reads),
+            "--index",
+            str(index),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "choose one" in result.output.lower()
+
+
 # --- contig verify --concordance-auto (PRD C1, second-caller seam) -------------
 # A fake second caller stands in for bcftools so CI never runs the real binary.
 # It writes a recorded second VCF under out_dir and returns that path, exactly the
@@ -1832,6 +1856,244 @@ def test_verify_concordance_auto_non_germline_skips(tmp_path, monkeypatch):
     )
     assert result.exit_code == 0
     assert "germline" in result.output.lower()
+
+
+# --- contig verify --concordance-counts-auto (PRD C1, second-quantifier seam) --
+# A fake second quantifier stands in for kallisto so CI never runs the real binary.
+# It writes a recorded second gene-count matrix under out_dir and returns that
+# path, exactly the contract of run_kallisto_quantifier (reads, index, out_dir) ->
+# gene_matrix_path.
+
+
+def _fake_quantifier_writing(counts):
+    """Build a fake second quantifier that writes `counts` and returns its path."""
+
+    def fake(reads, index, out_dir):
+        path = Path(out_dir) / "second.gene_counts.tsv"
+        path.write_text(
+            "".join(f"{gene}\t{count}\n" for gene, count in counts.items())
+        )
+        return str(path)
+
+    return fake
+
+
+def _write_reads_and_index(tmp_path):
+    reads = _make_sheet(tmp_path)
+    index = tmp_path / "index"
+    index.mkdir(exist_ok=True)
+    return reads, index
+
+
+def test_verify_concordance_counts_auto_emits_checks(tmp_path, monkeypatch):
+    _write_rnaseq_run_with_counts(tmp_path, "ca1", _COUNTS_PRIMARY)
+    reads, index = _write_reads_and_index(tmp_path)
+
+    monkeypatch.setattr(
+        "contig.cli.run_kallisto_quantifier", _fake_quantifier_writing(_COUNTS_CONCORDANT)
+    )
+    ok = runner.invoke(
+        app,
+        [
+            "verify",
+            "ca1",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-counts-auto",
+            "--reads",
+            str(reads),
+            "--index",
+            str(index),
+        ],
+    )
+    assert ok.exit_code == 0
+    out = ok.output.lower()
+    assert "spearman_concordance" in out
+    assert "gene_overlap" in out
+    assert "pass" in out
+
+    monkeypatch.setattr(
+        "contig.cli.run_kallisto_quantifier", _fake_quantifier_writing(_COUNTS_DIVERGENT)
+    )
+    bad = runner.invoke(
+        app,
+        [
+            "verify",
+            "ca1",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-counts-auto",
+            "--reads",
+            str(reads),
+            "--index",
+            str(index),
+        ],
+    )
+    assert "spearman_concordance" in bad.output.lower()
+    assert "warn" in bad.output.lower()
+
+
+def test_verify_concordance_counts_auto_at_most_warn_exit(tmp_path, monkeypatch):
+    # A divergent second quantifier is the only issue; outputs are unchanged, so
+    # there is no drift -> the exit code must stay 0 (concordance is at-most-WARN).
+    _write_rnaseq_run_with_counts(tmp_path, "ca2", _COUNTS_PRIMARY)
+    reads, index = _write_reads_and_index(tmp_path)
+
+    monkeypatch.setattr(
+        "contig.cli.run_kallisto_quantifier", _fake_quantifier_writing(_COUNTS_DIVERGENT)
+    )
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "ca2",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-counts-auto",
+            "--reads",
+            str(reads),
+            "--index",
+            str(index),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "warn" in result.output.lower()
+
+
+def test_verify_concordance_counts_auto_json_includes_results(tmp_path, monkeypatch):
+    _write_rnaseq_run_with_counts(tmp_path, "ca3", _COUNTS_PRIMARY)
+    reads, index = _write_reads_and_index(tmp_path)
+
+    monkeypatch.setattr(
+        "contig.cli.run_kallisto_quantifier", _fake_quantifier_writing(_COUNTS_CONCORDANT)
+    )
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "ca3",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-counts-auto",
+            "--reads",
+            str(reads),
+            "--index",
+            str(index),
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert "concordance" in data
+    checks = {r["check"] for r in data["concordance"]}
+    assert {"spearman_concordance", "fraction_agreeing", "gene_overlap"} <= checks
+
+
+def test_verify_concordance_counts_auto_missing_reads_or_index_skips(tmp_path, monkeypatch):
+    # A missing --reads (and, separately, a missing --index): the CLI must note the
+    # skip before invoking the quantifier, emit no concordance, and leave the exit
+    # code unaffected (no crash).
+    _write_rnaseq_run_with_counts(tmp_path, "ca4", _COUNTS_PRIMARY)
+    reads, index = _write_reads_and_index(tmp_path)
+
+    def boom(reads, index, out_dir):  # the quantifier must not be reached
+        raise AssertionError("quantifier invoked despite missing --reads/--index")
+
+    monkeypatch.setattr("contig.cli.run_kallisto_quantifier", boom)
+
+    # Missing --reads.
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "ca4",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-counts-auto",
+            "--index",
+            str(index),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "skipping concordance" in result.output.lower()
+    assert "spearman_concordance" not in result.output.lower()
+
+    # Missing --index.
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "ca4",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-counts-auto",
+            "--reads",
+            str(reads),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "skipping concordance" in result.output.lower()
+    assert "spearman_concordance" not in result.output.lower()
+
+
+def test_verify_concordance_counts_auto_quantifier_failure_skips(tmp_path, monkeypatch):
+    # The quantifier raises SecondQuantifierError (e.g. kallisto not on PATH): the
+    # CLI must turn it into a clear note, no PASS, no crash, exit unaffected.
+    _write_rnaseq_run_with_counts(tmp_path, "ca5", _COUNTS_PRIMARY)
+    reads, index = _write_reads_and_index(tmp_path)
+
+    from contig.verification.count_quantifier import SecondQuantifierError
+
+    def boom(reads, index, out_dir):
+        raise SecondQuantifierError("kallisto not found")
+
+    monkeypatch.setattr("contig.cli.run_kallisto_quantifier", boom)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "ca5",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-counts-auto",
+            "--reads",
+            str(reads),
+            "--index",
+            str(index),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "skipping concordance" in result.output.lower()
+    assert "spearman_concordance" not in result.output.lower()
+
+
+def test_verify_concordance_counts_auto_non_rnaseq_skips(tmp_path, monkeypatch):
+    # A germline run with --concordance-counts-auto: count concordance is not
+    # defined for it, so the command prints a clear note, does not crash, and the
+    # exit is unaffected. The quantifier must never be reached.
+    _write_germline_run_with_vcf(tmp_path, "ca6", _VCF_SITES_A)
+    reads, index = _write_reads_and_index(tmp_path)
+
+    def boom(reads, index, out_dir):
+        raise AssertionError("quantifier invoked for a non-rnaseq run")
+
+    monkeypatch.setattr("contig.cli.run_kallisto_quantifier", boom)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "ca6",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-counts-auto",
+            "--reads",
+            str(reads),
+            "--index",
+            str(index),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "rna-seq" in result.output.lower()
 
 
 def test_keygen_prints_a_keypair(tmp_path):

@@ -28,6 +28,8 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Iterable
 
+from pydantic import ValidationError
+
 from contig.samplesheet import fastq_paths
 
 # A second quantifier: (reads, index, out_dir) -> produced gene-matrix path. The
@@ -143,9 +145,10 @@ def run_kallisto_quantifier(reads: str, index: str, out_dir: str) -> str:
     the resulting `abundance.tsv`, collapses transcripts to genes via the index's
     `t2g.txt`, and writes `<out_dir>/second.gene_counts.tsv`.
 
-    A missing binary (FileNotFoundError from the spawn), a nonzero exit, or a
-    missing transcript->gene map is re-raised as a clear SecondQuantifierError,
-    never leaked.
+    A missing binary (FileNotFoundError from the spawn), a nonzero exit, a
+    malformed sample sheet (bare ValueError / pydantic ValidationError from
+    `fastq_paths`), or a missing transcript->gene map is re-raised as a clear
+    SecondQuantifierError, never leaked.
 
     The subprocess success path (steps 3-7 below) is intentionally NOT exercised
     in CI; the manual gate covers it against a real kallisto index and FASTQs.
@@ -157,7 +160,12 @@ def run_kallisto_quantifier(reads: str, index: str, out_dir: str) -> str:
     if not index_path.is_dir():
         raise SecondQuantifierError(f"second quantifier index not found: {index}")
 
-    fastqs = [str(p) for p in fastq_paths(reads)]
+    try:
+        fastqs = [str(p) for p in fastq_paths(reads)]
+    except (ValueError, ValidationError) as exc:
+        raise SecondQuantifierError(
+            f"second quantifier reads sheet is malformed: {reads} ({exc})"
+        ) from exc
     if not fastqs:
         raise SecondQuantifierError(f"second quantifier reads sheet has no FASTQs: {reads}")
     missing = [f for f in fastqs if not Path(f).is_file()]
