@@ -67,7 +67,8 @@ def test_collapse_to_gene_drops_unknown_transcript():
     result = collapse_to_gene(rows, t2g)
 
     assert result == {"geneA": 10.0}
-    assert "tx_unknown" not in result.values()
+    # the dropped transcript's count leaks into no gene (values are floats)
+    assert 100.0 not in result.values()
 
 
 def test_collapse_to_gene_multi_gene_and_tie():
