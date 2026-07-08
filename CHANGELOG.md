@@ -6,6 +6,66 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Self-heal a plain-`gzip`'d (non-BGZF) reference FASTA** (capability C2, self-heal
+  breadth — the **first slice of the input-format-conversion class**). A Contig-launched
+  **nf-core/sarek** run (assays `variant_calling` germline and `somatic_variant_calling`)
+  fails hard when the user's `--fasta` was compressed with plain `gzip` instead of `bgzip`:
+  `samtools faidx` rejects it outright (`[E::fai_build3_core] Cannot index files compressed
+  with gzip, please use bgzip`), and previously fell through to the opaque terminal
+  `tool_crash`. **rnaseq is deliberately excluded** — nf-core/rnaseq's `PREPARE_GENOME`
+  gunzips a `.gz` fasta before faidx ever sees it, so the failure never reaches Contig
+  there; sarek 3.5.1 has **no gunzip module** and passes `--fasta` straight to
+  `SAMTOOLS_FAIDX`, so it *is* reachable through the real CLI (the forced `--gtf` that
+  `resolve_reference` couples to `--fasta` is tolerated by sarek's nf-schema as a warning,
+  not a validation failure, since sarek defines no `gtf` param and
+  `validationFailUnrecognisedParams` defaults false).
+  - A new `_recompress_reference` in `self_heal.py` **stream-decompresses** the reference
+    with stdlib `gzip` (no external tool — `shutil.copyfileobj` in 1 MiB chunks, never
+    reading the whole file into memory) to a plain **uncompressed `.fa`** in run-scoped
+    scratch `<run_id>/healed_reference/<name>`, redirects the in-memory `params["fasta"]`
+    to the scratch copy, and retries — the user's original file is never touched or
+    rewritten. Reuses the STAR-index scratch/redirect/`built_paths` seam and the
+    GTF-harmonization reproduce-safety contract (verified empirically, not assumed: a
+    dedicated test injects a temporary leak into `_dispatch_run` to prove the assertion is
+    load-bearing, then confirms `launch.json` keeps the original `fasta` on the real code
+    path — `rerun`/`resume` read only `launch.json` and re-derive the heal from the
+    original path; the scratch path is never persisted, only `run_record.json`'s
+    provenance legitimately shows it).
+  - A new `_gzip_kind` classifier discriminates `"plain_gzip"` from `"bgzf"` (magic-byte
+    check plus a walk of the FEXTRA subfields for the samtools/htslib `BC` tag) from
+    `"not_gzip"`, so a **valid BGZF reference is left untouched** — recompressing it would
+    be pointless churn on an already-correct file, never a false diagnosis.
+  - A new `FailureClass` `reference_not_bgzf`, with a **narrow** detector branch anchored
+    on the faidx-specific `cannot index files compressed with gzip` (not the bare "please
+    use bgzip" that tabix/bcftools emit for VCFs — a different fix entirely). One golden
+    detector-corpus case plus a held-out twin; `eval-guard`'s held-out accuracy moved from
+    83.3% (10/12) to **84.6% (11/13)** on the refrozen baseline (`--update-baseline`, a
+    deliberate act).
+  - A new `repair.py` branch proposes a `kind="reference"` patch
+    (`operation={"recompress_reference": True}`) with `risk="needs_confirmation"` —
+    mirroring the sibling `build_index` reference patch, not `safe`, so a human can veto a
+    reference rewrite; tests drive it with `auto_approve=True`.
+  - **Every give-up is honest, never a false pass:** no `params["fasta"]`, a file that
+    isn't actually plain-gzip (already-BGZF or genuinely uncompressed/corrupt), or a failed
+    decompression all end in a distinct `reference_recompress_unresolvable` /
+    `reference_recompress_failed` outcome and an honest FAIL — never masked as a recovery.
+    Bounded to **one recompress per run** (`built_paths` guard); a second identical failure
+    after a successful recompress gives up rather than looping.
+  - **No raw-read egress; research-use only.** Recompression runs entirely on the user's
+    compute. Built test-first with an injected executor and tiny real gzip/hand-crafted-BGZF
+    fixtures (real stdlib `gzip` runs for real in CI on those fixtures) — **no real
+    nf-core/sarek or samtools run in CI.**
+  - **Deferred (honestly, out of scope for this slice):** **CRAM↔BAM conversion**, the
+    other half of the input-format-conversion class; a **BGZF fix target** (declined in
+    favor of plain uncompressed — universal downstream acceptance, mirrors rnaseq's own
+    GUNZIP, one step); promoting `recompress_reference` from `needs_confirmation` to a
+    `safe` auto-approved patch; a `heal-guard` scenario promoting `reference_not_bgzf` to a
+    covered outcome-match class (C6 slice 2); and cleaning up the `resolve_reference`
+    `--fasta`/`--gtf` coupling quirk that this slice merely tolerates rather than fixes (a
+    separate follow-up).
+
 ## [0.22.0] - 2026-07-07
 
 ### Added
