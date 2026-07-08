@@ -244,6 +244,33 @@ ladder (observed `realtime` → blind fallback); memory path untouched; Nextflow
 verdict/exit-code/`FailureClass` change; test-first with injected fixtures. **Deferred:**
 the same-process sibling-`realtime` rescue (same `process == name` blocker as memory) and
 factor/ceiling calibration on real data.
+**Shipped (input-format conversion — bgzip-reference slice — Unreleased):** the **first
+slice of the input-format-conversion class**. A Contig-launched **nf-core/sarek** run
+(`variant_calling` germline + `somatic_variant_calling`) whose `--fasta` was compressed
+with plain `gzip` instead of `bgzip` fails `samtools faidx`
+(`Cannot index files compressed with gzip, please use bgzip`) — previously an opaque
+`tool_crash`. **rnaseq is deliberately excluded**: its own `PREPARE_GENOME` gunzips a
+`.gz` fasta before faidx ever runs, so the failure never reaches Contig there; sarek 3.5.1
+has no gunzip module, so it is reachable through the real CLI (the forced `--gtf` from
+`resolve_reference` is only an nf-schema warning on sarek, not a validation failure). A new
+`_recompress_reference` **stream-decompresses** the reference with stdlib `gzip` (no
+external tool) to a plain **uncompressed `.fa`** in run-scoped scratch
+`<run_id>/healed_reference/`, redirects the in-memory `params["fasta"]`, and retries —
+reusing the STAR-index scratch/redirect seam and the GTF-harmonization reproduce-safety
+contract (empirically verified: `launch.json` keeps the original `fasta`; `rerun`/`resume`
+re-derive). A new `_gzip_kind` classifier discriminates plain-gzip from BGZF via the
+FEXTRA `BC` subfield, so a **valid BGZF reference is left untouched**. New `FailureClass`
+`reference_not_bgzf` with a narrow detector branch (anchored on the faidx-specific
+message, not the bare "please use bgzip" tabix/bcftools emit for VCFs); one golden
+corpus case + a held-out twin (held-out accuracy 83.3%→84.6%, refrozen baseline). Patch is
+`kind="reference"`, `risk="needs_confirmation"` (not auto-approved `safe`). Every give-up —
+no fasta, already-BGZF, decompress failure, already-recompressed-this-run — is an honest
+FAIL, bounded to one recompress per run. Test-first with an injected executor and tiny
+real gzip/hand-crafted-BGZF fixtures; no real nf-core/sarek or samtools run in CI.
+**Deferred:** CRAM↔BAM conversion (the other half of this class); a BGZF fix target
+(declined for plain-uncompressed); `safe`-vs-gated auto-approval; a `heal-guard` scenario
+for the new class; and the `resolve_reference` `--fasta`/`--gtf` coupling quirk this slice
+tolerates rather than fixes.
 **Deferred to later C2 slices:** bwa-mem2 **build/redirect** (detection shipped v0.11.0;
 build blocked until a live trigger exists) and the classic-vs-mem2 aligner-mismatch heal;
 classic-BWA index build/redirect (needs a supported `bwa index` target, e.g. sarek
@@ -253,7 +280,8 @@ index kind (the BAM/CRAM form of
 assembly-signature form of reference/build mismatch (no sample-side contig signal in raw
 FASTQ or finished bundle), exhaustive per-assembly alias-table completeness beyond the
 GRCh38 seed, known-sites/GTF-version consistency, a runtime `reference_mismatch`
-detector-corpus case, format conversion, and pin conflict.
+detector-corpus case, CRAM↔BAM conversion (the input-format-conversion class's second
+half), and pin conflict.
 
 Expand the failure-mode catalog and repair strategies well past the current set,
 and make repairs resource-aware. This is the most directly "gets better with
@@ -538,7 +566,7 @@ held-out-accuracy trend over corpus/loop versions.
 | ID | Capability | Window | Leverage |
 |----|-----------|--------|----------|
 | C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) + somatic slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap + somatic auto `somatic_site_overlap` PASS-site Jaccard, Mutect2 vs Strelka2, no user input; auto-run second germline/RNA tool + single-cell deferred) |
-| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; per-contig alias harmonization (mito `M`↔`MT` + GRCh38 scaffold seed) shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); peak-RSS-informed OOM memory scaling shipped (Unreleased, honest two-tier: own-peak → blind fallback; sibling rescue deferred); walltime-informed `time_limit` scaling shipped (Unreleased, floored at blind — censored realtime, tail-only win + field instrument); bwa-mem2/classic-BWA build+redirect, assembly-signature + exhaustive per-assembly alias completeness pending) | Unattended-completion rate, corpus fuel |
+| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; per-contig alias harmonization (mito `M`↔`MT` + GRCh38 scaffold seed) shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); peak-RSS-informed OOM memory scaling shipped (Unreleased, honest two-tier: own-peak → blind fallback; sibling rescue deferred); walltime-informed `time_limit` scaling shipped (Unreleased, floored at blind — censored realtime, tail-only win + field instrument); **input-format-conversion class's first slice shipped (Unreleased): bgzip'd (non-BGZF) reference FASTA self-heal, sarek-scoped (rnaseq immune by construction), stream-decompress to uncompressed `.fa` + retry; CRAM↔BAM conversion is the deferred second half**; bwa-mem2/classic-BWA build+redirect, assembly-signature + exhaustive per-assembly alias completeness pending) | Unattended-completion rate, corpus fuel |
 | C3 | Biological-plausibility verification | SHIPPED v0.3.0 (germline) + RNA-seq (v0.6.0) + single-cell ingestion (Unreleased) | Verdict gets smarter about biology (germline Ti/Tv, het/hom; RNA-seq dup/rRNA; single-cell cell-QC now *fires* via STARsolo/Cell Ranger ingestion — was a dormant no-op; mito/doublet deferred) |
 | C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased); Strelka2-native VAF, FAIL severity + PON reference wiring deferred | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |

@@ -1,9 +1,16 @@
 {
-  "timestamp": "2026-07-05T12:36:05.604011+00:00",
-  "corpus_size": 12,
-  "corpus_sha": "ba791e75e7b8d44fb708be26ff97b9abc98a5c56a1719c8fc6acfe28dee7edea",
-  "accuracy": 0.8333333333333334,
+  "timestamp": "2026-07-07T22:36:00.098643+00:00",
+  "corpus_size": 13,
+  "corpus_sha": "d6f6fb43b09b915c280f9ba66133ca7031bb5045bd68daf82bf14dd3b3c4345a",
+  "accuracy": 0.8461538461538461,
   "per_class": {
+    "tool_crash": {
+      "support": 1,
+      "predicted": 3,
+      "correct": 1,
+      "precision": 0.3333333333333333,
+      "recall": 1.0
+    },
     "qc_anomaly": {
       "support": 1,
       "predicted": 0,
@@ -11,21 +18,14 @@
       "precision": 0.0,
       "recall": 0.0
     },
-    "download_failed": {
-      "support": 1,
-      "predicted": 1,
-      "correct": 1,
-      "precision": 1.0,
-      "recall": 1.0
-    },
-    "permission_denied": {
-      "support": 1,
-      "predicted": 1,
-      "correct": 1,
-      "precision": 1.0,
-      "recall": 1.0
-    },
     "bad_param": {
+      "support": 1,
+      "predicted": 1,
+      "correct": 1,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "container_pull_failed": {
       "support": 1,
       "predicted": 1,
       "correct": 1,
@@ -39,35 +39,7 @@
       "precision": 1.0,
       "recall": 1.0
     },
-    "tool_crash": {
-      "support": 1,
-      "predicted": 3,
-      "correct": 1,
-      "precision": 0.3333333333333333,
-      "recall": 1.0
-    },
-    "oom": {
-      "support": 1,
-      "predicted": 1,
-      "correct": 1,
-      "precision": 1.0,
-      "recall": 1.0
-    },
     "disk_full": {
-      "support": 1,
-      "predicted": 1,
-      "correct": 1,
-      "precision": 1.0,
-      "recall": 1.0
-    },
-    "no_progress": {
-      "support": 1,
-      "predicted": 0,
-      "correct": 0,
-      "precision": 0.0,
-      "recall": 0.0
-    },
-    "missing_index": {
       "support": 1,
       "predicted": 1,
       "correct": 1,
@@ -81,7 +53,42 @@
       "precision": 1.0,
       "recall": 1.0
     },
-    "container_pull_failed": {
+    "download_failed": {
+      "support": 1,
+      "predicted": 1,
+      "correct": 1,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "reference_not_bgzf": {
+      "support": 1,
+      "predicted": 1,
+      "correct": 1,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "permission_denied": {
+      "support": 1,
+      "predicted": 1,
+      "correct": 1,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "no_progress": {
+      "support": 1,
+      "predicted": 0,
+      "correct": 0,
+      "precision": 0.0,
+      "recall": 0.0
+    },
+    "oom": {
+      "support": 1,
+      "predicted": 1,
+      "correct": 1,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "missing_index": {
       "support": 1,
       "predicted": 1,
       "correct": 1,
@@ -89,6 +96,6 @@
       "recall": 1.0
     }
   },
-  "contig_version": "0.16.0",
+  "contig_version": "0.22.0",
   "detector": "rules"
 }

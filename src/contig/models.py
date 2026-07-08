@@ -210,6 +210,7 @@ FailureClass = Literal[
     "time_limit",
     "missing_reference",
     "missing_index",
+    "reference_not_bgzf",
     "bad_param",
     "container_pull_failed",
     "container_unavailable",
