@@ -6,6 +6,42 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Turnkey RNA-seq cross-tool concordance autorun** (`contig verify
+  --concordance-counts-auto`) (capability C1, RNA-seq slice — the autorun follow-on to the
+  user-supplied `--concordance-counts` shipped v0.12.0, mirroring how germline
+  `--concordance-auto` (v0.4.0) followed `--concordance-vcf`). Contig now produces the
+  second gene-count matrix itself: given `--reads <sample sheet>` and a prebuilt `--index`,
+  it runs a second, independent quantifier (**kallisto**) behind an injectable seam and
+  corroborates the run's primary Salmon gene matrix against kallisto's — no user-produced
+  second matrix required.
+  - A new `verification/count_quantifier.py` mirrors the germline `second_caller.py` seam:
+    a `CountQuantifier` type, a pure `kallisto_command` argv builder (asserted in tests,
+    never executed), and a default `run_kallisto_quantifier` that validates inputs, shells
+    out, and re-raises every failure (missing binary, missing/malformed reads, missing
+    index, missing `abundance.tsv`, missing transcript→gene map) as one named
+    `SecondQuantifierError`. **kallisto is never run in CI** (the subprocess success path is
+    covered only by a manual gate); tests inject a fake quantifier.
+  - The transcript→gene collapse is a **pure, CI-tested** function (`collapse_to_gene`) that
+    sums kallisto's transcript-level `est_counts` to gene level via the `t2g.txt` carried in
+    the kallisto index directory — so the one scientifically load-bearing step is verified
+    for real even though the tool itself is not. A missing `t2g.txt` is an honest
+    `SecondQuantifierError`, never a silently-emitted transcript-level matrix.
+  - Same honest contract as every concordance slice: **at most WARN**, **never changes the
+    verify exit code**, `unverified` (never a false pass) below 10 shared genes. Every
+    unrunnable path — a non-rnaseq run, a missing `--reads`/`--index`, a quantifier failure,
+    or a malformed sample sheet — prints a clear skip note and emits zero checks. The four
+    concordance flags (`--concordance-vcf`, `--concordance-auto`, `--concordance-counts`,
+    `--concordance-counts-auto`) are mutually exclusive.
+  - No raw-read egress (the quantifier runs on the user's compute; only gene-count metrics
+    are compared); no new dependency; no change to the run record, the reproduce contract,
+    or the verdict/exit logic. Built test-first with an injected fake quantifier and real
+    stdlib collapse/parse fixtures — no real kallisto or nf-core run in CI. **Deferred:** a
+    persisted-sample-sheet fallback for `--reads`; building the index in-seam from a
+    `--transcriptome`; single-cell concordance; a dashboard "corroborated by" line; and
+    FAIL-severity until the bands are calibrated on real data.
+
 ## [0.23.0] - 2026-07-08
 
 ### Added

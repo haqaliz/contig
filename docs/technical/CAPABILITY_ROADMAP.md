@@ -55,10 +55,23 @@ legitimately overlaps poorly). Same contract as germline: at most WARN, never ch
 the verify exit code, `unverified` (never a false pass) below 10 shared genes;
 mutually exclusive with the germline flags. The Spearman and the gzip-transparent,
 tolerant count-matrix parser are hand-rolled stdlib (no scipy/numpy added). **Deferred
-to a follow-on slice:** auto-running a second caller/quantifier (today the user
-supplies the second call set/matrix — mirrors the germline `--concordance-auto`
-follow-on in v0.4.0), single-cell concordance, a dashboard "corroborated by" line, and
-FAIL-severity once thresholds are calibrated on real data.
+to a follow-on slice:** auto-running a second germline caller for RNA-seq's sibling assays, single-cell concordance, a dashboard "corroborated by" line, and
+FAIL-severity once thresholds are calibrated on real data (the RNA-seq quantifier autorun itself is now shipped — see the autorun slice below).
+
+**Shipped (RNA-seq autorun slice — Unreleased).** The RNA-seq concordance axis is now
+turnkey: `contig verify --concordance-counts-auto --reads <sheet> --index <kallisto-index>`
+produces the second matrix itself by running a second, independent quantifier (**kallisto**)
+behind an injectable seam (`verification/count_quantifier.py`, mirroring the germline
+`second_caller.py`), then feeds it into the shipped `evaluate_count_concordance`. This is the
+exact follow-on the RNA-seq slice named — it mirrors how the germline autorun
+`--concordance-auto` (v0.4.0) followed the user-supplied `--concordance-vcf`. kallisto is
+**never run in CI** (injected seam; the subprocess path is covered by a manual gate only),
+but the transcript→gene collapse is a **pure, CI-tested** function. Same contract: at most
+WARN, never changes the exit code, `unverified` below 10 shared genes; the four concordance
+flags are mutually exclusive; every unrunnable path is an honest skip note. **Still deferred:**
+a persisted-sheet `--reads` fallback, an in-seam index build from a `--transcriptome`,
+single-cell concordance, a dashboard "corroborated by" line, and FAIL-severity on calibrated
+bands.
 
 **Shipped (somatic slice — Unreleased).** The concordance axis now extends to the somatic
 (tumor–normal) assay, and — uniquely — with **no user-supplied input and no second tool run**:

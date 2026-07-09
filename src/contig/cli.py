@@ -85,6 +85,10 @@ from contig.verification.second_caller import (
     SecondCallerError,
     run_bcftools_caller,
 )
+from contig.verification.count_quantifier import (
+    SecondQuantifierError,
+    run_kallisto_quantifier,
+)
 from contig.verification.structural import manifest_for
 from contig.runner import PipelineExecutionError, default_executor, default_index_builder
 from contig.samplesheet import (
@@ -769,6 +773,21 @@ def verify(
         "--concordance-counts",
         help="A second gene-count matrix (TSV) to corroborate this RNA-seq run's quantification against.",
     ),
+    concordance_counts_auto: bool = typer.Option(
+        False,
+        "--concordance-counts-auto",
+        help="Run a second quantifier (kallisto) on --reads and --index and corroborate this RNA-seq run's counts against it.",
+    ),
+    reads: str = typer.Option(
+        None,
+        "--reads",
+        help="Sample sheet (FASTQ) for --concordance-counts-auto's second quantifier.",
+    ),
+    index: str = typer.Option(
+        None,
+        "--index",
+        help="Prebuilt kallisto index for --concordance-counts-auto.",
+    ),
 ) -> None:
     """Re-hash a finished run's outputs and report any drift from the record.
 
@@ -787,15 +806,27 @@ def verify(
 
     With --concordance-counts, corroborate an RNA-seq run's gene-count matrix against a
     second quantifier's matrix (PRD C1, rnaseq): the same at-most-WARN, never-changes-
-    exit contract applies. The three concordance flags are mutually exclusive.
+    exit contract applies.
+
+    With --concordance-counts-auto (plus --reads and --index), Contig produces that
+    second gene-count matrix itself by running a second quantifier (kallisto) and
+    corroborates the run against it; the same at-most-WARN, never-changes-exit
+    contract applies. --reads and --index are ignored unless --concordance-counts-auto
+    is set. The four concordance flags are mutually exclusive.
     """
     if not _is_safe_run_id(run_id):
         typer.echo(f"Invalid run id: {run_id!r}", err=True)
         raise typer.Exit(code=1)
-    if sum(bool(x) for x in (concordance_vcf, concordance_auto, concordance_counts)) > 1:
+    if (
+        sum(
+            bool(x)
+            for x in (concordance_vcf, concordance_auto, concordance_counts, concordance_counts_auto)
+        )
+        > 1
+    ):
         typer.echo(
-            "Choose one of --concordance-vcf, --concordance-auto or "
-            "--concordance-counts, not more than one.",
+            "Choose one of --concordance-vcf, --concordance-auto, --concordance-counts or "
+            "--concordance-counts-auto, not more than one.",
             err=True,
         )
         raise typer.Exit(code=1)
@@ -815,6 +846,10 @@ def verify(
     elif concordance_counts:
         concordance = _evaluate_run_counts_concordance(
             record, runs_dir, run_id, concordance_counts
+        )
+    elif concordance_counts_auto:
+        concordance = _evaluate_run_counts_concordance_auto(
+            record, runs_dir, run_id, reads, index
         )
     else:
         concordance = None
@@ -999,6 +1034,47 @@ def _evaluate_run_counts_concordance(
     if primary is None:
         return []
     return evaluate_count_concordance(primary, counts_matrix, assay="rnaseq")
+
+
+def _evaluate_run_counts_concordance_auto(
+    record: RunRecord,
+    runs_dir: str,
+    run_id: str,
+    reads: str,
+    index: str,
+    quantifier=None,
+) -> list:
+    """Count-concordance checks for an rnaseq run vs a freshly produced second matrix.
+
+    Like `_evaluate_run_counts_concordance`, but Contig produces the second gene-count
+    matrix itself: it gates to rnaseq, resolves the same primary matrix, validates
+    that --reads and --index were given and exist, then runs the second quantifier
+    (kallisto by default; injectable via `quantifier` and monkeypatchable as the
+    module-level `run_kallisto_quantifier`). A missing input or any
+    SecondQuantifierError prints a clear skip note and yields no checks (never a
+    crash, never a false pass). Returns the QCResult list so the caller surfaces it
+    without changing the exit code.
+    """
+    primary = _resolve_primary_counts(record, runs_dir, run_id)
+    if primary is None:
+        return []
+
+    for label, value in (("--reads", reads), ("--index", index)):
+        if not value:
+            typer.echo(f"Skipping concordance: {label} is required for --concordance-counts-auto.")
+            return []
+        if not Path(value).exists():
+            typer.echo(f"Skipping concordance: {label} path not found: {value}.")
+            return []
+
+    run_q = quantifier if quantifier is not None else run_kallisto_quantifier
+    with tempfile.TemporaryDirectory() as out_dir:
+        try:
+            second = run_q(reads, index, out_dir)
+        except SecondQuantifierError as exc:
+            typer.echo(f"Skipping concordance: the second quantifier could not run ({exc}).")
+            return []
+        return evaluate_count_concordance(primary, second, assay="rnaseq")
 
 
 def _echo_concordance(concordance: list | None) -> None:
