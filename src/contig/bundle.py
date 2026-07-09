@@ -11,7 +11,8 @@ import json
 import os
 from pathlib import Path
 
-from contig.models import ReferenceIdentity, RunRecord, sha256_file
+from contig.models import AnnotationProvenance, ReferenceIdentity, RunRecord, sha256_file
+from contig.verification.annotation_structural import _open_text
 
 # The env var that, when set to a hex or base64 Ed25519 private key, makes
 # write_bundle emit a detached signature sidecar next to the record. Absent or
@@ -107,6 +108,45 @@ def compute_reference_identity(
         fasta_sha256=_hash(fasta),
         gtf_sha256=_hash(gtf),
     )
+
+
+def _parse_annotation_header(header_lines: list[str]) -> "AnnotationProvenance | None":
+    """Parse VEP/SnpEff tool + version from a VCF's header lines, or None."""
+    for line in header_lines:
+        if line.startswith("##VEP="):
+            # ##VEP="v110" time="..." cache="..."
+            value = line[len("##VEP="):].strip()
+            version = value.split()[0].strip('"') if value else None
+            return AnnotationProvenance(tool="VEP", version=version, raw_header=line.strip())
+        if line.startswith("##SnpEffVersion="):
+            value = line[len("##SnpEffVersion="):].strip().strip('"')
+            return AnnotationProvenance(
+                tool="SnpEff", version=value or None, raw_header=line.strip()
+            )
+    return None
+
+
+def compute_annotation_identity(run_dir: Path) -> "AnnotationProvenance | None":
+    """Locate an annotated VCF under run_dir and parse its annotation provenance.
+
+    Globs `**/*.vcf.gz`, reads only each file's header (up to `#CHROM`), and returns
+    the first VEP/SnpEff provenance found. None when no annotated VCF exists — never
+    a fabricated tool/version. Reproduce-safe: derived from the output VCF, not a
+    stored scratch path.
+    """
+    for vcf in sorted(Path(run_dir).glob("**/*.vcf.gz")):
+        header_lines: list[str] = []
+        with _open_text(vcf) as fh:
+            for line in fh:
+                if not line.startswith("#"):
+                    break
+                header_lines.append(line)
+                if line.startswith("#CHROM"):
+                    break
+        prov = _parse_annotation_header(header_lines)
+        if prov is not None:
+            return prov
+    return None
 
 
 def compute_output_checksums(results_dir: str | Path) -> dict[str, str]:

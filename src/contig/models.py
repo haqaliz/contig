@@ -203,6 +203,19 @@ class ReferenceIdentity(BaseModel):
     harmonized_direction: str | None = None
 
 
+class AnnotationProvenance(BaseModel):
+    """Which annotation tool + DB version a run's annotated VCF was produced by.
+
+    Parsed from the annotated VCF's own header (the tool records its version there),
+    captured for provenance. Research-use attribution only — this records WHAT tool
+    and DB reported, never a significance judgement.
+    """
+
+    tool: Literal["VEP", "SnpEff"]
+    version: str | None = None
+    raw_header: str | None = None
+
+
 # --- Self-healing loop (ARCHITECTURE §5) ---------------------------------------
 
 FailureClass = Literal[
@@ -281,6 +294,7 @@ class RunRecord(BaseModel):
     repair_history: list[RepairStep] = []
     resource_usage: list[TaskResource] = []
     reference_identity: ReferenceIdentity | None = None
+    annotation_identity: AnnotationProvenance | None = None
     harmonized_reference_direction: str | None = None
     # The resolved assay this run was executed as. Persisted so methods/benchmark
     # can read it directly instead of re-deriving from the pipeline string (which
