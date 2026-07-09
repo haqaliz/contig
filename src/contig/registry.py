@@ -38,6 +38,13 @@ REGISTRY: list[PipelineEntry] = [
         pipeline="nf-core/sarek",
         revision="3.5.1",
         description="Germline short-variant calling (GATK best-practices), research use.",
+        # Enable sarek's built-in annotation step (VEP -> CSQ) alongside the germline
+        # caller so a Contig germline run also produces an annotated VCF (capability
+        # C7). Research-use only: Contig verifies the annotation RAN, never adjudicates
+        # significance. Injected non-destructively by _inject_default_params (a user
+        # who sets their own --tools keeps it). Re-injected on rerun/resume, never
+        # stored as a derived param (same reproduce-safety as somatic's --tools).
+        default_params={"tools": "haplotypecaller,vep"},
     ),
     PipelineEntry(
         assay="scrnaseq",

@@ -74,10 +74,13 @@ def test_somatic_command_carries_tools_flag():
     assert cmd[cmd.index("--tools") + 1] == "strelka,mutect2"
 
 
-# (b) germline / RNA-seq keep an empty default => no --tools -----------------------
+# (b) germline injects annotation tools; RNA-seq keeps an empty default => no --tools
 
 
-def test_germline_sarek_run_injects_no_tools(tmp_path, monkeypatch):
+def test_germline_sarek_run_injects_annotation_tools(tmp_path, monkeypatch):
+    """Germline now enables sarek's built-in annotation step (VEP -> CSQ) alongside
+    the caller (capability C7), so a germline run injects --tools haplotypecaller,vep
+    — mirroring how somatic injects strelka,mutect2."""
     captured: list = []
     monkeypatch.setattr("contig.cli.self_heal_run", _self_heal_params_spy(captured))
     result = runner.invoke(
@@ -87,7 +90,7 @@ def test_germline_sarek_run_injects_no_tools(tmp_path, monkeypatch):
     )
     assert result.exit_code == 0, result.output
     assert captured and captured[0] is not None
-    assert "tools" not in captured[0]
+    assert captured[0].get("tools") == "haplotypecaller,vep"
 
 
 def test_rnaseq_run_injects_no_tools(tmp_path, monkeypatch):
@@ -163,5 +166,7 @@ def test_inject_default_params_unregistered_assay_is_noop():
 def test_pipeline_entry_default_params_empty_by_default():
     # every non-somatic entry keeps an empty default (no behavior change)
     assert select_pipeline("rnaseq").default_params == {}
-    assert select_pipeline("variant_calling").default_params == {}
+    # Germline now enables sarek's built-in annotation step (VEP) alongside the
+    # caller (capability C7) — no longer an empty default.
+    assert select_pipeline("variant_calling").default_params == {"tools": "haplotypecaller,vep"}
     assert select_pipeline("somatic_variant_calling").default_params == {"tools": "strelka,mutect2"}
