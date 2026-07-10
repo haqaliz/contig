@@ -6,6 +6,59 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Research-use variant annotation: somatic gate + plausibility** (capability C7,
+  M2 + M3 — the somatic and biological-plausibility follow-ons to M1's germline
+  structural verify). Two slices:
+  - **M2 — somatic annotation enablement + gate.** The `somatic_variant_calling`
+    registry entry now enables sarek's annotation step too: `default_params`
+    widens `tools` from `strelka,mutect2` to `strelka,mutect2,vep`, injected
+    non-destructively (a user's own `--tools` wins) and re-applied on
+    rerun/resume — the same seam M1 used for germline. The M1 structural
+    verifier (`annotation_present`/`annotation_complete`) and the
+    `AnnotationProvenance` capture are now gated to a new `VARIANT_ASSAYS`
+    constant covering **both** `variant_calling` and `somatic_variant_calling`,
+    so a somatic run's annotated VCF is verified identically to germline.
+    Provenance capture at `_finalize` is now gated to the two variant assays
+    (previously unconditional) — a tightening for every other assay; unchanged
+    for both variant assays, and never dropped for a genuine variant run even
+    when the assay can't be resolved (falls back to attempting capture).
+  - **M3 — annotation plausibility, both assays.** A new
+    `verification/annotation_plausibility.py` parses the consequence terms out
+    of the VEP `CSQ` or SnpEff `ANN` INFO field (the CSQ subfield index is
+    resolved from the header `Format:` string; ANN uses SnpEff's fixed layout;
+    multi-transcript comma-separated entries and `&`-joined terms are both
+    handled) and computes two metrics over the records that carry the field:
+    `real_consequence_fraction` (share whose most-severe consequence is a real,
+    non-intergenic term) and `intergenic_fraction`. Each variant collapses to a
+    single most-severe consequence via a small fixed severity ordering; an
+    unknown non-empty term ranks as real, never as intergenic. A new
+    WARN-capped `ANNOTATION_PLAUSIBILITY_PACK` (not registered in
+    `_RULE_PACKS`) drives two checks wired into `_discover_qc` for both variant
+    assays: `annotation_real_fraction` (WARN below 0.10) and
+    `annotation_consequence_distribution` (WARN above 0.95 intergenic — the
+    "~100%-intergenic" smell). The annotated VCF is located once and fed to
+    both the structural and plausibility verifiers, avoiding a duplicate scan.
+  - **Honest contract:** the bands are **uncalibrated engineering defaults**,
+    deliberately loose so a legitimate high-intergenic run doesn't cry wolf;
+    at most WARN, never FAIL, no exit-code change. Every uncomputable/absent
+    path — no annotated VCF, an unresolvable CSQ `Format:`, zero annotated
+    records — is UNVERIFIED, never a false pass. Additive to the verdict only:
+    no new `FailureClass`, model, or persisted-record change; `eval-guard`/
+    `heal-guard` baselines untouched. Research-use only: Contig verifies the
+    annotation ran plausibly and never adjudicates pathogenicity — the
+    consequence-distribution check is a statistical sanity signal, not a
+    per-variant biological or clinical judgement.
+  - **Carried live-cache caveat (same as M1):** enabling `vep` makes sarek emit
+    an annotated VCF, but a live run may still need a `--vep_cache`/
+    `--download_cache` or a `--step annotate` entry point that Contig does not
+    yet wire — when annotation didn't run, both verifiers degrade to
+    UNVERIFIED honestly. No real VEP/SnpEff/sarek run in CI; synthetic gzipped
+    VCF fixtures only. **Deferred:** VEP-vs-SnpEff cross-tool annotation
+    concordance (M4), surfacing + C6 eval fold-in (M5), FAIL severity until
+    real-data calibration, and research prioritization.
+
 ## [0.25.0] - 2026-07-10
 
 ### Added

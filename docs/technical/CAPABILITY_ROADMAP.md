@@ -574,7 +574,7 @@ held-out-accuracy trend over corpus/loop versions.
 
 ---
 
-## C7. Research-use variant annotation & prioritization  ·  M1 SHIPPED (Unreleased) — germline structural verify + provenance; somatic (M2), plausibility (M3), VEP-vs-SnpEff concordance (M4), surface+eval (M5) pending
+## C7. Research-use variant annotation & prioritization  ·  M1 + M2 + M3 SHIPPED (Unreleased) — germline structural verify + provenance, somatic gate, annotation plausibility (both assays); VEP-vs-SnpEff concordance (M4), surface+eval (M5) pending
 
 Add an **annotation** assay: run the annotation step (VEP / SnpEff against ClinVar, gnomAD)
 that attaches functional and population context to a call set, and **verify it ran correctly
@@ -602,6 +602,38 @@ wire — when that annotation output is absent the verifier reports UNVERIFIED, 
 cache surfaces honestly rather than as a silent success. Test-first; no real VEP/SnpEff/sarek
 run in CI.
 
+**Shipped (M2 slice, Unreleased):** the somatic assay gets the same structural verifier and
+provenance capture as germline. The `somatic_variant_calling` registry entry's
+`default_params` widens `tools` from `strelka,mutect2` to `strelka,mutect2,vep`, injected
+non-destructively (a user's own `--tools` wins) and re-applied on rerun/resume — the same
+seam M1 used. The shipped M1 structural verifier and `AnnotationProvenance` capture are now
+gated to a new `VARIANT_ASSAYS` constant covering both `variant_calling` and
+`somatic_variant_calling`, so a somatic run's annotated VCF is verified identically to
+germline. Provenance capture at `_finalize` is now gated to the two variant assays (was
+unconditional) — a tightening for every other assay; unchanged for both variant assays, and
+never dropped for a genuine variant run even when the assay can't be resolved (falls back to
+attempting capture rather than silently skipping it).
+
+**Shipped (M3 slice, Unreleased):** annotation plausibility, both assays. A new
+`verification/annotation_plausibility.py` parses the consequence terms out of the VEP `CSQ`
+or SnpEff `ANN` INFO field (the CSQ subfield index is resolved from the header `Format:`
+string; ANN uses SnpEff's fixed layout; multi-transcript comma-separated entries and
+`&`-joined terms are both handled) and computes two metrics over the records carrying the
+field: `real_consequence_fraction` (share whose most-severe consequence is a real,
+non-intergenic term) and `intergenic_fraction`, collapsing each variant to a single
+most-severe consequence via a small fixed severity ordering (an unknown non-empty term ranks
+as real, never intergenic). A new WARN-capped `ANNOTATION_PLAUSIBILITY_PACK` (not registered
+in `_RULE_PACKS`) drives two checks wired into `_discover_qc` for both variant assays:
+`annotation_real_fraction` (WARN below 0.10) and `annotation_consequence_distribution` (WARN
+above 0.95 intergenic — the "~100%-intergenic" smell). The annotated VCF is located once and
+fed to both the structural and plausibility verifiers. The bands are uncalibrated engineering
+defaults, deliberately loose so a legitimate high-intergenic run doesn't cry wolf; at most
+WARN, never FAIL, no exit-code change; every uncomputable/absent path — no annotated VCF, an
+unresolvable CSQ `Format:`, zero annotated records — is UNVERIFIED, never a false pass.
+Research-use only: a statistical sanity signal on the consequence distribution, never a
+per-variant biological/clinical judgement. Same carried live-cache caveat as M1; no real
+VEP/SnpEff/sarek run in CI.
+
 **Why it is moat.** A new assay that compounds the failure/verification corpus (moat #2)
 while reusing the shipped three verification axes — structural (C4-style), plausibility
 (C3-style), concordance (C1-style) — and the C5 reference-identity provenance pattern. No new
@@ -615,10 +647,11 @@ better, never redundant (`CLAUDE.md` #2/#3).
   verifies the annotated VCF exists and every input variant carries an annotation record
   (`CSQ`/`ANN` INFO present); annotation tool + cache/DB version captured into provenance
   (C5 pattern) and rendered in `contig methods`/HTML. UNVERIFIED (never PASS) when absent.
-- **M2 — same verifier, somatic.** Gate M1's structural verifier + provenance to
-  `somatic_variant_calling` (Mutect2/Strelka2 VCFs). New assay gate only.
-- **M3 — annotation plausibility (C3-style, both assays).** Annotated-fraction band +
-  consequence-type distribution sanity; WARN-capped, UNVERIFIED-when-absent.
+- **M2 — same verifier, somatic. SHIPPED (Unreleased).** Gate M1's structural verifier +
+  provenance to `somatic_variant_calling` (Mutect2/Strelka2 VCFs). New assay gate only.
+- **M3 — annotation plausibility (C3-style, both assays). SHIPPED (Unreleased).**
+  Annotated-fraction band + consequence-type distribution sanity; WARN-capped,
+  UNVERIFIED-when-absent.
 - **M4 — annotation concordance (C1-style, both assays).** VEP vs SnpEff per-variant
   consequence / gene-symbol agreement as corroboration; at most WARN, `unverified` below a
   shared-record threshold.
@@ -651,7 +684,7 @@ ever. See [`../planning/variant-annotation-assay/prd.md`](../planning/variant-an
 | C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased); Strelka2-native VAF, FAIL severity + PON reference wiring deferred | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
 | C6 | Eval flywheel as a continuous loop | M6 (detector held-out guard slice 1 SHIPPED, Unreleased — honestly 0.833/10:12, two classes structurally unreachable; repair-loop outcome-match guard slice 2 SHIPPED, Unreleased — honestly 1.0/7:7, 5 classes covered; both wired into CI; folding C1/C3 signals + held-out-accuracy trend pending) | Compounding accuracy from real runs |
-| C7 | Research-use variant annotation & prioritization | M1 SHIPPED (Unreleased) — germline structural verify + provenance; somatic (M2), plausibility (M3), VEP-vs-SnpEff concordance (M4), surface+eval (M5) pending (germline `annotation_present`/`annotation_complete` structural checks, `AnnotationProvenance` tool+DB-version capture, `--tools …,vep` enablement, WARN-capped/UNVERIFIED-when-absent; live run may still need a VEP/SnpEff cache Contig does not yet wire — absent annotation degrades to UNVERIFIED, never a false pass; verify-only, prioritization deferred) | Disease-research breadth on-thesis, new corpus; run+verify annotation, never a clinical verdict |
+| C7 | Research-use variant annotation & prioritization | M1 + M2 + M3 SHIPPED (Unreleased) — germline structural verify + provenance, somatic annotation gate, annotation plausibility (both assays); VEP-vs-SnpEff concordance (M4), surface+eval (M5) pending (germline+somatic `annotation_present`/`annotation_complete` structural checks via `VARIANT_ASSAYS`, `AnnotationProvenance` tool+DB-version capture, `--tools …,vep` enablement on both assays, `annotation_real_fraction`/`annotation_consequence_distribution` plausibility checks, all WARN-capped/UNVERIFIED-when-absent; live run may still need a VEP/SnpEff cache Contig does not yet wire — absent annotation degrades to UNVERIFIED, never a false pass; verify-only, prioritization deferred) | Disease-research breadth on-thesis, new corpus; run+verify annotation, never a clinical verdict |
 
 **One-line mantra:** make every verdict harder to fool, recover more failures
 without a human, and let every run make the next verdict smarter.
