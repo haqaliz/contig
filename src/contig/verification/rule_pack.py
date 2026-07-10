@@ -163,16 +163,23 @@ METHYLSEQ_RULE_PACK: list[dict] = [
 ]
 
 
-# 16S/ITS amplicon per-sample QC (nf-core/ampliseq, DADA2). Per-sample summary
-# metrics from the pipeline's MultiQC report / DADA2 stats:
-#   percent_retained: fraction of input reads surviving DADA2 filter+denoise+merge
-#       +chimera removal; the headline "ran but wrong" signal for amplicon. The
-#       exact MultiQC slug is unverified (DADA2 reports per-step counts that the
-#       pipeline summarizes); we key off the documented retained-fraction quantity.
+# 16S/ITS amplicon per-sample QC (nf-core/ampliseq, DADA2). The exact MultiQC
+# general-stats slug for these metrics is unverified (DADA2 reports per-step
+# counts that the pipeline summarizes, not a stable general-stats field), so
+# `runner._discover_qc`'s ampliseq gate ingests DADA2's own on-disk stats
+# artifacts directly via `verification/ampliseq_metrics.py`, bypassing MultiQC
+# entirely (see `_DEDICATED_METRIC_ASSAYS`). Per-metric DADA2 source:
+#   percent_retained: fraction of input reads surviving DADA2 filter+denoise
+#       +merge+chimera removal; the headline "ran but wrong" signal for
+#       amplicon. Computed as nonchim / input * 100 from DADA2's
+#       `overall_summary.tsv` track table (`parse_dada2_overall_summary`).
 #   asv_count: number of ASVs inferred for the sample (too few means denoising
-#       collapsed real diversity or the sample was near-empty). Slug unverified.
+#       collapsed real diversity or the sample was near-empty). Computed as
+#       the count of non-zero rows in the sample's column of the ASV table
+#       (`*ASV_table*`, `parse_asv_table`).
 #   input_reads: raw read depth for the sample (a too-shallow sample cannot be
-#       trusted regardless of retention). Slug unverified.
+#       trusted regardless of retention). Read straight from the `input`
+#       column of `overall_summary.tsv` (`parse_dada2_overall_summary`).
 # Thresholds are illustrative, tunable engineering defaults, not biological claims.
 AMPLISEQ_RULE_PACK: list[dict] = [
     {

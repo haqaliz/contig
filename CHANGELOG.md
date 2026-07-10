@@ -51,6 +51,49 @@ All notable changes to Contig are recorded here. The format follows
     committed realistic Bismark report fixture set — no real `nf-core/methylseq` run
     in CI.
 
+- **Ampliseq DADA2 QC ingestion — the dormant amplicon verdict now fires**
+  (capability C3, biological-plausibility verification — the `ampliseq` slice of
+  `assay-qc-verdict-fires`, fast-follow #2 on the seam the methylseq slice
+  established; `mag` remains hollow, deferred). `ampliseq` already carried a
+  biological QC pack (`AMPLISEQ_RULE_PACK`: DADA2 read retention, ASV count,
+  sample read depth), but like methylseq it **silently no-oped on every real
+  run**: the exact MultiQC general-stats slug for these metrics is unverified,
+  and `nf-core/ampliseq` does not reliably route them there. This slice makes the
+  checks **fire** by ingesting DADA2's own on-disk stats artifacts:
+  - A new `verification/ampliseq_metrics.py` with deterministic, stdlib-only
+    parsers: `parse_dada2_overall_summary` (header-driven TSV; `input_reads` from
+    the `input` column, `percent_retained` = `nonchim / input * 100`, omitted when
+    `input` is zero/absent/non-numeric; column names matched case-insensitively
+    with common nf-core/ampliseq naming variants tolerated) and `parse_asv_table`
+    (rows=ASVs, columns=samples; `asv_count` = number of ASV rows with a non-zero
+    count in a sample's column, with `sequence`/id/taxonomy metadata columns
+    excluded by name and, as a second guard, by failing to parse as numeric). The
+    **structural difference from methylseq's one-file-per-sample Bismark
+    reports**: DADA2's artifacts are multi-sample files, so both parsers return
+    `{sample: {slug: value}}` directly for every sample in the file. A metric
+    that is absent or non-numeric is omitted everywhere, never coerced to 0.
+  - A dedicated `_discover_qc` gate (`assay == "ampliseq"`, mirroring the
+    methylseq gate) whose `_locate_ampliseq_qc` rglobs `overall_summary.tsv` and
+    the ASV table and **merges the two parsers' per-sample dicts by sample key**
+    (`setdefault(sample, {}).update(...)`) before evaluating
+    `AMPLISEQ_RULE_PACK`. A located sample yielding zero usable metrics emits one
+    explicit `ampliseq_qc:<sample>` **UNVERIFIED** rather than a silent no-op; no
+    artifact at all skips silently (structural QC owns a missing required
+    output). A sample with only `overall_summary.tsv` (no ASV table) evaluates
+    read-retention and read-depth and is **not** forced into a false
+    whole-sample UNVERIFIED.
+  - **Single authoritative source**: `ampliseq` joins `methylseq` in
+    `_DEDICATED_METRIC_ASSAYS`, so a check can never double-emit if a future
+    MultiQC build ever carries a matching slug. `ampliseq` stays registered in
+    `_RULE_PACKS`/`rule_pack_for` (unchanged contract) — only metric *delivery*
+    moved to the dedicated gate.
+  - No band re-calibration (illustrative engineering defaults, unchanged); no
+    change to `mag` (still hollow), `scrnaseq`, `rnaseq`, `methylseq`, or the
+    variant paths. Additive to the verdict only: no `FailureClass`, model, or
+    persisted-record change; no new dependency. Local, deterministic, no
+    raw-read egress. Built test-first with a committed realistic DADA2 stats
+    fixture set — no real `nf-core/ampliseq` run in CI.
+
 ## [0.28.0] - 2026-07-11
 
 ### Added
