@@ -11,7 +11,7 @@ import hashlib
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, field_validator
 
 
 def sha256_file(path: str | Path, chunk_size: int = 1 << 20) -> str:
@@ -294,7 +294,11 @@ class RunRecord(BaseModel):
     repair_history: list[RepairStep] = []
     resource_usage: list[TaskResource] = []
     reference_identity: ReferenceIdentity | None = None
-    annotation_identity: AnnotationProvenance | None = None
+    # M4 enables BOTH VEP and SnpEff on the variant assays, so provenance is a
+    # list (one entry per distinct annotator found). Pre-M4 bundles serialized
+    # this field as a SINGLE object -- the validator below normalizes that
+    # legacy shape (and a bare None) into a list so old bundles still load.
+    annotation_identity: list[AnnotationProvenance] = Field(default_factory=list)
     harmonized_reference_direction: str | None = None
     # The resolved assay this run was executed as. Persisted so methods/benchmark
     # can read it directly instead of re-deriving from the pipeline string (which
@@ -302,6 +306,22 @@ class RunRecord(BaseModel):
     # sarek). Optional/defaulted so legacy bundles written before this field still
     # load and fall back to the pipeline-derived assay.
     assay: str | None = None
+
+    @field_validator("annotation_identity", mode="before")
+    @classmethod
+    def _normalize_annotation_identity(cls, value: object) -> object:
+        """Back-compat load-time guarantee for pre-M4 bundles (PRD contract B).
+
+        Pre-M4 serialized `annotation_identity` as a single object (dict or
+        AnnotationProvenance); M4 stores a list of them. Normalize here so
+        old bundles still deserialize, verify, and reproduce: None -> [],
+        a single object -> a one-element list, an existing list -> unchanged.
+        """
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        return [value]
 
     @computed_field  # serialized into run_record.json so the dashboard reads it directly
     @property

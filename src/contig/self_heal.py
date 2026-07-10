@@ -1274,7 +1274,9 @@ def _finalize(
     # predating both fields, or a pipeline the registry doesn't know), fall back
     # to attempting the capture rather than silently dropping provenance for a
     # possibly-genuine variant run — compute_annotation_identity itself already
-    # degrades to None when nothing is found, so this can never fabricate one.
+    # degrades to an empty list when nothing is found, so this can never
+    # fabricate one. M4: the list can hold BOTH a VEP and a SnpEff entry when
+    # both annotators ran (deduped by tool; see compute_annotation_identity).
     resolved_assay = record.assay or assay_for_pipeline(record.pipeline)
     if resolved_assay is None or resolved_assay in VARIANT_ASSAYS:
         record.annotation_identity = compute_annotation_identity(run_dir)

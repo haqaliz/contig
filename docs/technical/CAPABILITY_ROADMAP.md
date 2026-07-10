@@ -574,7 +574,7 @@ held-out-accuracy trend over corpus/loop versions.
 
 ---
 
-## C7. Research-use variant annotation & prioritization  ·  M1 + M2 + M3 SHIPPED (Unreleased) — germline structural verify + provenance, somatic gate, annotation plausibility (both assays); VEP-vs-SnpEff concordance (M4), surface+eval (M5) pending
+## C7. Research-use variant annotation & prioritization  ·  M1 + M2 + M3 + M4 SHIPPED (Unreleased) — germline structural verify + provenance, somatic gate, annotation plausibility (both assays), VEP-vs-SnpEff concordance (both assays); surface+eval (M5) pending
 
 Add an **annotation** assay: run the annotation step (VEP / SnpEff against ClinVar, gnomAD)
 that attaches functional and population context to a call set, and **verify it ran correctly
@@ -652,9 +652,27 @@ better, never redundant (`CLAUDE.md` #2/#3).
 - **M3 — annotation plausibility (C3-style, both assays). SHIPPED (Unreleased).**
   Annotated-fraction band + consequence-type distribution sanity; WARN-capped,
   UNVERIFIED-when-absent.
-- **M4 — annotation concordance (C1-style, both assays).** VEP vs SnpEff per-variant
-  consequence / gene-symbol agreement as corroboration; at most WARN, `unverified` below a
-  shared-record threshold.
+- **M4 — annotation concordance (C1-style, both assays). SHIPPED (Unreleased).** VEP vs
+  SnpEff per-variant agreement as corroboration, auto-run in the verdict (no CLI flag). A new
+  `verification/annotation_concordance.py` enables SnpEff alongside VEP
+  (`default_params.tools` → `…,vep,snpeff` on both variant assays, injected non-destructively,
+  re-applied on rerun/resume) so one sarek run emits both annotation sets, then emits two
+  `kind="concordance"` checks over shared variants keyed on `(CHROM,POS,REF,ALT)`:
+  `consequence_concordance` (most-severe-term agreement, **WARN-capped < 0.90, never FAIL**)
+  and `gene_symbol_concordance` (**informational-only, always PASS** — VEP/SnpEff symbol
+  sources diverge too much for an honest WARN). Both reuse the shipped M3 CSQ/ANN most-severe-
+  consequence parser (M3's single-key driver is untouched — M4 owns its own dual-key parse).
+  Discovery handles a **two-file** layout (separate VEP/SnpEff VCFs) and a **single-VCF-both**
+  layout (one VCF with both `CSQ` and `ANN`), recording the detected layout. Gene-symbol
+  normalization is fixed and minimal (case-fold + strip, empty/`.` → unresolvable, no alias
+  table); resolvable-only denominator. `RunRecord.annotation_identity` is now a **list**
+  capturing both annotators' tool + version (a back-compat validator keeps pre-M4 single-object
+  bundles loading), rendered in `contig methods` + an HTML provenance panel. Honest throughout:
+  at most WARN, never changes the `verify` exit code; only-one-annotator (e.g. missing SnpEff
+  cache), annotation absent, too few shared/resolvable variants, or an ambiguous layout →
+  **UNVERIFIED, never a false pass**. Test-first, no real VEP/SnpEff/sarek in CI.
+- **M5 — surface + eval fold-in.** "Corroborated by" line, DB-version provenance in the
+  reproduce bundle, annotation outcomes folded into the C6 eval corpus.
 - **M5 — surface + eval fold-in.** "Corroborated by" line, DB-version provenance in the
   reproduce bundle, annotation outcomes folded into the C6 eval corpus.
 
@@ -684,7 +702,7 @@ ever. See [`../planning/variant-annotation-assay/prd.md`](../planning/variant-an
 | C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased); Strelka2-native VAF, FAIL severity + PON reference wiring deferred | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
 | C6 | Eval flywheel as a continuous loop | M6 (detector held-out guard slice 1 SHIPPED, Unreleased — honestly 0.833/10:12, two classes structurally unreachable; repair-loop outcome-match guard slice 2 SHIPPED, Unreleased — honestly 1.0/7:7, 5 classes covered; both wired into CI; folding C1/C3 signals + held-out-accuracy trend pending) | Compounding accuracy from real runs |
-| C7 | Research-use variant annotation & prioritization | M1 + M2 + M3 SHIPPED (Unreleased) — germline structural verify + provenance, somatic annotation gate, annotation plausibility (both assays); VEP-vs-SnpEff concordance (M4), surface+eval (M5) pending (germline+somatic `annotation_present`/`annotation_complete` structural checks via `VARIANT_ASSAYS`, `AnnotationProvenance` tool+DB-version capture, `--tools …,vep` enablement on both assays, `annotation_real_fraction`/`annotation_consequence_distribution` plausibility checks, all WARN-capped/UNVERIFIED-when-absent; live run may still need a VEP/SnpEff cache Contig does not yet wire — absent annotation degrades to UNVERIFIED, never a false pass; verify-only, prioritization deferred) | Disease-research breadth on-thesis, new corpus; run+verify annotation, never a clinical verdict |
+| C7 | Research-use variant annotation & prioritization | M1 + M2 + M3 + M4 SHIPPED (Unreleased) — germline structural verify + provenance, somatic annotation gate, annotation plausibility (both assays), VEP-vs-SnpEff concordance (both assays: `consequence_concordance` WARN-capped + `gene_symbol_concordance` informational, auto in the verdict, both VCF layouts, annotator-version provenance pair); surface+eval (M5) pending (germline+somatic `annotation_present`/`annotation_complete` structural checks via `VARIANT_ASSAYS`, `AnnotationProvenance` tool+DB-version capture, `--tools …,vep` enablement on both assays, `annotation_real_fraction`/`annotation_consequence_distribution` plausibility checks, all WARN-capped/UNVERIFIED-when-absent; live run may still need a VEP/SnpEff cache Contig does not yet wire — absent annotation degrades to UNVERIFIED, never a false pass; verify-only, prioritization deferred) | Disease-research breadth on-thesis, new corpus; run+verify annotation, never a clinical verdict |
 
 **One-line mantra:** make every verdict harder to fool, recover more failures
 without a human, and let every run make the next verdict smarter.

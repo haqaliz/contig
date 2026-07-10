@@ -6,6 +6,44 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Research-use variant annotation: VEP-vs-SnpEff concordance** (capability C7, M4 —
+  the cross-tool corroboration axis for the annotation assay, on both `variant_calling`
+  and `somatic_variant_calling`). This applies the C1 concordance primitive to
+  annotation: a second independent annotator runs on the same call set and their
+  per-variant agreement corroborates that annotation ran sanely. Slices:
+  - **Enable SnpEff alongside VEP.** The two variant assays' `default_params.tools`
+    widen from `…,vep` to `…,vep,snpeff` (germline `haplotypecaller,vep,snpeff`; somatic
+    `strelka,mutect2,vep,snpeff`), injected non-destructively (a user's own `--tools`
+    still wins) and re-applied on rerun/resume through the same seam M1/M2 used — so one
+    sarek run emits both annotation sets.
+  - **Two concordance metrics**, auto-run in the verdict via `_discover_qc` (no CLI flag,
+    the somatic-auto path), in a new `verification/annotation_concordance.py`:
+    `consequence_concordance` — the fraction of shared variants whose most-severe
+    consequence term agrees, **WARN-capped (< 0.90), never FAIL**; and
+    `gene_symbol_concordance` — the fraction whose annotated gene symbol agrees,
+    **informational-only (always PASS)**, because VEP/SnpEff symbol sources diverge
+    enough that a WARN would only train users to ignore the signal. Both reuse the
+    shipped M3 CSQ/ANN most-severe-consequence parser rather than forking it (M3's
+    single-key driver is untouched — M4 owns its own dual-key parse).
+  - **Both VCF layouts.** Discovery keys on header-declared annotation keys (path
+    component as tie-break) and handles both a **two-file** layout (separate VEP and
+    SnpEff VCFs, joined on `(CHROM,POS,REF,ALT)`) and a **single-VCF-both** layout (one
+    VCF carrying both `CSQ` and `ANN`), recording which layout it detected in the
+    message.
+  - **Provenance pair.** `RunRecord.annotation_identity` becomes a list capturing BOTH
+    annotators' tool + version (deduped by tool), rendered in `contig methods` and a new
+    HTML provenance panel; a mode="before" validator keeps pre-M4 single-object bundles
+    loading and reproducing.
+  - **Honest contract throughout:** concordance is at most WARN and never changes the
+    `verify` exit code; every uncomputable/absent path — only one annotator ran (e.g. a
+    missing SnpEff cache), annotation absent, too few shared/resolvable variants, an
+    ambiguous multi-file layout — is **UNVERIFIED, never a false pass**. Research-use
+    only: a corroboration signal, never a pathogenicity/clinical verdict. Test-first with
+    synthetic CSQ/ANN fixtures; no real VEP/SnpEff/sarek run in CI. Milestone M5 (verdict-
+    card "corroborated by" line, DB-cache provenance, eval fold-in) remains pending.
+
 ## [0.26.0] - 2026-07-10
 
 ### Added

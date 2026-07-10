@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contig.models import (
+    AnnotationProvenance,
     Diagnosis,
     ExecutionTarget,
     Patch,
@@ -495,6 +496,53 @@ def test_html_report_omits_reference_identity_section_when_none() -> None:
     )
     html = render_run_report_html(record)
     assert "Reference identity" not in html
+
+
+def test_html_report_omits_annotation_identity_section_when_empty() -> None:
+    # _full_record() leaves annotation_identity at its default (empty list) —
+    # the section must not be rendered at all.
+    html = render_run_report_html(_full_record())
+    assert "Annotation identity" not in html
+
+
+def test_html_report_shows_annotation_identity_section_for_single_tool() -> None:
+    record = RunRecord(
+        run_id="r-ann-single",
+        pipeline="nf-core/sarek",
+        pipeline_revision="3.5.1",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="VEP", status="COMPLETED", exit=0)],
+        annotation_identity=[AnnotationProvenance(tool="VEP", version="v110")],
+    )
+    html = render_run_report_html(record)
+    # Section heading must be present
+    assert "Annotation identity" in html
+    # Tool and version must appear
+    assert "VEP" in html
+    assert "v110" in html
+
+
+def test_html_report_shows_annotation_identity_rows_for_both_tools() -> None:
+    record = RunRecord(
+        run_id="r-ann-both",
+        pipeline="nf-core/sarek",
+        pipeline_revision="3.5.1",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="VEP", status="COMPLETED", exit=0)],
+        annotation_identity=[
+            AnnotationProvenance(tool="VEP", version="v110"),
+            AnnotationProvenance(tool="SnpEff", version="5.2"),
+        ],
+    )
+    html = render_run_report_html(record)
+    assert "Annotation identity" in html
+    # Both tools and both versions must appear as rows
+    assert "VEP" in html
+    assert "v110" in html
+    assert "SnpEff" in html
+    assert "5.2" in html
 
 
 def test_html_report_escapes_user_text() -> None:

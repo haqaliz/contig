@@ -79,13 +79,26 @@ def _reference_clause(record: RunRecord) -> str:
 
 
 def _annotation_clause(record: RunRecord) -> str:
-    """A clause attributing the annotation tool + DB version, if recorded."""
-    ai = record.annotation_identity
-    if ai is None:
+    """A clause attributing the annotation tool(s) + DB version(s), if recorded.
+
+    M4 enables both VEP and SnpEff on the variant assays, so a run may carry
+    more than one provenance entry; each renders as "Tool version" joined by
+    "; " (e.g. "VEP v110; SnpEff 5.1"). Defensive against a raw single-object
+    shape (the pre-M4 legacy serialization) in case this field is ever read
+    before the model validator has normalized it.
+    """
+    provenances = record.annotation_identity
+    if provenances is None:
         return ""
-    version = f" {ai.version}" if ai.version else ""
+    if not isinstance(provenances, list):
+        provenances = [provenances]
+    if not provenances:
+        return ""
+    rendered = "; ".join(
+        f"{ai.tool}{f' {ai.version}' if ai.version else ''}" for ai in provenances
+    )
     return (
-        f" Variant annotation was performed with {ai.tool}{version}; annotations are"
+        f" Variant annotation was performed with {rendered}; annotations are"
         " reported as produced by that tool and its databases (research use)."
     )
 

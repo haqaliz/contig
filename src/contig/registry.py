@@ -27,30 +27,35 @@ REGISTRY: list[PipelineEntry] = [
         revision="3.5.1",
         description="Somatic tumor–normal short-variant calling (nf-core/sarek), research use.",
         # Somatic sarek needs an explicit tool selection or it does nothing somatic;
-        # this default injects `--tools strelka,mutect2,vep` at dispatch, enabling
-        # sarek's built-in annotation step (VEP -> CSQ) alongside the somatic
-        # callers (capability C7, M2: somatic gets the SAME annotation structural
-        # verifier + provenance capture already shipped for germline in M1).
+        # this default injects `--tools strelka,mutect2,vep,snpeff` at dispatch,
+        # enabling BOTH of sarek's built-in annotation steps (VEP -> CSQ and
+        # SnpEff -> ANN) alongside the somatic callers (capability C7, M2: somatic
+        # gets the SAME annotation structural verifier + provenance capture already
+        # shipped for germline in M1; C7 M4: running both annotators lets a later
+        # verifier compare their calls for cross-tool annotation concordance).
         # R5 (honest scope): this only assembles the command — a real Mutect2 run
         # typically also needs a panel-of-normals / germline resource that
         # resolve_reference does not wire; that reference wiring is deferred (PRD
         # Out-of-Scope / OQ2). Injected non-destructively by _inject_default_params
         # (a user who sets their own --tools keeps it); re-injected on
         # rerun/resume, never stored as a derived param.
-        default_params={"tools": "strelka,mutect2,vep"},
+        default_params={"tools": "strelka,mutect2,vep,snpeff"},
     ),
     PipelineEntry(
         assay="variant_calling",
         pipeline="nf-core/sarek",
         revision="3.5.1",
         description="Germline short-variant calling (GATK best-practices), research use.",
-        # Enable sarek's built-in annotation step (VEP -> CSQ) alongside the germline
-        # caller so a Contig germline run also produces an annotated VCF (capability
-        # C7). Research-use only: Contig verifies the annotation RAN, never adjudicates
-        # significance. Injected non-destructively by _inject_default_params (a user
-        # who sets their own --tools keeps it). Re-injected on rerun/resume, never
-        # stored as a derived param (same reproduce-safety as somatic's --tools).
-        default_params={"tools": "haplotypecaller,vep"},
+        # Enable BOTH of sarek's built-in annotation steps (VEP -> CSQ and
+        # SnpEff -> ANN) alongside the germline caller so a Contig germline run
+        # produces a dual-annotated VCF (capability C7; C7 M4: running both
+        # annotators lets a later verifier compare their calls for cross-tool
+        # annotation concordance). Research-use only: Contig verifies the
+        # annotation RAN, never adjudicates significance. Injected
+        # non-destructively by _inject_default_params (a user who sets their own
+        # --tools keeps it). Re-injected on rerun/resume, never stored as a
+        # derived param (same reproduce-safety as somatic's --tools).
+        default_params={"tools": "haplotypecaller,vep,snpeff"},
     ),
     PipelineEntry(
         assay="scrnaseq",
