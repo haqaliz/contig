@@ -574,7 +574,7 @@ held-out-accuracy trend over corpus/loop versions.
 
 ---
 
-## C7. Research-use variant annotation & prioritization  ·  PLANNED (founder demand-pull)
+## C7. Research-use variant annotation & prioritization  ·  M1 SHIPPED (Unreleased) — germline structural verify + provenance; somatic (M2), plausibility (M3), VEP-vs-SnpEff concordance (M4), surface+eval (M5) pending
 
 Add an **annotation** assay: run the annotation step (VEP / SnpEff against ClinVar, gnomAD)
 that attaches functional and population context to a call set, and **verify it ran correctly
@@ -583,6 +583,24 @@ Layer-2. Contig surfaces *what the databases reported, attributed to the tool an
 version, as research output*; it never adjudicates pathogenicity, issues a clinical verdict,
 or makes a diagnosis. See the bright line in [`USE_CASE_UNIVERSE.md`](USE_CASE_UNIVERSE.md)
 (lines 33–48, 75–78) and `CLAUDE.md` constraint #4.
+
+**Shipped (M1 slice, Unreleased):** the germline structural verifier is live. A new
+`verification/annotation_structural.py` reads the annotated VCF's bytes and emits two
+WARN-capped, `kind="structural"` checks — `annotation_present` (a `CSQ`/`ANN` field is
+declared and at least one record carries it) and `annotation_complete` (fraction of records
+carrying the annotation field; 1.0 → PASS, <1.0 → WARN) — degrading to UNVERIFIED (never a
+false pass) when no annotated VCF is found. The annotation tool + version is parsed straight
+from the VCF header into a new `AnnotationProvenance` model (C5 provenance pattern), attached
+at `_finalize` alongside `reference_identity` and rendered in `contig methods`. Enablement is
+one declarative `default_params={"tools": "haplotypecaller,vep"}` line on the germline
+`variant_calling` registry entry, injected non-destructively (a user's own `--tools` wins) and
+re-injected on rerun/resume. Research-use only: Contig verifies the annotation *executed*,
+never adjudicates significance. **Live-cache caveat:** enabling `--tools …,vep` makes sarek
+produce an annotated VCF, but a real run's annotation step may still require a VEP/SnpEff cache
+(`--vep_cache`/`--download_cache`) or a `--step annotate` entry point that Contig does not yet
+wire — when that annotation output is absent the verifier reports UNVERIFIED, so a missing
+cache surfaces honestly rather than as a silent success. Test-first; no real VEP/SnpEff/sarek
+run in CI.
 
 **Why it is moat.** A new assay that compounds the failure/verification corpus (moat #2)
 while reusing the shipped three verification axes — structural (C4-style), plausibility
@@ -633,7 +651,7 @@ ever. See [`../planning/variant-annotation-assay/prd.md`](../planning/variant-an
 | C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased); Strelka2-native VAF, FAIL severity + PON reference wiring deferred | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
 | C6 | Eval flywheel as a continuous loop | M6 (detector held-out guard slice 1 SHIPPED, Unreleased — honestly 0.833/10:12, two classes structurally unreachable; repair-loop outcome-match guard slice 2 SHIPPED, Unreleased — honestly 1.0/7:7, 5 classes covered; both wired into CI; folding C1/C3 signals + held-out-accuracy trend pending) | Compounding accuracy from real runs |
-| C7 | Research-use variant annotation & prioritization | PLANNED (founder demand-pull; germline-first: M1 enable+structural verify → M2 somatic → M3 plausibility → M4 VEP-vs-SnpEff concordance → M5 surface+eval; verify-only, prioritization deferred) | Disease-research breadth on-thesis, new corpus; run+verify annotation, never a clinical verdict |
+| C7 | Research-use variant annotation & prioritization | M1 SHIPPED (Unreleased) — germline structural verify + provenance; somatic (M2), plausibility (M3), VEP-vs-SnpEff concordance (M4), surface+eval (M5) pending (germline `annotation_present`/`annotation_complete` structural checks, `AnnotationProvenance` tool+DB-version capture, `--tools …,vep` enablement, WARN-capped/UNVERIFIED-when-absent; live run may still need a VEP/SnpEff cache Contig does not yet wire — absent annotation degrades to UNVERIFIED, never a false pass; verify-only, prioritization deferred) | Disease-research breadth on-thesis, new corpus; run+verify annotation, never a clinical verdict |
 
 **One-line mantra:** make every verdict harder to fool, recover more failures
 without a human, and let every run make the next verdict smarter.

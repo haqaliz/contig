@@ -6,6 +6,23 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Research-use variant annotation, germline structural verify** (capability C7, M1).
+  A Contig germline (`variant_calling`) run now enables nf-core/sarek's built-in
+  annotation step (VEP → `CSQ`) and verifies it ran: a new
+  `verification/annotation_structural.py` reports `annotation_present` and
+  `annotation_complete` (WARN-capped, UNVERIFIED when no annotated VCF is found —
+  never a false pass), and the annotation tool + version is parsed from the VCF
+  header into a new `AnnotationProvenance` record, rendered in `contig methods`.
+  Research-use only: Contig verifies the annotation EXECUTED, never adjudicates
+  pathogenicity. Enabling `--tools haplotypecaller,vep` makes sarek produce an
+  annotated VCF, but a live run's annotation step may still require a VEP/SnpEff
+  cache (`--vep_cache`/`--download_cache`) or a `--step annotate` entry point that
+  Contig does not yet wire — and when that annotation output is absent the verifier
+  degrades to UNVERIFIED (never a false pass), so a missing cache surfaces honestly
+  rather than as a silent success. Test-first; no real VEP/sarek run in CI.
+
 ## [0.24.0] - 2026-07-10
 
 ### Added
