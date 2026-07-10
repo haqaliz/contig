@@ -30,6 +30,8 @@ pass) when too few symbol pairs are resolvable on both sides.
 from __future__ import annotations
 
 import os
+from pathlib import Path
+from typing import Iterable
 
 from contig.models import QCResult
 from contig.verification.annotation_plausibility import (
@@ -371,3 +373,161 @@ def evaluate_gene_symbol_concordance(
             expected_range=None,
         )
     ]
+
+
+# --- run-level discovery + auto-wire (phase 4, C7 M4) ---------------------------
+#
+# Everything above is the PURE core (parsing + the two metric functions); this is
+# the run-level entry that DISCOVERS the annotation source(s) under a run dir and
+# auto-wires both metrics -- no CLI flag, no user input (the "somatic auto" path,
+# mirroring `somatic_concordance.evaluate_somatic_concordance_from_run` /
+# `select_caller_vcfs` exactly).
+
+
+def _declared_annotation_keys(vcf_path: str | os.PathLike) -> set[str]:
+    """Which of {"CSQ", "ANN"} the VCF's header DECLARES, or an empty set.
+
+    Unlike `annotation_structural._declared_key` (which returns only the FIRST
+    key found -- by design for that module's single-key structural check), this
+    returns the FULL declared set, because detecting a single VCF that declares
+    BOTH (the single-vcf-both layout) requires knowing about both at once.
+    """
+    keys: set[str] = set()
+    with _open_text(vcf_path) as fh:
+        for line in fh:
+            if not line.startswith("#"):
+                break
+            for key in ("CSQ", "ANN"):
+                if line.startswith(f"##INFO=<ID={key},"):
+                    keys.add(key)
+    return keys
+
+
+def _one_annotator_only(present_tool: str) -> list[QCResult]:
+    """Both metrics, UNVERIFIED: only `present_tool` ran under this run."""
+    message = (
+        f"only {present_tool} annotation is present under this run; the other "
+        "annotator did not run (e.g. a missing SnpEff cache) -- cannot compute "
+        "concordance"
+    )
+    return [
+        _concordance(
+            "consequence_concordance",
+            "unverified",
+            message,
+            value=None,
+            expected_range=f">= {_WARN_BELOW}",
+        ),
+        _concordance(
+            "gene_symbol_concordance",
+            "unverified",
+            message,
+            value=None,
+            expected_range=None,
+        ),
+    ]
+
+
+def _ambiguous_layout(vep_count: int, snpeff_count: int) -> list[QCResult]:
+    """Both metrics, UNVERIFIED: too many candidate files on one/both sides,
+    even after path-component disambiguation -- mirrors
+    `select_caller_vcfs`'s ambiguity -> UNVERIFIED (never an arbitrary pick)."""
+    message = (
+        f"cannot compute concordance: {vep_count} candidate VEP (CSQ) file(s) and "
+        f"{snpeff_count} candidate SnpEff (ANN) file(s) remain ambiguous after "
+        "path-component disambiguation; not computed for an ambiguous layout"
+    )
+    return [
+        _concordance(
+            "consequence_concordance",
+            "unverified",
+            message,
+            value=None,
+            expected_range=f">= {_WARN_BELOW}",
+        ),
+        _concordance(
+            "gene_symbol_concordance",
+            "unverified",
+            message,
+            value=None,
+            expected_range=None,
+        ),
+    ]
+
+
+def _evaluate_both_metrics(
+    vep_path: str | os.PathLike,
+    snpeff_path: str | os.PathLike,
+    *,
+    layout: str,
+) -> list[QCResult]:
+    vep_cons = parse_consequences(vep_path, "CSQ")
+    snpeff_cons = parse_consequences(snpeff_path, "ANN")
+    vep_syms = parse_symbols(vep_path, "CSQ")
+    snpeff_syms = parse_symbols(snpeff_path, "ANN")
+    return evaluate_consequence_concordance(
+        vep_cons, snpeff_cons, layout=layout
+    ) + evaluate_gene_symbol_concordance(vep_syms, snpeff_syms)
+
+
+def evaluate_annotation_concordance_from_run(
+    run_dir: str | os.PathLike,
+    vcfs: Iterable[str | os.PathLike] | None = None,
+) -> list[QCResult]:
+    """Discover VEP/SnpEff annotation under a run dir and evaluate BOTH
+    concordance metrics (consequence + gene-symbol) against each other.
+
+    Header-key detection is PRIMARY: a candidate is any `*.vcf.gz` under
+    `run_dir` (or the explicit `vcfs` list, rglob'd sorted when omitted) whose
+    header declares CSQ and/or ANN. No candidate at all -> clean `[]` skip
+    (annotation absent, or nothing to corroborate) -- never a spurious
+    UNVERIFIED.
+
+    Layout resolution, in order:
+    1. single-vcf-both: some candidate declares BOTH CSQ and ANN -> use it.
+    2. two-file: split the remaining candidates by declared key.
+       - exactly one on each side -> use them directly.
+       - one side EMPTY (only one annotator ran) -> `_one_annotator_only`.
+       - multiple on a side -> path-component tie-break SECONDARY (a `vep` /
+         `snpeff` path component below `run_dir`, mirroring
+         `select_caller_vcfs`'s caller-name match); exactly one each after
+         that -> use them; otherwise `_ambiguous_layout` (never an arbitrary
+         pick).
+    """
+    run_dir = Path(run_dir)
+    candidate_paths = [
+        Path(v) for v in (vcfs if vcfs is not None else sorted(run_dir.rglob("*.vcf.gz")))
+    ]
+    keyed = [(v, _declared_annotation_keys(v)) for v in candidate_paths]
+    keyed = [(v, keys) for v, keys in keyed if keys]
+
+    if not keyed:
+        return []
+
+    both = next((v for v, keys in keyed if keys == {"CSQ", "ANN"}), None)
+    if both is not None:
+        return _evaluate_both_metrics(both, both, layout="single-vcf-both")
+
+    vep_candidates = [v for v, keys in keyed if "CSQ" in keys]
+    snpeff_candidates = [v for v, keys in keyed if "ANN" in keys]
+
+    if not vep_candidates or not snpeff_candidates:
+        present_tool = "VEP" if vep_candidates else "SnpEff"
+        return _one_annotator_only(present_tool)
+
+    if len(vep_candidates) == 1 and len(snpeff_candidates) == 1:
+        return _evaluate_both_metrics(
+            vep_candidates[0], snpeff_candidates[0], layout="two-file"
+        )
+
+    def _has_component(p: Path, name: str) -> bool:
+        return name in {part.lower() for part in p.relative_to(run_dir).parts}
+
+    vep_disambiguated = [v for v in vep_candidates if _has_component(v, "vep")]
+    snpeff_disambiguated = [v for v in snpeff_candidates if _has_component(v, "snpeff")]
+    if len(vep_disambiguated) == 1 and len(snpeff_disambiguated) == 1:
+        return _evaluate_both_metrics(
+            vep_disambiguated[0], snpeff_disambiguated[0], layout="two-file"
+        )
+
+    return _ambiguous_layout(len(vep_candidates), len(snpeff_candidates))

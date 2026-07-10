@@ -28,6 +28,9 @@ from contig.models import ExecutionTarget, QCResult, RunRecord, TaskEvent
 from contig.nfconfig import generate_nextflow_config
 from contig.registry import VARIANT_ASSAYS
 from contig.snakemake import build_snakemake_command, parse_snakemake_stats_file
+from contig.verification.annotation_concordance import (
+    evaluate_annotation_concordance_from_run,
+)
 from contig.verification.qc_ingest import parse_multiqc_general_stats_file
 from contig.verification.rnaseq_plausibility import evaluate_rnaseq_plausibility
 from contig.verification.rule_pack import SCRNASEQ_RULE_PACK, evaluate, rule_pack_for
@@ -161,6 +164,14 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
                 results.extend(evaluate_annotation_structural(vcf))
                 results.extend(evaluate_annotation_plausibility(vcf))
                 break
+        # Cross-tool VEP-vs-SnpEff annotation concordance (capability C7 M4):
+        # auto-discovers the annotation source(s) under the run (single-vcf-both
+        # or two-file layout) and evaluates both the consequence and gene-symbol
+        # metrics against each other. No CLI flag -- mirrors the somatic
+        # cross-caller concordance auto-wiring below. Clean `[]` skip when no
+        # annotated VCF is found at all; honest UNVERIFIED (never a false pass)
+        # when only one annotator ran or the layout is ambiguous.
+        results.extend(evaluate_annotation_concordance_from_run(run_dir))
     # Somatic biological-plausibility checks (capability C4 follow-on): VAF
     # distribution, somatic variant count, and panel-of-normals presence, all
     # computed from the tumor column of the Mutect2 VCF. Gated strictly to the
