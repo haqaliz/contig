@@ -13,9 +13,12 @@ def _write_gz(path: Path, body: str) -> Path:
 
 
 def test_vep_provenance_parsed(tmp_path):
+    # Realistic ensembl-vep 113.0 header as pinned by sarek 3.5.1.
     body = (
         "##fileformat=VCFv4.2\n"
-        '##VEP="v110" time="2026-07-10" cache="/vep/homo_sapiens/110_GRCh38"\n'
+        '##VEP="v113.0" API="v113" time="2026-01-01 00:00:00" '
+        'cache="/root/.vep/homo_sapiens/113_GRCh38" assembly="GRCh38.p14" '
+        'gnomADe="v4.1" gnomADg="v4.1" dbSNP="156" sift="6.2.1"\n'
         "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
         "chr1\t100\t.\tA\tG\t50\tPASS\tCSQ=G|missense_variant\n"
     )
@@ -27,9 +30,9 @@ def test_vep_provenance_parsed(tmp_path):
     assert len(prov) == 1
     assert isinstance(prov[0], AnnotationProvenance)
     assert prov[0].tool == "VEP"
-    assert prov[0].version == "v110"
+    assert prov[0].version == "v113.0"
     # M5: the VEP cache token's basename is captured as the annotation cache/build id.
-    assert prov[0].db_version == "110_GRCh38"
+    assert prov[0].db_version == "113_GRCh38"
 
 
 def test_vep_cache_token_trailing_slash_and_file_prefix(tmp_path):
@@ -37,7 +40,7 @@ def test_vep_cache_token_trailing_slash_and_file_prefix(tmp_path):
     # basename, never a fabricated or malformed value.
     body = (
         "##fileformat=VCFv4.2\n"
-        '##VEP="v110" cache="file:///vep/homo_sapiens/110_GRCh38/"\n'
+        '##VEP="v113.0" cache="file:///root/.vep/homo_sapiens/113_GRCh38/"\n'
         "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
         "chr1\t100\t.\tA\tG\t50\tPASS\tCSQ=G|missense_variant\n"
     )
@@ -45,14 +48,14 @@ def test_vep_cache_token_trailing_slash_and_file_prefix(tmp_path):
     d.mkdir(parents=True)
     _write_gz(d / "sample_VEP.ann.vcf.gz", body)
     prov = compute_annotation_identity(tmp_path)
-    assert prov[0].db_version == "110_GRCh38"
+    assert prov[0].db_version == "113_GRCh38"
 
 
 def test_vep_without_cache_token_db_version_none(tmp_path):
     # No cache token in the header -> db_version is None, never fabricated.
     body = (
         "##fileformat=VCFv4.2\n"
-        '##VEP="v110" time="2026-07-10"\n'
+        '##VEP="v113.0" API="v113" time="2026-01-01 00:00:00"\n'
         "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
         "chr1\t100\t.\tA\tG\t50\tPASS\tCSQ=G|missense_variant\n"
     )
@@ -61,15 +64,18 @@ def test_vep_without_cache_token_db_version_none(tmp_path):
     _write_gz(d / "sample_VEP.ann.vcf.gz", body)
     prov = compute_annotation_identity(tmp_path)
     assert prov[0].tool == "VEP"
-    assert prov[0].version == "v110"
+    assert prov[0].version == "v113.0"
     assert prov[0].db_version is None
 
 
 def test_snpeff_provenance_parsed(tmp_path):
+    # Realistic SnpEff 5.1 header as pinned by sarek 3.5.1. The genome DB
+    # (GRCh38.105) is the first positional token after "SnpEff  " (double space)
+    # on the ##SnpEffCmd line; annotation flags follow the DB.
     body = (
         "##fileformat=VCFv4.2\n"
-        '##SnpEffVersion="5.1d (build 2022-04-19)"\n'
-        '##SnpEffCmd="SnpEff  GRCh38.105 input.vcf "\n'
+        '##SnpEffVersion="5.1 (build 2022-01-21 06:23), by Pablo Cingolani"\n'
+        '##SnpEffCmd="SnpEff  GRCh38.105 -csvStats test.csv input.vcf "\n'
         "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
         "chr1\t100\t.\tA\tG\t50\tPASS\tANN=G|missense_variant\n"
     )
@@ -79,18 +85,20 @@ def test_snpeff_provenance_parsed(tmp_path):
     prov = compute_annotation_identity(tmp_path)
     assert len(prov) == 1
     assert prov[0].tool == "SnpEff"
-    assert prov[0].version.startswith("5.1d")
+    # Version field captures the full ##SnpEffVersion string; assert it contains 5.1.
+    assert "5.1" in prov[0].version
     # M5: the genome DB token from ##SnpEffCmd is captured as the cache/build id.
     assert prov[0].db_version == "GRCh38.105"
 
 
-def test_snpeff_genome_version_line_form(tmp_path):
-    # The alternative ##SnpEffGenomeVersion= spelling is also supported; the genome
-    # token can live on a different header line than ##SnpEffVersion=.
+def test_snpeff_real_cmd_contract(tmp_path):
+    # Real SnpEff contract (there is no ##SnpEffGenomeVersion header): the genome DB
+    # lives ONLY on ##SnpEffCmd as the first positional token after "SnpEff  ", with
+    # annotation flags AFTER the DB. That token must be captured verbatim.
     body = (
         "##fileformat=VCFv4.2\n"
-        "##SnpEffGenomeVersion=GRCh38.105\n"
-        '##SnpEffVersion="5.1d (build 2022-04-19)"\n'
+        '##SnpEffVersion="5.1 (build 2022-01-21 06:23), by Pablo Cingolani"\n'
+        '##SnpEffCmd="SnpEff  GRCh38.105 -csvStats test.csv input.vcf "\n'
         "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
         "chr1\t100\t.\tA\tG\t50\tPASS\tANN=G|missense_variant\n"
     )
@@ -100,15 +108,32 @@ def test_snpeff_genome_version_line_form(tmp_path):
     prov = compute_annotation_identity(tmp_path)
     assert len(prov) == 1
     assert prov[0].tool == "SnpEff"
-    assert prov[0].version.startswith("5.1d")
     assert prov[0].db_version == "GRCh38.105"
+
+
+def test_snpeff_version_without_cmd_db_version_none(tmp_path):
+    # A SnpEff header carrying ##SnpEffVersion but NO ##SnpEffCmd yields db_version
+    # None -- the genome DB is never fabricated from the version line alone.
+    body = (
+        "##fileformat=VCFv4.2\n"
+        '##SnpEffVersion="5.1 (build 2022-01-21 06:23), by Pablo Cingolani"\n'
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+        "chr1\t100\t.\tA\tG\t50\tPASS\tANN=G|missense_variant\n"
+    )
+    d = tmp_path / "results"
+    d.mkdir(parents=True)
+    _write_gz(d / "sample_snpEff.ann.vcf.gz", body)
+    prov = compute_annotation_identity(tmp_path)
+    assert len(prov) == 1
+    assert prov[0].tool == "SnpEff"
+    assert prov[0].db_version is None
 
 
 def test_snpeff_without_genome_token_db_version_none(tmp_path):
     # SnpEff header with no genome DB token -> db_version None, never fabricated.
     body = (
         "##fileformat=VCFv4.2\n"
-        '##SnpEffVersion="5.1d (build 2022-04-19)"\n'
+        '##SnpEffVersion="5.1 (build 2022-01-21 06:23), by Pablo Cingolani"\n'
         "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
         "chr1\t100\t.\tA\tG\t50\tPASS\tANN=G|missense_variant\n"
     )
