@@ -29,6 +29,7 @@ from contig.models import ExecutionTarget, QCResult, RunRecord, TaskEvent
 from contig.nfconfig import generate_nextflow_config
 from contig.registry import VARIANT_ASSAYS
 from contig.snakemake import build_snakemake_command, parse_snakemake_stats_file
+from contig.verification.ampliseq_metrics import parse_asv_table, parse_dada2_overall_summary
 from contig.verification.annotation_concordance import (
     evaluate_annotation_concordance_from_run,
 )
@@ -40,6 +41,7 @@ from contig.verification.methylseq_metrics import (
 from contig.verification.qc_ingest import parse_multiqc_general_stats_file
 from contig.verification.rnaseq_plausibility import evaluate_rnaseq_plausibility
 from contig.verification.rule_pack import (
+    AMPLISEQ_RULE_PACK,
     METHYLSEQ_RULE_PACK,
     SCRNASEQ_RULE_PACK,
     evaluate,
@@ -59,7 +61,7 @@ from contig.verification.variant_metrics import evaluate_variant_plausibility
 # Assays whose biological metrics come from a dedicated on-disk gate below, NOT
 # from MultiQC general-stats. The generic pack path skips them so a metric can
 # never be emitted twice if a future MultiQC ever carried a matching slug.
-_DEDICATED_METRIC_ASSAYS = {"methylseq"}
+_DEDICATED_METRIC_ASSAYS = {"methylseq", "ampliseq"}
 
 # STARsolo writes a Summary.csv under each metric subdir (Gene/, GeneFull/, ...);
 # the enclosing dir named "<sample>.Solo.out" carries the sample id. These are the
@@ -173,6 +175,31 @@ def _locate_methylseq_qc(run_dir: Path) -> dict[str, dict[str, float]]:
         for path in sorted(run_dir.rglob(pattern)):
             sample = _sample_from_bismark(path)
             located.setdefault(sample, {}).update(parser(path))
+    return located
+
+
+def _locate_ampliseq_qc(run_dir: Path) -> dict[str, dict[str, float]]:
+    """Find DADA2 stats artifacts under a run dir -> {sample: {slug: value}}.
+
+    Structural difference from `_locate_methylseq_qc`: DADA2's
+    `overall_summary.tsv` and ASV table are each a SINGLE multi-sample file
+    (not one file per sample), so each parser already returns
+    `{sample: {slug: value}}` directly, and this just MERGES the two dicts by
+    sample key (`setdefault(sample, {}).update(...)`) rather than deriving a
+    sample id from the filename. A sample present in only one of the two
+    artifacts keeps whatever parsed; a sample whose only located artifact(s)
+    yield zero usable metrics still appears with an empty dict, so the gate
+    can emit an explicit UNVERIFIED rather than silently dropping it.
+    """
+    located: dict[str, dict[str, float]] = {}
+    artifact_globs = (
+        ("*overall_summary*.tsv", parse_dada2_overall_summary),
+        ("*ASV_table*", parse_asv_table),
+    )
+    for pattern, parser in artifact_globs:
+        for path in sorted(run_dir.rglob(pattern)):
+            for sample, sample_metrics in parser(path).items():
+                located.setdefault(sample, {}).update(sample_metrics)
     return located
 
 
@@ -336,6 +363,38 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
                         status="unverified",
                         message=(
                             f"{sample}: Bismark report found but no usable metric parsed"
+                        ),
+                        value=None,
+                        kind="metric",
+                    )
+                )
+    # Ampliseq DADA2 QC (capability C3, ampliseq slice). nf-core/ampliseq does
+    # not reliably route DADA2's per-sample metrics into MultiQC general-stats
+    # under a stable slug, so a dedicated gate parses DADA2's own on-disk stats
+    # artifacts (overall_summary.tsv, ASV table) and drives AMPLISEQ_RULE_PACK
+    # directly -- mirrors the methylseq gate above. The one structural
+    # difference: DADA2's artifacts are MULTI-sample files (one file, many
+    # samples), so `_locate_ampliseq_qc` merges the parsers' own
+    # `{sample: {...}}` dicts by sample key rather than deriving a sample id
+    # from the filename. A located sample with no usable metric yields one
+    # explicit UNVERIFIED (never a silent no-op or a false pass); no artifact
+    # at all skips silently (structural QC owns a missing required output). A
+    # sample with only a partial artifact set (e.g. overall_summary.tsv only,
+    # no ASV table) evaluates the checks it can and is NOT forced into a
+    # whole-sample UNVERIFIED (B4). Gated strictly to ampliseq; the generic
+    # MultiQC pack path above skips ampliseq (_DEDICATED_METRIC_ASSAYS) so this
+    # gate is the single authoritative source (M6).
+    if assay == "ampliseq":
+        for sample, sample_metrics in _locate_ampliseq_qc(run_dir).items():
+            if sample_metrics:
+                results.extend(evaluate({sample: sample_metrics}, AMPLISEQ_RULE_PACK))
+            else:
+                results.append(
+                    QCResult(
+                        check=f"ampliseq_qc:{sample}",
+                        status="unverified",
+                        message=(
+                            f"{sample}: DADA2 stats found but no usable metric parsed"
                         ),
                         value=None,
                         kind="metric",

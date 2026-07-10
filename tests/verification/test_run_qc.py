@@ -843,3 +843,174 @@ def test_discover_qc_methylseq_gate_not_applied_to_other_assays(tmp_path):
 
     assert not any(r.check.startswith("mapping_efficiency:") for r in results)
     assert not any(r.check.startswith("methylseq_qc:") for r in results)
+
+
+# --------------------------------------------------------------------------- #
+# ampliseq DADA2 QC ingestion gate (ampliseq-firing aspect of
+# assay-qc-verdict-fires). nf-core/ampliseq does not reliably route DADA2's
+# per-sample metrics into MultiQC general-stats under a stable slug, so a
+# dedicated gate parses DADA2's own on-disk stats artifacts and drives
+# AMPLISEQ_RULE_PACK. Mirrors the methylseq gate above; the one structural
+# difference is that DADA2's artifacts are MULTI-sample files (one file, many
+# samples), not one file per sample.
+# --------------------------------------------------------------------------- #
+
+_OVERALL_SUMMARY_HEALTHY = (
+    "sample\tinput\tfiltered\tdenoisedF\tdenoisedR\tmerged\ttabled\tnonchim\n"
+    "S1\t100000\t95000\t94000\t94000\t92000\t92000\t90000\n"
+    "S2\t50000\t48000\t47500\t47500\t46000\t46000\t45000\n"
+)
+_OVERALL_SUMMARY_FAILED = (
+    "sample\tinput\tfiltered\tdenoisedF\tdenoisedR\tmerged\ttabled\tnonchim\n"
+    "S1\t500\t480\t470\t470\t460\t460\t50\n"
+)
+_ASV_TABLE_HEALTHY = (
+    "ASV_ID\tS1\tS2\tsequence\n"
+    "ASV1\t120\t0\tACGT\n"
+    "ASV2\t45\t80\tTTAA\n"
+    "ASV3\t0\t30\tGGCC\n"
+)
+
+
+def _write_ampliseq_overall_summary(run_dir, text):
+    p = run_dir / "dada2" / "dada_stats" / "overall_summary.tsv"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+    return p
+
+
+def _write_ampliseq_asv_table(run_dir, text):
+    p = run_dir / "dada2" / "ASV_table.tsv"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+    return p
+
+
+def test_discover_qc_ampliseq_healthy_summary_and_asv_table_pass(tmp_path):
+    # B1: healthy overall_summary.tsv + ASV table -> non-UNVERIFIED
+    # dada2_read_retention:<s>, asv_count:<s>, sample_read_depth:<s>.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_ampliseq_overall_summary(run_dir, _OVERALL_SUMMARY_HEALTHY)
+    _write_ampliseq_asv_table(run_dir, _ASV_TABLE_HEALTHY)
+
+    results = _discover_qc(run_dir, assay="ampliseq")
+    checks = {r.check: r for r in results}
+
+    assert "dada2_read_retention:S1" in checks
+    assert checks["dada2_read_retention:S1"].status != "unverified"
+    assert checks["dada2_read_retention:S1"].value == 90.0
+    assert "asv_count:S1" in checks
+    assert checks["asv_count:S1"].status != "unverified"
+    assert checks["asv_count:S1"].value == 2.0
+    assert "sample_read_depth:S1" in checks
+    assert checks["sample_read_depth:S1"].status != "unverified"
+    assert checks["sample_read_depth:S1"].value == 100000.0
+
+
+def test_discover_qc_ampliseq_grossly_failed_sample_fails(tmp_path):
+    # B2: retention below fail_below (20.0) and reads below fail_below (1000)
+    # -> FAIL on both checks.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_ampliseq_overall_summary(run_dir, _OVERALL_SUMMARY_FAILED)
+
+    results = _discover_qc(run_dir, assay="ampliseq")
+    checks = {r.check: r for r in results}
+
+    assert checks["dada2_read_retention:S1"].status == "fail"
+    assert checks["sample_read_depth:S1"].status == "fail"
+
+
+def test_discover_qc_ampliseq_zero_usable_metrics_is_unverified(tmp_path):
+    # B3: artifact present but zero usable metrics -> exactly one
+    # ampliseq_qc:<sample> UNVERIFIED.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_ampliseq_overall_summary(
+        run_dir, "sample\tinput\nS1\tN/A\n"  # non-numeric input -> nothing usable
+    )
+
+    results = _discover_qc(run_dir, assay="ampliseq")
+
+    unverified = [r for r in results if r.check == "ampliseq_qc:S1"]
+    assert len(unverified) == 1
+    assert unverified[0].status == "unverified"
+    assert unverified[0].value is None
+    assert unverified[0].kind == "metric"
+
+
+def test_discover_qc_ampliseq_no_artifact_skips_silently(tmp_path):
+    # B3: no ampliseq artifact at all -> no ampliseq metric result, no crash.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    results = _discover_qc(run_dir, assay="ampliseq")
+
+    assert not any(r.check.startswith("dada2_read_retention:") for r in results)
+    assert not any(r.check.startswith("ampliseq_qc:") for r in results)
+
+
+def test_discover_qc_ampliseq_partial_summary_only_no_unverified(tmp_path):
+    # B4: only overall_summary.tsv present (no ASV table) -> retention +
+    # read-depth evaluate; asv_count simply absent; no whole-sample
+    # ampliseq_qc:<s> UNVERIFIED.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_ampliseq_overall_summary(run_dir, _OVERALL_SUMMARY_HEALTHY)
+
+    results = _discover_qc(run_dir, assay="ampliseq")
+    checks = {r.check: r for r in results}
+
+    assert "dada2_read_retention:S1" in checks
+    assert "sample_read_depth:S1" in checks
+    assert "asv_count:S1" not in checks
+    assert not any(r.check == "ampliseq_qc:S1" for r in results)
+
+
+def test_discover_qc_ampliseq_multi_sample_no_cross_sample_bleed(tmp_path):
+    # B5: multi-sample file -> each sample keyed separately, no cross-sample
+    # bleed.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_ampliseq_overall_summary(run_dir, _OVERALL_SUMMARY_HEALTHY)
+    _write_ampliseq_asv_table(run_dir, _ASV_TABLE_HEALTHY)
+
+    results = _discover_qc(run_dir, assay="ampliseq")
+    checks = {r.check: r for r in results}
+
+    assert checks["dada2_read_retention:S1"].value == 90.0
+    assert checks["dada2_read_retention:S2"].value == 90.0
+    assert checks["sample_read_depth:S1"].value == 100000.0
+    assert checks["sample_read_depth:S2"].value == 50000.0
+    assert checks["asv_count:S1"].value == 2.0
+    assert checks["asv_count:S2"].value == 2.0
+
+
+def test_discover_qc_ampliseq_no_double_emit_with_multiqc(tmp_path):
+    # B6: an ampliseq run whose MultiQC carries a matching slug does NOT
+    # double-emit; the dedicated gate is the single source (M6).
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_ampliseq_overall_summary(run_dir, _OVERALL_SUMMARY_HEALTHY)
+    _write_ampliseq_asv_table(run_dir, _ASV_TABLE_HEALTHY)
+    mqc = run_dir / "multiqc_data.json"
+    mqc.write_text('{"report_general_stats_data":[{"S1":{"percent_retained":90.0}}]}')
+
+    results = _discover_qc(run_dir, assay="ampliseq")
+
+    retention = [r for r in results if r.check == "dada2_read_retention:S1"]
+    assert len(retention) == 1
+
+
+def test_discover_qc_ampliseq_gate_not_applied_to_other_assays(tmp_path):
+    # B7: the ampliseq gate is not applied to any other assay.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_ampliseq_overall_summary(run_dir, _OVERALL_SUMMARY_HEALTHY)
+    _write_ampliseq_asv_table(run_dir, _ASV_TABLE_HEALTHY)
+
+    results = _discover_qc(run_dir, assay="rnaseq")
+
+    assert not any(r.check.startswith("dada2_read_retention:") for r in results)
+    assert not any(r.check.startswith("ampliseq_qc:") for r in results)
