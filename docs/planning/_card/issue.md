@@ -1,65 +1,75 @@
-# Card: annotation-m5-surface (feat)
+# Card: feat / assay-qc-verdict-fires
 
-Type: feat · Slug: annotation-m5-surface · Owner: aliz · Branch: `feat/annotation-m5-surface/aliz`
+- **Type:** feat
+- **Id/slug:** assay-qc-verdict-fires
+- **Owner:** aliz
+- **Branch:** feat/assay-qc-verdict-fires/aliz
+- **Source:** inline brief (no GitHub issue; carried from a `/contig-next` recommendation, 2026-07-11)
 
-No GitHub issue (tracker has no filed issue) — source is the inline brief below,
-produced by the `/contig-next` handoff (2026-07-10) that selected this feature.
+## Brief
 
-- Initiative PRD: `docs/planning/variant-annotation-assay/prd.md`
-- Capability: C7 (research-use variant annotation & prioritization), milestone **M5** —
-  the final annotation-assay slice.
-- Shipped so far: M1 (germline structural verify + provenance) v0.25.0; M2 (somatic
-  gate) + M3 (annotation plausibility, both assays) v0.26.0; **M4 (VEP-vs-SnpEff
-  concordance, both assays) v0.27.0 — just shipped** (see `CHANGELOG.md`).
+Harden the biological verdict for the methylation (`methylseq`), 16S-amplicon
+(`ampliseq`), and shotgun-metagenomics (`mag`) assays so their QC packs actually
+**fire** on a real run — the direct sibling of the shipped single-cell fix
+(v0.21.0). Lead with **methylseq** as the first slice; ampliseq and mag are
+fast-follows on the same seam.
 
-## Brief (from /contig-next handoff)
+Today `METHYLSEQ_RULE_PACK` / `AMPLISEQ_RULE_PACK` / `MAG_RULE_PACK`
+(`src/contig/verification/rule_pack.py:131-226`) draw their metrics **only** from
+`parse_multiqc_general_stats_file` (via `runner.py:_discover_qc` → `run_qc.py`),
+using metric slugs the source itself annotates as **"slug unverified"** on nearly
+every entry. Because `evaluate()` silently skips any absent metric, a wrong slug
+degrades every check to UNVERIFIED with **no breadcrumb** — so three of the seven
+wired assays are effectively verdict-hollow, "reading as wired" while never firing.
+This is the exact latent no-op that hollowed out the single-cell verdict until
+v0.21.0.
 
-Ship **C7 M5** scoped to the **two unblocked parts**, explicitly deferring the third
-(blocked) part:
+## Proposed first slice (methylseq)
 
-1. **"Corroborated by" surface line.** A verdict-card / report line surfacing the M4
-   annotation-concordance metrics (`consequence_concordance` and
-   `gene_symbol_concordance`) with both annotator names — the human-legible corroboration
-   line M4 deferred.
-2. **Annotation DB/cache-version provenance.** Extend `AnnotationProvenance` to capture the
-   annotation **database / cache version** from the VCF header (VEP `##VEP` header line;
-   SnpEff `SnpEffCmd` / `ANN` header) alongside the tool+version M4 already captures.
-   Render it in `contig methods`, the HTML provenance panel, and the reproduce bundle.
+1. Confirm the **real** Bismark MultiQC general-stats slugs (bisulfite conversion,
+   mapping efficiency, duplication) from a **realistic captured `multiqc_data.json`
+   fixture** — CI never runs nf-core/methylseq, so build a realistic fixture rather
+   than guessing keys (in-pattern: commit `5cedaaa` did this for sarek annotation).
+2. Add a **tolerant key lookup** (alias set per metric) so the pack keys off the
+   actual slug(s).
+3. Emit an **explicit `<check>:<sample>` UNVERIFIED** breadcrumb when a MultiQC file
+   is located but lacks the expected metric — never a silent no-op (mirror the
+   scrnaseq "located-but-unparseable → explicit UNVERIFIED" pattern).
+4. Keep the packs **WARN/FAIL-capped and UNVERIFIED-when-absent** exactly as today;
+   **no band re-calibration** (bands stay illustrative engineering defaults, since
+   FAIL-severity calibration on real data is a separately-deferred concern).
 
-**Explicitly deferred (do NOT build this slice):**
+Then repeat for **ampliseq** (DADA2 read-retention / ASV count / read depth) and
+**mag** (QUAST N50, CheckM completeness/contamination) on the same seam.
 
-3. **Fold annotation outcomes into the C6 eval corpus.** Blocked on C6's standing blocker:
-   the C1/C3/annotation corroboration signals carry **no ground-truth labels**, so they
-   need a labeling design before they can join `eval-guard`/`heal-guard` (deferred across
-   v0.17.0 and v0.22.0). Note it as deferred; don't build it.
+## Why (moat grounding)
 
-## Known caveats to resolve in the dig
+- Pure **C3 biological-plausibility verification**
+  (`docs/technical/CAPABILITY_ROADMAP.md:330-392`): Layer-2 only, makes the verdict
+  "smarter about biology," and each firing check adds plausibility eval data.
+- Matches `CLAUDE.md`: seven assays "wired and being hardened to the same bar" as
+  RNA-seq — this closes that gap for three of them.
+- Low feasibility risk: v0.21.0 scrnaseq slice is a proven template.
 
-- **Honest provenance.** When a given VCF header carries no DB/cache version, degrade to
-  the existing tool-only provenance — never fabricate a version (mirrors C5's "left null,
-  never fabricated" rule). Verify VEP `##VEP` and SnpEff `SnpEffCmd`/`ANN` headers actually
-  carry a parseable DB/cache-version token in our synthetic fixtures; if a header lacks it,
-  the field stays `None`.
-- **Live-cache caveat (carried from M1–M4).** Enabling annotation may still need a
-  VEP/SnpEff cache Contig doesn't wire; when annotation didn't run there is no
-  concordance metric and no provenance version — the surface line must simply not render
-  (or render UNVERIFIED), never a fabricated corroboration.
-- **Surface must be kind-driven, not re-computed.** The "corroborated by" line should read
-  the already-computed M4 `kind="concordance"` `QCResult`s, not recompute concordance.
-- **Reproduce round-trip.** The new provenance field must serialize into the bundle and
-  survive rerun/resume, with back-compat for pre-M5 bundles (mirrors M4's list migration).
+## Distinction from a DEFERRED sibling (keep the caveat honest)
 
-## Precedent to reuse (shipped contracts)
+This is **not** the deferred single-cell *simpleaf/alevin-fry* ingestion. That path
+is blocked because the default aligner emits **no structured artifact at all** (HTML
+AlevinQC / evolving QCatch). Bismark/DADA2/QUAST **do** write structured MultiQC
+general-stats — so this is a solvable **slug-accuracy** problem against an existing
+artifact, not a missing-source blocker.
 
-- M4 concordance: `verification/annotation_concordance.py` (emits the two `kind="concordance"`
-  `QCResult`s this slice surfaces).
-- Provenance: `AnnotationProvenance` (M4 made `RunRecord.annotation_identity` a list;
-  `models.py` ~206-216, ~297) + `bundle.compute_annotation_identity`.
-- Report grouping: the existing `kind=="concordance"` display split in `report.py`
-  (~101-109) and `contig methods` / HTML provenance panel rendering.
+## Known caveat / risk to dig first
 
-## Guardrail
+The whole slice hinges on getting the **actual MultiQC general-stats keys right**,
+and CI never runs these nf-core pipelines. Plan to build/obtain a realistic
+`multiqc_data.json` fixture (real nf-core test-profile output structure) before
+locking slugs — guessing keys reintroduces the same silent-no-op it's meant to fix.
 
-Research-use verification only. Surface + provenance, never a pathogenicity/clinical
-verdict. A verdict means "ran correctly and reproducibly," never "clinically true."
-UNVERIFIED is never rendered as PASS. Bright line: `docs/technical/USE_CASE_UNIVERSE.md:33-48`.
+## Constraints (from CLAUDE.md)
+
+- Layer-2 only (run / self-heal / verify / reproduce). No Layer-1 workflow authoring.
+- No raw-read egress — parsers read small summary files on the user's compute.
+- No correctness over-claiming — UNVERIFIED never rendered as PASS; bands scoped per
+  assay, uncalibrated defaults stay WARN/FAIL-capped.
+- Test-first (strict TDD), synthetic/realistic fixtures — no real nf-core run in CI.
