@@ -6,6 +6,51 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Methylseq bisulfite QC ingestion — the dormant methylation verdict now fires**
+  (capability C3, biological-plausibility verification — the methylseq slice of
+  `assay-qc-verdict-fires`, the same seam as v0.21.0's single-cell fix; `ampliseq`
+  and `mag` remain hollow, deferred fast-follows on this seam). The `methylseq` assay
+  already carried a biological QC pack (`METHYLSEQ_RULE_PACK`: mapping efficiency,
+  duplication rate, bisulfite conversion), but it **silently no-oped on every real
+  run**: the pack's metrics are only read from MultiQC general-stats under a slug the
+  pack itself flagged "unverified," and `nf-core/methylseq` does not reliably route
+  Bismark's per-sample fields there. Because `evaluate()` skips any absent metric,
+  the methylation verdict degraded to UNVERIFIED while reading as "wired." This
+  slice makes the checks **fire** by ingesting Bismark's own on-disk reports:
+  - A new `verification/methylseq_metrics.py` with deterministic, stdlib-only
+    parsers: `parse_bismark_alignment_report` (`Mapping efficiency:` from
+    `*_PE_report.txt` / `*_SE_report.txt`), `parse_bismark_dedup_report`
+    (`... duplicated alignments removed:` from `*.deduplication_report.txt`), and
+    `parse_bismark_conversion_report`, which emits `percent_bs_conversion` **only**
+    when a recognizable conversion/control-rate line is present — a standard
+    splitting report (methylation-context percentages only, no conversion field)
+    correctly omits it rather than guessing. A metric that is absent or non-numeric
+    is omitted everywhere, never coerced to 0.
+  - A dedicated `_discover_qc` gate (`assay == "methylseq"`, mirroring the scrnaseq
+    gate) that locates Bismark's alignment/deduplication/splitting reports under the
+    run, derives a per-sample id, **merges all report kinds for the same sample**
+    into one metric dict (no double-count), and evaluates `METHYLSEQ_RULE_PACK`. A
+    located artifact yielding zero usable metrics emits one explicit
+    `methylseq_qc:<sample>` **UNVERIFIED** rather than a silent no-op; no artifact at
+    all skips silently (structural QC owns a missing required output). A sample with
+    only a partial report set (e.g. alignment only, the common single-report case)
+    evaluates the checks it can and is **not** forced into a false whole-sample
+    UNVERIFIED.
+  - **Single authoritative source**: a new `_DEDICATED_METRIC_ASSAYS` set skips the
+    generic MultiQC pack path for `methylseq`, so a check can never double-emit if a
+    future MultiQC build ever happened to carry a matching slug. `methylseq` stays
+    registered in `_RULE_PACKS`/`rule_pack_for` (unchanged contract) — only metric
+    *delivery* moved to the dedicated gate.
+  - No band re-calibration (illustrative engineering defaults, unchanged); no
+    change to `ampliseq`/`mag` (still hollow), `scrnaseq`, `rnaseq`, or the variant
+    paths. Additive to the verdict only: no `FailureClass`, model, or persisted-record
+    change; no new dependency. Local, deterministic, no raw-read egress (parsers
+    read small report text files on the user's compute). Built test-first with a
+    committed realistic Bismark report fixture set — no real `nf-core/methylseq` run
+    in CI.
+
 ## [0.28.0] - 2026-07-11
 
 ### Added

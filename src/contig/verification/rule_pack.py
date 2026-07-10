@@ -114,17 +114,27 @@ SCRNASEQ_RULE_PACK: list[dict] = [
 ]
 
 
-# Methyl-seq (bisulfite) per-sample QC (nf-core/methylseq, Bismark/bwa-meth).
-# These are per-sample summary metrics from the pipeline's MultiQC report. The
-# metric keys below mirror the documented Bismark fields MultiQC ingests; the
-# exact MultiQC general-stats slug can vary by aligner/version, so they are
-# chosen to track the documented quantities rather than a pinned slug:
-#   percent_bs_conversion: bisulfite conversion rate (from the lambda/unmethylated
-#       spike-in or non-CpG conversion); a low value means unconverted cytosines
-#       masquerade as methylation. MultiQC slug unverified.
-#   percent_aligned: Bismark mapping efficiency (% uniquely aligned). MultiQC
-#       reports this as a Bismark general-stats column; slug unverified.
-#   percent_duplication: % duplicate alignments removed by deduplicate_bismark.
+# Methyl-seq (bisulfite) per-sample QC (nf-core/methylseq, Bismark). Metrics are
+# ingested by a DEDICATED gate (`runner._discover_qc`, `assay == "methylseq"`)
+# that parses Bismark's own on-disk report artifacts directly via
+# `verification/methylseq_metrics.py` — NOT MultiQC general-stats, whose slug
+# for these fields is not reliably stable across aligner/version (see
+# `_DEDICATED_METRIC_ASSAYS` in runner.py, the methylseq-firing slice):
+#   percent_aligned: Bismark mapping efficiency (% uniquely aligned pairs/reads),
+#       from the `Mapping efficiency:` line of the alignment report
+#       (`*_PE_report.txt` / `*_SE_report.txt`).
+#   percent_duplication: % duplicate alignments removed, from the
+#       `... duplicated alignments removed:` line (with its parenthesized
+#       percent) of the deduplication report (`*.deduplication_report.txt`,
+#       written by `deduplicate_bismark`).
+#   percent_bs_conversion: bisulfite conversion rate (from a lambda/unmethylated
+#       spike-in or other control); a low value means unconverted cytosines
+#       masquerade as methylation. **Control-dependent**: a standard Bismark
+#       splitting report carries methylation-context percentages only, with NO
+#       conversion-rate field, so this metric is emitted only when a
+#       recognizable conversion/control line is present — otherwise it is
+#       correctly OMITTED (the check simply produces no result for that sample,
+#       never a guessed value; see methylseq_metrics.parse_bismark_conversion_report).
 # Thresholds are illustrative, tunable engineering defaults for catching a grossly
 # failed run (poor conversion, almost nothing mapped, extreme duplication), not
 # biological claims.

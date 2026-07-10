@@ -1,0 +1,7 @@
+Total number of alignments analysed in S1_bismark_bt2_pe.bam:	789000
+Total number duplicated alignments removed:	97335 (12.34%)
+Duplicated alignments were found at:	97335 different position(s)
+Total count of deduplicated leftover sequences: 691665 (87.66% of total)
+
+Total number of positions with more than one read:	48210
+Mean coverage after deduplication:	14

@@ -18,6 +18,8 @@ from contig.verification.methylseq_metrics import (
     parse_bismark_dedup_report,
 )
 
+_FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "methylseq"
+
 
 def _write(tmp_path: Path, name: str, text: str) -> Path:
     p = tmp_path / name
@@ -151,4 +153,30 @@ def test_standard_splitting_report_without_control_line_is_empty(tmp_path: Path)
 
 def test_conversion_report_unrecognized_file_returns_empty(tmp_path: Path) -> None:
     path = _write(tmp_path, "unrelated.txt", "nothing to see here\n")
+    assert parse_bismark_conversion_report(path) == {}
+
+
+# --------------------------------------------------------------------------- #
+# Integration: parse the committed realistic fixture set end-to-end
+# (tests/fixtures/methylseq/), shaped like real nf-core/methylseq v3 output.
+# Belt-and-suspenders on the real field labels, per Phase 3 of the plan.
+# --------------------------------------------------------------------------- #
+
+
+def test_committed_alignment_fixture_parses_mapping_efficiency() -> None:
+    path = _FIXTURES_DIR / "S1_bismark_bt2_PE_report.txt"
+    assert parse_bismark_alignment_report(path) == {"percent_aligned": 78.9}
+
+
+def test_committed_dedup_fixture_parses_duplication_percent() -> None:
+    path = _FIXTURES_DIR / "S1_bismark_bt2_pe.deduplication_report.txt"
+    assert parse_bismark_dedup_report(path) == {"percent_duplication": 12.34}
+
+
+def test_committed_splitting_fixture_has_no_conversion_line() -> None:
+    # The real Bismark splitting report carries methylation-context percentages
+    # only (no conversion/control rate line in a standard, no-spike-in run), so
+    # this MUST omit percent_bs_conversion rather than guess from an unrelated
+    # field (A5).
+    path = _FIXTURES_DIR / "S1_bismark_bt2_pe.deduplicated_splitting_report.txt"
     assert parse_bismark_conversion_report(path) == {}

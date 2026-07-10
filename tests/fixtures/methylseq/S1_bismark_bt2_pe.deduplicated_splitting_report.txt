@@ -1,0 +1,25 @@
+S1_bismark_bt2_pe.deduplicated.bam
+
+Bismark Extractor Version: v0.24.1
+
+Processed 691665 lines in total
+Total number of methylation call strings processed: 691665
+
+Final Cytosine Methylation Report
+==================================
+Total number of C's analysed:	17820000
+
+Total methylated C's in CpG context:	2740000
+Total methylated C's in CHG context:	36500
+Total methylated C's in CHH context:	52200
+Total methylated C's in Unknown context (CN or CHN):	1500
+
+Total unmethylated C's in CpG context:	960000
+Total unmethylated C's in CHG context:	6870000
+Total unmethylated C's in CHH context:	7160000
+Total unmethylated C's in Unknown context (CN or CHN):	15800
+
+C methylated in CpG context:	74.1%
+C methylated in CHG context:	0.5%
+C methylated in CHH context:	0.7%
+C methylated in unknown context (CN or CHN):	8.7%
