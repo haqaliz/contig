@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-07-10
+
 ### Added
 
 - **Research-use variant annotation, germline structural verify** (capability C7, M1).
@@ -878,6 +880,7 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.25.0]: https://github.com/haqaliz/contig/releases/tag/v0.25.0
 [0.24.0]: https://github.com/haqaliz/contig/releases/tag/v0.24.0
 [0.23.0]: https://github.com/haqaliz/contig/releases/tag/v0.23.0
 [0.22.0]: https://github.com/haqaliz/contig/releases/tag/v0.22.0
