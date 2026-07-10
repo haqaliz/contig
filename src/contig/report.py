@@ -11,6 +11,7 @@ from html import escape
 from pydantic import BaseModel
 
 from contig.models import QCResult, RunRecord, RunSummary, overall_verdict
+from contig.verification.annotation_surface import corroborated_by_line
 
 
 class VerdictExplanation(BaseModel):
@@ -105,6 +106,11 @@ def render_run_report(record: RunRecord) -> str:
             lines.append(f"  - {qc.check}: {qc.status.upper()} (value {qc.value})")
         if concordance:
             lines.append("Concordance (cross-tool corroboration):")
+            # Plain-language corroboration line from M4's already-computed
+            # results (None when concordance is not computable -- D2).
+            corroboration = corroborated_by_line(record)
+            if corroboration is not None:
+                lines.append(f"  {corroboration}")
             for qc in concordance:
                 lines.append(f"  - {qc.check}: {qc.status.upper()} (value {qc.value})")
     else:
@@ -278,6 +284,9 @@ def render_run_report_html(
         concordance = [qc for qc in record.qc_results if qc.kind == "concordance"]
         if concordance:
             parts.append("<h3>Concordance (cross-tool corroboration)</h3>")
+            corroboration = corroborated_by_line(record)
+            if corroboration is not None:
+                parts.append(f'<p class="note">{escape(corroboration)}</p>')
             parts.append(_qc_table(concordance))
     else:
         parts.append('<p class="note">No QC checks ran (run is unverified).</p>')

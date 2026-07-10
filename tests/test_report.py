@@ -378,6 +378,133 @@ def test_text_report_shows_concordance_line() -> None:
     assert "Concordance" in report or "corroborated by" in report
 
 
+def _consequence_pass() -> QCResult:
+    # Exact message format from evaluate_consequence_concordance (pass branch).
+    return QCResult(
+        check="consequence_concordance",
+        status="pass",
+        message=(
+            "vep vs snpeff: 47/50 shared site(s) agree on the most-severe "
+            "consequence (agreement 0.94); layout=two-file"
+        ),
+        value=0.94,
+        expected_range=">= 0.9",
+        kind="concordance",
+    )
+
+
+def _gene_symbol_pass() -> QCResult:
+    return QCResult(
+        check="gene_symbol_concordance",
+        status="pass",
+        message=(
+            "vep vs snpeff: 45/50 resolvable gene-symbol pair(s) agree "
+            "(agreement 0.9); informational only, never affects the verdict"
+        ),
+        value=0.9,
+        expected_range=None,
+        kind="concordance",
+    )
+
+
+def _both_annotators() -> list[AnnotationProvenance]:
+    return [
+        AnnotationProvenance(tool="VEP", version="v110"),
+        AnnotationProvenance(tool="SnpEff", version="5.1d"),
+    ]
+
+
+def test_text_report_shows_corroborated_by_line() -> None:
+    # A dual-annotated record with M4 concordance results surfaces the
+    # plain-language corroborated-by line inside the concordance section.
+    record = RunRecord(
+        run_id="r-corro",
+        pipeline="nf-core/sarek",
+        pipeline_revision="3.5.1",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="HAPLOTYPECALLER", status="COMPLETED", exit=0)],
+        qc_results=[_consequence_pass(), _gene_symbol_pass()],
+        annotation_identity=_both_annotators(),
+    )
+    report = render_run_report(record)
+    assert "Corroborated by VEP and SnpEff" in report
+    assert "47/50 consequences agree" in report
+    # the line sits under the concordance header
+    assert report.index("Concordance") < report.index("Corroborated by")
+
+
+def test_text_report_omits_corroborated_by_when_single_annotator() -> None:
+    # Only one annotator ran: concordance is UNVERIFIED (value None) so the
+    # helper returns None and no corroborated-by line is rendered (D2).
+    record = RunRecord(
+        run_id="r-single",
+        pipeline="nf-core/sarek",
+        pipeline_revision="3.5.1",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="HAPLOTYPECALLER", status="COMPLETED", exit=0)],
+        qc_results=[
+            QCResult(
+                check="consequence_concordance",
+                status="unverified",
+                message="only VEP annotation is present under this run",
+                value=None,
+                expected_range=">= 0.9",
+                kind="concordance",
+            ),
+        ],
+        annotation_identity=[AnnotationProvenance(tool="VEP", version="v110")],
+    )
+    report = render_run_report(record)
+    assert "Corroborated by" not in report
+
+
+def test_html_report_shows_corroborated_by_note() -> None:
+    record = RunRecord(
+        run_id="r-corro-html",
+        pipeline="nf-core/sarek",
+        pipeline_revision="3.5.1",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="HAPLOTYPECALLER", status="COMPLETED", exit=0)],
+        qc_results=[_consequence_pass(), _gene_symbol_pass()],
+        annotation_identity=_both_annotators(),
+    )
+    html = render_run_report_html(record)
+    assert "Corroborated by VEP and SnpEff" in html
+    assert "47/50 consequences agree" in html
+    # rendered as a note paragraph, after the concordance heading
+    assert 'class="note"' in html
+    assert html.index("Concordance (cross-tool corroboration)") < html.index(
+        "Corroborated by"
+    )
+
+
+def test_html_report_omits_corroborated_by_when_single_annotator() -> None:
+    record = RunRecord(
+        run_id="r-single-html",
+        pipeline="nf-core/sarek",
+        pipeline_revision="3.5.1",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="HAPLOTYPECALLER", status="COMPLETED", exit=0)],
+        qc_results=[
+            QCResult(
+                check="consequence_concordance",
+                status="unverified",
+                message="only VEP annotation is present under this run",
+                value=None,
+                expected_range=">= 0.9",
+                kind="concordance",
+            ),
+        ],
+        annotation_identity=[AnnotationProvenance(tool="VEP", version="v110")],
+    )
+    html = render_run_report_html(record)
+    assert "Corroborated by" not in html
+
+
 def test_html_report_shows_signature_status_when_present() -> None:
     record = _full_record()
     signature_status = {

@@ -13,6 +13,7 @@ import os
 
 from contig.models import RunRecord
 from contig.registry import assay_for_pipeline
+from contig.verification.annotation_surface import corroborated_by_line
 
 # Human-readable assay labels for the prose. A pipeline whose assay is not in the
 # curated registry simply renders without an assay clause (see render_methods).
@@ -112,6 +113,20 @@ def _annotation_clause(record: RunRecord) -> str:
     )
 
 
+def _corroboration_clause(record: RunRecord) -> str:
+    """The M4 cross-tool corroboration sentence, or '' when not computable.
+
+    Sourced verbatim from the shared `corroborated_by_line` helper (which reads
+    M4's already-computed concordance results and never recomputes); it already
+    names the annotators, so it is appended as a self-contained sentence right
+    after the annotation clause. `None` -> omitted entirely (PRD D2).
+    """
+    line = corroborated_by_line(record)
+    if line is None:
+        return ""
+    return " " + line
+
+
 def _qc_clause(record: RunRecord) -> str:
     """A summary of the QC checks behind the verdict, or the unverified note."""
     verdict = record.verdict
@@ -157,6 +172,7 @@ def render_methods(record: RunRecord) -> str:
         + _params_clause(record)
         + _reference_clause(record)
         + _annotation_clause(record)
+        + _corroboration_clause(record)
         + _provenance_clause(record)
         + _qc_clause(record)
     )
