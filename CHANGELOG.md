@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-07-10
+
 ### Added
 
 - **Research-use variant annotation: VEP-vs-SnpEff concordance** (capability C7, M4 —
@@ -973,6 +975,7 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.27.0]: https://github.com/haqaliz/contig/releases/tag/v0.27.0
 [0.26.0]: https://github.com/haqaliz/contig/releases/tag/v0.26.0
 [0.25.0]: https://github.com/haqaliz/contig/releases/tag/v0.25.0
 [0.24.0]: https://github.com/haqaliz/contig/releases/tag/v0.24.0
