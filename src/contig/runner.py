@@ -136,15 +136,21 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
         vcfs = sorted(p for p in run_dir.rglob(pattern) if p.is_file())
         if vcfs:
             results.extend(evaluate_variant_plausibility(vcfs[0]))
-    # Annotation structural verification (capability C7; germline shipped M1,
-    # somatic enabled M2 — the SAME verifier, no new algorithm). Gated to both
+    # Annotation structural + plausibility verification (capability C7; germline
+    # structural shipped M1, somatic structural enabled M2, plausibility M3 — the
+    # SAME located VCF feeds both verifiers, no duplicate scan). Gated to both
     # variant assays. We look for an annotated VCF (one carrying CSQ/ANN)
-    # anywhere under the run and verify the annotation step ran over every
-    # record. Absent annotation is handled inside evaluate_annotation_structural
-    # as UNVERIFIED, so a plain (un-annotated) run is never dragged down — we
-    # simply don't find an annotated VCF and skip. Research-use only: no
+    # anywhere under the run: the structural checks prove the annotation step
+    # ran; the plausibility checks (WARN-capped) assess what it found (real vs.
+    # intergenic consequence distribution). Absent annotation is handled inside
+    # evaluate_annotation_structural as UNVERIFIED, so a plain (un-annotated)
+    # run is never dragged down — we simply don't find an annotated VCF and
+    # skip both blocks silently (no duplicate UNVERIFIED). Research-use only: no
     # significance claim.
     if assay in VARIANT_ASSAYS:
+        from contig.verification.annotation_plausibility import (
+            evaluate_annotation_plausibility,
+        )
         from contig.verification.annotation_structural import (
             annotation_metrics,
             evaluate_annotation_structural,
@@ -153,6 +159,7 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
         for vcf in sorted(run_dir.rglob("*.vcf.gz")):
             if annotation_metrics(vcf).info_key is not None:
                 results.extend(evaluate_annotation_structural(vcf))
+                results.extend(evaluate_annotation_plausibility(vcf))
                 break
     # Somatic biological-plausibility checks (capability C4 follow-on): VAF
     # distribution, somatic variant count, and panel-of-normals presence, all

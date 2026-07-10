@@ -59,6 +59,15 @@ def test_annotated_somatic_run_verifies(tmp_path):
     assert present.status == "pass"
     assert complete.status == "pass" and complete.value == 1.0
 
+    real_fraction = next(
+        r for r in results if r.check == "annotation_real_fraction:sample"
+    )
+    distribution = next(
+        r for r in results if r.check == "annotation_consequence_distribution:sample"
+    )
+    assert real_fraction.status == "pass"
+    assert distribution.status == "pass"
+
 
 def test_unannotated_somatic_run_yields_no_false_pass(tmp_path):
     _write_gz(
