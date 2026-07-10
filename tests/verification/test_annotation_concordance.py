@@ -205,6 +205,34 @@ def test_single_vcf_both_keys(tmp_path):
     assert "single-vcf-both" in result.message
 
 
+def test_boundary_band_status_from_raw_not_rounded_regression():
+    # Regression for a Critical false-PASS bug: status was decided from the
+    # ROUNDED fraction, not the raw ratio. 1808/2009 = 0.8999502239920358 --
+    # strictly below the 0.90 WARN floor -- but round(_, 4) == 0.9000, which
+    # is >= _WARN_BELOW and was wrongly reported as "pass". The status must
+    # be computed from the raw ratio; only the reported `value` may be rounded.
+    n = 2009
+    matches = 1808
+    sites = _sites(n)
+    vep_map = {site: "missense_variant" for site in sites}
+    snpeff_map = {
+        site: ("missense_variant" if i < matches else "synonymous_variant")
+        for i, site in enumerate(sites)
+    }
+
+    raw = matches / n
+    assert raw < 0.90
+    assert round(raw, 4) == 0.9000  # the deceptive rounded display value
+
+    result = evaluate_consequence_concordance(vep_map, snpeff_map, layout="two-file")[0]
+
+    assert result.status == "warn", (
+        f"raw agreement {raw} is < 0.90 and must WARN, even though it "
+        f"rounds to {round(raw, 4)} for display"
+    )
+    assert result.value == 0.9  # rounding is still fine for the reported value
+
+
 def test_undeclared_key_empty(tmp_path):
     body = NO_ANNOTATION_HEADER + "chr1\t100\t.\tA\tG\t50\tPASS\tDP=30\n"
     vcf = _write(tmp_path, "unannotated.vcf", body)

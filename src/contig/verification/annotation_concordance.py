@@ -166,8 +166,9 @@ def evaluate_consequence_concordance(
         ]
 
     matches = sum(vep_map[k] == snpeff_map[k] for k in shared)
-    fraction = round(matches / len(shared), 4)
-    status = "warn" if fraction < _WARN_BELOW else "pass"
+    raw = matches / len(shared)
+    status = "warn" if raw < _WARN_BELOW else "pass"
+    fraction = round(raw, 4)
     return [
         _concordance(
             "consequence_concordance",
