@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 from contig.models import AnnotationProvenance, ReferenceIdentity, RunRecord, sha256_file
@@ -110,18 +111,76 @@ def compute_reference_identity(
     )
 
 
+_CACHE_TOKEN_RE = re.compile(r'cache="([^"]*)"')
+# An assembly/genome DB token like "GRCh38.105" -- letters/digits then a dot-number.
+_SNPEFF_GENOME_RE = re.compile(r"\b([A-Za-z0-9]+\.\d[\w.]*)\b")
+
+
+def _extract_vep_cache(line: str) -> str | None:
+    """Return the basename of a VEP ``cache="..."`` token, or None if absent.
+
+    ``/vep/homo_sapiens/110_GRCh38`` -> ``110_GRCh38``. Handles a trailing slash
+    and a ``file://`` prefix. Never fabricates: no token / empty token -> None.
+    """
+    match = _CACHE_TOKEN_RE.search(line)
+    if not match:
+        return None
+    path = match.group(1).strip()
+    if path.startswith("file://"):
+        path = path[len("file://"):]
+    path = path.rstrip("/")
+    if not path:
+        return None
+    return os.path.basename(path) or None
+
+
+def _extract_snpeff_db(header_lines: list[str]) -> str | None:
+    """Scan SnpEff header lines for the genome DB token (e.g. ``GRCh38.105``), or None.
+
+    Supports two spellings, on any header line:
+      - ``##SnpEffGenomeVersion=GRCh38.105`` -> value after ``=``.
+      - ``##SnpEffCmd="SnpEff  GRCh38.105 input.vcf "`` -> first assembly-like token.
+    Never fabricates: no token -> None.
+    """
+    for line in header_lines:
+        if line.startswith("##SnpEffGenomeVersion="):
+            value = line[len("##SnpEffGenomeVersion="):].strip().strip('"')
+            if value:
+                return value
+        if line.startswith("##SnpEffCmd="):
+            match = _SNPEFF_GENOME_RE.search(line)
+            if match:
+                return match.group(1)
+    return None
+
+
 def _parse_annotation_header(header_lines: list[str]) -> "AnnotationProvenance | None":
-    """Parse VEP/SnpEff tool + version from a VCF's header lines, or None."""
+    """Parse VEP/SnpEff tool + version (+ cache/build db_version) from VCF header lines.
+
+    VEP is a single-line parse (tool, version, cache token on the ``##VEP=`` line).
+    SnpEff needs to scan the whole header block: the version is on ``##SnpEffVersion=``
+    but the genome DB token may live on a different ``##SnpEffCmd=`` /
+    ``##SnpEffGenomeVersion=`` line, so it does not early-return on the version line.
+    """
     for line in header_lines:
         if line.startswith("##VEP="):
             # ##VEP="v110" time="..." cache="..."
             value = line[len("##VEP="):].strip()
             version = value.split()[0].strip('"') if value else None
-            return AnnotationProvenance(tool="VEP", version=version, raw_header=line.strip())
+            return AnnotationProvenance(
+                tool="VEP",
+                version=version,
+                db_version=_extract_vep_cache(line),
+                raw_header=line.strip(),
+            )
+    for line in header_lines:
         if line.startswith("##SnpEffVersion="):
             value = line[len("##SnpEffVersion="):].strip().strip('"')
             return AnnotationProvenance(
-                tool="SnpEff", version=value or None, raw_header=line.strip()
+                tool="SnpEff",
+                version=value or None,
+                db_version=_extract_snpeff_db(header_lines),
+                raw_header=line.strip(),
             )
     return None
 
