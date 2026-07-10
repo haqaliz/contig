@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-07-11
+
 ### Added
 
 - **Research-use variant annotation: surface + cache/build provenance** (capability
@@ -27,7 +29,7 @@ All notable changes to Contig are recorded here. The format follows
   - **Annotation cache/build provenance, captured and round-tripped.**
     `AnnotationProvenance` gains a `db_version` field, parsed honestly from the VCF
     header: the VEP `cache="…"` token (basename of the cache path, e.g. `110_GRCh38`)
-    and the SnpEff genome token (from `##SnpEffCmd`/`##SnpEffGenomeVersion`, e.g.
+    and the SnpEff genome token (from `##SnpEffCmd`, e.g.
     `GRCh38.105`); absent → `None`, never fabricated. It is labelled **"cache/build"**
     everywhere it renders — *not* "database version" — because it is the annotator's
     cache/build identifier, not a per-database (ClinVar/gnomAD) release. Rendered in
@@ -43,6 +45,18 @@ All notable changes to Contig are recorded here. The format follows
     unlabeled annotation signals. With M5's surface + provenance shipped, the C7
     annotation assay's remaining open item is that eval fold-in (and the standing
     research-*prioritization* follow-on, deliberately out of scope).
+
+### Fixed
+
+- **Annotation cache/build header parsing verified against real sarek 3.5.1 output**
+  (#13). The M5 SnpEff parser carried an invented `##SnpEffGenomeVersion=` header
+  branch that real SnpEff never emits; it is removed. SnpEff writes the genome DB only
+  on `##SnpEffCmd` (the first positional token after `SnpEff␣␣`, e.g. `GRCh38.105` for
+  sarek 3.5.1's pinned SnpEff 5.1), which the retained branch parses correctly past any
+  leading flags; the VEP `cache=` basename parser (`113_GRCh38` for ensembl-vep 113.0)
+  was already correct. The provenance fixtures are now realistic sarek-3.5.1 headers
+  rather than synthetic placeholders. Verify-only — no behaviour change beyond removing
+  dead code; still no real VEP/SnpEff/sarek run in CI.
 
 ## [0.27.0] - 2026-07-10
 
@@ -1013,6 +1027,7 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.28.0]: https://github.com/haqaliz/contig/releases/tag/v0.28.0
 [0.27.0]: https://github.com/haqaliz/contig/releases/tag/v0.27.0
 [0.26.0]: https://github.com/haqaliz/contig/releases/tag/v0.26.0
 [0.25.0]: https://github.com/haqaliz/contig/releases/tag/v0.25.0
