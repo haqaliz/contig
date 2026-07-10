@@ -137,16 +137,14 @@ def _extract_vep_cache(line: str) -> str | None:
 def _extract_snpeff_db(header_lines: list[str]) -> str | None:
     """Scan SnpEff header lines for the genome DB token (e.g. ``GRCh38.105``), or None.
 
-    Supports two spellings, on any header line:
-      - ``##SnpEffGenomeVersion=GRCh38.105`` -> value after ``=``.
-      - ``##SnpEffCmd="SnpEff  GRCh38.105 input.vcf "`` -> first assembly-like token.
-    Never fabricates: no token -> None.
+    Real SnpEff output writes the genome DB ONLY on the ``##SnpEffCmd`` line, as the
+    first positional token right after ``SnpEff␣␣`` (double space), with annotation
+    flags following it, e.g.
+    ``##SnpEffCmd="SnpEff  GRCh38.105 -csvStats test.csv input.vcf "``. There is no
+    ``##SnpEffGenomeVersion`` header -- SnpEff emits only ``##SnpEffVersion`` and
+    ``##SnpEffCmd``. Never fabricates: no ``##SnpEffCmd`` (or no DB token on it) -> None.
     """
     for line in header_lines:
-        if line.startswith("##SnpEffGenomeVersion="):
-            value = line[len("##SnpEffGenomeVersion="):].strip().strip('"')
-            if value:
-                return value
         if line.startswith("##SnpEffCmd="):
             match = _SNPEFF_GENOME_RE.search(line)
             if match:
@@ -159,8 +157,8 @@ def _parse_annotation_header(header_lines: list[str]) -> "AnnotationProvenance |
 
     VEP is a single-line parse (tool, version, cache token on the ``##VEP=`` line).
     SnpEff needs to scan the whole header block: the version is on ``##SnpEffVersion=``
-    but the genome DB token may live on a different ``##SnpEffCmd=`` /
-    ``##SnpEffGenomeVersion=`` line, so it does not early-return on the version line.
+    but the genome DB token lives on the separate ``##SnpEffCmd=`` line, so it does not
+    early-return on the version line.
     """
     for line in header_lines:
         if line.startswith("##VEP="):
