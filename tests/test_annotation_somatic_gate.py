@@ -130,19 +130,19 @@ def _heal_with_incidental_vcf(tmp_path, assay):
 
 def test_non_variant_assay_does_not_capture_annotation_provenance(tmp_path):
     record = _heal_with_incidental_vcf(tmp_path, assay="rnaseq")
-    assert record.annotation_identity is None
+    assert record.annotation_identity == []
 
 
 def test_germline_variant_assay_captures_annotation_provenance(tmp_path):
     record = _heal_with_incidental_vcf(tmp_path, assay="variant_calling")
-    assert record.annotation_identity is not None
-    assert record.annotation_identity.tool == "VEP"
+    assert len(record.annotation_identity) == 1
+    assert record.annotation_identity[0].tool == "VEP"
 
 
 def test_somatic_variant_assay_captures_annotation_provenance(tmp_path):
     record = _heal_with_incidental_vcf(tmp_path, assay="somatic_variant_calling")
-    assert record.annotation_identity is not None
-    assert record.annotation_identity.tool == "VEP"
+    assert len(record.annotation_identity) == 1
+    assert record.annotation_identity[0].tool == "VEP"
 
 
 def test_unresolvable_assay_falls_back_to_capturing_provenance(tmp_path):
@@ -176,5 +176,5 @@ def test_unresolvable_assay_falls_back_to_capturing_provenance(tmp_path):
     assert record.assay is None
     assert assay_for_pipeline(record.pipeline) is None
 
-    assert record.annotation_identity is not None
-    assert record.annotation_identity.tool == "VEP"
+    assert len(record.annotation_identity) == 1
+    assert record.annotation_identity[0].tool == "VEP"

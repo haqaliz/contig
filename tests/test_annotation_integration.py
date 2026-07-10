@@ -40,7 +40,7 @@ def test_annotated_germline_run_verifies_and_captures_provenance(tmp_path):
     assert distribution.status == "pass"
 
     prov = compute_annotation_identity(tmp_path)
-    assert prov is not None and prov.tool == "VEP" and prov.version == "v110"
+    assert len(prov) == 1 and prov[0].tool == "VEP" and prov[0].version == "v110"
 
 
 def test_all_intergenic_germline_run_warns_but_never_fails(tmp_path):
@@ -79,4 +79,4 @@ def test_unannotated_germline_run_yields_no_false_pass(tmp_path):
     # emitting a duplicate unverified here would be noise.
     plausibility_checks = {"annotation_real_fraction", "annotation_consequence_distribution"}
     assert not any(r.check.split(":")[0] in plausibility_checks for r in results)
-    assert compute_annotation_identity(tmp_path) is None
+    assert compute_annotation_identity(tmp_path) == []

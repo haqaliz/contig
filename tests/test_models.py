@@ -143,6 +143,44 @@ def test_run_record_serializes_verdict_into_json():
     assert data["verdict"] == "pass"
 
 
+def test_annotation_identity_accepts_legacy_singular():
+    # Pre-M4 bundles serialized `annotation_identity` as a SINGLE object (the
+    # first-annotator-found shape). M4 stores a list (both VEP + SnpEff), so a
+    # legacy bundle's dict must still deserialize -- as a one-element list --
+    # rather than fail validation and lock old bundles out of verify/reproduce.
+    from contig.models import AnnotationProvenance
+
+    legacy_dict = {
+        "run_id": "run-legacy",
+        "pipeline": "nf-core/sarek",
+        "pipeline_revision": "3.5.1",
+        "target": {"backend": "local", "container_runtime": "docker", "work_dir": "/tmp/run"},
+        "input_checksums": {},
+        "annotation_identity": {"tool": "VEP", "version": "v110"},
+    }
+    record = RunRecord.model_validate(legacy_dict)
+    assert record.annotation_identity == [AnnotationProvenance(tool="VEP", version="v110")]
+
+
+def test_annotation_identity_defaults_to_empty_list():
+    record = _minimal_record([])
+    assert record.annotation_identity == []
+
+
+def test_annotation_identity_none_normalizes_to_empty_list():
+    record = RunRecord.model_validate(
+        {
+            "run_id": "run-none",
+            "pipeline": "nf-core/rnaseq",
+            "pipeline_revision": "3.14.0",
+            "target": {"backend": "local", "container_runtime": "docker", "work_dir": "/tmp/run"},
+            "input_checksums": {},
+            "annotation_identity": None,
+        }
+    )
+    assert record.annotation_identity == []
+
+
 def test_diagnosis_rejects_confidence_above_one():
     from contig.models import Diagnosis
 

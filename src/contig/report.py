@@ -341,6 +341,21 @@ def render_run_report_html(
                 ri_rows["annotation version"] = ri.annotation_version
         parts.append(f"<table><tbody>{_provenance_rows(ri_rows)}</tbody></table>")
 
+    # Annotation identity — the annotator(s) (VEP/SnpEff) that produced the
+    # annotated VCF (capability C7). M4 enables both on the variant assays, so
+    # this is a list; each entry gets its own row. Defensive against a raw
+    # single-object shape (the pre-M4 legacy serialization) in case this field
+    # is ever read before the model validator has normalized it.
+    annotation_identity = record.annotation_identity
+    if annotation_identity is not None and not isinstance(annotation_identity, list):
+        annotation_identity = [annotation_identity]
+    if annotation_identity:
+        parts.append("<h3>Annotation identity</h3>")
+        ann_rows: dict[str, object] = {
+            ai.tool: (ai.version or "unknown") for ai in annotation_identity
+        }
+        parts.append(f"<table><tbody>{_provenance_rows(ann_rows)}</tbody></table>")
+
     # Signature provenance (the key and algorithm the verdict was signed under).
     if signature_status and signature_status.get("signed"):
         parts.append("<h2>Signature</h2>")

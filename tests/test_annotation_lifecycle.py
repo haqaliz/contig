@@ -39,6 +39,8 @@ def test_discover_qc_emits_annotation_checks_for_germline(tmp_path):
 
 
 def test_methods_renders_annotation_clause():
+    # Constructs annotation_identity as a SINGLE object -- the pre-M4 legacy
+    # shape -- to exercise the back-compat validator on RunRecord construction.
     record = RunRecord(
         run_id="r1",
         pipeline="nf-core/sarek",
@@ -51,3 +53,23 @@ def test_methods_renders_annotation_clause():
     text = render_methods(record)
     assert "VEP" in text
     assert "v110" in text
+
+
+def test_methods_renders_both_annotators():
+    # M4: a RunRecord carrying BOTH VEP and SnpEff provenance renders both
+    # tool+version strings in the methods paragraph.
+    record = RunRecord(
+        run_id="r2",
+        pipeline="nf-core/sarek",
+        pipeline_revision="3.5.1",
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_checksums={},
+        assay="variant_calling",
+        annotation_identity=[
+            AnnotationProvenance(tool="VEP", version="v110"),
+            AnnotationProvenance(tool="SnpEff", version="5.1"),
+        ],
+    )
+    text = render_methods(record)
+    assert "VEP" in text and "v110" in text
+    assert "SnpEff" in text and "5.1" in text

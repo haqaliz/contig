@@ -126,14 +126,18 @@ def _parse_annotation_header(header_lines: list[str]) -> "AnnotationProvenance |
     return None
 
 
-def compute_annotation_identity(run_dir: Path) -> "AnnotationProvenance | None":
-    """Locate an annotated VCF under run_dir and parse its annotation provenance.
+def compute_annotation_identity(run_dir: Path) -> list["AnnotationProvenance"]:
+    """Locate annotated VCFs under run_dir and parse ALL annotation provenances.
 
-    Globs `**/*.vcf.gz`, reads only each file's header (up to `#CHROM`), and returns
-    the first VEP/SnpEff provenance found. None when no annotated VCF exists — never
-    a fabricated tool/version. Reproduce-safe: derived from the output VCF, not a
-    stored scratch path.
+    M4 enables both VEP and SnpEff on the variant assays, so a run can carry
+    two distinct annotators. Globs `**/*.vcf.gz`, reads only each file's header
+    (up to `#CHROM`), and returns every distinct provenance found, deduped by
+    tool (first occurrence wins per tool) in deterministic order (sorted by
+    tool name). Empty list when no annotated VCF exists — never a fabricated
+    tool/version. Reproduce-safe: derived from the output VCFs, not a stored
+    scratch path.
     """
+    found: dict[str, AnnotationProvenance] = {}
     for vcf in sorted(Path(run_dir).glob("**/*.vcf.gz")):
         header_lines: list[str] = []
         with _open_text(vcf) as fh:
@@ -144,9 +148,9 @@ def compute_annotation_identity(run_dir: Path) -> "AnnotationProvenance | None":
                 if line.startswith("#CHROM"):
                     break
         prov = _parse_annotation_header(header_lines)
-        if prov is not None:
-            return prov
-    return None
+        if prov is not None and prov.tool not in found:
+            found[prov.tool] = prov
+    return [found[tool] for tool in sorted(found)]
 
 
 def compute_output_checksums(results_dir: str | Path) -> dict[str, str]:
