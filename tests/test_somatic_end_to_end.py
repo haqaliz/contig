@@ -99,7 +99,7 @@ def test_somatic_run_end_to_end(tmp_path, monkeypatch):
     # --tools strelka,mutect2 (M4), now also enabling vep (C7 M2).
     cmd = captured["cmd"]
     assert "--tools" in cmd
-    assert cmd[cmd.index("--tools") + 1] == "strelka,mutect2,vep"
+    assert cmd[cmd.index("--tools") + 1] == "strelka,mutect2,vep,snpeff"
 
     # (2) The run is labelled the somatic assay, persisted on the record (M2) — NOT
     # the pipeline-derived germline assay that nf-core/sarek would otherwise resolve.
