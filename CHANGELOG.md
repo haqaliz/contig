@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-07-11
+
 ### Added
 
 - **Mag QUAST + CheckM QC ingestion — the dormant shotgun-metagenomics verdict
@@ -1158,6 +1160,7 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.29.0]: https://github.com/haqaliz/contig/releases/tag/v0.29.0
 [0.28.0]: https://github.com/haqaliz/contig/releases/tag/v0.28.0
 [0.27.0]: https://github.com/haqaliz/contig/releases/tag/v0.27.0
 [0.26.0]: https://github.com/haqaliz/contig/releases/tag/v0.26.0
