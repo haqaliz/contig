@@ -53,6 +53,14 @@ export const FIXTURE_RUN_IDS = [
   // QC panel (a dedicated cross-tool corroboration section, separate from metric
   // and structural checks) and for the neutral "unverified" status pill.
   "concordance-fixture",
+  // A dual-annotated variant run (nf-core/sarek) carrying VEP+SnpEff
+  // annotation_identity and both consequence_concordance and
+  // gene_symbol_concordance QC results (kind "concordance"), for the
+  // "Corroborated by ..." line + annotation cache/build note in the concordance
+  // card (C7 M5). The single-annotator counterpart below carries a
+  // consequence_concordance with value null, so the line is omitted (PRD D2).
+  "corroboration-fixture",
+  "corroboration-absent-fixture",
   // A finished run (numeric QC metrics) for the cross-run benchmark section (PRD
   // contract A). The benchmark route is mocked in the spec to return a drift report
   // and a no_reference report, so the section renders deterministically without the

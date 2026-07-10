@@ -1,0 +1,68 @@
+{
+  "run_id": "corroboration-fixture",
+  "pipeline": "nf-core/sarek",
+  "pipeline_revision": "3.4.0",
+  "target": {
+    "backend": "local",
+    "container_runtime": "docker",
+    "work_dir": "/tmp/work",
+    "engine": "nextflow",
+    "credentials_ref": null,
+    "backend_options": {},
+    "resource_limits": {}
+  },
+  "input_checksums": {
+    "samplesheet.csv": "deadbeef"
+  },
+  "parameters": {
+    "genome": "GRCh38"
+  },
+  "container_digests": {},
+  "nextflow_version": "24.10.0",
+  "contig_version": "0.1.0",
+  "annotation_identity": [
+    {
+      "tool": "VEP",
+      "version": "110",
+      "db_version": "110_GRCh38",
+      "raw_header": null
+    },
+    {
+      "tool": "SnpEff",
+      "version": "5.1",
+      "db_version": "GRCh38.105",
+      "raw_header": null
+    }
+  ],
+  "events": [
+    {
+      "process": "ENSEMBLVEP_VEP",
+      "status": "COMPLETED",
+      "exit": 0,
+      "task_id": "1",
+      "name": "ENSEMBLVEP_VEP (SAMPLE_A)"
+    }
+  ],
+  "qc_results": [
+    {
+      "check": "consequence_concordance",
+      "status": "pass",
+      "message": "VEP vs SnpEff: 48/50 shared site(s) with a consequence call agree (0.96).",
+      "value": 0.96,
+      "expected_range": ">= 0.9",
+      "kind": "concordance"
+    },
+    {
+      "check": "gene_symbol_concordance",
+      "status": "pass",
+      "message": "VEP vs SnpEff: 46/50 shared site(s) with a gene symbol agree (0.92).",
+      "value": 0.92,
+      "expected_range": "informational",
+      "kind": "concordance"
+    }
+  ],
+  "output_checksums": {},
+  "repair_history": [],
+  "resource_usage": [],
+  "verdict": "pass"
+}

@@ -1,0 +1,54 @@
+{
+  "run_id": "corroboration-absent-fixture",
+  "pipeline": "nf-core/sarek",
+  "pipeline_revision": "3.4.0",
+  "target": {
+    "backend": "local",
+    "container_runtime": "docker",
+    "work_dir": "/tmp/work",
+    "engine": "nextflow",
+    "credentials_ref": null,
+    "backend_options": {},
+    "resource_limits": {}
+  },
+  "input_checksums": {
+    "samplesheet.csv": "deadbeef"
+  },
+  "parameters": {
+    "genome": "GRCh38"
+  },
+  "container_digests": {},
+  "nextflow_version": "24.10.0",
+  "contig_version": "0.1.0",
+  "annotation_identity": [
+    {
+      "tool": "VEP",
+      "version": "110",
+      "db_version": "110_GRCh38",
+      "raw_header": null
+    }
+  ],
+  "events": [
+    {
+      "process": "ENSEMBLVEP_VEP",
+      "status": "COMPLETED",
+      "exit": 0,
+      "task_id": "1",
+      "name": "ENSEMBLVEP_VEP (SAMPLE_A)"
+    }
+  ],
+  "qc_results": [
+    {
+      "check": "consequence_concordance",
+      "status": "unverified",
+      "message": "Only one annotator ran, so this result has no cross-tool corroboration.",
+      "value": null,
+      "expected_range": "two or more annotators",
+      "kind": "concordance"
+    }
+  ],
+  "output_checksums": {},
+  "repair_history": [],
+  "resource_usage": [],
+  "verdict": "pass"
+}

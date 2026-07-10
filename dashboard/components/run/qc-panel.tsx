@@ -20,7 +20,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { QCResult, QCStatus } from "@/lib/types";
+import {
+  annotationIdentityNote,
+  corroboratedByLine,
+} from "@/lib/derive";
+import type { AnnotationProvenance, QCResult, QCStatus } from "@/lib/types";
 
 // Cross-sample checks are run across the whole batch, not per-sample. Their keys
 // either have no sample suffix ("min_sample_count") or describe a batch metric.
@@ -116,7 +120,13 @@ function QcRows({ rows }: { rows: QCResult[] }) {
   );
 }
 
-export function QcPanel({ qcResults }: { qcResults: QCResult[] }) {
+export function QcPanel({
+  qcResults,
+  annotationIdentity,
+}: {
+  qcResults: QCResult[];
+  annotationIdentity?: AnnotationProvenance[];
+}) {
   if (qcResults.length === 0) {
     return (
       <Card>
@@ -141,6 +151,15 @@ export function QcPanel({ qcResults }: { qcResults: QCResult[] }) {
   // They carry kind "concordance" and get their own section, mirroring structural.
   // A check with no second tool to compare against reports status "unverified".
   const concordance = qcResults.filter((q) => q.kind === "concordance");
+  // The plain-language "Corroborated by ..." line, read (never recomputed) from
+  // the concordance results + annotation identity. Null when there is no
+  // computable consequence concordance (PRD D2), in which case no line is shown.
+  const corroboration = corroboratedByLine({
+    qc_results: qcResults,
+    annotation_identity: annotationIdentity,
+  });
+  // The annotation tool(s) + cache/build id, surfaced honestly (PRD D1).
+  const identityNote = annotationIdentityNote(annotationIdentity);
   const metric = qcResults.filter(
     (q) => q.kind !== "structural" && q.kind !== "concordance",
   );
@@ -196,7 +215,15 @@ export function QcPanel({ qcResults }: { qcResults: QCResult[] }) {
               state, not a failure).
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-3">
+            {corroboration && (
+              <p className="text-sm text-foreground">{corroboration}</p>
+            )}
+            {identityNote && (
+              <p className="text-xs text-muted-foreground">
+                Annotation: {identityNote} (research use).
+              </p>
+            )}
             <QcRows rows={concordance} />
           </CardContent>
         </Card>

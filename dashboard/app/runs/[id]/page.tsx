@@ -153,7 +153,10 @@ export default async function RunDetailPage({
           <TabsTrigger value="provenance">Provenance</TabsTrigger>
         </TabsList>
         <TabsContent value="qc">
-          <QcPanel qcResults={record.qc_results} />
+          <QcPanel
+            qcResults={record.qc_results}
+            annotationIdentity={record.annotation_identity}
+          />
         </TabsContent>
         <TabsContent value="self-heal">
           <RepairTimeline history={record.repair_history} />
