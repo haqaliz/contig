@@ -647,3 +647,199 @@ def test_discover_qc_scrnaseq_gate_not_applied_to_other_assays(tmp_path):
     for assay in ("rnaseq", "variant_calling"):
         results = _discover_qc(run_dir, assay=assay)
         assert not any(r.check.startswith("estimated_cells:") for r in results)
+
+
+# --------------------------------------------------------------------------- #
+# methylseq bisulfite QC ingestion gate (methylseq-firing aspect of
+# assay-qc-verdict-fires). nf-core/methylseq does not reliably route Bismark's
+# per-sample metrics into MultiQC general-stats under a stable slug, so a
+# dedicated gate parses Bismark's own on-disk report artifacts and drives
+# METHYLSEQ_RULE_PACK. Mirrors the scrnaseq gate above.
+# --------------------------------------------------------------------------- #
+
+_BISMARK_ALIGNMENT_HEALTHY = (
+    "Bismark report for: S1_R1.fastq.gz and S1_R2.fastq.gz (version: v0.24.1)\n\n"
+    "Final Alignment report\n"
+    "=======================\n"
+    "Sequence pairs analysed in total:\t1000000\n"
+    "Mapping efficiency:\t78.90%\n"
+)
+_BISMARK_ALIGNMENT_FAILED = (
+    "Bismark report for: S1_R1.fastq.gz and S1_R2.fastq.gz (version: v0.24.1)\n\n"
+    "Final Alignment report\n"
+    "=======================\n"
+    "Sequence pairs analysed in total:\t1000000\n"
+    "Mapping efficiency:\t12.00%\n"
+)
+_BISMARK_DEDUP_HEALTHY = (
+    "Total number of alignments analysed in S1_bismark_bt2_pe.bam:\t789000\n"
+    "Total number duplicated alignments removed:\t97335 (12.34%)\n"
+)
+_BISMARK_SPLITTING_NO_CONTROL = (
+    "Bismark methylation extractor report for S1_bismark_bt2_pe.bam\n\n"
+    "C methylated in CpG context:\t12.0%\n"
+)
+_BISMARK_SPLITTING_WITH_CONTROL = (
+    "Bismark methylation extractor report for S1_bismark_bt2_pe.bam\n\n"
+    "Bisulfite conversion rate:\t99.30%\n"
+)
+
+
+def _write_bismark_alignment(run_dir, sample, text, paired=True):
+    suffix = "PE" if paired else "SE"
+    p = run_dir / "bismark" / "reports" / f"{sample}_bismark_bt2_{suffix}_report.txt"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+    return p
+
+
+def _write_bismark_dedup(run_dir, sample, text):
+    p = (
+        run_dir
+        / "bismark"
+        / "deduplicated"
+        / f"{sample}_bismark_bt2_pe.deduplication_report.txt"
+    )
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+    return p
+
+
+def _write_bismark_splitting(run_dir, sample, text):
+    p = run_dir / "bismark" / "methylation_calls" / f"{sample}_splitting_report.txt"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+    return p
+
+
+def test_discover_qc_methylseq_healthy_alignment_and_dedup_pass(tmp_path):
+    # A1: healthy alignment+dedup -> non-UNVERIFIED mapping_efficiency:<s> +
+    # duplication_rate:<s>.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_bismark_alignment(run_dir, "S1", _BISMARK_ALIGNMENT_HEALTHY)
+    _write_bismark_dedup(run_dir, "S1", _BISMARK_DEDUP_HEALTHY)
+
+    results = _discover_qc(run_dir, assay="methylseq")
+    checks = {r.check: r for r in results}
+
+    assert "mapping_efficiency:S1" in checks
+    assert checks["mapping_efficiency:S1"].status != "unverified"
+    assert checks["mapping_efficiency:S1"].value == 78.9
+    assert "duplication_rate:S1" in checks
+    assert checks["duplication_rate:S1"].status != "unverified"
+    assert checks["duplication_rate:S1"].value == 12.34
+
+
+def test_discover_qc_methylseq_low_mapping_efficiency_fails(tmp_path):
+    # A2: mapping efficiency < fail_below (30.0) -> FAIL mapping_efficiency:<s>.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_bismark_alignment(run_dir, "S1", _BISMARK_ALIGNMENT_FAILED)
+
+    results = _discover_qc(run_dir, assay="methylseq")
+    checks = {r.check: r for r in results}
+
+    assert checks["mapping_efficiency:S1"].status == "fail"
+
+
+def test_discover_qc_methylseq_zero_usable_metrics_is_unverified(tmp_path):
+    # A3a: report present but zero usable metrics -> exactly one
+    # methylseq_qc:<sample> UNVERIFIED.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_bismark_alignment(
+        run_dir, "S1", "Bismark report for: S1 (version: v0.24.1)\n"  # no mapping line
+    )
+
+    results = _discover_qc(run_dir, assay="methylseq")
+
+    unverified = [r for r in results if r.check == "methylseq_qc:S1"]
+    assert len(unverified) == 1
+    assert unverified[0].status == "unverified"
+    assert unverified[0].value is None
+    assert unverified[0].kind == "metric"
+
+
+def test_discover_qc_methylseq_no_artifact_skips_silently(tmp_path):
+    # A3b: no methylseq artifact at all -> no methylseq metric result, no crash.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    results = _discover_qc(run_dir, assay="methylseq")
+
+    assert not any(r.check.startswith("mapping_efficiency:") for r in results)
+    assert not any(r.check.startswith("methylseq_qc:") for r in results)
+
+
+def test_discover_qc_methylseq_alignment_only_sample_no_unverified(tmp_path):
+    # A4: alignment-only sample (no dedup, no conversion) -> PASS/WARN on mapping
+    # efficiency and no methylseq_qc:<s> UNVERIFIED.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_bismark_alignment(run_dir, "S1", _BISMARK_ALIGNMENT_HEALTHY)
+
+    results = _discover_qc(run_dir, assay="methylseq")
+    checks = {r.check: r for r in results}
+
+    assert checks["mapping_efficiency:S1"].status in {"pass", "warn"}
+    assert not any(r.check == "methylseq_qc:S1" for r in results)
+    assert not any(r.check.startswith("duplication_rate:") for r in results)
+
+
+def test_discover_qc_methylseq_conversion_only_with_control_line(tmp_path):
+    # A5: percent_bs_conversion emitted only with a control line; a standard
+    # splitting report omits it (no bisulfite_conversion:<s> result), and the
+    # sample still evaluates the rest of its metrics.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_bismark_alignment(run_dir, "S1", _BISMARK_ALIGNMENT_HEALTHY)
+    _write_bismark_splitting(run_dir, "S1", _BISMARK_SPLITTING_NO_CONTROL)
+
+    results = _discover_qc(run_dir, assay="methylseq")
+    checks = {r.check: r for r in results}
+
+    assert "bisulfite_conversion:S1" not in checks
+    assert "mapping_efficiency:S1" in checks
+    assert not any(r.check == "methylseq_qc:S1" for r in results)
+
+
+def test_discover_qc_methylseq_conversion_with_control_line_fires(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_bismark_alignment(run_dir, "S1", _BISMARK_ALIGNMENT_HEALTHY)
+    _write_bismark_splitting(run_dir, "S1", _BISMARK_SPLITTING_WITH_CONTROL)
+
+    results = _discover_qc(run_dir, assay="methylseq")
+    checks = {r.check: r for r in results}
+
+    assert "bisulfite_conversion:S1" in checks
+    assert checks["bisulfite_conversion:S1"].value == 99.3
+    assert checks["bisulfite_conversion:S1"].status != "unverified"
+
+
+def test_discover_qc_methylseq_no_double_emit_with_multiqc(tmp_path):
+    # A6: a methylseq run whose MultiQC carries a matching slug does NOT
+    # double-emit; the dedicated gate is the single source (M6).
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_bismark_alignment(run_dir, "S1", _BISMARK_ALIGNMENT_HEALTHY)
+    mqc = run_dir / "multiqc_data.json"
+    mqc.write_text('{"report_general_stats_data":[{"S1":{"percent_aligned":78.9}}]}')
+
+    results = _discover_qc(run_dir, assay="methylseq")
+
+    mapping = [r for r in results if r.check == "mapping_efficiency:S1"]
+    assert len(mapping) == 1
+
+
+def test_discover_qc_methylseq_gate_not_applied_to_other_assays(tmp_path):
+    # A7: the methylseq gate is not applied to any other assay.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_bismark_alignment(run_dir, "S1", _BISMARK_ALIGNMENT_HEALTHY)
+
+    results = _discover_qc(run_dir, assay="rnaseq")
+
+    assert not any(r.check.startswith("mapping_efficiency:") for r in results)
+    assert not any(r.check.startswith("methylseq_qc:") for r in results)

@@ -8,6 +8,7 @@ assembly is layered on once the toolchain (Nextflow/Docker) is present.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
@@ -31,9 +32,19 @@ from contig.snakemake import build_snakemake_command, parse_snakemake_stats_file
 from contig.verification.annotation_concordance import (
     evaluate_annotation_concordance_from_run,
 )
+from contig.verification.methylseq_metrics import (
+    parse_bismark_alignment_report,
+    parse_bismark_conversion_report,
+    parse_bismark_dedup_report,
+)
 from contig.verification.qc_ingest import parse_multiqc_general_stats_file
 from contig.verification.rnaseq_plausibility import evaluate_rnaseq_plausibility
-from contig.verification.rule_pack import SCRNASEQ_RULE_PACK, evaluate, rule_pack_for
+from contig.verification.rule_pack import (
+    METHYLSEQ_RULE_PACK,
+    SCRNASEQ_RULE_PACK,
+    evaluate,
+    rule_pack_for,
+)
 from contig.verification.scrnaseq_metrics import (
     parse_cellranger_metrics,
     parse_starsolo_summary,
@@ -44,6 +55,11 @@ from contig.verification.run_qc import evaluate_run_qc
 from contig.verification.structural import evaluate_structural, manifest_for
 from contig.verification.variant_metrics import evaluate_variant_plausibility
 
+
+# Assays whose biological metrics come from a dedicated on-disk gate below, NOT
+# from MultiQC general-stats. The generic pack path skips them so a metric can
+# never be emitted twice if a future MultiQC ever carried a matching slug.
+_DEDICATED_METRIC_ASSAYS = {"methylseq"}
 
 # STARsolo writes a Summary.csv under each metric subdir (Gene/, GeneFull/, ...);
 # the enclosing dir named "<sample>.Solo.out" carries the sample id. These are the
@@ -107,6 +123,59 @@ def _locate_scrnaseq_qc(run_dir: Path) -> dict[str, dict[str, float]]:
     return located
 
 
+# Bismark report filename suffixes, most specific first. `_sample_from_bismark`
+# strips the first pattern that matches so nf-core's fully-qualified aligner
+# names (`_bismark_bt2_PE_report.txt`) and a plainer `_splitting_report.txt`
+# both resolve to the same sample id.
+_BISMARK_SUFFIX_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"_bismark_[^_]+_(?:PE|SE)_report\.txt$", re.IGNORECASE),
+    re.compile(r"_bismark_[^_]+_(?:pe|se)\.deduplication_report\.txt$", re.IGNORECASE),
+    re.compile(r"\.?deduplication_report\.txt$", re.IGNORECASE),
+    re.compile(
+        r"_bismark_[^_]+_(?:pe|se)\.deduplicated_splitting_report\.txt$",
+        re.IGNORECASE,
+    ),
+    re.compile(r"_splitting_report\.txt$", re.IGNORECASE),
+]
+
+
+def _sample_from_bismark(path: Path) -> str:
+    """Derive the sample id from a Bismark report path by stripping the
+    recognized report-kind suffix off the filename (mirrors
+    `_sample_from_starsolo`/`_sample_from_cellranger` above)."""
+    name = path.name
+    for pattern in _BISMARK_SUFFIX_PATTERNS:
+        stripped = pattern.sub("", name)
+        if stripped != name:
+            return stripped
+    return path.stem
+
+
+def _locate_methylseq_qc(run_dir: Path) -> dict[str, dict[str, float]]:
+    """Find Bismark bisulfite-QC report artifacts under a run dir ->
+    {sample: {slug: value}}.
+
+    Alignment, deduplication, and splitting/conversion reports for the SAME
+    sample are MERGED into one metric dict (M3) rather than overwritten, so a
+    sample with only a subset of report kinds keeps whatever parsed. A sample
+    whose only located report(s) yield zero usable metrics still appears with
+    an empty dict, so the gate can emit an explicit UNVERIFIED rather than
+    silently dropping it.
+    """
+    located: dict[str, dict[str, float]] = {}
+    report_globs = (
+        ("*_PE_report.txt", parse_bismark_alignment_report),
+        ("*_SE_report.txt", parse_bismark_alignment_report),
+        ("*deduplication_report.txt", parse_bismark_dedup_report),
+        ("*splitting_report.txt", parse_bismark_conversion_report),
+    )
+    for pattern, parser in report_globs:
+        for path in sorted(run_dir.rglob(pattern)):
+            sample = _sample_from_bismark(path)
+            located.setdefault(sample, {}).update(parser(path))
+    return located
+
+
 def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
     """Verify a finished run: MultiQC metric checks (assay-specific rule pack) +
     structural checks on outputs + VCF plausibility checks (germline ts_tv/het_hom;
@@ -118,7 +187,7 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
             pack = rule_pack_for(assay)
         except ValueError:
             pack = None  # no rule pack for this assay -> skip metric QC (stay honest)
-        if pack is not None:
+        if pack is not None and assay not in _DEDICATED_METRIC_ASSAYS:
             results.extend(
                 evaluate_run_qc(multiqc, rule_pack=pack, cross_sample=(assay == "rnaseq"))
             )
@@ -239,6 +308,34 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
                         status="unverified",
                         message=(
                             f"{sample}: cell-QC file found but no usable metric parsed"
+                        ),
+                        value=None,
+                        kind="metric",
+                    )
+                )
+    # Methylseq bisulfite QC (capability C3, methylseq slice). nf-core/methylseq
+    # does not reliably route Bismark's per-sample metrics into MultiQC
+    # general-stats under a stable slug, so a dedicated gate parses Bismark's own
+    # on-disk report artifacts (alignment, deduplication, splitting/conversion)
+    # and drives METHYLSEQ_RULE_PACK directly -- mirrors the scrnaseq gate above.
+    # A located artifact with no usable metric yields one explicit UNVERIFIED
+    # (never a silent no-op or a false pass); no artifact at all skips silently
+    # (structural QC owns a missing output). A sample with only a partial report
+    # set (e.g. alignment only) evaluates the checks it can and is NOT forced
+    # into a whole-sample UNVERIFIED (M3/A4). Gated strictly to methylseq; the
+    # generic MultiQC pack path above skips methylseq (_DEDICATED_METRIC_ASSAYS)
+    # so this gate is the single authoritative source (M6).
+    if assay == "methylseq":
+        for sample, sample_metrics in _locate_methylseq_qc(run_dir).items():
+            if sample_metrics:
+                results.extend(evaluate({sample: sample_metrics}, METHYLSEQ_RULE_PACK))
+            else:
+                results.append(
+                    QCResult(
+                        check=f"methylseq_qc:{sample}",
+                        status="unverified",
+                        message=(
+                            f"{sample}: Bismark report found but no usable metric parsed"
                         ),
                         value=None,
                         kind="metric",
