@@ -14,8 +14,12 @@ record carrying the annotation field at all.
 
 This module carries its own small VCF pass; per the codebase's convention
 (see `somatic_plausibility.py:20-23`), it does not add a shared VCF
-abstraction. It reuses only `_open_text` (gzip-transparent open) and
-`_declared_key` (header key detection) from `annotation_structural.py`.
+abstraction. It reuses `_open_text` (gzip-transparent open), `_declared_key`
+(header key detection), and `_record_has_key` (INFO-field presence) from
+`annotation_structural.py`. The evaluator wrapper below runs the WARN-capped
+`ANNOTATION_PLAUSIBILITY_PACK` (see `rule_pack.py`) over the computable
+metrics and, per the never-a-false-pass guarantee, emits an explicit
+`unverified` result for any metric the parser could not honestly compute.
 """
 
 from __future__ import annotations
@@ -23,7 +27,13 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from contig.verification.annotation_structural import _declared_key, _open_text
+from contig.models import QCResult
+from contig.verification.annotation_structural import (
+    _declared_key,
+    _open_text,
+    _record_has_key,
+)
+from contig.verification.rule_pack import ANNOTATION_PLAUSIBILITY_PACK, evaluate
 
 # D1 — minimal SO-severity ordering for "most-severe consequence per variant".
 # Least -> most severe; intergenic_variant is the unique rank 0. An unknown,
@@ -106,11 +116,6 @@ def _consequence_index_csq(header_lines: list[str]) -> int | None:
         except ValueError:
             return None
     return None
-
-
-def _has_key(info: str, key: str) -> bool:
-    """True if an INFO column carries `key` (a `KEY=...` token)."""
-    return any(field.split("=", 1)[0] == key for field in info.split(";"))
 
 
 def _variant_terms(info_value: str, key: str, cons_index: int) -> list[str]:
@@ -215,14 +220,14 @@ def annotation_plausibility_metrics(
 
             if key is None:
                 for candidate in ("CSQ", "ANN"):
-                    if _has_key(info, candidate):
+                    if _record_has_key(info, candidate):
                         key = candidate
                         cons_index = _resolve_consequence_index(key, header_lines)
                         if cons_index is None:
                             return _UNCOMPUTABLE
                         break
 
-            if key is None or cons_index is None or not _has_key(info, key):
+            if key is None or cons_index is None or not _record_has_key(info, key):
                 continue
 
             annotated += 1
@@ -242,3 +247,47 @@ def annotation_plausibility_metrics(
         real_consequence_fraction=real / annotated,
         intergenic_fraction=intergenic / annotated,
     )
+
+
+def evaluate_annotation_plausibility(
+    vcf_path: str | os.PathLike, label: str = "sample"
+) -> list[QCResult]:
+    """Evaluate the annotation plausibility rules over a VCF, capped at WARN.
+
+    Computes `AnnotationPlausibilityMetrics` from the CSQ/ANN consequence parse,
+    then runs the WARN-capped ANNOTATION_PLAUSIBILITY_PACK over the COMPUTABLE
+    metrics via the shared evaluate() (band logic and "<check>:<label>" naming
+    stay single-sourced). A None metric is NOT silently skipped: the shared
+    evaluate() only sees computable metrics, so each rule whose metric is None
+    gets an explicit "unverified" QCResult here instead (never a false pass).
+    Every result is kind "metric".
+    """
+    metrics = annotation_plausibility_metrics(vcf_path)
+
+    by_metric = {
+        "real_consequence_fraction": metrics.real_consequence_fraction,
+        "intergenic_fraction": metrics.intergenic_fraction,
+    }
+    computable = {
+        metric: value for metric, value in by_metric.items() if value is not None
+    }
+
+    results = evaluate({label: computable}, ANNOTATION_PLAUSIBILITY_PACK)
+
+    for rule in ANNOTATION_PLAUSIBILITY_PACK:
+        metric = rule["metric"]
+        if by_metric[metric] is None:
+            results.append(
+                QCResult(
+                    check=f"{rule['check']}:{label}",
+                    status="unverified",
+                    message=(
+                        f"{label}: {metric} could not be computed "
+                        "(unresolvable CSQ Format or no annotated records)"
+                    ),
+                    value=None,
+                    kind="metric",
+                )
+            )
+
+    return results

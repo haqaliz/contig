@@ -276,6 +276,38 @@ SOMATIC_PLAUSIBILITY_PACK: list[dict] = [
 ]
 
 
+# Annotation consequence-distribution plausibility (capability C7, M3). WARN-capped
+# (no fail_*): the bands are illustrative, tunable engineering defaults, NOT
+# biological claims, uncalibrated on real cohorts. Computed over annotated
+# records from the CSQ/ANN consequence parse (see annotation_plausibility.py);
+# UNVERIFIED-when-uncomputable absorbs an unresolvable CSQ Format or a VCF with
+# no annotated records (see evaluate_annotation_plausibility). Like the other
+# plausibility packs, this is imported directly by its evaluator and is
+# deliberately NOT registered in _RULE_PACKS.
+ANNOTATION_PLAUSIBILITY_PACK: list[dict] = [
+    {   # a degenerate run: almost every variant is empty or intergenic. Loose
+        # floor so a legit high-intron/UTR run does not trip it.
+        "check": "annotation_real_fraction",
+        "metric": "real_consequence_fraction",
+        "warn_below": 0.10,
+        "message": (
+            "few variants received a real (non-intergenic) consequence — "
+            "annotation may be degenerate"
+        ),
+    },
+    {   # the PRD's "~100%-intergenic" smell; loose ceiling so a real
+        # high-intergenic WGS/off-target run still passes.
+        "check": "annotation_consequence_distribution",
+        "metric": "intergenic_fraction",
+        "warn_above": 0.95,
+        "message": (
+            "nearly all variants are intergenic — check the reference/"
+            "annotation cache"
+        ),
+    },
+]
+
+
 _RULE_PACKS: dict[str, list[dict]] = {
     "rnaseq": RNASEQ_RULE_PACK,
     "variant_calling": VARIANT_RULE_PACK,

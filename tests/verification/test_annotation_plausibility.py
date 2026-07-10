@@ -19,6 +19,7 @@ from contig.verification.annotation_plausibility import (
     _consequence_index_csq,
     _most_severe_rank,
     annotation_plausibility_metrics,
+    evaluate_annotation_plausibility,
 )
 
 # VEP CSQ header: Format declares Consequence at index 1.
@@ -206,3 +207,97 @@ def test_no_annotated_records_is_none(tmp_path):
 
     assert m.real_consequence_fraction is None
     assert m.intergenic_fraction is None
+
+
+# --- Evaluator: WARN-capped rule pack + never-a-false-pass UNVERIFIED -----------
+
+
+def test_in_band_metrics_pass(tmp_path):
+    # Same fixture as test_vep_csq_multi_transcript_aggregation: real_fraction
+    # 2/3 (>= 0.10) and intergenic_fraction 1/3 (<= 0.95) are both in-band.
+    body = VEP_HEADER + (
+        "chr1\t100\t.\tA\tG\t50\tPASS\t"
+        "CSQ=G|missense_variant&splice_region_variant|MODERATE|BRCA1,"
+        "G|synonymous_variant|LOW|BRCA1\n"
+        "chr1\t200\t.\tC\tT\t50\tPASS\tCSQ=T|intergenic_variant|MODIFIER|.\n"
+        "chr1\t300\t.\tG\tA\t50\tPASS\tCSQ=A|intron_variant|MODIFIER|GENE1\n"
+    )
+    vcf = _write(tmp_path, "vep.vcf", body)
+
+    results = evaluate_annotation_plausibility(vcf, label="S1")
+    by_check = {r.check: r for r in results}
+
+    assert by_check["annotation_real_fraction:S1"].status == "pass"
+    assert by_check["annotation_consequence_distribution:S1"].status == "pass"
+
+
+def test_out_of_band_metrics_warn_never_fail(tmp_path):
+    # All-intergenic fixture: real_fraction 0.0 (< 0.10 floor) and
+    # intergenic_fraction 1.0 (> 0.95 ceiling) are both out-of-band -> warn,
+    # never fail (WARN-cap), and each carries an expected_range.
+    body = VEP_HEADER + (
+        "chr1\t100\t.\tA\tG\t50\tPASS\tCSQ=G|intergenic_variant|MODIFIER|.\n"
+        "chr1\t200\t.\tC\tT\t50\tPASS\tCSQ=T|intergenic_variant|MODIFIER|.\n"
+    )
+    vcf = _write(tmp_path, "intergenic.vcf", body)
+
+    results = evaluate_annotation_plausibility(vcf, label="S1")
+    by_check = {r.check: r for r in results}
+
+    real = by_check["annotation_real_fraction:S1"]
+    intergenic = by_check["annotation_consequence_distribution:S1"]
+
+    assert real.status == "warn"
+    assert real.status != "fail"
+    assert real.expected_range is not None
+
+    assert intergenic.status == "warn"
+    assert intergenic.status != "fail"
+    assert intergenic.expected_range is not None
+
+
+def test_uncomputable_metrics_are_unverified(tmp_path):
+    # Unresolvable CSQ Format -> both metrics None -> each check present as an
+    # explicit unverified result (value None, kind metric), never silently
+    # skipped and never a pass.
+    body = CSQ_NO_CONSEQUENCE_HEADER + (
+        "chr1\t100\t.\tA\tG\t50\tPASS\tCSQ=G|MODERATE|BRCA1\n"
+    )
+    vcf = _write(tmp_path, "unresolvable.vcf", body)
+
+    results = evaluate_annotation_plausibility(vcf, label="S1")
+    by_check = {r.check: r for r in results}
+
+    real = by_check["annotation_real_fraction:S1"]
+    intergenic = by_check["annotation_consequence_distribution:S1"]
+
+    assert real.status == "unverified"
+    assert real.value is None
+    assert real.kind == "metric"
+
+    assert intergenic.status == "unverified"
+    assert intergenic.value is None
+    assert intergenic.kind == "metric"
+
+
+def test_check_names_use_label():
+    # Check names are "annotation_real_fraction:<label>" and
+    # "annotation_consequence_distribution:<label>"; default label is "sample".
+    from contig.verification.rule_pack import ANNOTATION_PLAUSIBILITY_PACK
+
+    checks = {rule["check"] for rule in ANNOTATION_PLAUSIBILITY_PACK}
+    assert checks == {"annotation_real_fraction", "annotation_consequence_distribution"}
+
+
+def test_default_label_is_sample(tmp_path):
+    body = VEP_HEADER + (
+        "chr1\t100\t.\tA\tG\t50\tPASS\tCSQ=G|missense_variant|MODERATE|BRCA1\n"
+    )
+    vcf = _write(tmp_path, "vep.vcf", body)
+
+    results = evaluate_annotation_plausibility(vcf)
+
+    assert any(r.check == "annotation_real_fraction:sample" for r in results)
+    assert any(
+        r.check == "annotation_consequence_distribution:sample" for r in results
+    )
