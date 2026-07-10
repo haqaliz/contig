@@ -15,7 +15,9 @@ from pathlib import Path
 from contig.verification.annotation_concordance import (
     _most_severe_term,
     evaluate_consequence_concordance,
+    evaluate_gene_symbol_concordance,
     parse_consequences,
+    parse_symbols,
 )
 
 # VEP CSQ header: Format declares Consequence at index 1.
@@ -63,6 +65,16 @@ def _csq_rec(chrom, pos, ref, alt, term):
 
 def _ann_rec(chrom, pos, ref, alt, term):
     return f"{chrom}\t{pos}\t.\t{ref}\t{alt}\t50\tPASS\tANN={alt}|{term}|MODERATE|GENE1\n"
+
+
+def _csq_sym_rec(chrom, pos, ref, alt, sym):
+    # SYMBOL is index 3 in VEP_HEADER's Format ("Allele|Consequence|IMPACT|SYMBOL").
+    return f"{chrom}\t{pos}\t.\t{ref}\t{alt}\t50\tPASS\tCSQ={alt}|missense_variant|MODERATE|{sym}\n"
+
+
+def _ann_sym_rec(chrom, pos, ref, alt, sym):
+    # Gene_Name is fixed index 3 in SnpEff ANN.
+    return f"{chrom}\t{pos}\t.\t{ref}\t{alt}\t50\tPASS\tANN={alt}|missense_variant|MODERATE|{sym}\n"
 
 
 def _sites(n, chrom="chr1", start=100):
@@ -239,3 +251,134 @@ def test_undeclared_key_empty(tmp_path):
 
     assert parse_consequences(vcf, "CSQ") == {}
     assert parse_consequences(vcf, "ANN") == {}
+
+
+# --- gene_symbol_concordance (informational-only; P3, C7 M4) --------------------
+#
+# Unlike consequence_concordance, this metric ALWAYS returns "pass" when
+# computable -- it reports agreement but never WARNs or FAILs (mirrors
+# count_concordance.py's always-pass `gene_overlap`). UNVERIFIED (value=None)
+# is reserved for the too-few-resolvable-pairs case only.
+
+
+def test_gene_symbol_informational_pass(tmp_path):
+    sites = _sites(10)
+    vep_syms = ["GENE1"] * 10
+    # Only 4/10 match -> a LOW fraction (0.4), but status must still be "pass"
+    # (informational never warns), not "warn".
+    snpeff_syms = ["GENE1"] * 4 + ["OTHER"] * 6
+    vep = _build_vcf(tmp_path, "vep_sym.vcf", VEP_HEADER, _csq_sym_rec, sites, vep_syms)
+    snpeff = _build_vcf(
+        tmp_path, "snpeff_sym.vcf", ANN_HEADER, _ann_sym_rec, sites, snpeff_syms
+    )
+
+    vep_map = parse_symbols(vep, "CSQ")
+    snpeff_map = parse_symbols(snpeff, "ANN")
+
+    results = evaluate_gene_symbol_concordance(vep_map, snpeff_map)
+
+    assert len(results) == 1
+    result = results[0]
+    assert result.check == "gene_symbol_concordance"
+    assert result.status == "pass"
+    assert result.value == 0.4
+    assert result.kind == "concordance"
+    assert "informational" in result.message
+
+
+def test_symbol_casefold_match(tmp_path):
+    sites = _sites(10)
+    vep_syms = ["BRCA1"] * 10
+    snpeff_syms = ["brca1"] * 10
+    vep = _build_vcf(tmp_path, "vep_sym.vcf", VEP_HEADER, _csq_sym_rec, sites, vep_syms)
+    snpeff = _build_vcf(
+        tmp_path, "snpeff_sym.vcf", ANN_HEADER, _ann_sym_rec, sites, snpeff_syms
+    )
+
+    vep_map = parse_symbols(vep, "CSQ")
+    snpeff_map = parse_symbols(snpeff, "ANN")
+
+    result = evaluate_gene_symbol_concordance(vep_map, snpeff_map)[0]
+
+    assert result.status == "pass"
+    assert result.value == 1.0
+
+
+def test_symbol_unresolvable_excluded(tmp_path):
+    # 12 shared sites: 10 resolvable pairs (all matching), plus 2 sites where the
+    # snpeff side is "." / empty (unresolvable). Those 2 must be EXCLUDED from the
+    # denominator, not counted as mismatches -- proving the denominator is the
+    # RESOLVABLE count (10), not the shared-site count (12). If they were wrongly
+    # counted as mismatches the fraction would be 10/12 = 0.8333, not 1.0.
+    sites = _sites(12)
+    vep_syms = ["GENE1"] * 12
+    snpeff_syms = ["GENE1"] * 10 + [".", ""]
+    vep = _build_vcf(tmp_path, "vep_sym.vcf", VEP_HEADER, _csq_sym_rec, sites, vep_syms)
+    snpeff = _build_vcf(
+        tmp_path, "snpeff_sym.vcf", ANN_HEADER, _ann_sym_rec, sites, snpeff_syms
+    )
+
+    vep_map = parse_symbols(vep, "CSQ")
+    snpeff_map = parse_symbols(snpeff, "ANN")
+
+    result = evaluate_gene_symbol_concordance(vep_map, snpeff_map)[0]
+
+    assert result.status == "pass"
+    assert result.value == 1.0
+    assert "10/10" in result.message
+
+
+def test_symbol_too_few_resolvable_unverified(tmp_path):
+    # 20 shared sites exist, but only 5 have BOTH sides resolvable (the rest have
+    # an unresolvable snpeff side) -- the RESOLVABLE count (5), not the shared-site
+    # count (20), must gate this to UNVERIFIED.
+    sites = _sites(20)
+    vep_syms = ["GENE1"] * 20
+    snpeff_syms = ["GENE1"] * 5 + ["."] * 15
+    vep = _build_vcf(tmp_path, "vep_sym.vcf", VEP_HEADER, _csq_sym_rec, sites, vep_syms)
+    snpeff = _build_vcf(
+        tmp_path, "snpeff_sym.vcf", ANN_HEADER, _ann_sym_rec, sites, snpeff_syms
+    )
+
+    vep_map = parse_symbols(vep, "CSQ")
+    snpeff_map = parse_symbols(snpeff, "ANN")
+
+    result = evaluate_gene_symbol_concordance(vep_map, snpeff_map)[0]
+
+    assert result.status == "unverified"
+    assert result.value is None
+    assert result.kind == "concordance"
+
+
+def test_symbol_index_csq_resolution(tmp_path):
+    # SYMBOL at a non-obvious position (index 4, buried among other subfields).
+    header = (
+        "##fileformat=VCFv4.2\n"
+        '##INFO=<ID=CSQ,Number=.,Type=String,Description="Consequence annotations from '
+        'Ensembl VEP. Format: Allele|Gene|Feature|BIOTYPE|SYMBOL|Consequence">\n'
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+    )
+    body = (
+        header
+        + "chr1\t100\t.\tA\tG\t50\tPASS\t"
+        "CSQ=G|ENSG1|ENST1|protein_coding|BRCA1|missense_variant\n"
+    )
+    vcf = _write(tmp_path, "vep_sym_nonobvious.vcf", body)
+
+    result = parse_symbols(vcf, "CSQ")
+
+    assert result[("chr1", "100", "A", "G")] == "brca1"
+
+    # A CSQ header whose Format has NO SYMBOL subfield -> parse_symbols returns {}.
+    no_symbol_header = (
+        "##fileformat=VCFv4.2\n"
+        '##INFO=<ID=CSQ,Number=.,Type=String,Description="Consequence annotations from '
+        'Ensembl VEP. Format: Allele|Consequence|IMPACT">\n'
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+    )
+    body2 = (
+        no_symbol_header + "chr1\t100\t.\tA\tG\t50\tPASS\tCSQ=G|missense_variant|MODERATE\n"
+    )
+    vcf2 = _write(tmp_path, "vep_sym_nosymbol.vcf", body2)
+
+    assert parse_symbols(vcf2, "CSQ") == {}
