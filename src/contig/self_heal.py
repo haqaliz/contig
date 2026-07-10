@@ -22,7 +22,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from contig.bundle import compute_output_checksums, compute_reference_identity, write_bundle
+from contig.bundle import (
+    compute_annotation_identity,
+    compute_output_checksums,
+    compute_reference_identity,
+    write_bundle,
+)
 from contig.corpus import append_case, failure_case_from_run
 from contig.detect import diagnose_failure
 from contig.events import parse_resource_usage_file
@@ -1258,6 +1263,7 @@ def _finalize(
     record.repair_history = repair_history
     record.output_checksums = compute_output_checksums(_results_dir(record, run_dir))
     record.reference_identity = compute_reference_identity(record.parameters)
+    record.annotation_identity = compute_annotation_identity(run_dir)
     if harmonized_reference_direction and record.reference_identity is not None:
         record.harmonized_reference_direction = harmonized_reference_direction
         record.reference_identity.harmonized = True

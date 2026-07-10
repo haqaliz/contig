@@ -135,6 +135,22 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
         vcfs = sorted(p for p in run_dir.rglob(pattern) if p.is_file())
         if vcfs:
             results.extend(evaluate_variant_plausibility(vcfs[0]))
+    # Annotation structural verification (capability C7, germline slice). Gated to
+    # germline. We look for an annotated VCF (one carrying CSQ/ANN) anywhere under
+    # the run and verify the annotation step ran over every record. Absent
+    # annotation is handled inside evaluate_annotation_structural as UNVERIFIED, so
+    # a plain (un-annotated) germline run is never dragged down — we simply don't
+    # find an annotated VCF and skip. Research-use only: no significance claim.
+    if assay == "variant_calling":
+        from contig.verification.annotation_structural import (
+            annotation_metrics,
+            evaluate_annotation_structural,
+        )
+
+        for vcf in sorted(run_dir.rglob("*.vcf.gz")):
+            if annotation_metrics(vcf).info_key is not None:
+                results.extend(evaluate_annotation_structural(vcf))
+                break
     # Somatic biological-plausibility checks (capability C4 follow-on): VAF
     # distribution, somatic variant count, and panel-of-normals presence, all
     # computed from the tumor column of the Mutect2 VCF. Gated strictly to the

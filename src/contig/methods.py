@@ -78,6 +78,18 @@ def _reference_clause(record: RunRecord) -> str:
     )
 
 
+def _annotation_clause(record: RunRecord) -> str:
+    """A clause attributing the annotation tool + DB version, if recorded."""
+    ai = record.annotation_identity
+    if ai is None:
+        return ""
+    version = f" {ai.version}" if ai.version else ""
+    return (
+        f" Variant annotation was performed with {ai.tool}{version}; annotations are"
+        " reported as produced by that tool and its databases (research use)."
+    )
+
+
 def _qc_clause(record: RunRecord) -> str:
     """A summary of the QC checks behind the verdict, or the unverified note."""
     verdict = record.verdict
@@ -122,6 +134,7 @@ def render_methods(record: RunRecord) -> str:
         opening
         + _params_clause(record)
         + _reference_clause(record)
+        + _annotation_clause(record)
         + _provenance_clause(record)
         + _qc_clause(record)
     )
