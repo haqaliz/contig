@@ -213,6 +213,12 @@ class AnnotationProvenance(BaseModel):
 
     tool: Literal["VEP", "SnpEff"]
     version: str | None = None
+    # The annotation cache/build identifier the tool ran against (VEP cache basename
+    # e.g. "110_GRCh38"; SnpEff genome DB e.g. "GRCh38.105"). This is the cache/build
+    # release, NOT a per-database (ClinVar/gnomAD) version -- never over-claim it as
+    # a "database version". None when the header carries no such token (never
+    # fabricated). Optional/defaulted so pre-M5 bundles still load.
+    db_version: str | None = None
     raw_header: str | None = None
 
 

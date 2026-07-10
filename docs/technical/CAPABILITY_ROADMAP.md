@@ -574,7 +574,7 @@ held-out-accuracy trend over corpus/loop versions.
 
 ---
 
-## C7. Research-use variant annotation & prioritization  ·  M1 + M2 + M3 + M4 SHIPPED (Unreleased) — germline structural verify + provenance, somatic gate, annotation plausibility (both assays), VEP-vs-SnpEff concordance (both assays); surface+eval (M5) pending
+## C7. Research-use variant annotation & prioritization  ·  M1 + M2 + M3 + M4 + M5 (surface + provenance) SHIPPED (Unreleased) — germline structural verify + provenance, somatic gate, annotation plausibility (both assays), VEP-vs-SnpEff concordance (both assays), "corroborated by" surface + cache/build provenance; M5 C6 eval fold-in still deferred
 
 Add an **annotation** assay: run the annotation step (VEP / SnpEff against ClinVar, gnomAD)
 that attaches functional and population context to a call set, and **verify it ran correctly
@@ -671,10 +671,21 @@ better, never redundant (`CLAUDE.md` #2/#3).
   at most WARN, never changes the `verify` exit code; only-one-annotator (e.g. missing SnpEff
   cache), annotation absent, too few shared/resolvable variants, or an ambiguous layout →
   **UNVERIFIED, never a false pass**. Test-first, no real VEP/SnpEff/sarek in CI.
-- **M5 — surface + eval fold-in.** "Corroborated by" line, DB-version provenance in the
-  reproduce bundle, annotation outcomes folded into the C6 eval corpus.
-- **M5 — surface + eval fold-in.** "Corroborated by" line, DB-version provenance in the
-  reproduce bundle, annotation outcomes folded into the C6 eval corpus.
+- **M5 — surface + eval fold-in. Surface + provenance SHIPPED (Unreleased); eval
+  fold-in DEFERRED.** A pure `verification/annotation_surface.py::corroborated_by_line`
+  *reads* M4's `consequence_concordance`/`gene_symbol_concordance` results (never
+  recomputes) into a single "Corroborated by VEP and SnpEff: …" line — gene-symbol half
+  marked informational, omitted (returns `None`) whenever consequence concordance is
+  absent/UNVERIFIED — rendered on the **text report, HTML report, `contig methods`, and
+  the Next.js dashboard** concordance card. `AnnotationProvenance` gains a `db_version`
+  parsed honestly from the VCF header (VEP `cache="…"` basename token, SnpEff
+  `##SnpEffCmd`/`##SnpEffGenomeVersion` genome token; absent → `None`, never fabricated),
+  labelled **"cache/build"** (not "database version" — it is the annotator cache/build id,
+  not a per-database release), rendered in methods + the HTML provenance panel + dashboard,
+  and **round-tripped through the reproduce bundle** with pre-M5 back-compat (legacy
+  bundles default `db_version` to `None`). Research-use only; no real VEP/SnpEff/sarek in
+  CI. **Still deferred:** folding annotation concordance/plausibility outcomes into the C6
+  eval corpus — blocked pending a labeling design for the unlabeled annotation signals.
 
 **Acceptance (test-first):** synthetic annotated-VCF fixtures (tiny VEP-`CSQ` / SnpEff-`ANN`
 samples); an annotated call set with records passes the structural check with the tool + DB
@@ -702,7 +713,7 @@ ever. See [`../planning/variant-annotation-assay/prd.md`](../planning/variant-an
 | C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased); Strelka2-native VAF, FAIL severity + PON reference wiring deferred | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
 | C6 | Eval flywheel as a continuous loop | M6 (detector held-out guard slice 1 SHIPPED, Unreleased — honestly 0.833/10:12, two classes structurally unreachable; repair-loop outcome-match guard slice 2 SHIPPED, Unreleased — honestly 1.0/7:7, 5 classes covered; both wired into CI; folding C1/C3 signals + held-out-accuracy trend pending) | Compounding accuracy from real runs |
-| C7 | Research-use variant annotation & prioritization | M1 + M2 + M3 + M4 SHIPPED (Unreleased) — germline structural verify + provenance, somatic annotation gate, annotation plausibility (both assays), VEP-vs-SnpEff concordance (both assays: `consequence_concordance` WARN-capped + `gene_symbol_concordance` informational, auto in the verdict, both VCF layouts, annotator-version provenance pair); surface+eval (M5) pending (germline+somatic `annotation_present`/`annotation_complete` structural checks via `VARIANT_ASSAYS`, `AnnotationProvenance` tool+DB-version capture, `--tools …,vep` enablement on both assays, `annotation_real_fraction`/`annotation_consequence_distribution` plausibility checks, all WARN-capped/UNVERIFIED-when-absent; live run may still need a VEP/SnpEff cache Contig does not yet wire — absent annotation degrades to UNVERIFIED, never a false pass; verify-only, prioritization deferred) | Disease-research breadth on-thesis, new corpus; run+verify annotation, never a clinical verdict |
+| C7 | Research-use variant annotation & prioritization | M1 + M2 + M3 + M4 + M5 surface+provenance SHIPPED (Unreleased) — germline structural verify + provenance, somatic annotation gate, annotation plausibility (both assays), VEP-vs-SnpEff concordance (both assays: `consequence_concordance` WARN-capped + `gene_symbol_concordance` informational, auto in the verdict, both VCF layouts, annotator-version provenance pair), M5 "corroborated by" line across text/HTML report + `contig methods` + dashboard (reads M4 results, never recomputes) + `AnnotationProvenance.db_version` cache/build token (VEP `cache=` / SnpEff genome) rendered and round-tripped through reproduce with pre-M5 back-compat; **M5 C6 eval fold-in still DEFERRED** (blocked on labeling design) (germline+somatic `annotation_present`/`annotation_complete` structural checks via `VARIANT_ASSAYS`, `AnnotationProvenance` tool+cache/build capture, `--tools …,vep` enablement on both assays, `annotation_real_fraction`/`annotation_consequence_distribution` plausibility checks, all WARN-capped/UNVERIFIED-when-absent; live run may still need a VEP/SnpEff cache Contig does not yet wire — absent annotation degrades to UNVERIFIED, never a false pass; verify-only, prioritization deferred) | Disease-research breadth on-thesis, new corpus; run+verify annotation, never a clinical verdict |
 
 **One-line mantra:** make every verdict harder to fool, recover more failures
 without a human, and let every run make the next verdict smarter.

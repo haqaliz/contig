@@ -162,6 +162,25 @@ def test_annotation_identity_accepts_legacy_singular():
     assert record.annotation_identity == [AnnotationProvenance(tool="VEP", version="v110")]
 
 
+def test_annotation_identity_legacy_dict_without_db_version_defaults_none():
+    # Pre-M5 bundles serialized annotation entries with no `db_version` key. Such
+    # a dict must still load and default `db_version` to None (never fabricated),
+    # so old bundles verify/reproduce unchanged.
+    from contig.models import AnnotationProvenance
+
+    legacy_dict = {
+        "run_id": "run-pre-m5",
+        "pipeline": "nf-core/sarek",
+        "pipeline_revision": "3.5.1",
+        "target": {"backend": "local", "container_runtime": "docker", "work_dir": "/tmp/run"},
+        "input_checksums": {},
+        "annotation_identity": [{"tool": "VEP", "version": "v110"}],
+    }
+    record = RunRecord.model_validate(legacy_dict)
+    assert record.annotation_identity == [AnnotationProvenance(tool="VEP", version="v110")]
+    assert record.annotation_identity[0].db_version is None
+
+
 def test_annotation_identity_defaults_to_empty_list():
     record = _minimal_record([])
     assert record.annotation_identity == []

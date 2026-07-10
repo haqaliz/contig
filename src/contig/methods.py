@@ -13,6 +13,7 @@ import os
 
 from contig.models import RunRecord
 from contig.registry import assay_for_pipeline
+from contig.verification.annotation_surface import corroborated_by_line
 
 # Human-readable assay labels for the prose. A pipeline whose assay is not in the
 # curated registry simply renders without an assay clause (see render_methods).
@@ -94,13 +95,36 @@ def _annotation_clause(record: RunRecord) -> str:
         provenances = [provenances]
     if not provenances:
         return ""
-    rendered = "; ".join(
-        f"{ai.tool}{f' {ai.version}' if ai.version else ''}" for ai in provenances
-    )
+    def _one(ai: object) -> str:
+        # "VEP v110 (cache/build 110_GRCh38)"; the cache/build parenthetical is
+        # omitted entirely when db_version is absent (no orphan label). Labeled
+        # "cache/build", never "database version" (it is the annotation cache
+        # release, not a ClinVar/gnomAD version -- PRD D1/R2).
+        base = f"{ai.tool}{f' {ai.version}' if ai.version else ''}"
+        db_version = getattr(ai, "db_version", None)
+        if db_version:
+            return f"{base} (cache/build {db_version})"
+        return base
+
+    rendered = "; ".join(_one(ai) for ai in provenances)
     return (
         f" Variant annotation was performed with {rendered}; annotations are"
         " reported as produced by that tool and its databases (research use)."
     )
+
+
+def _corroboration_clause(record: RunRecord) -> str:
+    """The M4 cross-tool corroboration sentence, or '' when not computable.
+
+    Sourced verbatim from the shared `corroborated_by_line` helper (which reads
+    M4's already-computed concordance results and never recomputes); it already
+    names the annotators, so it is appended as a self-contained sentence right
+    after the annotation clause. `None` -> omitted entirely (PRD D2).
+    """
+    line = corroborated_by_line(record)
+    if line is None:
+        return ""
+    return " " + line
 
 
 def _qc_clause(record: RunRecord) -> str:
@@ -148,6 +172,7 @@ def render_methods(record: RunRecord) -> str:
         + _params_clause(record)
         + _reference_clause(record)
         + _annotation_clause(record)
+        + _corroboration_clause(record)
         + _provenance_clause(record)
         + _qc_clause(record)
     )

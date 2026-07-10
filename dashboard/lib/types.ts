@@ -80,6 +80,19 @@ export interface TaskResource {
   pct_cpu: number;
 }
 
+// One annotation-tool provenance entry (mirror of AnnotationProvenance in
+// src/contig/models.py). A variant run may carry more than one (M4 enables both
+// VEP and SnpEff). `db_version` is the annotation cache/build identifier (e.g.
+// "110_GRCh38"), labeled "cache/build" in the UI, never "database version" (PRD
+// D1): it is the annotation cache release, not a ClinVar/gnomAD version. Absent
+// on pre-M5 records, so it is null when the header carried no cache/genome token.
+export interface AnnotationProvenance {
+  tool: string;
+  version: string | null;
+  db_version: string | null;
+  raw_header?: string | null;
+}
+
 export interface RunRecord {
   run_id: string;
   pipeline: string;
@@ -97,6 +110,10 @@ export interface RunRecord {
   // Per-task duration, peak memory, and cpu, parsed from the run's trace. Empty
   // for older runs (predating resource capture) and for runs with no trace.
   resource_usage: TaskResource[];
+  // The annotation tool(s) + cache/build recorded for a variant run (M4/M5).
+  // Absent for non-annotated runs and older records; the concordance card reads
+  // it for annotator names and the cache/build note.
+  annotation_identity?: AnnotationProvenance[];
   verdict: Verdict;
 }
 
