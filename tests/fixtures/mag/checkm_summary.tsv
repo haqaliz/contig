@@ -1,0 +1,4 @@
+Bin Id	Marker lineage	# genomes	# markers	# marker sets	0	1	2	3	4	5+	Completeness	Contamination	Strain heterogeneity
+bin.1	k__Bacteria (UID203)	5449	104	58	2	99	3	0	0	0	98.28	1.72	0.00
+bin.2	o__Bacteroidales (UID2657)	199	277	158	15	260	2	0	0	0	89.45	1.10	0.00
+bin.3	k__Bacteria (UID203)	5449	104	58	48	52	4	0	0	0	52.30	3.85	20.00

@@ -206,15 +206,25 @@ AMPLISEQ_RULE_PACK: list[dict] = [
 ]
 
 
-# Shotgun metagenomics per-bin/per-assembly QC (nf-core/mag). Assembly stats come
-# from QUAST and bin quality from CheckM/BUSCO, both ingested by MultiQC:
-#   n50: assembly contig N50 in bp; a tiny N50 is a fragmented (failed) assembly.
-#       QUAST reports N50 in general stats; the MultiQC slug is unverified here.
-#   completeness: CheckM bin completeness (%); how much of the expected single-copy
-#       marker set the bin contains. MultiQC slug unverified.
-#   contamination: CheckM bin contamination (%); marker duplication indicating the
-#       bin mixes genomes. Lower is better, so this is an upper-bound check. Slug
-#       unverified.
+# Shotgun metagenomics per-bin QC (nf-core/mag). The exact MultiQC
+# general-stats slug for these metrics is unverified (QUAST/CheckM report
+# per-assembly/per-bin fields that the pipeline summarizes, not a stable
+# general-stats field), so `runner._discover_qc`'s mag gate ingests QUAST's
+# and CheckM's own on-disk stats artifacts directly via
+# `verification/mag_metrics.py`, bypassing MultiQC entirely (see
+# `_DEDICATED_METRIC_ASSAYS`). The entity key is the BIN, not the sample.
+# Per-metric source:
+#   n50: assembly contig N50 in bp; a tiny N50 is a fragmented (failed)
+#       assembly. Read from the `N50` column of QUAST's
+#       `transposed_report.tsv` (`parse_quast_report`).
+#   completeness: CheckM bin completeness (%); how much of the expected
+#       single-copy marker set the bin contains. Read from the `Completeness`
+#       column of CheckM's summary table (`parse_checkm_summary`).
+#   contamination: CheckM bin contamination (%); marker duplication
+#       indicating the bin mixes genomes. Lower is better, so this is an
+#       upper-bound check (`warn_above`/`fail_above`). Read from the
+#       `Contamination` column of CheckM's summary table
+#       (`parse_checkm_summary`).
 # Thresholds track the common CheckM "medium/high quality MAG" rules of thumb
 # (completeness and contamination) and a coarse assembly-contiguity floor; they
 # are illustrative, tunable engineering defaults, not biological claims.

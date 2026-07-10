@@ -122,3 +122,31 @@ def test_checkm_summary_multi_bin_no_cross_bin_bleed(tmp_path: Path) -> None:
     out = parse_checkm_summary(path)
     assert set(out) == {"bin.1", "bin.2"}
     assert out["bin.1"] != out["bin.2"]
+
+
+# --------------------------------------------------------------------------- #
+# Integration: parse the committed realistic fixture set end-to-end
+# (tests/fixtures/mag/), shaped like real nf-core/mag QUAST + CheckM output
+# (includes an `unbinned` QUAST row, which has no CheckM counterpart). Belt-
+# and-suspenders on the real field labels, per Phase 3 of the plan.
+# --------------------------------------------------------------------------- #
+
+
+def test_committed_transposed_report_fixture_parses_bins() -> None:
+    path = _FIXTURES_DIR / "transposed_report.tsv"
+    out = parse_quast_report(path)
+
+    assert set(out) == {"bin.1", "bin.2", "bin.3", "unbinned"}
+    assert out["bin.1"]["n50"] == 112340.0
+    assert out["bin.2"]["n50"] == 54200.0
+    assert out["bin.3"]["n50"] == 4210.0
+
+
+def test_committed_checkm_summary_fixture_parses_bins() -> None:
+    path = _FIXTURES_DIR / "checkm_summary.tsv"
+    out = parse_checkm_summary(path)
+
+    assert set(out) == {"bin.1", "bin.2", "bin.3"}
+    assert out["bin.1"] == {"completeness": 98.28, "contamination": 1.72}
+    assert out["bin.2"] == {"completeness": 89.45, "contamination": 1.10}
+    assert out["bin.3"] == {"completeness": 52.30, "contamination": 3.85}

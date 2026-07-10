@@ -8,6 +8,49 @@ All notable changes to Contig are recorded here. The format follows
 
 ### Added
 
+- **Mag QUAST + CheckM QC ingestion — the dormant shotgun-metagenomics verdict
+  now fires** (capability C3, biological-plausibility verification — the `mag`
+  slice of `assay-qc-verdict-fires`, fast-follow #3 on the seam the methylseq
+  and ampliseq slices established; this closes out the seam). `mag` already
+  carried a biological QC pack (`MAG_RULE_PACK`: assembly N50, bin
+  completeness, bin contamination), but like methylseq/ampliseq it **silently
+  no-oped on every real run**: the exact MultiQC general-stats slug for these
+  metrics is unverified, and `nf-core/mag` does not reliably route them there.
+  This slice makes the checks **fire** by ingesting QUAST's and CheckM's own
+  on-disk stats artifacts:
+  - A new `verification/mag_metrics.py` with deterministic, stdlib-only
+    parsers: `parse_quast_report` (header-driven `transposed_report.tsv`;
+    `n50` from the `N50` column, case-insensitive) and `parse_checkm_summary`
+    (header-driven CheckM summary table; `completeness`/`contamination` from
+    the `Completeness`/`Contamination` columns, case-insensitive). The
+    **entity key is the BIN**, not the sample — matching `MAG_RULE_PACK`'s own
+    test fixture and nf-core/mag's per-bin QUAST/CheckM output. Like
+    ampliseq's DADA2 artifacts, both files are multi-bin, so both parsers
+    return `{bin: {slug: value}}` directly for every bin/assembly row in the
+    file. A metric that is absent or non-numeric is omitted everywhere, never
+    coerced to 0.
+  - A dedicated `_discover_qc` gate (`assay == "mag"`, mirroring the ampliseq
+    gate) whose `_locate_mag_qc` rglobs `transposed_report.tsv` and the CheckM
+    summary and **merges the two parsers' per-bin dicts by bin id**
+    (`setdefault(bin, {}).update(...)`) before evaluating `MAG_RULE_PACK`. A
+    located bin yielding zero usable metrics emits one explicit
+    `mag_qc:<bin>` **UNVERIFIED** rather than a silent no-op; no artifact at
+    all skips silently (structural QC owns a missing required output). A bin
+    with only `transposed_report.tsv` (no CheckM summary) evaluates
+    `assembly_n50` and is **not** forced into a false whole-bin UNVERIFIED.
+  - **Single authoritative source**: `mag` joins `methylseq`/`ampliseq` in
+    `_DEDICATED_METRIC_ASSAYS`, so a check can never double-emit if a future
+    MultiQC build ever carries a matching slug. `mag` stays registered in
+    `_RULE_PACKS`/`rule_pack_for` (unchanged contract) — only metric
+    *delivery* moved to the dedicated gate.
+  - CheckM only this slice; BUSCO as an alternate completeness source is
+    deferred. No band re-calibration (illustrative engineering defaults,
+    unchanged); no change to `methylseq`, `ampliseq`, `scrnaseq`, `rnaseq`, or
+    the variant paths. Additive to the verdict only: no `FailureClass`,
+    model, or persisted-record change; no new dependency. Local,
+    deterministic, no raw-read egress. Built test-first with a committed
+    realistic QUAST + CheckM fixture set — no real `nf-core/mag` run in CI.
+
 - **Methylseq bisulfite QC ingestion — the dormant methylation verdict now fires**
   (capability C3, biological-plausibility verification — the methylseq slice of
   `assay-qc-verdict-fires`, the same seam as v0.21.0's single-cell fix; `ampliseq`
