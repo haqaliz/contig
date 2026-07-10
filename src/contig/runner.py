@@ -33,6 +33,7 @@ from contig.verification.ampliseq_metrics import parse_asv_table, parse_dada2_ov
 from contig.verification.annotation_concordance import (
     evaluate_annotation_concordance_from_run,
 )
+from contig.verification.mag_metrics import parse_checkm_summary, parse_quast_report
 from contig.verification.methylseq_metrics import (
     parse_bismark_alignment_report,
     parse_bismark_conversion_report,
@@ -42,6 +43,7 @@ from contig.verification.qc_ingest import parse_multiqc_general_stats_file
 from contig.verification.rnaseq_plausibility import evaluate_rnaseq_plausibility
 from contig.verification.rule_pack import (
     AMPLISEQ_RULE_PACK,
+    MAG_RULE_PACK,
     METHYLSEQ_RULE_PACK,
     SCRNASEQ_RULE_PACK,
     evaluate,
@@ -61,7 +63,7 @@ from contig.verification.variant_metrics import evaluate_variant_plausibility
 # Assays whose biological metrics come from a dedicated on-disk gate below, NOT
 # from MultiQC general-stats. The generic pack path skips them so a metric can
 # never be emitted twice if a future MultiQC ever carried a matching slug.
-_DEDICATED_METRIC_ASSAYS = {"methylseq", "ampliseq"}
+_DEDICATED_METRIC_ASSAYS = {"methylseq", "ampliseq", "mag"}
 
 # STARsolo writes a Summary.csv under each metric subdir (Gene/, GeneFull/, ...);
 # the enclosing dir named "<sample>.Solo.out" carries the sample id. These are the
@@ -200,6 +202,31 @@ def _locate_ampliseq_qc(run_dir: Path) -> dict[str, dict[str, float]]:
         for path in sorted(run_dir.rglob(pattern)):
             for sample, sample_metrics in parser(path).items():
                 located.setdefault(sample, {}).update(sample_metrics)
+    return located
+
+
+def _locate_mag_qc(run_dir: Path) -> dict[str, dict[str, float]]:
+    """Find QUAST + CheckM stats artifacts under a run dir -> {bin: {slug: value}}.
+
+    Structural difference from `_locate_methylseq_qc`, same shape as
+    `_locate_ampliseq_qc`: QUAST's `transposed_report.tsv` and CheckM's
+    summary table are each a SINGLE multi-bin file (not one file per bin), so
+    each parser already returns `{bin: {slug: value}}` directly, and this just
+    MERGES the two dicts by bin id (`setdefault(bin, {}).update(...)`) rather
+    than deriving a bin id from the filename. A bin present in only one of the
+    two artifacts keeps whatever parsed; a bin whose only located artifact(s)
+    yield zero usable metrics still appears with an empty dict, so the gate
+    can emit an explicit UNVERIFIED rather than silently dropping it.
+    """
+    located: dict[str, dict[str, float]] = {}
+    artifact_globs = (
+        ("*transposed_report*.tsv", parse_quast_report),
+        ("*checkm_summary*.tsv", parse_checkm_summary),
+    )
+    for pattern, parser in artifact_globs:
+        for path in sorted(run_dir.rglob(pattern)):
+            for bin_id, bin_metrics in parser(path).items():
+                located.setdefault(bin_id, {}).update(bin_metrics)
     return located
 
 
@@ -395,6 +422,38 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
                         status="unverified",
                         message=(
                             f"{sample}: DADA2 stats found but no usable metric parsed"
+                        ),
+                        value=None,
+                        kind="metric",
+                    )
+                )
+    # Mag (shotgun metagenomics) assembly/bin QC (capability C3, mag slice).
+    # nf-core/mag does not reliably route QUAST's/CheckM's per-bin metrics
+    # into MultiQC general-stats under a stable slug, so a dedicated gate
+    # parses QUAST's and CheckM's own on-disk stats artifacts
+    # (transposed_report.tsv, CheckM summary) and drives MAG_RULE_PACK
+    # directly -- mirrors the ampliseq gate above. The entity key is the BIN
+    # (not the sample): `_locate_mag_qc` merges the two parsers' own
+    # `{bin: {...}}` dicts by bin id rather than deriving a bin id from the
+    # filename. A located bin with no usable metric yields one explicit
+    # UNVERIFIED (never a silent no-op or a false pass); no artifact at all
+    # skips silently (structural QC owns a missing required output). A bin
+    # with only a partial artifact set (e.g. QUAST only, no CheckM) evaluates
+    # the checks it can and is NOT forced into a whole-bin UNVERIFIED (C4).
+    # Gated strictly to mag; the generic MultiQC pack path above skips mag
+    # (_DEDICATED_METRIC_ASSAYS) so this gate is the single authoritative
+    # source (M6).
+    if assay == "mag":
+        for bin_id, bin_metrics in _locate_mag_qc(run_dir).items():
+            if bin_metrics:
+                results.extend(evaluate({bin_id: bin_metrics}, MAG_RULE_PACK))
+            else:
+                results.append(
+                    QCResult(
+                        check=f"mag_qc:{bin_id}",
+                        status="unverified",
+                        message=(
+                            f"{bin_id}: QUAST/CheckM stats found but no usable metric parsed"
                         ),
                         value=None,
                         kind="metric",

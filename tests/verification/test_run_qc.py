@@ -1014,3 +1014,169 @@ def test_discover_qc_ampliseq_gate_not_applied_to_other_assays(tmp_path):
 
     assert not any(r.check.startswith("dada2_read_retention:") for r in results)
     assert not any(r.check.startswith("ampliseq_qc:") for r in results)
+
+
+# --------------------------------------------------------------------------- #
+# mag QUAST + CheckM QC ingestion gate (mag-firing aspect of
+# assay-qc-verdict-fires). nf-core/mag does not reliably route QUAST's/
+# CheckM's per-bin metrics into MultiQC general-stats under a stable slug, so
+# a dedicated gate parses QUAST's and CheckM's own on-disk stats artifacts and
+# drives MAG_RULE_PACK. Mirrors the ampliseq gate above; the entity key is the
+# BIN (not the sample), matching the pack's own test fixture.
+# --------------------------------------------------------------------------- #
+
+_TRANSPOSED_REPORT_HEALTHY = (
+    "Assembly\t# contigs\tLargest contig\tTotal length\tN50\tL50\n"
+    "bin.1\t42\t120000\t3500000\t8500\t12\n"
+    "bin.2\t18\t95000\t2100000\t6200\t8\n"
+)
+_TRANSPOSED_REPORT_FAILED = (
+    "Assembly\t# contigs\tLargest contig\tTotal length\tN50\tL50\n"
+    "bin.1\t900\t1200\t50000\t300\t400\n"
+)
+_CHECKM_SUMMARY_HEALTHY = (
+    "Bin Id\tMarker lineage\t# genomes\t# markers\tCompleteness\tContamination\n"
+    "bin.1\tk__Bacteria\t100\t120\t95.2\t1.3\n"
+    "bin.2\tk__Bacteria\t100\t120\t88.0\t2.1\n"
+)
+
+
+def _write_mag_transposed_report(run_dir, text):
+    p = run_dir / "QUAST" / "transposed_report.tsv"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+    return p
+
+
+def _write_mag_checkm_summary(run_dir, text):
+    p = run_dir / "CheckM" / "checkm_summary.tsv"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+    return p
+
+
+def test_discover_qc_mag_healthy_quast_and_checkm_pass(tmp_path):
+    # C1: healthy QUAST + CheckM -> non-UNVERIFIED assembly_n50:<bin>,
+    # bin_completeness:<bin>, bin_contamination:<bin>.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_mag_transposed_report(run_dir, _TRANSPOSED_REPORT_HEALTHY)
+    _write_mag_checkm_summary(run_dir, _CHECKM_SUMMARY_HEALTHY)
+
+    results = _discover_qc(run_dir, assay="mag")
+    checks = {r.check: r for r in results}
+
+    assert "assembly_n50:bin.1" in checks
+    assert checks["assembly_n50:bin.1"].status != "unverified"
+    assert checks["assembly_n50:bin.1"].value == 8500.0
+    assert "bin_completeness:bin.1" in checks
+    assert checks["bin_completeness:bin.1"].status != "unverified"
+    assert checks["bin_completeness:bin.1"].value == 95.2
+    assert "bin_contamination:bin.1" in checks
+    assert checks["bin_contamination:bin.1"].status != "unverified"
+    assert checks["bin_contamination:bin.1"].value == 1.3
+
+
+def test_discover_qc_mag_grossly_failed_bin_fails(tmp_path):
+    # C2: N50 below fail_below (1000) -> FAIL.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_mag_transposed_report(run_dir, _TRANSPOSED_REPORT_FAILED)
+
+    results = _discover_qc(run_dir, assay="mag")
+    checks = {r.check: r for r in results}
+
+    assert checks["assembly_n50:bin.1"].status == "fail"
+
+
+def test_discover_qc_mag_zero_usable_metrics_is_unverified(tmp_path):
+    # C3: artifact present but zero usable metrics -> exactly one
+    # mag_qc:<bin> UNVERIFIED.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_mag_transposed_report(
+        run_dir, "Assembly\tN50\nbin.1\tN/A\n"  # non-numeric N50 -> nothing usable
+    )
+
+    results = _discover_qc(run_dir, assay="mag")
+
+    unverified = [r for r in results if r.check == "mag_qc:bin.1"]
+    assert len(unverified) == 1
+    assert unverified[0].status == "unverified"
+    assert unverified[0].value is None
+    assert unverified[0].kind == "metric"
+
+
+def test_discover_qc_mag_no_artifact_skips_silently(tmp_path):
+    # C3: no mag artifact at all -> no mag metric result, no crash.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    results = _discover_qc(run_dir, assay="mag")
+
+    assert not any(r.check.startswith("assembly_n50:") for r in results)
+    assert not any(r.check.startswith("mag_qc:") for r in results)
+
+
+def test_discover_qc_mag_partial_quast_only_no_unverified(tmp_path):
+    # C4: only QUAST present (no CheckM) -> assembly_n50 evaluates;
+    # completeness/contamination simply absent; no whole-bin mag_qc:<bin>
+    # UNVERIFIED.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_mag_transposed_report(run_dir, _TRANSPOSED_REPORT_HEALTHY)
+
+    results = _discover_qc(run_dir, assay="mag")
+    checks = {r.check: r for r in results}
+
+    assert "assembly_n50:bin.1" in checks
+    assert "bin_completeness:bin.1" not in checks
+    assert "bin_contamination:bin.1" not in checks
+    assert not any(r.check == "mag_qc:bin.1" for r in results)
+
+
+def test_discover_qc_mag_multi_bin_no_cross_bin_bleed(tmp_path):
+    # C5: multi-bin files -> each bin keyed separately, no cross-bin bleed.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_mag_transposed_report(run_dir, _TRANSPOSED_REPORT_HEALTHY)
+    _write_mag_checkm_summary(run_dir, _CHECKM_SUMMARY_HEALTHY)
+
+    results = _discover_qc(run_dir, assay="mag")
+    checks = {r.check: r for r in results}
+
+    assert checks["assembly_n50:bin.1"].value == 8500.0
+    assert checks["assembly_n50:bin.2"].value == 6200.0
+    assert checks["bin_completeness:bin.1"].value == 95.2
+    assert checks["bin_completeness:bin.2"].value == 88.0
+    assert checks["bin_contamination:bin.1"].value == 1.3
+    assert checks["bin_contamination:bin.2"].value == 2.1
+
+
+def test_discover_qc_mag_no_double_emit_with_multiqc(tmp_path):
+    # C6: a mag run whose MultiQC carries a matching slug does NOT
+    # double-emit; the dedicated gate is the single source (M6).
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_mag_transposed_report(run_dir, _TRANSPOSED_REPORT_HEALTHY)
+    _write_mag_checkm_summary(run_dir, _CHECKM_SUMMARY_HEALTHY)
+    mqc = run_dir / "multiqc_data.json"
+    mqc.write_text('{"report_general_stats_data":[{"bin.1":{"n50":8500.0}}]}')
+
+    results = _discover_qc(run_dir, assay="mag")
+
+    n50 = [r for r in results if r.check == "assembly_n50:bin.1"]
+    assert len(n50) == 1
+
+
+def test_discover_qc_mag_gate_not_applied_to_other_assays(tmp_path):
+    # C7: the mag gate is not applied to any other assay.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_mag_transposed_report(run_dir, _TRANSPOSED_REPORT_HEALTHY)
+    _write_mag_checkm_summary(run_dir, _CHECKM_SUMMARY_HEALTHY)
+
+    results = _discover_qc(run_dir, assay="rnaseq")
+
+    assert not any(r.check.startswith("assembly_n50:") for r in results)
+    assert not any(r.check.startswith("mag_qc:") for r in results)
