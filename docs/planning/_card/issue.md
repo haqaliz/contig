@@ -1,36 +1,44 @@
-# Card: annotation-germline-structural-verify (feat)
+# Card: annotation-plausibility (feat)
 
-Type: feat · id/slug: `annotation-germline-structural-verify` · owner: aliz
-Branch: `feat/annotation-germline-structural-verify/aliz`
+Type: feat · id/slug: `annotation-plausibility` · owner: aliz
+Branch: `feat/annotation-plausibility/aliz`
 Source: no GitHub issue — inline unit of work handed off by `/contig-next` (2026-07-10).
 
-The initiative PRD and M1 implementation plan already exist in-repo (committed to
-master), so this card links to them rather than restating them.
+The initiative PRD already exists in-repo (committed to master), so this card links
+to it rather than restating it.
 
 - Initiative PRD: `docs/planning/variant-annotation-assay/prd.md`
-- M1 implementation plan (authoritative, task-by-task TDD): `docs/planning/variant-annotation-assay/plan-m1.md`
-- Capability: C7 (research-use variant annotation & prioritization), milestone **M1**.
+- Capability: C7 (research-use variant annotation & prioritization), milestones **M2 + M3**.
+- M1 (germline structural verify + provenance) shipped in v0.25.0 (see `CHANGELOG.md`).
 
 ## Brief (from /contig-next handoff)
 
-Build C7 M1: research-use variant annotation, germline structural verify. Enable
-nf-core/sarek's built-in annotation step (VEP → `CSQ`) on the germline
-`variant_calling` assay, add a `verification/annotation_structural.py` verifier that
-proves the annotation *ran correctly* (every variant carries an annotation record),
-and capture the annotation tool + DB version into provenance (the C5
-`reference_identity` pattern), rendered in `contig methods`.
+Build C7 M2+M3: extend annotation verification past M1's germline-structural slice.
 
-Research-use only — Contig verifies the annotation EXECUTED, never adjudicates
-pathogenicity. WARN-capped; UNVERIFIED (never a false pass) when no annotated VCF is
-found. Mirrors the shipped somatic-plausibility slice. No real VEP/sarek in CI
-(synthetic VCF fixtures only).
+- **M2 — same verifier, somatic (small assay gate).** Gate M1's
+  `verification/annotation_structural.py` structural verifier and the
+  `AnnotationProvenance` capture to `somatic_variant_calling` (Mutect2/Strelka2 VCFs).
+  New assay gate only — no new verification logic.
+- **M3 — annotation plausibility (C3-style, both assays; the meat).** A new
+  plausibility pack for both germline `variant_calling` and `somatic_variant_calling`:
+  an annotated-fraction band plus a consequence-type-distribution sanity check parsed
+  from the VCF's `CSQ` (VEP) / `ANN` (SnpEff) INFO field. WARN-capped; degrades to
+  UNVERIFIED (never a false pass) when the annotation field is absent. Mirrors the
+  shipped somatic-VAF plausibility slice (`verification/somatic_plausibility.py`,
+  v0.14.0).
 
-## Known caveat to resolve in the dig (plan Task 4)
+Research-use only — Contig verifies the annotation ran *plausibly*, never adjudicates
+pathogenicity. Test-first with synthetic annotated-VCF fixtures covering **both** VEP
+`CSQ` and SnpEff `ANN` field shapes. No real VEP/SnpEff/sarek run in CI.
 
-The plan defers confirming the exact sarek `--tools` string (`haplotypecaller,vep`)
-and whether sarek 3.5.1 actually runs annotation without a `--vep_cache` /
-`--snpeff_cache` or `--step annotate`. De-risked but not eliminated: the verifier
-degrades to UNVERIFIED when annotation didn't run, so a missing cache surfaces
-honestly, not as a green verdict. Since no real VEP/sarek runs in CI, the M1 slice
-is shippable even if the live `--tools`/cache wiring needs a follow-on — but resolve
-and record the finding rather than silently assuming a cache exists.
+## Known caveat to resolve in the dig
+
+Carried from the C7 M1 card + `CHANGELOG.md` v0.25.0 live-cache caveat: enabling
+`--tools …,vep` makes sarek emit an annotated VCF, but a live run may still require a
+`--vep_cache`/`--download_cache` or `--step annotate` that Contig does not yet wire.
+Both the M2 structural verifier and the M3 plausibility pack degrade to **UNVERIFIED
+(never a false pass)** when annotation didn't run, so the slice is shippable on
+synthetic fixtures regardless. The concrete thing to pin in the dig: the exact **`CSQ`
+(VEP) vs `ANN` (SnpEff)** INFO field shapes M3 must parse for the consequence-type
+distribution — they differ in delimiter and field order, and the fixtures must cover
+both.
