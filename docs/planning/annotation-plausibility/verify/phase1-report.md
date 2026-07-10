@@ -113,3 +113,30 @@ assays.
 - No changes were made to `src/contig/verification/rule_pack.py`,
   `annotation_plausibility.py`, or any plausibility logic — those are Phase 2+ and
   out of scope for this phase.
+
+## Fix: fallback coverage
+
+Backfilled the missing test for the `resolved_assay is None` defensive arm flagged
+above (plan step 6 said "cover with the test"; no direct test existed).
+
+- Added `test_unresolvable_assay_falls_back_to_capturing_provenance` to
+  `tests/test_annotation_somatic_gate.py`. It drives the real seam
+  (`self_heal_run(...)`) with `assay=None` and an unregistered pipeline string
+  (`"legacy/unregistered-pipeline"`), over a run dir carrying an incidental
+  VEP-annotated VCF, exactly like the three existing provenance-gating tests in
+  that file. It first asserts `record.assay is None` and
+  `assay_for_pipeline(record.pipeline) is None` (proving `resolved_assay` is
+  genuinely `None`, i.e. neither field resolves), then asserts
+  `record.annotation_identity is not None` and `.tool == "VEP"` — the fallback
+  arm captured provenance rather than dropping it.
+- Confirmed the test genuinely reaches the fallback branch: temporarily inverted
+  the final assertion to `assert record.annotation_identity is None` and ran
+  `uv run pytest tests/test_annotation_somatic_gate.py -q -k INVERTED`, which
+  failed with `AssertionError: assert AnnotationProvenance(tool='VEP', ...) is
+  None` — proving the branch executes and populates provenance. Then flipped the
+  assertion back to the correct expectation (`is not None` / `tool == "VEP"`) and
+  restored the test's real name.
+- No production code was changed — only the test file.
+- Validation: `uv run pytest tests/test_annotation_somatic_gate.py
+  tests/test_annotation_provenance.py -q` → all green (9 passed). Full
+  `uv run pytest -q` → all green, exit code 0.

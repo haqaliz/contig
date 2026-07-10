@@ -6,6 +6,7 @@ import gzip
 from pathlib import Path
 
 from contig.models import ExecutionTarget
+from contig.registry import assay_for_pipeline
 from contig.runner import _discover_qc
 from contig.self_heal import self_heal_run
 
@@ -131,5 +132,40 @@ def test_germline_variant_assay_captures_annotation_provenance(tmp_path):
 
 def test_somatic_variant_assay_captures_annotation_provenance(tmp_path):
     record = _heal_with_incidental_vcf(tmp_path, assay="somatic_variant_calling")
+    assert record.annotation_identity is not None
+    assert record.annotation_identity.tool == "VEP"
+
+
+def test_unresolvable_assay_falls_back_to_capturing_provenance(tmp_path):
+    """The `resolved_assay is None` defensive arm in self_heal._finalize: a
+    record whose assay is neither persisted nor derivable from the pipeline
+    (legacy record predating both fields, or an unregistered pipeline) must
+    still attempt provenance capture rather than silently drop it for what
+    might be a genuine variant run."""
+    run_dir = tmp_path / "runs" / "r"
+    _write_gz(run_dir / "results" / "incidental_VEP.ann.vcf.gz", _VEP_BODY)
+
+    def executor(cmd, trace_path):
+        Path(trace_path).write_text(_trace_ok())
+        (Path(trace_path).parent / "run.log").write_text("done")
+        return 0
+
+    record = self_heal_run(
+        pipeline="legacy/unregistered-pipeline",
+        revision="1.0.0",
+        profiles=["test", "docker"],
+        target=_target(tmp_path / "w"),
+        input_paths=[],
+        runs_dir=tmp_path / "runs",
+        run_id="r",
+        executor=executor,
+        max_attempts=3,
+        assay=None,
+    )
+    # Sanity: this pipeline really is unresolvable, so resolved_assay is None
+    # and we're genuinely exercising the fallback arm, not the variant-assay one.
+    assert record.assay is None
+    assert assay_for_pipeline(record.pipeline) is None
+
     assert record.annotation_identity is not None
     assert record.annotation_identity.tool == "VEP"
