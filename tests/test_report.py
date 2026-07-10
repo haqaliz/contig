@@ -545,6 +545,46 @@ def test_html_report_shows_annotation_identity_rows_for_both_tools() -> None:
     assert "5.2" in html
 
 
+def test_html_report_shows_cache_build_when_db_version_present() -> None:
+    # M5: the Annotation identity panel surfaces the cache/build id in the value,
+    # honestly labeled "cache/build" (never "database version") per PRD D1/R2.
+    record = RunRecord(
+        run_id="r-ann-cb",
+        pipeline="nf-core/sarek",
+        pipeline_revision="3.5.1",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="VEP", status="COMPLETED", exit=0)],
+        annotation_identity=[
+            AnnotationProvenance(tool="VEP", version="v110", db_version="110_GRCh38"),
+        ],
+    )
+    html = render_run_report_html(record)
+    assert "Annotation identity" in html
+    assert "v110" in html
+    assert "cache/build 110_GRCh38" in html
+    assert "database version" not in html
+
+
+def test_html_report_omits_orphan_cache_build_when_db_version_absent() -> None:
+    # M5: an entry without a db_version renders tool+version only -- no orphan
+    # "cache/build" label in the panel.
+    record = RunRecord(
+        run_id="r-ann-nocb",
+        pipeline="nf-core/sarek",
+        pipeline_revision="3.5.1",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="SnpEff", status="COMPLETED", exit=0)],
+        annotation_identity=[AnnotationProvenance(tool="SnpEff", version="5.1")],
+    )
+    html = render_run_report_html(record)
+    assert "Annotation identity" in html
+    assert "SnpEff" in html
+    assert "5.1" in html
+    assert "cache/build" not in html
+
+
 def test_html_report_escapes_user_text() -> None:
     record = RunRecord(
         run_id="r1",

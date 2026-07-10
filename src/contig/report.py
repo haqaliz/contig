@@ -351,8 +351,20 @@ def render_run_report_html(
         annotation_identity = [annotation_identity]
     if annotation_identity:
         parts.append("<h3>Annotation identity</h3>")
+
+        def _ann_value(ai: object) -> str:
+            # "v110 · cache/build 110_GRCh38" — the cache/build id joins the tool
+            # version in one legible cell (S-2). The suffix is omitted when
+            # db_version is absent (no orphan label). Labeled "cache/build", never
+            # "database version" (PRD D1/R2). _provenance_rows escapes the value.
+            version = ai.version or "unknown"
+            db_version = getattr(ai, "db_version", None)
+            if db_version:
+                return f"{version} · cache/build {db_version}"
+            return version
+
         ann_rows: dict[str, object] = {
-            ai.tool: (ai.version or "unknown") for ai in annotation_identity
+            ai.tool: _ann_value(ai) for ai in annotation_identity
         }
         parts.append(f"<table><tbody>{_provenance_rows(ann_rows)}</tbody></table>")
 

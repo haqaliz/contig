@@ -94,9 +94,18 @@ def _annotation_clause(record: RunRecord) -> str:
         provenances = [provenances]
     if not provenances:
         return ""
-    rendered = "; ".join(
-        f"{ai.tool}{f' {ai.version}' if ai.version else ''}" for ai in provenances
-    )
+    def _one(ai: object) -> str:
+        # "VEP v110 (cache/build 110_GRCh38)"; the cache/build parenthetical is
+        # omitted entirely when db_version is absent (no orphan label). Labeled
+        # "cache/build", never "database version" (it is the annotation cache
+        # release, not a ClinVar/gnomAD version -- PRD D1/R2).
+        base = f"{ai.tool}{f' {ai.version}' if ai.version else ''}"
+        db_version = getattr(ai, "db_version", None)
+        if db_version:
+            return f"{base} (cache/build {db_version})"
+        return base
+
+    rendered = "; ".join(_one(ai) for ai in provenances)
     return (
         f" Variant annotation was performed with {rendered}; annotations are"
         " reported as produced by that tool and its databases (research use)."

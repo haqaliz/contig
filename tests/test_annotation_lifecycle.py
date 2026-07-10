@@ -55,6 +55,47 @@ def test_methods_renders_annotation_clause():
     assert "v110" in text
 
 
+def test_methods_renders_cache_build_when_db_version_present():
+    # M5: an annotation provenance entry carrying a db_version renders the
+    # cache/build identifier honestly labeled as "cache/build" (never "database
+    # version"), alongside tool + tool-version.
+    record = RunRecord(
+        run_id="r-cb",
+        pipeline="nf-core/sarek",
+        pipeline_revision="3.5.1",
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_checksums={},
+        assay="variant_calling",
+        annotation_identity=[
+            AnnotationProvenance(tool="VEP", version="v110", db_version="110_GRCh38"),
+        ],
+    )
+    text = render_methods(record)
+    assert "VEP" in text and "v110" in text
+    assert "cache/build 110_GRCh38" in text
+    # Must never over-claim it is a database version (PRD D1/R2).
+    assert "database version" not in text
+
+
+def test_methods_renders_no_orphan_cache_build_when_db_version_absent():
+    # M5: an entry without a db_version renders tool+version only -- no orphan
+    # "(cache/build )" label.
+    record = RunRecord(
+        run_id="r-nocb",
+        pipeline="nf-core/sarek",
+        pipeline_revision="3.5.1",
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_checksums={},
+        assay="variant_calling",
+        annotation_identity=[
+            AnnotationProvenance(tool="SnpEff", version="5.1"),
+        ],
+    )
+    text = render_methods(record)
+    assert "SnpEff" in text and "5.1" in text
+    assert "cache/build" not in text
+
+
 def test_methods_renders_both_annotators():
     # M4: a RunRecord carrying BOTH VEP and SnpEff provenance renders both
     # tool+version strings in the methods paragraph.
