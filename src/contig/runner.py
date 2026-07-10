@@ -26,6 +26,7 @@ from contig.bundle import compute_input_checksums, write_bundle
 from contig.events import parse_trace_file
 from contig.models import ExecutionTarget, QCResult, RunRecord, TaskEvent
 from contig.nfconfig import generate_nextflow_config
+from contig.registry import VARIANT_ASSAYS
 from contig.snakemake import build_snakemake_command, parse_snakemake_stats_file
 from contig.verification.qc_ingest import parse_multiqc_general_stats_file
 from contig.verification.rnaseq_plausibility import evaluate_rnaseq_plausibility
@@ -135,13 +136,15 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
         vcfs = sorted(p for p in run_dir.rglob(pattern) if p.is_file())
         if vcfs:
             results.extend(evaluate_variant_plausibility(vcfs[0]))
-    # Annotation structural verification (capability C7, germline slice). Gated to
-    # germline. We look for an annotated VCF (one carrying CSQ/ANN) anywhere under
-    # the run and verify the annotation step ran over every record. Absent
-    # annotation is handled inside evaluate_annotation_structural as UNVERIFIED, so
-    # a plain (un-annotated) germline run is never dragged down — we simply don't
-    # find an annotated VCF and skip. Research-use only: no significance claim.
-    if assay == "variant_calling":
+    # Annotation structural verification (capability C7; germline shipped M1,
+    # somatic enabled M2 — the SAME verifier, no new algorithm). Gated to both
+    # variant assays. We look for an annotated VCF (one carrying CSQ/ANN)
+    # anywhere under the run and verify the annotation step ran over every
+    # record. Absent annotation is handled inside evaluate_annotation_structural
+    # as UNVERIFIED, so a plain (un-annotated) run is never dragged down — we
+    # simply don't find an annotated VCF and skip. Research-use only: no
+    # significance claim.
+    if assay in VARIANT_ASSAYS:
         from contig.verification.annotation_structural import (
             annotation_metrics,
             evaluate_annotation_structural,

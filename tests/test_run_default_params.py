@@ -1,7 +1,8 @@
 """Phase 4 (M4): a per-assay declarative default_params seam injects `--tools`.
 
 A somatic sarek run must genuinely invoke sarek's somatic callers, so the
-resolved assay's registry `default_params` (e.g. `{"tools": "strelka,mutect2"}`)
+resolved assay's registry `default_params`
+(e.g. `{"tools": "strelka,mutect2,vep"}`)
 are merged into the run's `params` — WITHOUT overriding a user-supplied value —
 before the launch manifest is written and before self-heal runs. Every other
 assay keeps an empty default, so germline/RNA-seq command assembly is unchanged.
@@ -47,7 +48,7 @@ def _self_heal_params_spy(captured):
     return spy
 
 
-# (a) a somatic run injects --tools strelka,mutect2 --------------------------------
+# (a) a somatic run injects --tools strelka,mutect2,vep ----------------------------
 
 
 def test_somatic_run_injects_tools_into_params(tmp_path, monkeypatch):
@@ -61,17 +62,17 @@ def test_somatic_run_injects_tools_into_params(tmp_path, monkeypatch):
     )
     assert result.exit_code == 0, result.output
     assert captured and captured[0] is not None
-    assert captured[0].get("tools") == "strelka,mutect2"
+    assert captured[0].get("tools") == "strelka,mutect2,vep"
 
 
 def test_somatic_command_carries_tools_flag():
-    """The merged param becomes `--tools strelka,mutect2` in the Nextflow argv."""
-    params = {"outdir": "/out", "tools": "strelka,mutect2"}
+    """The merged param becomes `--tools strelka,mutect2,vep` in the Nextflow argv."""
+    params = {"outdir": "/out", "tools": "strelka,mutect2,vep"}
     cmd = build_nextflow_command(
         "nf-core/sarek", "3.5.1", ["docker"], "/trace", params=params
     )
     assert "--tools" in cmd
-    assert cmd[cmd.index("--tools") + 1] == "strelka,mutect2"
+    assert cmd[cmd.index("--tools") + 1] == "strelka,mutect2,vep"
 
 
 # (b) germline injects annotation tools; RNA-seq keeps an empty default => no --tools
@@ -132,8 +133,8 @@ def test_rerun_reinjects_tools_via_persisted_assay(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     # both the original run and the replay assembled --tools
     assert len(captured) == 2
-    assert captured[0].get("tools") == "strelka,mutect2"
-    assert captured[1].get("tools") == "strelka,mutect2"
+    assert captured[0].get("tools") == "strelka,mutect2,vep"
+    assert captured[1].get("tools") == "strelka,mutect2,vep"
 
 
 # (d) merge never clobbers an already-present (user) param -------------------------
@@ -148,7 +149,7 @@ def test_inject_default_params_does_not_override_existing_key():
 def test_inject_default_params_adds_registry_default():
     params: dict[str, object] = {"outdir": "/out"}
     _inject_default_params(params, "somatic_variant_calling")
-    assert params["tools"] == "strelka,mutect2"
+    assert params["tools"] == "strelka,mutect2,vep"
 
 
 def test_inject_default_params_empty_for_non_somatic():
@@ -169,4 +170,8 @@ def test_pipeline_entry_default_params_empty_by_default():
     # Germline now enables sarek's built-in annotation step (VEP) alongside the
     # caller (capability C7) — no longer an empty default.
     assert select_pipeline("variant_calling").default_params == {"tools": "haplotypecaller,vep"}
-    assert select_pipeline("somatic_variant_calling").default_params == {"tools": "strelka,mutect2"}
+    # Somatic now also enables sarek's built-in annotation step (VEP -> CSQ)
+    # alongside the somatic callers (capability C7, M2).
+    assert select_pipeline("somatic_variant_calling").default_params == {
+        "tools": "strelka,mutect2,vep"
+    }

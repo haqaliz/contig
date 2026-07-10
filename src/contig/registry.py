@@ -27,11 +27,17 @@ REGISTRY: list[PipelineEntry] = [
         revision="3.5.1",
         description="Somatic tumor–normal short-variant calling (nf-core/sarek), research use.",
         # Somatic sarek needs an explicit tool selection or it does nothing somatic;
-        # this default injects `--tools strelka,mutect2` at dispatch. R5 (honest
-        # scope): this only assembles the command — a real Mutect2 run typically
-        # also needs a panel-of-normals / germline resource that resolve_reference
-        # does not wire; that reference wiring is deferred (PRD Out-of-Scope / OQ2).
-        default_params={"tools": "strelka,mutect2"},
+        # this default injects `--tools strelka,mutect2,vep` at dispatch, enabling
+        # sarek's built-in annotation step (VEP -> CSQ) alongside the somatic
+        # callers (capability C7, M2: somatic gets the SAME annotation structural
+        # verifier + provenance capture already shipped for germline in M1).
+        # R5 (honest scope): this only assembles the command — a real Mutect2 run
+        # typically also needs a panel-of-normals / germline resource that
+        # resolve_reference does not wire; that reference wiring is deferred (PRD
+        # Out-of-Scope / OQ2). Injected non-destructively by _inject_default_params
+        # (a user who sets their own --tools keeps it); re-injected on
+        # rerun/resume, never stored as a derived param.
+        default_params={"tools": "strelka,mutect2,vep"},
     ),
     PipelineEntry(
         assay="variant_calling",
@@ -78,6 +84,12 @@ REGISTRY: list[PipelineEntry] = [
 
 _BY_ASSAY: dict[str, PipelineEntry] = {e.assay: e for e in REGISTRY}
 _ASSAY_BY_PIPELINE: dict[str, str] = {e.pipeline: e.assay for e in REGISTRY}
+
+# The two variant-calling assays that share the C7 annotation structural
+# verifier + AnnotationProvenance capture (germline shipped M1, somatic
+# enabled M2). Shared here (rather than duplicated as a literal tuple in both
+# runner.py and self_heal.py) since both modules gate on exactly this pair.
+VARIANT_ASSAYS: tuple[str, ...] = ("variant_calling", "somatic_variant_calling")
 
 
 class UnknownAssayError(KeyError):

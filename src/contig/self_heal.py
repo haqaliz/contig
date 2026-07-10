@@ -34,6 +34,7 @@ from contig.events import parse_resource_usage_file
 from contig.models import Diagnosis, ExecutionTarget, Patch, QCResult, RepairStep, RunRecord, RunSummary
 from contig.notify import emit_event
 from contig.reference_check import fasta_contigs, gtf_contigs
+from contig.registry import VARIANT_ASSAYS, assay_for_pipeline
 from contig.repair import propose_patches
 from contig.resource_sizing import (
     PEAK_RSS_SAFETY_FACTOR,
@@ -1263,7 +1264,20 @@ def _finalize(
     record.repair_history = repair_history
     record.output_checksums = compute_output_checksums(_results_dir(record, run_dir))
     record.reference_identity = compute_reference_identity(record.parameters)
-    record.annotation_identity = compute_annotation_identity(run_dir)
+    # Annotation provenance capture (capability C7) is gated to the two variant
+    # assays (germline shipped M1, somatic enabled M2) — other assays never had
+    # an annotation step to attribute, and gating avoids attaching provenance to
+    # an unrelated VCF that incidentally carries a CSQ/ANN-like token. Resolve
+    # the assay exactly as the rest of the engine does (methods.py:119): prefer
+    # the persisted `record.assay`, falling back to the legacy
+    # pipeline-derived lookup. If NEITHER resolves the assay (a legacy record
+    # predating both fields, or a pipeline the registry doesn't know), fall back
+    # to attempting the capture rather than silently dropping provenance for a
+    # possibly-genuine variant run — compute_annotation_identity itself already
+    # degrades to None when nothing is found, so this can never fabricate one.
+    resolved_assay = record.assay or assay_for_pipeline(record.pipeline)
+    if resolved_assay is None or resolved_assay in VARIANT_ASSAYS:
+        record.annotation_identity = compute_annotation_identity(run_dir)
     if harmonized_reference_direction and record.reference_identity is not None:
         record.harmonized_reference_direction = harmonized_reference_direction
         record.reference_identity.harmonized = True
