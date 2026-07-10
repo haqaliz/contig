@@ -1,129 +1,85 @@
-# Understanding: self-heal-bgzip-reference (Phase 2 deep dig)
+# Understanding: annotation-germline-structural-verify (Phase 2 deep dig)
 
-## Headline verdict (CONFIRMED with a real reproduction, 2026-07-08)
+Dig date: 2026-07-10. Validated against the worktree code by two read-only agents.
 
-The live-trigger question — the one make-or-break caveat from the card — is
-**settled, and it FLIPPED from the initial guess**:
+## What the work really is
 
-| Assay / pipeline | Gunzips the fasta before faidx? | Live trigger for the non-BGZF failure? |
-|---|---|---|
-| **rnaseq** (`nf-core/rnaseq@3.26.0`) | **YES** — `GUNZIP_FASTA` gated on `fasta.endsWith('.gz')` | **NO** — failure erased before faidx |
-| **variant_calling** (germline, `nf-core/sarek@3.5.1`) | **NO gunzip module exists in sarek at all** | **YES** |
-| **somatic_variant_calling** (`nf-core/sarek@3.5.1`) | **NO gunzip module exists in sarek at all** | **YES** |
+C7 milestone **M1**: enable nf-core/sarek's built-in annotation step (VEP → `CSQ`)
+on the germline `variant_calling` assay, add a structural verifier that proves the
+annotation **ran** (every variant carries an annotation record), and capture the
+annotation tool + version into provenance (C5 `reference_identity` pattern), rendered
+in `contig methods`. Research-use only — verify it EXECUTED, never adjudicate
+pathogenicity. WARN-capped; UNVERIFIED (never a false pass) when no annotated VCF.
 
-So the full **build/redirect self-heal is justified**, scoped to the **sarek
-assays** (germline + somatic). rnaseq is correctly excluded — its own
-`GUNZIP_FASTA` step makes the failure unreachable there.
+The PRD (`variant-annotation-assay/prd.md`) and the task-by-task TDD plan
+(`variant-annotation-assay/plan-m1.md`) already exist and are authoritative. This dig
+**validates the plan against current code** rather than re-deriving it.
 
-This is the opposite of the first dig agent's provisional "(b) detector-only"
-verdict, which assumed sarek gunzips "like rnaseq." Reading the **version-exact
-pinned source** disproved that: sarek 3.5.1 has no `gunzip` module (only
-`spring/decompress`, for FASTQ reads). This is exactly why the card said dig the
-trigger first, and why "confirm with a real run" was the right call.
+## Verdict: the plan is sound. Four wiring corrections + one caveat to record.
 
-### Evidence (version-exact, not memory)
+### Confirmed as the plan assumes
+- `QCResult` accepts `check/status/message/value/kind`; `QCStatus` includes
+  `pass/warn/fail/unverified`; `QCKind` includes `structural`. (`models.py:55,64,67`)
+- `ReferenceIdentity` at `models.py:192`; `AnnotationProvenance` inserts cleanly after it.
+- `RunRecord.reference_identity` at `models.py:283`; `assay` at `models.py:290`;
+  `Literal` + pydantic `BaseModel` imported at top.
+- `_discover_qc(run_dir: Path, assay: str = "rnaseq")` at `runner.py:106`; the
+  `if assay == "variant_calling":` block at `runner.py:133` uses
+  `run_dir.rglob(pattern)` — the plan's added rglob loop is consistent.
+- `_finalize` sets `record.reference_identity = compute_reference_identity(...)` at
+  `self_heal.py:1260`; bundle import to extend is `self_heal.py:25`.
+- `_reference_clause` composition site is inside `render_methods` at `methods.py:121-127`.
+- `somatic_plausibility.py` is the correct mirror: its own gzip-transparent `_open_text`,
+  assay-gated in `_discover_qc`, WARN-capped, UNVERIFIED-when-absent.
+- `PipelineEntry.default_params` exists (`models.py:152`); somatic entry injects
+  `{"tools":"strelka,mutect2"}`; germline entry currently has NO `default_params`
+  (asserted by `test_run_default_params.py:166`) — exactly the pre-change state.
+- `_inject_default_params` (`cli.py:295`) uses `params.setdefault` — non-clobbering;
+  called in `_dispatch_run` (`cli.py:555`) which is shared by run/rerun/resume, so it
+  is re-injected on reproduce (asserted by `test_rerun_reinjects_tools_via_persisted_assay`).
+  `build_nextflow_command` (`runner.py:302`) serializes `{key:value}` → `--key value`.
 
-1. **rnaseq 3.26.0** `subworkflows/local/prepare_genome/main.nf`:
-   - L113-114: `if (fasta.endsWith('.gz')) { ch_fasta = GUNZIP_FASTA(...).gunzip... }`
-   - L224: `SAMTOOLS_FAIDX(ch_fasta.map {...}, true)` — faidx runs on the GUNZIP
-     **output**, never the raw `.gz`. GNU gunzip decompresses plain-gzip AND
-     BGZF alike, so faidx never sees a non-BGZF file. No trigger.
-2. **sarek 3.5.1**: git tree (`api.github.com/repos/nf-core/sarek/git/trees/3.5.1`)
-   contains **no `modules/nf-core/gunzip`**. `subworkflows/local/prepare_genome/main.nf:54`
-   passes `fasta` **directly** into `SAMTOOLS_FAIDX(fasta, [ [ id:'no_fai' ], [] ] )`.
-   `workflows/sarek/main.nf` + `utils_nfcore_sarek_pipeline` + `samplesheet_to_channel`
-   contain no fasta gunzip/decompress (only `SPRING_DECOMPRESS` for spring FASTQ).
-   → a plain-gzip'd `--fasta` reaches faidx raw.
-3. **Real reproduction** (homebrew samtools/htslib, exact command sarek runs):
-   ```
-   $ gzip -c ref.fa > ref_plain.fa.gz ; samtools faidx ref_plain.fa.gz
-   [E::fai_build_core] File truncated at line 1
-   [E::fai_build3_core] Cannot index files compressed with gzip, please use bgzip
-   [faidx] Could not build fai index ref_plain.fa.gz.fai      (exit 1)
-   ```
-   Fix path verified: `bgzip -c ref.fa > ref_bgzf.fa.gz ; samtools faidx ref_bgzf.fa.gz`
-   → exit 0, produces `.fai` + `.gzi`. Plain uncompressed `.fa` → exit 0 too.
+### Plan corrections REQUIRED before implementing (Agent A)
+1. **`methods.py` public renderer is `render_methods(record)`, NOT `methods_text`.**
+   Plan Task 3's snippet imports/calls `methods_text` — will `ImportError`. Use
+   `render_methods`; append `_annotation_clause(record)` into the `render_methods`
+   composition (after `_reference_clause`).
+2. **Test helper is `_record(**overrides)` in `tests/test_methods.py:19`, NOT
+   `_minimal_target`.** Plan Tasks 3/5 fixtures must use `_record(...)` (min required
+   RunRecord fields: `run_id`, `pipeline`, `pipeline_revision`, `target`,
+   `input_checksums`).
+3. **`QCResult` has a 6th field `expected_range`** (between `value` and `kind`).
+   Harmless for construction (defaulted); only matters if a test asserts an exact
+   field set. Do not assert "exactly five fields."
+4. **`sha256_file` is defined in `contig.models`, re-exported via `bundle.py:14`.**
+   Cosmetic — the plan's import extension of `bundle.py:14` still works.
 
-### Detector token (ground-truth)
+### Sarek annotation caveat — RESOLVED (Agent B)
+- **CI slice is SAFE.** M1 tests only assert (a) the germline registry entry's
+  `default_params` carries `tools` containing `vep`, and (b) `_inject_default_params`
+  merges it non-destructively into argv. Both are backed by confirmed, already-tested
+  machinery and need no VEP cache. No real VEP/sarek runs in CI.
+- **Real-run caveat to record (do NOT silently assume a cache):** `src/` has ZERO
+  VEP/SnpEff cache or `--step annotate` wiring. On a live sarek 3.5.1 run,
+  `--tools haplotypecaller,vep` may not produce annotated output without a
+  `--vep_cache`/`--snpeff_cache`/`--download_cache` (and possibly `--step annotate`),
+  none of which Contig currently plumbs. The mitigating design intent: the structural
+  verifier degrades to **UNVERIFIED (never a false PASS)** when annotation output is
+  absent — so a missing cache surfaces honestly. Record this in the PRD Technical
+  Considerations / as an M1 caveat; the live cache wiring is a legitimate follow-on.
+- **Subtlety worth a note:** because `_inject_default_params` is whole-value
+  `setdefault`, a germline user who passes their own `--tools haplotypecaller` (no
+  `vep`) keeps their value and silently drops the annotation default. Correct
+  non-override behavior, but it means the annotation default only applies when the
+  user specifies no `tools` at all. Acceptable for M1; note it.
 
-Anchor the new detector branch on the **canonical, highly specific** htslib line:
-`Cannot index files compressed with gzip, please use bgzip` (secondary anchor:
-`fai_build3_core`). Narrow — no benign-log false-match risk, mirroring the
-existing STAR / bwa-mem2 two-token gates.
+## Guardrail check
+On-thesis Layer 2 (run + verify an annotation step; consume VEP/SnpEff, never author
+pipelines). Research-use only, bright line honored (no pathogenicity/clinical verdict).
+Inside the founder's edge. No drift to flag.
 
-## What the work is really asking
-
-Add a C2 self-heal slice that **recovers** (not just detects) a plain-gzip'd
-(non-BGZF) reference FASTA in a Contig-launched **sarek** run: detect the
-`faidx` "please use bgzip" failure → re-compress the reference into run-scoped
-scratch → redirect `params["fasta"]` → retry → record the recovery. Plus a new
-`FailureClass`, a detector-corpus seed + holdout twin, and injected-builder
-tests. Reproduce-safe (rerun re-derives from the original path). No real
-pipeline run in CI.
-
-### Fix design — recommended direction (decide in PRD/plan)
-
-The provably-correct fix is to **replicate the GUNZIP step that sarek lacks and
-rnaseq has**: decompress the plain-gzip'd reference to plain uncompressed `.fa`
-in run scratch and redirect. Every downstream sarek tool (faidx, bwa/bwa-mem2
-index, GATK dict) accepts uncompressed. Alternative: re-compress to **BGZF**
-(faidx-native, smaller scratch) — but must confirm bwa index / GATK dict all
-accept bgzip. **Open question for the plan:** uncompressed vs bgzf target.
-Leaning **uncompressed** (universal, mirrors the working rnaseq path exactly).
-
-## Affected areas + seams to reuse (from the code-map dig)
-
-- **`src/contig/models.py:208-225`** — `FailureClass` Literal (16 members). Add a
-  new member (e.g. `reference_not_bgzf`), or evaluate reusing an existing class.
-  Distinct class is cleaner (fix is a recompress, not an index build).
-- **`src/contig/detect.py`** — `diagnose_failure` waterfall. New narrow branch
-  near the index branches (L200-262 pattern), BEFORE the `tool_crash`
-  fallthrough (L320-329, where it lands today at conf 0.4). Capture the FASTA
-  path in `evidence` (the Diagnosis carries no path field; it's re-parsed later).
-- **`src/contig/repair.py`** — `propose_patches` emits a `kind="reference"`
-  patch with a recompress operation.
-- **`src/contig/self_heal.py`** — new `_recompress_reference(...)` helper modeled
-  on `_build_star_index` (L566-673): run-scoped scratch `<run_id>/healed_index/`,
-  the `bgzip`/`gunzip` action via the injectable `IndexBuilder` seam, redirect
-  in-memory `params["fasta"]`, `built_paths` one-per-run guard (L834), dispatched
-  from `_apply_patch_and_maybe_build` (L698-790). NOTE: this is a whole-file
-  redirect like STAR, **not** a `_INDEX_BUILD` suffix-table row (L164-170).
-- **Reproduce-safety** — mirror GTF harmonization (`cli.py:472-508,566,659`):
-  launch.json stores the **original** `fasta` (already true, `cli.py:566`); never
-  persist the scratch path; `rerun` re-enters `_dispatch_run` and re-derives.
-- **Corpus** — `src/contig/data/detector_corpus.jsonl` (+ `_holdout.jsonl`): one
-  golden `FailureCase` (real `faidx` log_text, `expected_class` = new class).
-- **Tests** — mirror the fai/dict injected-builder fail-then-succeed pattern in
-  `tests/test_self_heal.py:1566-1610,1737-1755`: (a) recompress success →
-  `built_index_and_retried`, `params["fasta"]` redirected, exactly one recompress,
-  re-run happened; (b) honest give-up when no fasta in params; (c) one-per-run guard.
-
-## Guardrail check (CLAUDE.md)
-
-- **Layer 2**, dead center: self-heal / recover-more-failures. Not Layer 1.
-- **Moat double-hit**: raises unattended-completion (headline Phase-1 metric,
-  ROADMAP:101) on the sarek assays + drops a golden corpus case (moat #2).
-- No wet-lab/clinical/proprietary-data dependency. No raw-read egress (recompress
-  runs on the user's compute). Research-use only.
-
-## Contradiction surfaced (do not paper over)
-
-The card (and the contig-next handoff) framed this around the **reference FASTA**
-generically and named **rnaseq**-style pipelines. The dig shows the failure is
-**sarek-specific** and **rnaseq-immune**. The slice must gate its heal to the
-sarek assays, or it will wire a recovery that the rnaseq path can never exercise
-(the same dormant-code trap that BWA/bwa-mem2 fell into).
-
-## Open questions for the PRD
-
-1. Fix target: decompress to plain `.fa` (universal, mirrors rnaseq) vs bgzf
-   (faidx-native). Recommend plain uncompressed unless scratch size matters.
-2. New `FailureClass` name vs reusing `missing_index` — recommend a new,
-   distinct member (`reference_not_bgzf`) for clean corpus labels + repair routing.
-3. Detector scope: gate the heal to sarek assays only, or classify the signature
-   globally (detector is assay-agnostic) but only wire the redirect where a fasta
-   param exists? Recommend: detector classifies globally (corpus value), redirect
-   fires wherever `params["fasta"]` is a plain-gzip file (naturally sarek-only,
-   since rnaseq's own gunzip means the failure never reaches Contig there).
-4. Also handle a BGZF-but-mislabeled or truncated-gzip reference? Out of scope —
-   this slice is plain-gzip→(bgzf|plain) only.
+## Open decisions for the review gate
+- Confirm VEP (`CSQ`) as the M1 default annotator (plan assumes `haplotypecaller,vep`);
+  SnpEff `ANN` is supported by the same parser shape but not the default.
+- Confirm we ship M1 CI-only with the real-run cache caveat recorded (recommended),
+  rather than expanding scope to wire a VEP cache path now (that's a follow-on).
