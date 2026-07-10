@@ -6,6 +6,44 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Research-use variant annotation: surface + cache/build provenance** (capability
+  C7, M5 — the surfacing and reproduce-provenance follow-on to M4's VEP-vs-SnpEff
+  concordance). Two of M5's three sub-parts shipped; the third (C6 eval-corpus
+  fold-in) remains **DEFERRED**. Slices:
+  - **"Corroborated by" line across all four surfaces.** A new pure helper
+    `verification/annotation_surface.py::corroborated_by_line` *reads* M4's already-
+    computed `consequence_concordance` and `gene_symbol_concordance` results off the
+    record (it never recomputes concordance) and renders a single line, e.g.
+    *"Corroborated by VEP and SnpEff: 47/50 consequences agree (0.94); gene symbols
+    45/50 (0.90, informational)."* The gene-symbol half is explicitly marked
+    **informational** (mirroring M4's always-PASS treatment) and is omitted when
+    absent; the whole line is omitted — returns `None` — whenever consequence
+    concordance is absent or UNVERIFIED (only one annotator ran, annotation absent,
+    too few shared variants), so it never manufactures corroboration that M4 didn't
+    establish. The line is surfaced on the **text report**, the **HTML report**,
+    `contig methods`, and the **Next.js dashboard** concordance card.
+  - **Annotation cache/build provenance, captured and round-tripped.**
+    `AnnotationProvenance` gains a `db_version` field, parsed honestly from the VCF
+    header: the VEP `cache="…"` token (basename of the cache path, e.g. `110_GRCh38`)
+    and the SnpEff genome token (from `##SnpEffCmd`/`##SnpEffGenomeVersion`, e.g.
+    `GRCh38.105`); absent → `None`, never fabricated. It is labelled **"cache/build"**
+    everywhere it renders — *not* "database version" — because it is the annotator's
+    cache/build identifier, not a per-database (ClinVar/gnomAD) release. Rendered in
+    `contig methods`, the HTML annotation-identity provenance panel, and the dashboard,
+    and it **round-trips through the reproduce bundle** (write → load) with pre-M5
+    **back-compat**: legacy bundles with no `db_version` key load and default to `None`.
+  - **Honest scope.** Surfacing and provenance only — Contig reads and displays M4's
+    corroboration signal and the annotator cache/build, and adjudicates nothing new;
+    still research-use only, never a pathogenicity/clinical verdict. Test-first with
+    synthetic CSQ/ANN and header fixtures; **no real VEP/SnpEff/sarek run in CI**.
+    **Deferred (M5's third sub-part):** folding annotation concordance/plausibility
+    outcomes into the C6 eval corpus — blocked pending a labeling design for the
+    unlabeled annotation signals. With M5's surface + provenance shipped, the C7
+    annotation assay's remaining open item is that eval fold-in (and the standing
+    research-*prioritization* follow-on, deliberately out of scope).
+
 ## [0.27.0] - 2026-07-10
 
 ### Added

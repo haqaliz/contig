@@ -85,8 +85,14 @@ corpus (moat #2) without new machinery.
 - **M4 — annotation concordance (C1-style, both assays):** VEP vs SnpEff on the same VCF —
   per-variant consequence / gene-symbol agreement as corroboration. At most WARN, `unverified`
   below a shared-record threshold. Extends the cross-tool concordance primitive to annotation.
-- **M5 — surface + eval fold-in:** "corroborated by" line on the verdict card, DB-version
-  provenance in the reproduce bundle, and annotation outcomes folded into the C6 eval corpus.
+- **M5 — surface + eval fold-in.** Surface + provenance **SHIPPED (Unreleased)**; eval
+  fold-in **DEFERRED**. "Corroborated by" line — sourced by *reading* M4's concordance
+  results, never recomputed — now renders on the text report, HTML report, `contig methods`,
+  and the dashboard concordance card; annotation **cache/build** provenance
+  (`AnnotationProvenance.db_version`, parsed from the VEP `cache=` / SnpEff genome header
+  token, labelled "cache/build" not "database version") is rendered and round-trips through
+  the reproduce bundle with pre-M5 back-compat. Still deferred: folding annotation outcomes
+  into the C6 eval corpus — blocked pending a labeling design for the unlabeled signals.
 
 ### Nice-to-have / explicit follow-ons (NOT this initiative)
 
