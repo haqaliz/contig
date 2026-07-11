@@ -12,8 +12,10 @@ import os
 import re
 from pathlib import Path
 
-from contig.models import AnnotationProvenance, ReferenceIdentity, RunRecord, sha256_file
+from contig.models import AnnotationProvenance, ReferenceIdentity, RunRecord, SexInference, sha256_file
 from contig.verification.annotation_structural import _open_text
+from contig.verification.sex_plausibility import sex_signals
+from contig.verification.structural import manifest_for
 
 # The env var that, when set to a hex or base64 Ed25519 private key, makes
 # write_bundle emit a detached signature sidecar next to the record. Absent or
@@ -208,6 +210,32 @@ def compute_annotation_identity(run_dir: Path) -> list["AnnotationProvenance"]:
         if prov is not None and prov.tool not in found:
             found[prov.tool] = prov
     return [found[tool] for tool in sorted(found)]
+
+
+def compute_sex_inference(run_dir: Path) -> "SexInference | None":
+    """Derive germline karyotypic-sex provenance from the run's primary VCF.
+
+    Locates the germline VCF EXACTLY as runner._discover_qc does (the
+    variant_calling manifest's first required glob, rglob'd under run_dir,
+    taking vcfs[0]) so provenance and the verdict describe the same call set --
+    a divergent second discovery path would be a real bug, not a style choice.
+    No VCF -> None (never fabricated). The actual inference is
+    verification.sex_plausibility.sex_signals; this just maps it to the
+    serializable provenance model.
+    """
+    pattern = manifest_for("variant_calling").required[0]  # "*.vcf.gz"
+    vcfs = sorted(p for p in Path(run_dir).rglob(pattern) if p.is_file())
+    if not vcfs:
+        return None
+    signals = sex_signals(vcfs[0])
+    return SexInference(
+        inferred_sex=signals.inferred_sex,
+        x_het_ratio=signals.x_het_ratio,
+        x_sites=signals.x_sites,
+        y_variant_count=signals.y_variant_count,
+        par_masked=signals.par_masked,
+        reference_build=signals.reference_build,
+    )
 
 
 def compute_output_checksums(results_dir: str | Path) -> dict[str, str]:

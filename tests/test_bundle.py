@@ -276,3 +276,55 @@ def test_compute_reference_identity_empty_params_returns_none():
 
 def test_compute_reference_identity_none_params_returns_none():
     assert compute_reference_identity(None) is None
+
+
+# --- compute_sex_inference (provenance capture: germline karyotypic sex) --------
+# VCF discovery mirrors runner._discover_qc exactly (manifest_for("variant_calling")
+# .required[0] rglob'd under run_dir, vcfs[0]) so provenance and the verdict
+# describe the same call set -- see tests/verification/test_sex_plausibility.py
+# for the male-pattern row shapes reused here.
+
+_SEX_VCF_HEADER = (
+    "##fileformat=VCFv4.2\n"
+    "##contig=<ID=chr1,length=248956422>\n"
+    "##contig=<ID=chrX,length=156040895>\n"
+    "##contig=<ID=chrY,length=57227415>\n"
+    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n"
+)
+
+
+def _sex_vcf_line(chrom, pos, ref, alt, gt):
+    return f"{chrom}\t{pos}\t.\t{ref}\t{alt}\t.\tPASS\t.\tGT\t{gt}\n"
+
+
+def _write_male_pattern_vcf(path):
+    """A gzipped germline VCF with a male-pattern chrX/chrY call set (low
+    X-het, chrY variants present), placed under the manifest's `*.vcf.gz` glob."""
+    import gzip
+
+    rows = [("chrX", 3_000_000 + i, "A", "G", "0/1") for i in range(2)]
+    rows += [("chrX", 4_000_000 + i, "A", "G", "0/0") for i in range(28)]
+    rows += [("chrY", 10_000_000 + i, "A", "G", "0/1") for i in range(6)]
+    body = "".join(_sex_vcf_line(*r) for r in rows)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt") as fh:
+        fh.write(_SEX_VCF_HEADER + body)
+    return path
+
+
+def test_compute_sex_inference_male_pattern_vcf_returns_xy(tmp_path):
+    from contig.bundle import compute_sex_inference
+
+    _write_male_pattern_vcf(tmp_path / "results" / "variant_calling" / "sample.vcf.gz")
+
+    result = compute_sex_inference(tmp_path)
+
+    assert result is not None
+    assert result.inferred_sex == "XY"
+    assert result.y_variant_count == 6
+
+
+def test_compute_sex_inference_no_vcf_returns_none(tmp_path):
+    from contig.bundle import compute_sex_inference
+
+    assert compute_sex_inference(tmp_path) is None
