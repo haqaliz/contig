@@ -11,7 +11,7 @@ from contig.bundle import (
     load_bundle,
     write_bundle,
 )
-from contig.models import ExecutionTarget, QCResult, RunRecord, TaskEvent, sha256_file
+from contig.models import ExecutionTarget, QCResult, RunRecord, SexInference, TaskEvent, sha256_file
 from contig.signing import (
     canonical_sha256,
     generate_keypair,
@@ -52,6 +52,14 @@ def _full_record() -> RunRecord:
         events=[TaskEvent(process="ALIGN", status="COMPLETED", exit=0, task_id="t1", name="ALIGN (1)")],
         qc_results=[QCResult(check="depth", status="pass", message="ok", value=42.0, expected_range="30-50")],
         output_checksums={"variants.vcf.gz": "c" * 64},
+        sex_inference=SexInference(
+            inferred_sex="XY",
+            x_het_ratio=0.02,
+            x_sites=143,
+            y_variant_count=6,
+            par_masked=True,
+            reference_build="GRCh38",
+        ),
     )
 
 
