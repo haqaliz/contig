@@ -1243,6 +1243,7 @@ def test_discover_qc_mag_gate_not_applied_to_other_assays(tmp_path):
     results = _discover_qc(run_dir, assay="rnaseq")
 
     assert not any(r.check.startswith("assembly_n50:") for r in results)
+    assert not any(r.check.startswith("mag_qc:") for r in results)
 
 
 # --------------------------------------------------------------------------- #
@@ -1397,4 +1398,3 @@ def test_discover_qc_rnaseq_composition_prefers_results_over_work_copy(tmp_path)
     assert len(exonic) == 1
     # healthy results/ copy -> ~0.9998; work/ copy would give 0.2
     assert exonic[0].value == pytest.approx(129779 / 129802, rel=1e-4)
-    assert not any(r.check.startswith("mag_qc:") for r in results)
