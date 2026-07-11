@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-07-12
+
 ### Added
 
 - **RNA-seq read-composition plausibility — the verdict now catches gDNA
@@ -1260,6 +1262,7 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.31.0]: https://github.com/haqaliz/contig/releases/tag/v0.31.0
 [0.30.0]: https://github.com/haqaliz/contig/releases/tag/v0.30.0
 [0.29.0]: https://github.com/haqaliz/contig/releases/tag/v0.29.0
 [0.28.0]: https://github.com/haqaliz/contig/releases/tag/v0.28.0
