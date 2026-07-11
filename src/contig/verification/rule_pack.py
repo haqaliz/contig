@@ -353,19 +353,11 @@ X_HET_HIGH = 0.20
 MIN_X_SITES = 20
 Y_PRESENT_FLOOR = 5
 
-# Like SOMATIC_PLAUSIBILITY_PACK, this is imported directly by its evaluator
-# (sex_plausibility.py) and deliberately NOT registered in _RULE_PACKS: the
-# derived sex_plausibility call is bimodal (XY / XX / discordant / indeterminate),
-# which a single warn_below/warn_above band cannot express, so it is hand-built
-# in the wrapper rather than run through evaluate(). Kept here anyway so the
-# thresholds stay single-sourced and auditable alongside the other packs.
-SEX_PLAUSIBILITY_PACK: list[dict] = [
-    {
-        "check": "x_het_ratio",
-        "metric": "x_het_ratio",
-        "message": "heterozygous fraction of callable (non-PAR) chrX genotypes",
-    },
-]
+# Deliberately no SEX_PLAUSIBILITY_PACK/_RULE_PACKS entry: the derived
+# sex_plausibility call is bimodal (XY / XX / discordant / indeterminate),
+# which a single warn_below/warn_above band cannot express, so
+# sex_plausibility.py hand-builds its QCResults directly from the four
+# scalar constants above rather than running them through evaluate().
 
 
 _RULE_PACKS: dict[str, list[dict]] = {

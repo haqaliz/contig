@@ -98,6 +98,30 @@ def test_detect_build_none_when_unrecognized_length(tmp_path):
     assert _detect_build(vcf) is None
 
 
+def test_detect_build_grch38_realistic_multi_attribute_contig_line(tmp_path):
+    # Real GATK/Picard/sarek ##contig lines carry extra attributes (assembly,
+    # md5, species, ...) before the closing '>' -- not just ID and length.
+    header = (
+        "##fileformat=VCFv4.2\n"
+        '##contig=<ID=chrX,length=156040895,assembly=GRCh38,'
+        'md5=1e86411d73e6cb358983b2f1f8b95923,species="Homo sapiens">\n'
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n"
+    )
+    vcf = _write_vcf(tmp_path / "a.vcf", header, [])
+    assert _detect_build(vcf) == "GRCh38"
+
+
+def test_detect_build_grch37_realistic_multi_attribute_contig_line(tmp_path):
+    header = (
+        "##fileformat=VCFv4.2\n"
+        '##contig=<ID=X,length=155270560,assembly=b37,'
+        'md5=7e0e2e580297b8764d4fe402413a428c,species="Homo sapiens">\n'
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n"
+    )
+    vcf = _write_vcf(tmp_path / "a.vcf", header, [])
+    assert _detect_build(vcf) == "GRCh37"
+
+
 # --- Phase 2: X-heterozygosity with PAR masking ---------------------------------
 
 
@@ -307,6 +331,43 @@ def test_sex_signals_recognizes_chr_prefixed_and_bare_contigs(tmp_path, x_chrom,
     assert signals.y_variant_count == 6
 
 
+def _header_with_contig_ids(x_id, y_id, x_len=156_040_895, y_len=57_227_415):
+    return (
+        "##fileformat=VCFv4.2\n"
+        "##contig=<ID=chr1,length=248956422>\n"
+        f"##contig=<ID={x_id},length={x_len}>\n"
+        f"##contig=<ID={y_id},length={y_len}>\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "contig_id_x,row_chrom_x,contig_id_y,row_chrom_y",
+    [
+        ("CHRX", "CHRX", "CHRY", "CHRY"),  # all-caps, both header and record
+        ("chrx", "chrx", "chry", "chry"),  # all-lowercase, both header and record
+        ("ChrX", "chrX", "ChrY", "chrY"),  # mixed case, header != record case
+    ],
+)
+def test_sex_signals_case_insensitive_contig_matching(
+    tmp_path, contig_id_x, row_chrom_x, contig_id_y, row_chrom_y
+):
+    # Real case variation (not just chr-prefixed vs bare): the ##contig ID and
+    # the record's CHROM column are both varied in case, independently, and
+    # must still resolve the build and count X/Y sites correctly.
+    header = _header_with_contig_ids(contig_id_x, contig_id_y)
+    rows = [(row_chrom_x, 3_000_000 + i, "A", "G", "0/1") for i in range(2)]
+    rows += [(row_chrom_x, 4_000_000 + i, "A", "G", "0/0") for i in range(28)]
+    rows += [(row_chrom_y, 10_000_000 + i, "A", "G", "0/1") for i in range(6)]
+    vcf = _write_vcf(tmp_path / "a.vcf", header, rows)
+
+    signals = sex_signals(vcf)
+
+    assert signals.reference_build == "GRCh38"
+    assert signals.inferred_sex == "XY"
+    assert signals.y_variant_count == 6
+
+
 # --- Phase 4: evaluate_sex_plausibility (WARN-capped, UNVERIFIED-when-weak) -----
 
 
@@ -372,6 +433,27 @@ def test_evaluate_indeterminate_is_unverified_with_none_value(tmp_path):
 
     xhet = by_check["x_het_ratio:s1"]
     assert xhet.status == "pass"  # informational-always-PASS convention
+    assert xhet.value is None
+
+
+def test_evaluate_no_chrx_contig_is_unverified_with_none_value(tmp_path):
+    # No chrX records at all (autosomal-only VCF) -> indeterminate/UNVERIFIED
+    # at the evaluate_sex_plausibility() level, matching the acceptance
+    # criterion "No chrX contig at all -> indeterminate, UNVERIFIED" (this was
+    # previously only asserted at the _x_signals helper level).
+    rows = [("chr1", 1000 + i, "A", "G", "0/1") for i in range(30)]
+    vcf = _write_vcf(tmp_path / "a.vcf", _HEADER_GRCH38, rows)
+
+    results = evaluate_sex_plausibility(vcf, sample="s1")
+    by_check = _by_check(results)
+
+    sex = by_check["sex_plausibility:s1"]
+    assert sex.status == "unverified"
+    assert sex.value is None
+    assert sex.status != "fail"
+
+    xhet = by_check["x_het_ratio:s1"]
+    assert xhet.status == "pass"
     assert xhet.value is None
 
 

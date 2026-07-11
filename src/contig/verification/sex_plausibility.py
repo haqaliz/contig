@@ -62,7 +62,12 @@ _PAR_Y: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {
     "GRCh38": ((10_001, 2_781_479), (56_887_903, 57_217_415)),
 }
 
-_CONTIG_RE = re.compile(r"##contig=<ID=(chr)?([XY]),length=(\d+)>", re.IGNORECASE)
+# A real ##contig line commonly carries extra attributes after length
+# (assembly=, md5=, species=, ...) before the closing '>', e.g.
+# `##contig=<ID=chrX,length=156040895,assembly=GRCh38,md5=...>`. Match length
+# followed by either ',' (more attributes) or '>' (line ends there) so a
+# realistic multi-attribute header is still recognized.
+_CONTIG_RE = re.compile(r"##contig=<ID=(chr)?([XY]),length=(\d+)[,>]", re.IGNORECASE)
 
 
 def _open_text(path: str | os.PathLike):
