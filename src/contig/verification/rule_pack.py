@@ -335,6 +335,23 @@ ANNOTATION_PLAUSIBILITY_PACK: list[dict] = [
 ]
 
 
+# RNA-seq read-composition plausibility (C3). Fractions in [0,1] (NOT the 0-100
+# percent scale of the MultiQC packs), so the bands are fractions too. WARN-capped,
+# uncalibrated engineering defaults; evaluated by the dedicated read_distribution gate
+# in runner._discover_qc and deliberately NOT registered in _RULE_PACKS.
+RNASEQ_COMPOSITION_PACK: list[dict] = [
+    {"check": "exonic_fraction", "metric": "exonic_fraction", "warn_below": 0.50,
+     "message": "fraction of assigned reads in exons (CDS+UTRs); low suggests gDNA "
+                "contamination or failed enrichment"},
+    {"check": "intronic_fraction", "metric": "intronic_fraction", "warn_above": 0.30,
+     "message": "fraction of assigned reads in introns; high suggests pre-mRNA / gDNA "
+                "contamination"},
+    {"check": "unassigned_fraction", "metric": "unassigned_fraction", "warn_above": 0.30,
+     "message": "fraction of all tags not assigned to any annotated feature "
+                "(intergenic / off-annotation)"},
+]
+
+
 # Germline karyotypic-sex plausibility (capability C3 follow-on,
 # germline-sex-check-plausibility). Infers karyotypic sex from X-heterozygosity
 # (+ Y presence) over a germline VCF, WARN-capped like the other plausibility

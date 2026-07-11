@@ -585,3 +585,97 @@ def test_rnaseq_plausibility_rrna_never_fails():
 
     rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "rrna_contamination")
     assert _status_for(99999.0, rule) != "fail"
+
+
+# --- RNA-seq read-composition plausibility pack (C3 slice, Phase 2) ------------
+
+
+def _healthy_composition_sample():
+    # A clean, CDS-dominated run (yeast test values from the plan): almost all
+    # assigned tags are exonic, almost none intronic, a modest unassigned share.
+    return {
+        "exonic_fraction": 0.9998,
+        "intronic_fraction": 0.0002,
+        "unassigned_fraction": 0.112,
+    }
+
+
+def test_rnaseq_composition_pack_has_exactly_three_rules():
+    from contig.verification.rule_pack import RNASEQ_COMPOSITION_PACK
+
+    assert len(RNASEQ_COMPOSITION_PACK) == 3
+
+
+def test_rnaseq_composition_pack_covers_exonic_intronic_unassigned():
+    from contig.verification.rule_pack import RNASEQ_COMPOSITION_PACK
+
+    metrics = {c["metric"] for c in RNASEQ_COMPOSITION_PACK}
+    assert metrics == {"exonic_fraction", "intronic_fraction", "unassigned_fraction"}
+
+
+def test_rnaseq_composition_pack_rules_have_no_fail_keys():
+    # WARN-cap guarantee: no fail_below / fail_above anywhere in this pack.
+    from contig.verification.rule_pack import RNASEQ_COMPOSITION_PACK
+
+    for rule in RNASEQ_COMPOSITION_PACK:
+        assert "fail_below" not in rule, f"{rule['check']!r} has forbidden fail_below"
+        assert "fail_above" not in rule, f"{rule['check']!r} has forbidden fail_above"
+
+
+def test_rnaseq_composition_pack_is_not_registered_in_rule_packs():
+    # Like RNASEQ_PLAUSIBILITY_PACK/SOMATIC_PLAUSIBILITY_PACK/
+    # ANNOTATION_PLAUSIBILITY_PACK, this pack is deliberately NOT selectable via
+    # rule_pack_for; it is driven directly by the dedicated read_distribution gate.
+    from contig.verification.rule_pack import RNASEQ_COMPOSITION_PACK, _RULE_PACKS
+
+    assert RNASEQ_COMPOSITION_PACK not in _RULE_PACKS.values()
+
+
+def test_healthy_composition_sample_passes_every_check():
+    from contig.verification.rule_pack import RNASEQ_COMPOSITION_PACK
+
+    results = evaluate({"WT_REP1": _healthy_composition_sample()}, RNASEQ_COMPOSITION_PACK)
+    assert len(results) == 3
+    assert all(r.status == "pass" for r in results)
+
+
+def test_low_exonic_fraction_warns_never_fails():
+    from contig.verification.rule_pack import RNASEQ_COMPOSITION_PACK
+
+    sample = _healthy_composition_sample() | {"exonic_fraction": 0.10}
+    results = evaluate({"BAD": sample}, RNASEQ_COMPOSITION_PACK)
+    exonic = [r for r in results if r.value == 0.10]
+    assert exonic and all(r.status == "warn" for r in exonic)
+
+
+def test_high_intronic_fraction_warns_never_fails():
+    from contig.verification.rule_pack import RNASEQ_COMPOSITION_PACK
+
+    sample = _healthy_composition_sample() | {"intronic_fraction": 0.75}
+    results = evaluate({"BAD": sample}, RNASEQ_COMPOSITION_PACK)
+    intronic = [r for r in results if r.value == 0.75]
+    assert intronic and all(r.status == "warn" for r in intronic)
+
+
+def test_high_unassigned_fraction_warns_never_fails():
+    from contig.verification.rule_pack import RNASEQ_COMPOSITION_PACK
+
+    sample = _healthy_composition_sample() | {"unassigned_fraction": 0.90}
+    results = evaluate({"BAD": sample}, RNASEQ_COMPOSITION_PACK)
+    unassigned = [r for r in results if r.value == 0.90]
+    assert unassigned and all(r.status == "warn" for r in unassigned)
+
+
+def test_rnaseq_composition_extreme_values_never_fail():
+    # WARN-cap guarantee at the scorer level: even wildly out-of-band values on
+    # every metric must never produce a "fail" status.
+    from contig.verification.rule_pack import RNASEQ_COMPOSITION_PACK
+
+    sample = {
+        "exonic_fraction": 0.0,
+        "intronic_fraction": 1.0,
+        "unassigned_fraction": 1.0,
+    }
+    results = evaluate({"WORST": sample}, RNASEQ_COMPOSITION_PACK)
+    assert len(results) == 3
+    assert all(r.status != "fail" for r in results)
