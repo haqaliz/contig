@@ -94,3 +94,52 @@ def _detect_build(vcf_path: str | os.PathLike) -> str | None:
             if length == _CHRX_LENGTH_GRCH38:
                 return "GRCh38"
     return None
+
+
+def _is_chrom(chrom: str, letter: str) -> bool:
+    """True when CHROM names the given single-letter contig (`chrX`/`X`, etc.)."""
+    c = chrom.lower()
+    if c.startswith("chr"):
+        c = c[3:]
+    return c == letter.lower()
+
+
+def _in_par(pos: int, par_ranges: tuple[tuple[int, int], tuple[int, int]]) -> bool:
+    """True when a 1-based POS falls inside either PAR range of the pair."""
+    return any(lo <= pos <= hi for lo, hi in par_ranges)
+
+
+def _x_signals(
+    sites: dict[tuple[str, str, str, str], str | None], build: str | None
+) -> tuple[float | None, int]:
+    """Het fraction + count over biallelic, non-missing, non-PAR chrX genotypes.
+
+    "Biallelic" means a single ALT allele (no comma), matching
+    concordance/somatic's convention; indels are included (like
+    variant_metrics.het_hom, which does not restrict to SNVs -- only ts_tv
+    does). PAR sites are excluded by POS when `build` resolved a PAR table;
+    `build is None` (undetermined) leaves the ratio unmasked, never guessed.
+    Returns `(None, x_sites)` when `x_sites < MIN_X_SITES` (too little signal
+    to call), including the `(None, 0)` case of no chrX contig at all.
+    """
+    par_ranges = _PAR_X.get(build) if build else None
+    het = 0
+    total = 0
+    for (chrom, pos, _ref, alt), gt in sites.items():
+        if not _is_chrom(chrom, "X"):
+            continue
+        if "," in alt:
+            continue
+        if gt is None:
+            continue
+        alleles = gt.split("/")
+        if len(alleles) != 2:
+            continue
+        if par_ranges and _in_par(int(pos), par_ranges):
+            continue
+        total += 1
+        if alleles[0] != alleles[1]:
+            het += 1
+    if total < MIN_X_SITES:
+        return None, total
+    return het / total, total

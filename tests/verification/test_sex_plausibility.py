@@ -5,6 +5,7 @@ Mirrors the style of test_variant_metrics.py (tiny inline VCFs via _HEADER /
 _vcf_line / _write_vcf).
 """
 
+from contig.verification.concordance import parse_vcf
 from contig.verification.rule_pack import (
     MIN_X_SITES,
     X_HET_HIGH,
@@ -15,6 +16,7 @@ from contig.verification.sex_plausibility import (
     _CHRX_LENGTH_GRCH37,
     _CHRX_LENGTH_GRCH38,
     _detect_build,
+    _x_signals,
 )
 
 # ##contig lines included so build detection (##contig=<ID=...X,length=L>) is
@@ -87,3 +89,76 @@ def test_detect_build_none_when_no_contig_header(tmp_path):
 def test_detect_build_none_when_unrecognized_length(tmp_path):
     vcf = _write_vcf(tmp_path / "a.vcf", _HEADER_UNKNOWN_LENGTH, [])
     assert _detect_build(vcf) is None
+
+
+# --- Phase 2: X-heterozygosity with PAR masking ---------------------------------
+
+
+def _xhet(vcf):
+    sites = parse_vcf(vcf)
+    build = _detect_build(vcf)
+    return _x_signals(sites, build)
+
+
+def test_xhet_female_pattern_reads_high_ratio(tmp_path):
+    # 24 het + 6 hom (hom-ref/hom-alt) non-PAR chrX sites, positions safely
+    # outside GRCh38 PAR -> ratio 24/30 = 0.8, well above X_HET_HIGH.
+    rows = [("chrX", 3_000_000 + i, "A", "G", "0/1") for i in range(24)]
+    rows += [("chrX", 4_000_000 + i, "A", "G", "0/0") for i in range(3)]
+    rows += [("chrX", 5_000_000 + i, "A", "G", "1/1") for i in range(3)]
+    vcf = _write_vcf(tmp_path / "a.vcf", _HEADER_GRCH38, rows)
+
+    ratio, x_sites = _xhet(vcf)
+
+    assert x_sites == 30
+    assert ratio == 0.8
+    assert ratio >= X_HET_HIGH
+
+
+def test_xhet_male_pattern_reads_low_ratio(tmp_path):
+    # 2 het + 28 hom non-PAR chrX sites -> ratio 2/30 ~ 0.0667, at/below X_HET_LOW.
+    rows = [("chrX", 3_000_000 + i, "A", "G", "0/1") for i in range(2)]
+    rows += [("chrX", 4_000_000 + i, "A", "G", "0/0") for i in range(28)]
+    vcf = _write_vcf(tmp_path / "a.vcf", _HEADER_GRCH38, rows)
+
+    ratio, x_sites = _xhet(vcf)
+
+    assert x_sites == 30
+    assert round(ratio, 4) == round(2 / 30, 4)
+    assert ratio <= X_HET_LOW
+
+
+def test_xhet_par_sites_excluded_from_denominator(tmp_path):
+    # Load-bearing masking test: the ONLY het chrX sites sit inside GRCh38 PAR1
+    # (10,001-2,781,479); 25 non-PAR sites are all hom. If PAR masking were
+    # broken, the 5 PAR-het sites would leak into the denominator and produce a
+    # mid-band (discordant) ratio (5/30 ~= 0.167) instead of a clean male read.
+    rows = [("chrX", 20_000 + i, "A", "G", "0/1") for i in range(5)]  # PAR1, het
+    rows += [("chrX", 5_000_000 + i, "A", "G", "0/0") for i in range(25)]  # non-PAR, hom
+    vcf = _write_vcf(tmp_path / "a.vcf", _HEADER_GRCH38, rows)
+
+    ratio, x_sites = _xhet(vcf)
+
+    assert x_sites == 25
+    assert ratio == 0.0
+    assert ratio <= X_HET_LOW
+
+
+def test_xhet_none_when_fewer_than_min_sites(tmp_path):
+    rows = [("chrX", 5_000_000 + i, "A", "G", "0/1") for i in range(10)]
+    vcf = _write_vcf(tmp_path / "a.vcf", _HEADER_GRCH38, rows)
+
+    ratio, x_sites = _xhet(vcf)
+
+    assert x_sites == 10
+    assert ratio is None
+
+
+def test_xhet_none_and_zero_sites_when_no_chrx_contig(tmp_path):
+    rows = [("chr1", 1000 + i, "A", "G", "0/1") for i in range(30)]
+    vcf = _write_vcf(tmp_path / "a.vcf", _HEADER_GRCH38, rows)
+
+    ratio, x_sites = _xhet(vcf)
+
+    assert x_sites == 0
+    assert ratio is None
