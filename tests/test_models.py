@@ -200,6 +200,45 @@ def test_annotation_identity_none_normalizes_to_empty_list():
     assert record.annotation_identity == []
 
 
+# --- SexInference (germline provenance capture) ---------------------------------
+
+
+def test_sex_inference_defaults_to_none():
+    record = _minimal_record([])
+    assert record.sex_inference is None
+
+
+def test_sex_inference_legacy_dict_without_key_loads_as_none():
+    # A pre-slice bundle's JSON simply lacks the `sex_inference` key -- it must
+    # still load (never raise) and default to None, exactly like the
+    # ReferenceIdentity back-compat contract.
+    legacy_dict = {
+        "run_id": "run-pre-sex-inference",
+        "pipeline": "nf-core/sarek",
+        "pipeline_revision": "3.5.1",
+        "target": {"backend": "local", "container_runtime": "docker", "work_dir": "/tmp/run"},
+        "input_checksums": {},
+    }
+    record = RunRecord.model_validate(legacy_dict)
+    assert record.sex_inference is None
+
+
+def test_sex_inference_round_trips_when_set():
+    from contig.models import SexInference
+
+    record = _minimal_record([])
+    record.sex_inference = SexInference(
+        inferred_sex="XY",
+        x_het_ratio=0.02,
+        x_sites=143,
+        y_variant_count=6,
+        par_masked=True,
+        reference_build="GRCh38",
+    )
+    reloaded = RunRecord.model_validate_json(record.model_dump_json())
+    assert reloaded.sex_inference == record.sex_inference
+
+
 def test_diagnosis_rejects_confidence_above_one():
     from contig.models import Diagnosis
 

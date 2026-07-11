@@ -222,6 +222,26 @@ class AnnotationProvenance(BaseModel):
     raw_header: str | None = None
 
 
+class SexInference(BaseModel):
+    """The germline karyotypic-sex signal (PRD germline-sex-check-plausibility),
+    captured as provenance on the RunRecord.
+
+    A serializable mirror of the verification-layer `SexSignals` dataclass
+    (`contig.verification.sex_plausibility.SexSignals`) -- this model exists so
+    the inference round-trips through the bundle; the compute itself lives in
+    the verification layer. Research-use inference only, never a clinical
+    determination: `inferred_sex` is one of "XY" | "XX" | "discordant" |
+    "indeterminate" (never fabricated when the signal is too weak to call).
+    """
+
+    inferred_sex: str
+    x_het_ratio: float | None = None
+    x_sites: int = 0
+    y_variant_count: int = 0
+    par_masked: bool = False
+    reference_build: str | None = None
+
+
 # --- Self-healing loop (ARCHITECTURE §5) ---------------------------------------
 
 FailureClass = Literal[
@@ -312,6 +332,11 @@ class RunRecord(BaseModel):
     # sarek). Optional/defaulted so legacy bundles written before this field still
     # load and fall back to the pipeline-derived assay.
     assay: str | None = None
+    # Germline karyotypic-sex inference, captured at finalize for variant_calling
+    # runs only (see self_heal._finalize). Optional/defaulted so pre-slice
+    # bundles simply lack the key and load with None -- no validator needed,
+    # mirroring ReferenceIdentity's back-compat idiom.
+    sex_inference: SexInference | None = None
 
     @field_validator("annotation_identity", mode="before")
     @classmethod
