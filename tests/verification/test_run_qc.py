@@ -1243,4 +1243,158 @@ def test_discover_qc_mag_gate_not_applied_to_other_assays(tmp_path):
     results = _discover_qc(run_dir, assay="rnaseq")
 
     assert not any(r.check.startswith("assembly_n50:") for r in results)
+
+
+# --------------------------------------------------------------------------- #
+# RNA-seq read-composition QC ingestion gate (rnaseq-mapping-composition-
+# plausibility, composition-checks aspect). RSeQC's read_distribution
+# exonic/intronic/unassigned fractions do NOT reach MultiQC general-stats, so
+# a dedicated gate parses the artifact directly and drives
+# RNASEQ_COMPOSITION_PACK. Additive to the existing MultiQC-driven rnaseq
+# plausibility gate; the two stay as separate blocks in _discover_qc.
+# --------------------------------------------------------------------------- #
+
+_READ_DISTRIBUTION_HEALTHY = """\
+Total Reads                   142111
+Total Tags                    146154
+Total Assigned Tags           129802
+=====================================================================
+Group               Total_bases         Tag_count           Tags/Kb
+CDS_Exons           146030              129779              888.71
+5'UTR_Exons         0                   0                   0.00
+3'UTR_Exons         0                   0                   0.00
+Introns             530                 23                  43.31
+TSS_up_1kb          43552               0                   0.00
+TSS_up_5kb          76907               0                   0.00
+TSS_up_10kb         89031               0                   0.00
+TES_down_1kb        40737               0                   0.00
+TES_down_5kb        81271               0                   0.00
+TES_down_10kb       97060               0                   0.00
+=====================================================================
+"""
+
+# Different tag counts from the healthy fixture, so a test can assert which
+# copy (results/ vs work/) was actually read by the AC6 dedup logic.
+_READ_DISTRIBUTION_WORK_COPY = """\
+Total Reads                   999999
+Total Tags                    999999
+Total Assigned Tags           500000
+=====================================================================
+Group               Total_bases         Tag_count           Tags/Kb
+CDS_Exons           1000                100000              100.00
+5'UTR_Exons         0                   0                   0.00
+3'UTR_Exons         0                   0                   0.00
+Introns             1000                400000              400.00
+TSS_up_1kb          0                   0                   0.00
+TSS_up_5kb          0                   0                   0.00
+TSS_up_10kb         0                   0                   0.00
+TES_down_1kb        0                   0                   0.00
+TES_down_5kb        0                   0                   0.00
+TES_down_10kb       0                   0                   0.00
+=====================================================================
+"""
+
+
+def _write_read_distribution(run_dir, relative_dir, sample, text):
+    d = run_dir / relative_dir
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / f"{sample}.read_distribution.txt"
+    f.write_text(text)
+    return f
+
+
+def test_discover_qc_emits_rnaseq_composition_for_rnaseq_assay(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_read_distribution(
+        run_dir,
+        "results/star_salmon/rseqc/read_distribution",
+        "WT_REP1",
+        _READ_DISTRIBUTION_HEALTHY,
+    )
+
+    results = _discover_qc(run_dir, assay="rnaseq")
+    checks = {r.check: r for r in results}
+
+    assert checks["exonic_fraction:WT_REP1"].status == "pass"
+    assert checks["intronic_fraction:WT_REP1"].status == "pass"
+    assert checks["unassigned_fraction:WT_REP1"].status == "pass"
+
+
+def test_discover_qc_rnaseq_composition_not_applied_to_other_assays(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_read_distribution(
+        run_dir,
+        "results/star_salmon/rseqc/read_distribution",
+        "WT_REP1",
+        _READ_DISTRIBUTION_HEALTHY,
+    )
+
+    results = _discover_qc(run_dir, assay="variant_calling")
+    checks = [r.check for r in results]
+
+    assert not any(c.startswith("exonic_fraction:") for c in checks)
+    assert not any(c.startswith("intronic_fraction:") for c in checks)
+    assert not any(c.startswith("unassigned_fraction:") for c in checks)
+    assert not any(c.startswith("rnaseq_composition_qc:") for c in checks)
+
+
+def test_discover_qc_rnaseq_composition_unparseable_is_unverified(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_read_distribution(
+        run_dir,
+        "results/star_salmon/rseqc/read_distribution",
+        "WT_REP1",
+        "garbage, not a real RSeQC report\nno usable fields here\n",
+    )
+
+    results = _discover_qc(run_dir, assay="rnaseq")
+    composition_checks = [r for r in results if r.check == "rnaseq_composition_qc:WT_REP1"]
+
+    assert len(composition_checks) == 1
+    assert composition_checks[0].status == "unverified"
+    assert composition_checks[0].value is None
+
+
+def test_discover_qc_rnaseq_composition_no_file_skips_silently(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    results = _discover_qc(run_dir, assay="rnaseq")
+    checks = [r.check for r in results]
+
+    assert not any(c.startswith("exonic_fraction:") for c in checks)
+    assert not any(c.startswith("intronic_fraction:") for c in checks)
+    assert not any(c.startswith("unassigned_fraction:") for c in checks)
+    assert not any(c.startswith("rnaseq_composition_qc:") for c in checks)
+
+
+def test_discover_qc_rnaseq_composition_prefers_results_over_work_copy(tmp_path):
+    # AC6 dedup: both a published results/ copy and an intermediate work/ copy
+    # exist for the same sample -> exactly one result per check per sample, and
+    # the value comes from the results/ copy (not the work/ copy's different
+    # tag counts).
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_read_distribution(
+        run_dir,
+        "results/star_salmon/rseqc/read_distribution",
+        "WT_REP1",
+        _READ_DISTRIBUTION_HEALTHY,
+    )
+    _write_read_distribution(
+        run_dir,
+        "work/ab/cd",
+        "WT_REP1",
+        _READ_DISTRIBUTION_WORK_COPY,
+    )
+
+    results = _discover_qc(run_dir, assay="rnaseq")
+    exonic = [r for r in results if r.check == "exonic_fraction:WT_REP1"]
+
+    assert len(exonic) == 1
+    # healthy results/ copy -> ~0.9998; work/ copy would give 0.2
+    assert exonic[0].value == pytest.approx(129779 / 129802, rel=1e-4)
     assert not any(r.check.startswith("mag_qc:") for r in results)

@@ -40,11 +40,13 @@ from contig.verification.methylseq_metrics import (
     parse_bismark_dedup_report,
 )
 from contig.verification.qc_ingest import parse_multiqc_general_stats_file
+from contig.verification.rnaseq_metrics import parse_read_distribution
 from contig.verification.rnaseq_plausibility import evaluate_rnaseq_plausibility
 from contig.verification.rule_pack import (
     AMPLISEQ_RULE_PACK,
     MAG_RULE_PACK,
     METHYLSEQ_RULE_PACK,
+    RNASEQ_COMPOSITION_PACK,
     SCRNASEQ_RULE_PACK,
     evaluate,
     rule_pack_for,
@@ -206,6 +208,29 @@ def _locate_ampliseq_qc(run_dir: Path) -> dict[str, dict[str, float]]:
     return located
 
 
+def _locate_rnaseq_composition_qc(run_dir: Path) -> dict[str, dict[str, float]]:
+    """RSeQC read_distribution.txt per sample -> {sample: {slug: value}}.
+
+    One file per sample. When a sample resolves to multiple files (a run keeps
+    both a published `results/` copy and an intermediate `work/` copy), prefer
+    the published tree so the verdict never reads a pre-final `work/` write; a
+    located-but-unparseable file still yields an empty dict so the gate can emit
+    an explicit UNVERIFIED.
+    """
+    by_sample: dict[str, list[Path]] = {}
+    for path in sorted(run_dir.rglob("*.read_distribution.txt")):
+        sample = path.name[: -len(".read_distribution.txt")]
+        by_sample.setdefault(sample, []).append(path)
+    located: dict[str, dict[str, float]] = {}
+    for sample, paths in by_sample.items():
+        preferred = next(
+            (p for p in paths if "results" in {q.lower() for q in p.relative_to(run_dir).parts}),
+            paths[0],
+        )
+        located[sample] = parse_read_distribution(preferred)
+    return located
+
+
 def _locate_mag_qc(run_dir: Path) -> dict[str, dict[str, float]]:
     """Find QUAST + CheckM stats artifacts under a run dir -> {bin: {slug: value}}.
 
@@ -347,6 +372,35 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
     if assay == "rnaseq" and multiqc is not None:
         metrics = parse_multiqc_general_stats_file(multiqc)
         results.extend(evaluate_rnaseq_plausibility(metrics))
+    # RNA-seq read-composition QC (capability C3, rnaseq slice, additive to the
+    # MultiQC-driven gate above). RSeQC's exonic/intronic/unassigned fractions do
+    # NOT reach Contig's MultiQC general-stats ingest (verified against a real
+    # multiqc_data.json), so a dedicated gate parses the read_distribution.txt
+    # artifact directly and drives RNASEQ_COMPOSITION_PACK -- mirrors the
+    # methylseq/ampliseq gates below. rnaseq deliberately stays OUT of
+    # _DEDICATED_METRIC_ASSAYS: the MultiQC pack above still owns
+    # alignment/duplication/rRNA, this gate only owns the composition fractions.
+    # A located artifact with no usable metric yields one explicit UNVERIFIED
+    # (never a silent no-op or a false pass); no artifact at all skips silently
+    # (structural QC owns a genuinely missing output; read_distribution is NOT
+    # part of the rnaseq structural manifest). Kept as a SEPARATE `if` block from
+    # the gate above (not merged) -- mirrors the germline dual-gate precedent.
+    if assay == "rnaseq":
+        for sample, sample_metrics in _locate_rnaseq_composition_qc(run_dir).items():
+            if sample_metrics:
+                results.extend(evaluate({sample: sample_metrics}, RNASEQ_COMPOSITION_PACK))
+            else:
+                results.append(
+                    QCResult(
+                        check=f"rnaseq_composition_qc:{sample}",
+                        status="unverified",
+                        message=(
+                            f"{sample}: RSeQC read_distribution found but no usable metric parsed"
+                        ),
+                        value=None,
+                        kind="metric",
+                    )
+                )
     # Single-cell cell-QC (capability C3, scrnaseq slice). The base nf-core/scrnaseq
     # pipeline does NOT route cell-level metrics into MultiQC general-stats, so a
     # dedicated gate parses the aligner's own cell-QC artifact (STARsolo Summary.csv
