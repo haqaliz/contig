@@ -12,6 +12,7 @@ from contig.models import (
     QCResult,
     ReferenceIdentity,
     RunRecord,
+    SexInference,
     TaskEvent,
 )
 
@@ -199,3 +200,44 @@ def test_methods_germline_sarek_without_assay_field_still_germline():
         _record(pipeline="nf-core/sarek", pipeline_revision="3.5.1")
     )
     assert "germline short-variant calling" in text.lower()
+
+
+# ---------------------------------------------------------------------------
+# sex_inference clause (research-use karyotypic-sex provenance, never clinical)
+# ---------------------------------------------------------------------------
+
+
+def test_methods_names_inferred_sex_and_evidence():
+    si = SexInference(
+        inferred_sex="XY",
+        x_het_ratio=0.02,
+        x_sites=143,
+        y_variant_count=6,
+        par_masked=True,
+        reference_build="GRCh38",
+    )
+    text = render_methods(_record(sex_inference=si))
+    assert "XY" in text
+    assert "0.02" in text
+    assert "143" in text
+    assert "GRCh38" in text
+
+
+def test_methods_indeterminate_sex_renders_undetermined_no_fabricated_call():
+    si = SexInference(
+        inferred_sex="indeterminate",
+        x_het_ratio=None,
+        x_sites=4,
+        y_variant_count=0,
+        par_masked=False,
+        reference_build=None,
+    )
+    text = render_methods(_record(sex_inference=si))
+    assert "undetermined" in text.lower()
+    assert "XY" not in text
+    assert "XX" not in text
+
+
+def test_methods_none_sex_inference_omits_clause():
+    text = render_methods(_record(sex_inference=None))
+    assert "karyotypic sex" not in text.lower()

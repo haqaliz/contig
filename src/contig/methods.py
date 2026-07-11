@@ -127,6 +127,42 @@ def _corroboration_clause(record: RunRecord) -> str:
     return " " + line
 
 
+def _sex_inference_clause(record: RunRecord) -> str:
+    """A clause naming the inferred germline karyotypic sex + its evidence, or ''.
+
+    Research-use inference only, never a clinical/karyotype determination:
+    "indeterminate" renders as "undetermined" (no fabricated call), and the
+    build/PAR-masking caveat is stated whenever the build could not be
+    resolved from the VCF header (par_masked False -- the ratio is unmasked).
+    """
+    si = record.sex_inference
+    if si is None:
+        return ""
+    if si.inferred_sex == "indeterminate":
+        return (
+            " Germline karyotypic sex was undetermined (too few callable"
+            f" chrX sites, {si.x_sites}) -- a research-use inference, never a"
+            " clinical determination."
+        )
+    evidence_parts = []
+    if si.x_het_ratio is not None:
+        evidence_parts.append(f"X-heterozygosity {si.x_het_ratio} over {si.x_sites} non-PAR sites")
+    # par_masked is False exactly when the build could not be resolved from the
+    # VCF header (see sex_plausibility.sex_signals): state that plainly rather
+    # than silently reporting an unmasked ratio as if PAR exclusion applied.
+    if si.par_masked and si.reference_build:
+        evidence_parts.append(si.reference_build)
+    else:
+        evidence_parts.append("PAR masking not applied: build undetermined")
+    if si.y_variant_count > 0:
+        evidence_parts.append(f"{si.y_variant_count} chrY variant site(s) present")
+    evidence = ", ".join(evidence_parts)
+    return (
+        f" Inferred karyotypic sex: {si.inferred_sex} ({evidence}) --"
+        " a research-use inference, never a clinical determination."
+    )
+
+
 def _qc_clause(record: RunRecord) -> str:
     """A summary of the QC checks behind the verdict, or the unverified note."""
     verdict = record.verdict
@@ -173,6 +209,7 @@ def render_methods(record: RunRecord) -> str:
         + _reference_clause(record)
         + _annotation_clause(record)
         + _corroboration_clause(record)
+        + _sex_inference_clause(record)
         + _provenance_clause(record)
         + _qc_clause(record)
     )

@@ -252,12 +252,13 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
     bams = sorted(run_dir.glob("**/*.bam"))
     if bams:
         results.extend(evaluate_structural(bams))
-    # Germline biological-plausibility checks (ts_tv, het_hom) computed straight
-    # from the VCF. This path is INDEPENDENT of MultiQC: it runs whether or not a
-    # report was found, so a germline run is never left without these checks. We
-    # locate the primary VCF exactly as concordance does (the variant_calling
-    # manifest's first required glob, rglob'd under the run), and skip cleanly when
-    # there is none. Gated strictly to germline so other assays are untouched.
+    # Germline biological-plausibility checks (ts_tv, het_hom, sex_plausibility)
+    # computed straight from the VCF. This path is INDEPENDENT of MultiQC: it
+    # runs whether or not a report was found, so a germline run is never left
+    # without these checks. We locate the primary VCF exactly as concordance
+    # does (the variant_calling manifest's first required glob, rglob'd under
+    # the run), and skip cleanly when there is none. Gated strictly to germline
+    # so other assays are untouched.
     if assay == "variant_calling":
         pattern = manifest_for("variant_calling").required[0]  # "*.vcf.gz"
         vcfs = sorted(p for p in run_dir.rglob(pattern) if p.is_file())

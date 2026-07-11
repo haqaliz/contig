@@ -625,6 +625,45 @@ def test_html_report_omits_reference_identity_section_when_none() -> None:
     assert "Reference identity" not in html
 
 
+def test_html_report_shows_sex_inference_section_when_present() -> None:
+    from contig.models import SexInference
+
+    record = RunRecord(
+        run_id="r-sex-present",
+        pipeline="nf-core/sarek",
+        pipeline_revision="3.5.1",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="HAPLOTYPECALLER", status="COMPLETED", exit=0)],
+        sex_inference=SexInference(
+            inferred_sex="XY",
+            x_het_ratio=0.02,
+            x_sites=143,
+            y_variant_count=6,
+            par_masked=True,
+            reference_build="GRCh38",
+        ),
+    )
+    html = render_run_report_html(record)
+    assert "Sex inference" in html or "sex inference" in html.lower()
+    assert "XY" in html
+    assert "GRCh38" in html
+
+
+def test_html_report_omits_sex_inference_section_when_none() -> None:
+    record = RunRecord(
+        run_id="r-sex-none",
+        pipeline="nf-core/rnaseq",
+        pipeline_revision="3.26.0",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="STAR", status="COMPLETED", exit=0)],
+        sex_inference=None,
+    )
+    html = render_run_report_html(record)
+    assert "sex inference" not in html.lower()
+
+
 def test_html_report_omits_annotation_identity_section_when_empty() -> None:
     # _full_record() leaves annotation_identity at its default (empty list) —
     # the section must not be rendered at all.

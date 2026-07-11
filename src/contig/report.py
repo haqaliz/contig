@@ -377,6 +377,25 @@ def render_run_report_html(
         }
         parts.append(f"<table><tbody>{_provenance_rows(ann_rows)}</tbody></table>")
 
+    # Sex inference — germline karyotypic-sex provenance (PRD
+    # germline-sex-check-plausibility). Research-use inference only, never a
+    # clinical determination; "indeterminate" renders honestly, not fabricated.
+    if record.sex_inference is not None:
+        si = record.sex_inference
+        parts.append("<h3>Sex inference</h3>")
+        si_rows: dict[str, object] = {"inferred sex": si.inferred_sex}
+        if si.x_het_ratio is not None:
+            si_rows["chrX heterozygosity ratio"] = si.x_het_ratio
+        si_rows["chrX non-PAR sites"] = si.x_sites
+        si_rows["chrY variant sites"] = si.y_variant_count
+        si_rows["PAR masked"] = si.par_masked
+        si_rows["reference build"] = si.reference_build or "undetermined"
+        parts.append(f"<table><tbody>{_provenance_rows(si_rows)}</tbody></table>")
+        parts.append(
+            '<p class="note">Research-use inference only; not a clinical or'
+            " diagnostic determination.</p>"
+        )
+
     # Signature provenance (the key and algorithm the verdict was signed under).
     if signature_status and signature_status.get("signed"):
         parts.append("<h2>Signature</h2>")
