@@ -6,6 +6,56 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **RNA-seq read-composition plausibility — the verdict now catches gDNA
+  contamination / failed enrichment** (capability C3, biological-plausibility
+  verification; the "exonic-mapping fraction" RNA-seq slice named at
+  `CAPABILITY_ROADMAP.md` C3 and deferred by the v0.6.0 rnaseq slice). A completed
+  RNA-seq run's verdict gains a **read-composition axis** derived from where aligned
+  reads fall relative to gene annotation — the classic smell for genomic-DNA
+  contamination, failed poly-A / rRNA depletion, or a broken annotation, which passes
+  alignment QC today but yields a biologically meaningless expression matrix. Slices:
+  - **Dedicated RSeQC-artifact parser (`verification/rnaseq_metrics.py`).** The
+    composition fractions are **not** in Contig's MultiQC general-stats ingest (verified
+    against a real `multiqc_data.json`), so a new stdlib-only, pure
+    `parse_read_distribution` reads RSeQC's own `read_distribution.txt` — the artifact
+    `nf-core/rnaseq@3.26.0` writes by default under
+    `results/star_salmon/rseqc/read_distribution/` — mirroring the shipped
+    scrnaseq/methylseq/ampliseq/mag dedicated-gate pattern. It computes three per-sample
+    fractions from the `Tag_count` column: `exonic_fraction` =
+    `(CDS_Exons + 5'UTR_Exons + 3'UTR_Exons) / Total Assigned Tags`, `intronic_fraction`
+    = `Introns / Total Assigned Tags`, and `unassigned_fraction` =
+    `(Total Tags − Total Assigned Tags) / Total Tags`. The two denominators are
+    intentional (exonic/intronic are shares *of assigned tags*; unassigned is a share *of
+    all tags*), and the nested/overlapping `TSS_up_*`/`TES_down_*` windows are never
+    summed (they would double-count). **Omit-never-guess:** any metric whose inputs are
+    absent/non-numeric or whose denominator is zero (or would go negative) is omitted from
+    the result, never coerced to 0.
+  - **A WARN-capped `RNASEQ_COMPOSITION_PACK` + additive `_discover_qc` gate.** Three
+    checks (`exonic_fraction` warn-below 0.50, `intronic_fraction` warn-above 0.30,
+    `unassigned_fraction` warn-above 0.30) — uncalibrated engineering defaults, kept loose
+    so a normal run reads PASS (verified against a real yeast test run: exonic ≈ 0.9998,
+    intronic ≈ 0.0002, unassigned ≈ 0.11). The pack is deliberately **not** registered in
+    `_RULE_PACKS`. A new locator prefers the published `results/` copy over an intermediate
+    `work/` copy (never reading a pre-final write). The gate is **additive** — a separate
+    `assay == "rnaseq"` block alongside the existing MultiQC-fed plausibility gate;
+    `rnaseq` stays **out** of `_DEDICATED_METRIC_ASSAYS`, so the alignment/dup/rRNA checks
+    keep their MultiQC path.
+  - **Honest contract, identical to every sibling C3 slice.** At most WARN, never FAIL,
+    never changes the `contig run`/`verify` exit code. A located-but-unparseable artifact
+    yields one explicit `rnaseq_composition_qc:<sample>` **UNVERIFIED** (never a false
+    pass); no artifact at all skips silently (structural QC owns a genuinely-missing
+    output; `read_distribution` is not added to the structural manifest). Additive to the
+    verdict only: no new `FailureClass`, model, persisted-record, or dependency; no
+    exit-code change. Local, deterministic, **no raw-read egress** (parses a small QC text
+    file already on the user's compute). Research-use sanity signal, never a clinical
+    judgement. Test-first with a committed realistic RSeQC fixture — **no real
+    nf-core/rnaseq run in CI**. **Deferred:** gene-body-coverage evenness (needs the
+    non-default RSeQC `geneBody_coverage` module), FAIL severity until the bands are
+    calibrated on real human RNA-seq, cross-sample composition aggregation, and a dashboard
+    card.
+
 ## [0.30.0] - 2026-07-11
 
 ### Added

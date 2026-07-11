@@ -327,7 +327,7 @@ corpus; repair success-rate analytics gain new classes.
 
 ---
 
-## C3. Biological-plausibility verification  ·  SHIPPED v0.3.0 (germline) + RNA-seq slice (v0.6.0) + single-cell ingestion slice (Unreleased) + germline sex-check slice (Unreleased)
+## C3. Biological-plausibility verification  ·  SHIPPED v0.3.0 (germline) + RNA-seq slice (v0.6.0) + single-cell ingestion slice (Unreleased) + germline sex-check slice (Unreleased) + RNA-seq mapping-composition slice (Unreleased)
 
 **Shipped (germline slice) in v0.3.0.** The germline plausibility rules (Ti/Tv and
 het/hom ratios) already existed in `VARIANT_RULE_PACK` but were dormant because
@@ -345,8 +345,29 @@ metric is absent from the run's ingested MultiQC, wired into `_discover_qc` gate
 UNVERIFIED-when-absent guarantee absorbs a wrong/missing slug. **Deferred:**
 gene-body-coverage evenness (needs a new RSeQC compute path), doublet rate
 (single-cell), coverage-from-VCF, multi-sample, and FAIL severity until
-the bands are calibrated on real data. (The **sex-check** slice has since shipped —
-see below.)
+the bands are calibrated on real data. (The **sex-check** and **mapping-composition**
+slices have since shipped — see below.)
+
+**Shipped (RNA-seq mapping-composition slice, Unreleased).** The RNA-seq axis now catches
+where reads fall relative to gene annotation — the gDNA-contamination / failed-enrichment
+smell that passes alignment QC but yields a meaningless matrix. This is the
+"exonic-mapping fraction" item the v0.6.0 slice deferred. Because the composition fractions
+are **not** in Contig's MultiQC general-stats ingest (verified against a real
+`multiqc_data.json`), a new dedicated parser `verification/rnaseq_metrics.py` reads RSeQC's
+own `read_distribution.txt` (the artifact `nf-core/rnaseq@3.26.0` writes by default),
+mirroring the scrnaseq/methylseq/ampliseq/mag dedicated-gate pattern. It emits three
+per-sample WARN-capped checks from the `Tag_count` column — `exonic_fraction` =
+`(CDS+5'UTR+3'UTR)/Total Assigned Tags`, `intronic_fraction` = `Introns/Total Assigned
+Tags`, `unassigned_fraction` = `(Total Tags−Total Assigned Tags)/Total Tags` (two
+intentional denominators; the nested TSS/TES windows never summed) — via a new
+`RNASEQ_COMPOSITION_PACK` (unregistered) and an **additive** `_discover_qc` gate that keeps
+`rnaseq` on its existing MultiQC pack path (`rnaseq` stays out of
+`_DEDICATED_METRIC_ASSAYS`) and prefers the published `results/` copy over a `work/` copy.
+Same contract as every C3 slice: at most WARN, never FAIL, never changes the exit code;
+omit-never-guess on uncomputable metrics; a located-but-unparseable artifact →
+`rnaseq_composition_qc:<sample>` **UNVERIFIED**; no artifact → silent skip. **Deferred:**
+gene-body-coverage evenness (non-default RSeQC module), FAIL severity until calibrated on
+real human RNA-seq, cross-sample aggregation, and a dashboard card.
 
 **Shipped (germline sex-check slice, Unreleased).** The verdict now catches
 sex-chromosome **discordance**. A new `verification/sex_plausibility.py` infers
@@ -731,7 +752,7 @@ ever. See [`../planning/variant-annotation-assay/prd.md`](../planning/variant-an
 |----|-----------|--------|----------|
 | C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) + somatic slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap + somatic auto `somatic_site_overlap` PASS-site Jaccard, Mutect2 vs Strelka2, no user input; auto-run second germline/RNA tool + single-cell deferred) |
 | C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; per-contig alias harmonization (mito `M`↔`MT` + GRCh38 scaffold seed) shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); peak-RSS-informed OOM memory scaling shipped (Unreleased, honest two-tier: own-peak → blind fallback; sibling rescue deferred); walltime-informed `time_limit` scaling shipped (Unreleased, floored at blind — censored realtime, tail-only win + field instrument); **input-format-conversion class's first slice shipped (Unreleased): bgzip'd (non-BGZF) reference FASTA self-heal, sarek-scoped (rnaseq immune by construction), stream-decompress to uncompressed `.fa` + retry; CRAM↔BAM conversion is the deferred second half**; bwa-mem2/classic-BWA build+redirect, assembly-signature + exhaustive per-assembly alias completeness pending) | Unattended-completion rate, corpus fuel |
-| C3 | Biological-plausibility verification | SHIPPED v0.3.0 (germline) + RNA-seq (v0.6.0) + single-cell ingestion (Unreleased) | Verdict gets smarter about biology (germline Ti/Tv, het/hom; RNA-seq dup/rRNA; single-cell cell-QC now *fires* via STARsolo/Cell Ranger ingestion — was a dormant no-op; mito/doublet deferred) |
+| C3 | Biological-plausibility verification | SHIPPED v0.3.0 (germline) + RNA-seq (v0.6.0) + single-cell ingestion (Unreleased) + germline sex-check (Unreleased) + RNA-seq mapping-composition (Unreleased) | Verdict gets smarter about biology (germline Ti/Tv, het/hom, sex-check; RNA-seq dup/rRNA + exonic/intronic/unassigned read-composition from RSeQC read_distribution; single-cell cell-QC now *fires* via STARsolo/Cell Ranger ingestion — was a dormant no-op; gene-body-coverage/mito/doublet deferred) |
 | C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased); Strelka2-native VAF, FAIL severity + PON reference wiring deferred | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
 | C6 | Eval flywheel as a continuous loop | M6 (detector held-out guard slice 1 SHIPPED, Unreleased — honestly 0.833/10:12, two classes structurally unreachable; repair-loop outcome-match guard slice 2 SHIPPED, Unreleased — honestly 1.0/7:7, 5 classes covered; both wired into CI; folding C1/C3 signals + held-out-accuracy trend pending) | Compounding accuracy from real runs |
