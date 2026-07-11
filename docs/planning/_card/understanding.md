@@ -1,104 +1,123 @@
-# Understanding — germline-sex-check-plausibility (Phase 2 dig)
+# Understanding — rnaseq-mapping-composition-plausibility (Phase 2 dig)
+
+Source: `_card/issue.md` brief + two read-only dig agents + on-disk real-run inspection.
+Date: 2026-07-11. Worktree baseline: 1452 passed, 1 skipped.
 
 ## What the work is really asking
 
-Add a **germline biological-plausibility check** that infers karyotypic sex from
-the run's own VCF and flags when the signal is internally inconsistent. It is a
-pure C3 slice on the CI-exercised `variant_calling` assay, WARN-capped, that
-degrades to UNVERIFIED (never a false pass) when sex can't be inferred. It reuses
-the shipped VCF-reading path — **no new compute path, no new tool, no live-run
-dependency.**
+Add a **C3 biological-plausibility** signal for the RNA-seq assay that measures where
+aligned reads fall relative to gene annotation — the **exonic / intronic** read-fraction
+composition — and surfaces it as a WARN-capped verdict check. Low exonic fraction (or
+high intronic) is a classic smell for genomic-DNA contamination, failed poly-A / rRNA
+depletion, or a broken annotation, and no incumbent issues this as a correctness signal.
+It is the "exonic-mapping fraction" item named but unbuilt in the C3 RNA-seq list
+(`CAPABILITY_ROADMAP.md:397`) and explicitly deferred by the v0.6.0 rnaseq slice
+(`docs/planning/rnaseq-plausibility/prd.md:93`).
 
-## Affected areas (confirmed by code dig)
+## The feasibility fork — RESOLVED (this was the caveat to dig first)
 
-- **New module:** `src/contig/verification/sex_plausibility.py` — mirror the shape of
-  `verification/variant_metrics.py` (germline, VCF-derived, reuses `parse_vcf`):
-  a pure compute fn → an `evaluate_sex_plausibility(vcf_path, sample=...)` wrapper →
-  explicit `status="unverified"` QCResult when uncomputable. Name matches
-  `somatic_plausibility.py` (it IS a plausibility evaluator with its own pack) and
-  the branch slug.
-- **New test:** `tests/verification/test_sex_plausibility.py` — `tmp_path` real VCFs
-  via inline `_HEADER` + `_vcf_line` + `_write_vcf` helpers; assert pass / warn (and
-  `!= "fail"`) / unverified / gzip round-trip. No mocks, no network.
-- **New pack:** `SEX_PLAUSIBILITY_PACK` (or module-level threshold constants
-  single-sourced) in `src/contig/verification/rule_pack.py`. **Not** registered in
-  `_RULE_PACKS` (like `SOMATIC_PLAUSIBILITY_PACK` / `RNASEQ_PLAUSIBILITY_PACK` /
-  `ANNOTATION_PLAUSIBILITY_PACK`) — imported directly by the new evaluator. A WARN
-  cap = omit `fail_below`/`fail_above` entirely (`rule_pack.py:50-59`,`285-303`).
-- **Wiring:** `src/contig/runner.py` `_discover_qc`, the existing germline block at
-  **runner.py:254-264** (`if assay == "variant_calling"`), which already locates the
-  VCF via `manifest_for("variant_calling").required[0]` rglob'd under the run dir and
-  extends `evaluate_variant_plausibility(vcfs[0])`. Add
-  `results.extend(evaluate_sex_plausibility(vcfs[0]))` beside it, plus the import
-  beside runner.py:60. **Reuse the same `vcfs[0]`** — no second discovery.
+The brief flagged one load-bearing question: is the composition signal reachable from a
+default Contig rnaseq run, and via MultiQC or a dedicated parser? **Resolved by inspecting
+real runs on disk (`runs/testpass2`, `runs/test-2026-06-21T22-18-14-239Z`):**
 
-## The load-bearing input (confirmed)
+1. **The RSeQC `read_distribution` artifact IS produced by default** at
+   `results/star_salmon/rseqc/read_distribution/<sample>.read_distribution.txt`
+   on nf-core/rnaseq@3.26.0 (the pinned revision, `registry.py:15-16`). Confirmed on 4+
+   real runs. So no launch-param change is needed to make the artifact exist.
+2. **The composition fractions do NOT reach Contig's MultiQC ingest.** Contig reads only
+   `report_general_stats_data` from `multiqc_data.json` (`qc_ingest.py:7`). A real run's
+   general-stats block has 11 metric keys, **none** exonic/intronic/CDS/tag-related, and
+   there is no read-distribution section Contig parses. Extending the existing
+   MultiQC-fed `RNASEQ_PLAUSIBILITY_PACK` path would therefore only ever emit UNVERIFIED.
 
-`concordance.parse_vcf(vcf_path)` → `dict[(CHROM,POS,REF,ALT), normalized_gt]`
-(`concordance.py:87-110`):
-- **CHROM is kept verbatim** — no `chr` stripping. So X/Y strings are whatever the
-  VCF uses; we must match `chrX`/`X` and `chrY`/`Y` ourselves (case-insensitive).
-- GT normalized to sorted `/`-joined tokens (`"0/1"`); **phased `0|1` handled**;
-  missing (`.`, `./.`) → `None`; **first sample column only**.
-- This gives us both signals we need: per-site GT (for X-het) and CHROM (for
-  X-site selection and Y presence). Reuse it exactly as `variant_metrics.py` does.
+**Decision: dedicated stdlib parser of the RSeQC artifact** — exactly the shipped
+fires-slice pattern (methylseq/ampliseq/mag). The caveat from the handoff is retired
+favorably: the artifact is default-present, so the check will genuinely fire, not no-op.
 
-## The verdict / exit-code contract (confirmed — cannot regress)
+## The real read_distribution.txt format (from a run on disk)
 
-- `overall_verdict` (`models.py:78-96`): precedence `fail > warn > pass > unverified`.
-  A WARN-capped check tops out at `warn`; `unverified` carries no severity and can
-  only be the verdict when nothing else is present.
-- `contig run` process exit is decided **only** by pipeline success
-  (`cli.py:610-612`), never by the QC verdict. So a WARN/UNVERIFIED
-  `sex_plausibility` result changes the printed verdict at most to `warn` and
-  **never** changes the exit code.
-- The check flows into the verdict through the **`run`** path
-  (`_discover_qc` → `RunRecord.qc_results`), not `contig verify` (which only
-  re-hashes outputs / runs concordance and does not re-run the QC packs).
+```
+Total Reads                   142111
+Total Tags                    146154
+Total Assigned Tags           129802
+=====================================================================
+Group               Total_bases         Tag_count           Tags/Kb
+CDS_Exons           146030              129779              888.71
+5'UTR_Exons         0                   0                   0.00
+3'UTR_Exons         0                   0                   0.00
+Introns             530                 23                  43.31
+TSS_up_1kb          43552               0                   0.00
+TSS_up_5kb          76907               0                   0.00
+TSS_up_10kb         89031               0                   0.00
+TES_down_1kb        40737               0                   0.00
+TES_down_5kb        81271               0                   0.00
+TES_down_10kb       97060               0                   0.00
+=====================================================================
+```
+(This is the nf-core rnaseq yeast test profile — CDS-dominated, expected.)
 
-## The science + the honest imperfection (the design core)
+**Metric computation (over the `Tag_count` column):**
+- `exonic_fraction` = (CDS_Exons + 5'UTR_Exons + 3'UTR_Exons) / **Total Assigned Tags** —
+  the mRNA-enrichment signal. WARN **below** a lenient threshold.
+- `intronic_fraction` = Introns / Total Assigned Tags — WARN **above** a lenient threshold
+  (pre-mRNA / gDNA contamination). Candidate; may ship informational.
+- **TSS_up_/TES_down_ bins are nested & overlapping windows (1kb ⊂ 5kb ⊂ 10kb)** — they
+  must NOT be summed into an "intergenic" number (double-counts). A clean intergenic-ish
+  signal, if wanted, is the *unassigned* fraction: `(Total Tags − Total Assigned Tags) /
+  Total Tags`. This is a PRD decision (see open questions).
 
-Two independent signals from one VCF:
-- **X-heterozygosity ratio** = het fraction over biallelic X-chromosome genotypes.
-  Bimodal: XY (male) → near 0 (hemizygous); XX (female) → substantial (~autosomal).
-- **Y-variant presence** = count/fraction of called variants on the Y contig.
+## How it wires in (from the code dig)
 
-Key asymmetry to encode honestly: **Y-presence is informative, Y-absence is not.**
-A female sample against a Y-containing reference AND a sample against a Y-less
-reference both yield ~0 Y calls — indistinguishable from the VCF alone. So:
-- Primary call comes from **X-het** (reliable when enough X sites exist).
-- **Y-presence** is used only as **corroboration when present** (X says female but
-  Y variants present → discordant → WARN: possible aneuploidy / contamination /
-  sample swap). Y-absence never penalizes.
-- Too few X biallelic sites, or no X contig, → **UNVERIFIED** (indeterminate).
+- **New parser** `src/contig/verification/rnaseq_metrics.py`: stdlib-only, pure,
+  `parse_read_distribution(path) -> dict[str, float]` returning `{exonic_fraction: …,
+  intronic_fraction: …}`; omit any metric it can't compute (never coerce to 0); guard
+  `Total Assigned Tags == 0`. Mirrors `methylseq_metrics.py` (one file → one sample).
+- **New locator** `_locate_rnaseq_composition_qc(run_dir)` in `runner.py`: rglob
+  `*.read_distribution.txt`, derive sample id by stripping the `.read_distribution` suffix,
+  return `{sample: {slug: value}}`; a located-but-unparseable file → empty dict for that
+  sample (→ explicit UNVERIFIED at the gate).
+- **New gate block** in `runner._discover_qc` (`runner.py`, alongside the existing
+  `assay == "rnaseq"` plausibility gate at `:347-349`), copied from the methylseq template
+  (`runner.py:385-400`): evaluate `RNASEQ_COMPOSITION_PACK` when metrics present, else emit
+  one `rnaseq_composition_qc:<sample>` UNVERIFIED. **No artifact at all → silent skip**
+  (structural QC owns genuinely-missing outputs; read_distribution is not in the rnaseq
+  structural manifest, `structural.py:245-249`, and must stay out of it).
+- **New rule pack** `RNASEQ_COMPOSITION_PACK` in `rule_pack.py`, WARN-capped (no `fail_*`),
+  **not** registered in `_RULE_PACKS` (matches the other plausibility packs).
+- **`rnaseq` stays OUT of `_DEDICATED_METRIC_ASSAYS`** (`runner.py:67`): the existing
+  `RNASEQ_RULE_PACK` alignment/assignment checks still need the generic MultiQC path
+  (`runner.py:245-248`). The new gate is purely additive.
+- **Tests**: `tests/verification/test_rnaseq_metrics.py` (inline-string fixtures via a
+  local `_write(tmp_path,…)` helper, plain text — the house style) + a committed realistic
+  `tests/fixtures/rnaseq/<sample>.read_distribution.txt` (new dir; author from a real run,
+  sanitized) + gate assertions in `tests/verification/test_run_qc.py`. **No real nf-core
+  run in CI.**
 
-This bimodality means a single `warn_below/warn_above` band does NOT fit
-`evaluate()` (it can't say "0 fine, 0.5 fine, 0.25 suspicious"). So the derived
-single `sex_plausibility` PASS/WARN/UNVERIFIED result is **hand-built in the
-wrapper** (like `variant_metrics.py`'s unverified branch), with the raw
-`x_het_ratio` optionally surfaced as an informational metric.
+## Honest contract (matches every sibling C3 slice)
+- WARN-capped bands, uncalibrated engineering defaults, **no FAIL** until real-data
+  calibration. UNVERIFIED (never a false pass) when the artifact/metric is absent.
+- Additive to the verdict only: no new `FailureClass`, model, persisted-record, or
+  dependency; no exit-code change; `eval-guard`/`heal-guard` baselines untouched.
+- Local, deterministic, **no raw-read egress** (parses a small QC text file already on the
+  user's compute).
 
-## Ambiguities / open questions for the PRD interview
+## Guardrail check (CLAUDE.md)
+Squarely Layer-2 verify-layer work ("make every verdict harder to fool"). Not Layer-1.
+No wet-lab/clinical credentials. Research-use sanity signal, never a clinical judgement.
+**No drift detected.**
 
-1. **Check shape:** one derived `sex_plausibility` (PASS/WARN/UNVERIFIED) built in
-   the wrapper, X-het primary + Y-presence corroboration — vs plain numeric band
-   checks. (Recommend the derived single check; bands don't fit a bimodal signal.)
-2. **PAR masking:** pseudoautosomal regions are diploid in males and inflate male
-   X-het; masking them needs build-specific (GRCh37≠GRCh38) coordinates. Recommend
-   **out of scope** for this slice (loose WARN-capped thresholds + the no-Y-penalty
-   absorb it); note as a known imperfection.
-3. **Thresholds:** uncalibrated engineering defaults, WARN-capped, no FAIL (as every
-   other C3 slice). Need: min-X-sites floor, X-het low/high cutoffs, Y-present floor.
-4. **Multi-sample VCFs:** `parse_vcf` reads first sample only → inherit the existing
-   `variant_metrics.py` first-sample limitation; per-sample sex is a deferred
-   follow-on. Confirm consistency.
-5. **reported-vs-inferred concordance:** explicitly **out of scope** (no sample-sheet
-   sex field today) — a named follow-on, per the brief. Do not add the field here.
-
-## Moat / guardrail check (passes)
-
-Layer-2 verification only; deepens "make every verdict harder to fool"; runs on the
-VCF already on the user's compute (no raw-read egress); research-use sanity signal,
-**never** a clinical sex/karyotype determination; WARN-capped honors "no correctness
-over-claiming"; test-first with synthetic fixtures, no real nf-core run in CI. No
-drift toward Layer 1.
+## Open questions for the requirements interview
+1. **Metric set.** Ship `exonic_fraction` alone (tightest, clearest), or also
+   `intronic_fraction` and/or the `unassigned_fraction` intergenic-ish signal? Which get
+   WARN bands vs. informational-only?
+2. **Denominator.** Total Assigned Tags (excludes off-annotation) vs. Total Tags. Exonic
+   over Assigned is the cleaner enrichment ratio; Total Tags folds in the unassigned smell.
+3. **Band values.** Lenient defaults so a normal run reads PASS — e.g. `exonic_fraction`
+   warn_below ~0.50? These are uncalibrated; state them as engineering defaults.
+4. **Multi-sample.** read_distribution is one-file-per-sample; confirm per-sample checks
+   (like the other packs) with no cross-sample aggregation this slice.
+5. **Naming.** Check names (`exonic_fraction`, …) and the located-but-empty UNVERIFIED key
+   (`rnaseq_composition_qc:<sample>`).
+6. **Scope guard.** Gene-body-coverage evenness stays deferred (needs the non-default
+   `geneBody_coverage` module); FAIL severity deferred to real-data calibration; no
+   dashboard card this slice unless trivial.
