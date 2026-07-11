@@ -143,3 +143,85 @@ def _x_signals(
     if total < MIN_X_SITES:
         return None, total
     return het / total, total
+
+
+def _y_count(
+    sites: dict[tuple[str, str, str, str], str | None], build: str | None
+) -> int:
+    """Count non-PAR chrY variant sites (any record, not gated on GT).
+
+    A record on chrY at all is the signal (something mapped and was called
+    there); genotype content is not required. PAR-Y sites are excluded --
+    they are also present on chrX in an XX sample, so they carry no
+    Y-specific evidence.
+    """
+    par_ranges = _PAR_Y.get(build) if build else None
+    count = 0
+    for (chrom, pos, _ref, _alt) in sites:
+        if not _is_chrom(chrom, "Y"):
+            continue
+        if par_ranges and _in_par(int(pos), par_ranges):
+            continue
+        count += 1
+    return count
+
+
+@dataclass(frozen=True)
+class SexSignals:
+    """The deterministic karyotypic-sex signal computed from a single VCF.
+
+    - inferred_sex: "XY" | "XX" | "discordant" | "indeterminate".
+    - x_het_ratio: heterozygous fraction of callable (non-PAR) chrX genotypes,
+      or None when there was too little signal (see _x_signals).
+    - x_sites: the callable (non-PAR) chrX genotype count behind the ratio.
+    - y_variant_count: non-PAR chrY variant site count.
+    - par_masked: whether PAR exclusion was applied (False when the build
+      could not be determined from the VCF header -- unmasked fallback).
+    - reference_build: "GRCh37" | "GRCh38" | None.
+    """
+
+    inferred_sex: str
+    x_het_ratio: float | None
+    x_sites: int
+    y_variant_count: int
+    par_masked: bool
+    reference_build: str | None
+
+
+def _infer_sex(x_het_ratio: float | None, y_variant_count: int) -> str:
+    """Derive the karyotype call from the X-het ratio and Y-presence count.
+
+    Y-ABSENCE never forces "discordant" -- a Y-less reference and a female
+    sample are indistinguishable from the VCF alone, so only Y-PRESENCE
+    (>= Y_PRESENT_FLOOR) at high X-het contradicts an XX read. A mid-band
+    X-het ratio is implausible for either karyotype on its own, so it also
+    reads discordant regardless of Y.
+    """
+    if x_het_ratio is None:
+        return "indeterminate"
+    if x_het_ratio <= X_HET_LOW:
+        return "XY"
+    if x_het_ratio >= X_HET_HIGH:
+        return "discordant" if y_variant_count >= Y_PRESENT_FLOOR else "XX"
+    return "discordant"  # mid-band: implausible for either karyotype
+
+
+def sex_signals(vcf_path: str | os.PathLike) -> SexSignals:
+    """Assemble the full karyotypic-sex signal for a single germline VCF.
+
+    Pure function of the VCF bytes: parses once via parse_vcf, detects the
+    build for PAR masking, computes X-het and Y-presence, and derives
+    inferred_sex. Same input -> same SexSignals, always.
+    """
+    sites = parse_vcf(vcf_path)
+    build = _detect_build(vcf_path)
+    x_het_ratio, x_sites = _x_signals(sites, build)
+    y_variant_count = _y_count(sites, build)
+    return SexSignals(
+        inferred_sex=_infer_sex(x_het_ratio, y_variant_count),
+        x_het_ratio=x_het_ratio,
+        x_sites=x_sites,
+        y_variant_count=y_variant_count,
+        par_masked=build is not None,
+        reference_build=build,
+    )

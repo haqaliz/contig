@@ -5,6 +5,8 @@ Mirrors the style of test_variant_metrics.py (tiny inline VCFs via _HEADER /
 _vcf_line / _write_vcf).
 """
 
+import pytest
+
 from contig.verification.concordance import parse_vcf
 from contig.verification.rule_pack import (
     MIN_X_SITES,
@@ -17,6 +19,8 @@ from contig.verification.sex_plausibility import (
     _CHRX_LENGTH_GRCH38,
     _detect_build,
     _x_signals,
+    _y_count,
+    sex_signals,
 )
 
 # ##contig lines included so build detection (##contig=<ID=...X,length=L>) is
@@ -162,3 +166,139 @@ def test_xhet_none_and_zero_sites_when_no_chrx_contig(tmp_path):
 
     assert x_sites == 0
     assert ratio is None
+
+
+# --- Phase 3: Y presence + sex_signals assembly + inferred_sex ------------------
+
+
+def _male_x_rows():
+    rows = [("chrX", 3_000_000 + i, "A", "G", "0/1") for i in range(2)]
+    rows += [("chrX", 4_000_000 + i, "A", "G", "0/0") for i in range(28)]
+    return rows
+
+
+def _female_x_rows():
+    rows = [("chrX", 3_000_000 + i, "A", "G", "0/1") for i in range(24)]
+    rows += [("chrX", 4_000_000 + i, "A", "G", "0/0") for i in range(3)]
+    rows += [("chrX", 5_000_000 + i, "A", "G", "1/1") for i in range(3)]
+    return rows
+
+
+def _midband_x_rows():
+    # 5 het over 30 total -> ratio 0.1667, strictly between X_HET_LOW and
+    # X_HET_HIGH: implausible for either karyotype.
+    rows = [("chrX", 3_000_000 + i, "A", "G", "0/1") for i in range(5)]
+    rows += [("chrX", 4_000_000 + i, "A", "G", "0/0") for i in range(25)]
+    return rows
+
+
+def _y_rows(n, chrom="chrY", start=10_000_000):
+    return [(chrom, start + i, "A", "G", "0/1") for i in range(n)]
+
+
+def test_ycount_counts_nonpar_y_sites(tmp_path):
+    vcf = _write_vcf(tmp_path / "a.vcf", _HEADER_GRCH38, _y_rows(7))
+    sites = parse_vcf(vcf)
+    build = _detect_build(vcf)
+
+    assert _y_count(sites, build) == 7
+
+
+def test_ycount_excludes_par_y_sites(tmp_path):
+    # 3 sites inside GRCh38 chrY PAR1 (10,001-2,781,479) + 5 non-PAR sites.
+    rows = [("chrY", 20_000 + i, "A", "G", "0/1") for i in range(3)]
+    rows += _y_rows(5)
+    vcf = _write_vcf(tmp_path / "a.vcf", _HEADER_GRCH38, rows)
+    sites = parse_vcf(vcf)
+    build = _detect_build(vcf)
+
+    assert _y_count(sites, build) == 5
+
+
+def test_ycount_recognizes_bare_y_grch37(tmp_path):
+    # GRCh37's chrY PAR1 (10,001-2,649,520) does NOT share chrX's PAR1 bounds;
+    # use a position clearly outside both chrY PARs.
+    vcf = _write_vcf(tmp_path / "a.vcf", _HEADER_GRCH37, _y_rows(6, chrom="Y", start=20_000_000))
+    sites = parse_vcf(vcf)
+    build = _detect_build(vcf)
+
+    assert build == "GRCh37"
+    assert _y_count(sites, build) == 6
+
+
+def test_sex_signals_male_pattern_is_xy(tmp_path):
+    rows = _male_x_rows() + _y_rows(6)
+    vcf = _write_vcf(tmp_path / "a.vcf", _HEADER_GRCH38, rows)
+
+    signals = sex_signals(vcf)
+
+    assert signals.inferred_sex == "XY"
+    assert signals.x_het_ratio <= X_HET_LOW
+    assert signals.y_variant_count == 6
+    assert signals.reference_build == "GRCh38"
+    assert signals.par_masked is True
+
+
+def test_sex_signals_female_pattern_no_y_is_xx(tmp_path):
+    vcf = _write_vcf(tmp_path / "a.vcf", _HEADER_GRCH38, _female_x_rows())
+
+    signals = sex_signals(vcf)
+
+    assert signals.inferred_sex == "XX"
+    assert signals.x_het_ratio >= X_HET_HIGH
+    assert signals.y_variant_count == 0
+
+
+def test_sex_signals_autosomal_x_het_with_y_is_discordant(tmp_path):
+    rows = _female_x_rows() + _y_rows(6)
+    vcf = _write_vcf(tmp_path / "a.vcf", _HEADER_GRCH38, rows)
+
+    signals = sex_signals(vcf)
+
+    assert signals.inferred_sex == "discordant"
+    assert signals.x_het_ratio >= X_HET_HIGH
+    assert signals.y_variant_count >= Y_PRESENT_FLOOR
+
+
+def test_sex_signals_midband_xhet_is_discordant(tmp_path):
+    vcf = _write_vcf(tmp_path / "a.vcf", _HEADER_GRCH38, _midband_x_rows())
+
+    signals = sex_signals(vcf)
+
+    assert signals.inferred_sex == "discordant"
+    assert X_HET_LOW < signals.x_het_ratio < X_HET_HIGH
+
+
+def test_sex_signals_too_few_x_sites_is_indeterminate(tmp_path):
+    rows = [("chrX", 5_000_000 + i, "A", "G", "0/1") for i in range(10)]
+    vcf = _write_vcf(tmp_path / "a.vcf", _HEADER_GRCH38, rows)
+
+    signals = sex_signals(vcf)
+
+    assert signals.inferred_sex == "indeterminate"
+    assert signals.x_het_ratio is None
+
+
+def test_sex_signals_female_pattern_y_absence_never_forces_discordant(tmp_path):
+    # Female-pattern X-het with zero chrY calls: Y-absence is uninformative (a
+    # Y-less reference and a female sample look identical from the VCF alone),
+    # so this must read XX, never discordant.
+    vcf = _write_vcf(tmp_path / "a.vcf", _HEADER_GRCH38, _female_x_rows())
+
+    signals = sex_signals(vcf)
+
+    assert signals.inferred_sex == "XX"
+
+
+@pytest.mark.parametrize("x_chrom,y_chrom", [("chrX", "chrY"), ("X", "Y")])
+def test_sex_signals_recognizes_chr_prefixed_and_bare_contigs(tmp_path, x_chrom, y_chrom):
+    rows = [(x_chrom, 3_000_000 + i, "A", "G", "0/1") for i in range(2)]
+    rows += [(x_chrom, 4_000_000 + i, "A", "G", "0/0") for i in range(28)]
+    rows += [(y_chrom, 10_000_000 + i, "A", "G", "0/1") for i in range(6)]
+    header = _HEADER_GRCH38 if x_chrom == "chrX" else _HEADER_GRCH37
+    vcf = _write_vcf(tmp_path / "a.vcf", header, rows)
+
+    signals = sex_signals(vcf)
+
+    assert signals.inferred_sex == "XY"
+    assert signals.y_variant_count == 6
