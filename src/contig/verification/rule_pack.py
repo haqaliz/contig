@@ -340,15 +340,27 @@ ANNOTATION_PLAUSIBILITY_PACK: list[dict] = [
 # uncalibrated engineering defaults; evaluated by the dedicated read_distribution gate
 # in runner._discover_qc and deliberately NOT registered in _RULE_PACKS.
 RNASEQ_COMPOSITION_PACK: list[dict] = [
-    {"check": "exonic_fraction", "metric": "exonic_fraction", "warn_below": 0.50,
-     "message": "fraction of assigned reads in exons (CDS+UTRs); low suggests gDNA "
-                "contamination or failed enrichment"},
-    {"check": "intronic_fraction", "metric": "intronic_fraction", "warn_above": 0.30,
-     "message": "fraction of assigned reads in introns; high suggests pre-mRNA / gDNA "
-                "contamination"},
-    {"check": "unassigned_fraction", "metric": "unassigned_fraction", "warn_above": 0.30,
-     "message": "fraction of all tags not assigned to any annotated feature "
-                "(intergenic / off-annotation)"},
+    {
+        "check": "exonic_fraction",
+        "metric": "exonic_fraction",
+        "warn_below": 0.50,
+        "message": "fraction of assigned reads in exons (CDS+UTRs); low suggests gDNA "
+        "contamination or failed enrichment",
+    },
+    {
+        "check": "intronic_fraction",
+        "metric": "intronic_fraction",
+        "warn_above": 0.30,
+        "message": "fraction of assigned reads in introns; high suggests pre-mRNA / gDNA "
+        "contamination",
+    },
+    {
+        "check": "unassigned_fraction",
+        "metric": "unassigned_fraction",
+        "warn_above": 0.30,
+        "message": "fraction of all tags not assigned to any annotated feature "
+        "(intergenic / off-annotation)",
+    },
 ]
 
 

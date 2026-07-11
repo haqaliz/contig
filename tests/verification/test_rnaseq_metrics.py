@@ -173,6 +173,51 @@ Introns             0                   0                   0.00
     assert UNASSIGNED_FRACTION not in out
 
 
+def test_negative_unassigned_guard_omits_unassigned_only(tmp_path: Path) -> None:
+    # Total Assigned Tags EXCEEDS Total Tags (malformed/inconsistent artifact).
+    # exonic/intronic only need `assigned`, so they are still computed; the
+    # `unassigned >= 0` guard omits UNASSIGNED_FRACTION rather than emitting a
+    # negative fraction.
+    text = """\
+Total Reads                   100
+Total Tags                    100
+Total Assigned Tags           150
+=====================================================================
+Group               Total_bases         Tag_count           Tags/Kb
+CDS_Exons           1000                120                 120.00
+Introns             1000                30                  30.00
+=====================================================================
+"""
+    path = _write(tmp_path, "S1.read_distribution.txt", text)
+    out = parse_read_distribution(path)
+    assert out[EXONIC_FRACTION] == pytest.approx(120 / 150)
+    assert out[INTRONIC_FRACTION] == pytest.approx(30 / 150)
+    assert UNASSIGNED_FRACTION not in out
+
+
+def test_non_numeric_total_assigned_tags_omits_all_three(tmp_path: Path) -> None:
+    # "Total Assigned Tags" trailing token is non-numeric -> `assigned` is
+    # None. exonic/intronic require `assigned is not None`, so both are
+    # omitted; unassigned's formula also requires `assigned is not None`, so
+    # it is omitted too, even though Total Tags is present and valid.
+    text = """\
+Total Reads                   100000
+Total Tags                    100000
+Total Assigned Tags           abc
+=====================================================================
+Group               Total_bases         Tag_count           Tags/Kb
+CDS_Exons           1000                90000               1000.00
+Introns             1000                5000                1000.00
+=====================================================================
+"""
+    path = _write(tmp_path, "S1.read_distribution.txt", text)
+    out = parse_read_distribution(path)
+    assert EXONIC_FRACTION not in out
+    assert INTRONIC_FRACTION not in out
+    assert UNASSIGNED_FRACTION not in out
+    assert out == {}
+
+
 # --------------------------------------------------------------------------- #
 # Garbage / empty input.
 # --------------------------------------------------------------------------- #
