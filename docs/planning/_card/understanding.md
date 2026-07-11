@@ -1,105 +1,104 @@
-# Understanding — assay-qc-verdict-fires (Phase 2 dig)
+# Understanding — germline-sex-check-plausibility (Phase 2 dig)
 
-## What the work really asks
+## What the work is really asking
 
-Make the biological QC verdict for `methylseq`, `ampliseq`, and `mag` **actually
-fire** on a real run instead of silently degrading to UNVERIFIED, and make any
-"can't compute" outcome **explicit** (a breadcrumb) rather than an invisible no-op.
-Lead depth-first with **methylseq**; ampliseq and mag are fast-follows on the same
-seam.
+Add a **germline biological-plausibility check** that infers karyotypic sex from
+the run's own VCF and flags when the signal is internally inconsistent. It is a
+pure C3 slice on the CI-exercised `variant_calling` assay, WARN-capped, that
+degrades to UNVERIFIED (never a false pass) when sex can't be inferred. It reuses
+the shipped VCF-reading path — **no new compute path, no new tool, no live-run
+dependency.**
 
-This is the exact class of latent no-op that hollowed the single-cell verdict until
-v0.21.0 fixed it — and that fix is the proven template to mirror.
+## Affected areas (confirmed by code dig)
 
-## Root cause (confirmed in code)
+- **New module:** `src/contig/verification/sex_plausibility.py` — mirror the shape of
+  `verification/variant_metrics.py` (germline, VCF-derived, reuses `parse_vcf`):
+  a pure compute fn → an `evaluate_sex_plausibility(vcf_path, sample=...)` wrapper →
+  explicit `status="unverified"` QCResult when uncomputable. Name matches
+  `somatic_plausibility.py` (it IS a plausibility evaluator with its own pack) and
+  the branch slug.
+- **New test:** `tests/verification/test_sex_plausibility.py` — `tmp_path` real VCFs
+  via inline `_HEADER` + `_vcf_line` + `_write_vcf` helpers; assert pass / warn (and
+  `!= "fail"`) / unverified / gzip round-trip. No mocks, no network.
+- **New pack:** `SEX_PLAUSIBILITY_PACK` (or module-level threshold constants
+  single-sourced) in `src/contig/verification/rule_pack.py`. **Not** registered in
+  `_RULE_PACKS` (like `SOMATIC_PLAUSIBILITY_PACK` / `RNASEQ_PLAUSIBILITY_PACK` /
+  `ANNOTATION_PLAUSIBILITY_PACK`) — imported directly by the new evaluator. A WARN
+  cap = omit `fail_below`/`fail_above` entirely (`rule_pack.py:50-59`,`285-303`).
+- **Wiring:** `src/contig/runner.py` `_discover_qc`, the existing germline block at
+  **runner.py:254-264** (`if assay == "variant_calling"`), which already locates the
+  VCF via `manifest_for("variant_calling").required[0]` rglob'd under the run dir and
+  extends `evaluate_variant_plausibility(vcfs[0])`. Add
+  `results.extend(evaluate_sex_plausibility(vcfs[0]))` beside it, plus the import
+  beside runner.py:60. **Reuse the same `vcfs[0]`** — no second discovery.
 
-- `METHYLSEQ_RULE_PACK` / `AMPLISEQ_RULE_PACK` / `MAG_RULE_PACK`
-  (`rule_pack.py:131-226`) are selected fine via `rule_pack_for(assay)` and reach
-  `evaluate()`, but their metrics arrive **only** through the generic MultiQC
-  general-stats path (`runner.py:115-124` → `run_qc.py:21-39` →
-  `qc_ingest.py:5-30`).
-- `evaluate()` does `if check["metric"] not in sample_metrics: continue`
-  (`rule_pack.py:368-369`) — an absent slug emits **nothing**. And
-  `evaluate_run_qc` returns `[]` on empty metrics (`run_qc.py:34-35`). So a
-  wrong/missing slug is **invisible**: no PASS, no FAIL, no UNVERIFIED.
-- Every slug in the three packs is annotated **"slug unverified"** in the source.
-- `qc_ingest.parse_multiqc_general_stats` takes sample ids and metric keys
-  **verbatim** — there is no aliasing/normalization today.
+## The load-bearing input (confirmed)
 
-## The proven precedent (scrnaseq, v0.21.0) — the template
+`concordance.parse_vcf(vcf_path)` → `dict[(CHROM,POS,REF,ALT), normalized_gt]`
+(`concordance.py:87-110`):
+- **CHROM is kept verbatim** — no `chr` stripping. So X/Y strings are whatever the
+  VCF uses; we must match `chrX`/`X` and `chrY`/`Y` ourselves (case-insensitive).
+- GT normalized to sorted `/`-joined tokens (`"0/1"`); **phased `0|1` handled**;
+  missing (`.`, `./.`) → `None`; **first sample column only**.
+- This gives us both signals we need: per-site GT (for X-het) and CHROM (for
+  X-site selection and Y presence). Reuse it exactly as `variant_metrics.py` does.
 
-`runner.py:231-246` is the shape to copy. scrnaseq did **not** try to fix MultiQC
-slugs — it added **dedicated on-disk artifact parsers** (`scrnaseq_metrics.py`
-reading STARsolo `Summary.csv` / Cell Ranger `metrics_summary.csv`) behind a
-per-assay gate that:
-- runs `evaluate({sample: metrics}, PACK)` when metrics parse, else
-- emits an **explicit UNVERIFIED** `QCResult(check=f"...:{sample}",
-  status="unverified", kind="metric")` when the artifact is located-but-unparseable,
-- and **silently skips** only when no artifact exists at all (structural QC owns the
-  missing-output case).
-Cell-Ranger-over-STARsolo precedence, floor principle (non-numeric omitted, never
-guessed to 0), no HTML scraping.
+## The verdict / exit-code contract (confirmed — cannot regress)
 
-## Affected areas / seams
+- `overall_verdict` (`models.py:78-96`): precedence `fail > warn > pass > unverified`.
+  A WARN-capped check tops out at `warn`; `unverified` carries no severity and can
+  only be the verdict when nothing else is present.
+- `contig run` process exit is decided **only** by pipeline success
+  (`cli.py:610-612`), never by the QC verdict. So a WARN/UNVERIFIED
+  `sex_plausibility` result changes the printed verdict at most to `warn` and
+  **never** changes the exit code.
+- The check flows into the verdict through the **`run`** path
+  (`_discover_qc` → `RunRecord.qc_results`), not `contig verify` (which only
+  re-hashes outputs / runs concordance and does not re-run the QC packs).
 
-- `src/contig/runner.py` — `_discover_qc` (add a per-assay gate + `_locate_*` +
-  `_sample_from_*` helpers, mirroring `:90-107` and `:231-246`).
-- `src/contig/verification/` — likely NEW `methylseq_metrics.py` (then
-  `ampliseq_metrics.py`, `mag_metrics.py`) mirroring `scrnaseq_metrics.py`; OR a
-  slug-alias layer in `qc_ingest.py` (see the fork below).
-- `src/contig/verification/rule_pack.py` — packs unchanged if new parsers emit the
-  canonical slugs; tighten "slug unverified" comments once confirmed.
-- `tests/verification/` — NEW `test_methylseq_metrics.py` + a methylseq gate block
-  in `test_run_qc.py` (mirror `:531-649`); inline synthetic fixtures.
-- Registry (`registry.py:67-87`) already wires the three assays (`methylseq`,
-  `ampliseq`, `mag`); structural manifests (`structural.py:265-275`) already fire —
-  only the **biological metric packs** are hollow. No `models.py` / `overall_verdict`
-  / `_RULE_PACKS` change needed.
+## The science + the honest imperfection (the design core)
 
-## The key architecture fork (for the PRD interview)
+Two independent signals from one VCF:
+- **X-heterozygosity ratio** = het fraction over biallelic X-chromosome genotypes.
+  Bimodal: XY (male) → near 0 (hemizygous); XX (female) → substantial (~autosomal).
+- **Y-variant presence** = count/fraction of called variants on the Y contig.
 
-Where do the metrics come from?
+Key asymmetry to encode honestly: **Y-presence is informative, Y-absence is not.**
+A female sample against a Y-containing reference AND a sample against a Y-less
+reference both yield ~0 Y calls — indistinguishable from the VCF alone. So:
+- Primary call comes from **X-het** (reliable when enough X sites exist).
+- **Y-presence** is used only as **corroboration when present** (X says female but
+  Y variants present → discordant → WARN: possible aneuploidy / contamination /
+  sample swap). Y-absence never penalizes.
+- Too few X biallelic sites, or no X contig, → **UNVERIFIED** (indeterminate).
 
-- **Option A — slug aliasing in the MultiQC path.** If Bismark/DADA2/QUAST *do*
-  route these metrics into MultiQC general-stats (just under different key names),
-  add a tolerant per-metric alias set so the pack matches. Smaller change; still
-  needs a per-assay gate to emit explicit UNVERIFIED when the keys are absent.
-- **Option B — dedicated artifact parsers (the scrnaseq pattern).** Parse the
-  tool's own on-disk report files (Bismark `*_PE_report.txt` /
-  `deduplicate_bismark` report; DADA2 stats table; QUAST `report.tsv` + CheckM tsv)
-  into canonical slugs behind a gate. Provably robust — does not depend on the base
-  pipeline routing to general-stats (the exact assumption that broke scrnaseq).
-  More per-assay work.
+This bimodality means a single `warn_below/warn_above` band does NOT fit
+`evaluate()` (it can't say "0 fine, 0.5 fine, 0.25 suspicious"). So the derived
+single `sex_plausibility` PASS/WARN/UNVERIFIED result is **hand-built in the
+wrapper** (like `variant_metrics.py`'s unverified branch), with the raw
+`x_het_ratio` optionally surfaced as an informational metric.
 
-**Lean:** Option B for methylseq, because it is the proven-robust pattern and the
-whole point is to stop depending on the fragile general-stats assumption.
-`percent_bs_conversion` in particular is commonly **absent** from Bismark
-general-stats, which is a concrete argument against Option A. But this is a real
-decision the interview should confirm, ideally against a real report layout.
+## Ambiguities / open questions for the PRD interview
 
-## Fixture caveat (dig-confirmed)
+1. **Check shape:** one derived `sex_plausibility` (PASS/WARN/UNVERIFIED) built in
+   the wrapper, X-het primary + Y-presence corroboration — vs plain numeric band
+   checks. (Recommend the derived single check; bands don't fit a bimodal signal.)
+2. **PAR masking:** pseudoautosomal regions are diploid in males and inflate male
+   X-het; masking them needs build-specific (GRCh37≠GRCh38) coordinates. Recommend
+   **out of scope** for this slice (loose WARN-capped thresholds + the no-Y-penalty
+   absorb it); note as a known imperfection.
+3. **Thresholds:** uncalibrated engineering defaults, WARN-capped, no FAIL (as every
+   other C3 slice). Need: min-X-sites floor, X-het low/high cutoffs, Y-present floor.
+4. **Multi-sample VCFs:** `parse_vcf` reads first sample only → inherit the existing
+   `variant_metrics.py` first-sample limitation; per-sample sex is a deferred
+   follow-on. Confirm consistency.
+5. **reported-vs-inferred concordance:** explicitly **out of scope** (no sample-sheet
+   sex field today) — a named follow-on, per the brief. Do not add the field here.
 
-CI never runs nf-core/methylseq/ampliseq/mag, and **no real methylseq/ampliseq/mag
-MultiQC or report artifact exists locally** — the only `multiqc_data.json` files on
-disk are RNA-seq/variant runs (same `report_general_stats_data` schema:
-`[ {sample: {metric_key: value}} ]`). So slugs/report layouts must be pinned from
-**realistic hand-authored fixtures** shaped like real nf-core output (in-pattern:
-commit `5cedaaa` did this for sarek annotation). The explicit-UNVERIFIED breadcrumb
-is the safety net: even an unconfirmed slug fails **loudly**, never silently.
+## Moat / guardrail check (passes)
 
-## Open questions for the interview
-
-1. Option A (alias) vs Option B (dedicated parsers) — confirm B, or A where a metric
-   is genuinely in general-stats?
-2. Scope of the first shippable slice: **methylseq only** (recommended, depth-first)
-   or all three at once?
-3. Which Bismark artifact is authoritative for each metric (report file vs MultiQC),
-   and can we confirm `percent_bs_conversion`'s real source at all offline?
-4. Bands unchanged (WARN/FAIL-capped, uncalibrated) — confirm no recalibration in
-   this slice (FAIL-severity calibration is separately deferred).
-
-## Guardrail check
-
-Pure Layer-2 verification hardening (C3). No Layer-1, no raw-read egress (parsers
-read small summary/report files on the user's compute), no over-claiming
-(UNVERIFIED never rendered as PASS). Clean.
+Layer-2 verification only; deepens "make every verdict harder to fool"; runs on the
+VCF already on the user's compute (no raw-read egress); research-use sanity signal,
+**never** a clinical sex/karyotype determination; WARN-capped honors "no correctness
+over-claiming"; test-first with synthetic fixtures, no real nf-core run in CI. No
+drift toward Layer 1.
