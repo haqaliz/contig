@@ -5,6 +5,8 @@ Mirrors the style of test_variant_metrics.py (tiny inline VCFs via _HEADER /
 _vcf_line / _write_vcf).
 """
 
+import gzip
+
 import pytest
 
 from contig.verification.concordance import parse_vcf
@@ -20,6 +22,7 @@ from contig.verification.sex_plausibility import (
     _detect_build,
     _x_signals,
     _y_count,
+    evaluate_sex_plausibility,
     sex_signals,
 )
 
@@ -302,3 +305,103 @@ def test_sex_signals_recognizes_chr_prefixed_and_bare_contigs(tmp_path, x_chrom,
 
     assert signals.inferred_sex == "XY"
     assert signals.y_variant_count == 6
+
+
+# --- Phase 4: evaluate_sex_plausibility (WARN-capped, UNVERIFIED-when-weak) -----
+
+
+def _by_check(results):
+    return {r.check: r for r in results}
+
+
+def test_evaluate_male_pattern_passes_xy(tmp_path):
+    rows = _male_x_rows() + _y_rows(6)
+    vcf = _write_vcf(tmp_path / "a.vcf", _HEADER_GRCH38, rows)
+
+    results = evaluate_sex_plausibility(vcf, sample="s1")
+    by_check = _by_check(results)
+
+    sex = by_check["sex_plausibility:s1"]
+    assert sex.status == "pass"
+    assert sex.status != "fail"
+    assert sex.kind == "metric"
+    assert "XY" in sex.message
+
+    xhet = by_check["x_het_ratio:s1"]
+    assert xhet.status == "pass"
+    assert xhet.kind == "metric"
+    assert xhet.value == sex_signals(vcf).x_het_ratio
+    assert "informational" in xhet.message.lower()
+
+
+def test_evaluate_female_pattern_passes_xx(tmp_path):
+    vcf = _write_vcf(tmp_path / "a.vcf", _HEADER_GRCH38, _female_x_rows())
+
+    results = evaluate_sex_plausibility(vcf, sample="s1")
+    by_check = _by_check(results)
+
+    sex = by_check["sex_plausibility:s1"]
+    assert sex.status == "pass"
+    assert "XX" in sex.message
+
+
+def test_evaluate_discordant_warns_never_fails(tmp_path):
+    rows = _female_x_rows() + _y_rows(6)
+    vcf = _write_vcf(tmp_path / "a.vcf", _HEADER_GRCH38, rows)
+
+    results = evaluate_sex_plausibility(vcf, sample="s1")
+    by_check = _by_check(results)
+
+    sex = by_check["sex_plausibility:s1"]
+    assert sex.status == "warn"
+    assert sex.status != "fail"
+    assert "aneuploidy" in sex.message or "contamination" in sex.message or "sample swap" in sex.message
+
+
+def test_evaluate_indeterminate_is_unverified_with_none_value(tmp_path):
+    rows = [("chrX", 5_000_000 + i, "A", "G", "0/1") for i in range(10)]
+    vcf = _write_vcf(tmp_path / "a.vcf", _HEADER_GRCH38, rows)
+
+    results = evaluate_sex_plausibility(vcf, sample="s1")
+    by_check = _by_check(results)
+
+    sex = by_check["sex_plausibility:s1"]
+    assert sex.status == "unverified"
+    assert sex.value is None
+    assert sex.status != "fail"
+
+    xhet = by_check["x_het_ratio:s1"]
+    assert xhet.status == "pass"  # informational-always-PASS convention
+    assert xhet.value is None
+
+
+def test_evaluate_gzip_matches_plain(tmp_path):
+    rows = _male_x_rows() + _y_rows(6)
+    plain = _write_vcf(tmp_path / "a.vcf", _HEADER_GRCH38, rows)
+    gz = tmp_path / "a.vcf.gz"
+    body = "".join(_vcf_line(*r) for r in rows)
+    with gzip.open(gz, "wt") as fh:
+        fh.write(_HEADER_GRCH38 + body)
+
+    plain_results = evaluate_sex_plausibility(plain, sample="s1")
+    gz_results = evaluate_sex_plausibility(gz, sample="s1")
+
+    assert plain_results == gz_results
+
+
+def test_evaluate_build_undetermined_falls_back_unmasked_still_warn_capped(tmp_path):
+    # No ##contig header at all -> build undetermined, unmasked X-het, still
+    # WARN-capped. Include a PAR-range het block that WOULD flip the read if
+    # masking were silently assumed; unmasked, it correctly counts toward het.
+    rows = [("chrX", 20_000 + i, "A", "G", "0/1") for i in range(24)]  # would be PAR1 if masked
+    rows += [("chrX", 4_000_000 + i, "A", "G", "0/0") for i in range(6)]
+    vcf = _write_vcf(tmp_path / "a.vcf", _HEADER_NO_CONTIG, rows)
+
+    signals = sex_signals(vcf)
+    assert signals.par_masked is False
+    assert signals.reference_build is None
+
+    results = evaluate_sex_plausibility(vcf, sample="s1")
+    by_check = _by_check(results)
+    assert by_check["sex_plausibility:s1"].status in ("pass", "warn", "unverified")
+    assert by_check["sex_plausibility:s1"].status != "fail"

@@ -225,3 +225,111 @@ def sex_signals(vcf_path: str | os.PathLike) -> SexSignals:
         par_masked=build is not None,
         reference_build=build,
     )
+
+
+def _discordant_message(signals: SexSignals, sample: str) -> str:
+    """Name the specific conflict behind a "discordant" call, plus the causes."""
+    ratio = round(signals.x_het_ratio, 4)
+    causes = "possible aneuploidy / contamination / sample swap"
+    if signals.x_het_ratio >= X_HET_HIGH:
+        return (
+            f"{sample}: autosomal-level chrX heterozygosity (ratio {ratio}) "
+            f"together with {signals.y_variant_count} chrY variant site(s) is "
+            f"inconsistent with a single karyotype ({causes})"
+        )
+    return (
+        f"{sample}: chrX heterozygosity ratio {ratio} falls between the XY "
+        f"(<= {X_HET_LOW}) and XX (>= {X_HET_HIGH}) bands, implausible for "
+        f"either karyotype ({causes})"
+    )
+
+
+def _sex_plausibility_result(signals: SexSignals, sample: str) -> QCResult:
+    """The at-most-WARN `sex_plausibility:{sample}` verdict-contributing result.
+
+    "XY"/"XX" -> pass; "discordant" -> warn (never fail, per the VERDICT
+    CONTRACT: a VCF-only signal can corroborate an aneuploidy/mixup, never
+    confidently diagnose one); "indeterminate" -> unverified with value=None
+    (too little signal to say anything, so it must not read as a pass).
+    """
+    check = f"sex_plausibility:{sample}"
+    if signals.inferred_sex == "indeterminate":
+        return QCResult(
+            check=check,
+            status="unverified",
+            message=(
+                f"{sample}: too few callable (non-PAR) chrX sites "
+                f"({signals.x_sites}, need >= {MIN_X_SITES}) to infer "
+                "karyotypic sex"
+            ),
+            value=None,
+            kind="metric",
+        )
+    if signals.inferred_sex == "discordant":
+        return QCResult(
+            check=check,
+            status="warn",
+            message=_discordant_message(signals, sample),
+            value=signals.x_het_ratio,
+            kind="metric",
+        )
+    ratio = round(signals.x_het_ratio, 4)
+    evidence = f"chrX het ratio {ratio}"
+    if signals.y_variant_count > 0:
+        evidence += f", {signals.y_variant_count} chrY variant site(s)"
+    return QCResult(
+        check=check,
+        status="pass",
+        message=f"{sample}: inferred karyotype {signals.inferred_sex} ({evidence})",
+        value=signals.x_het_ratio,
+        kind="metric",
+    )
+
+
+def _x_het_ratio_result(signals: SexSignals, sample: str) -> QCResult:
+    """The informational `x_het_ratio:{sample}` result.
+
+    Always status="pass" -- the established informational-always-PASS
+    convention (mirroring gene_symbol_concordance) for a raw metric that
+    carries no severity of its own; the WARN-capped call lives in
+    sex_plausibility, not here.
+    """
+    check = f"x_het_ratio:{sample}"
+    if signals.x_het_ratio is None:
+        return QCResult(
+            check=check,
+            status="pass",
+            message=(
+                f"{sample}: chrX heterozygosity ratio unavailable "
+                f"(only {signals.x_sites} callable X site(s)) -- informational metric"
+            ),
+            value=None,
+            kind="metric",
+        )
+    ratio = round(signals.x_het_ratio, 4)
+    return QCResult(
+        check=check,
+        status="pass",
+        message=f"{sample}: chrX heterozygosity ratio {ratio} -- informational metric",
+        value=signals.x_het_ratio,
+        kind="metric",
+    )
+
+
+def evaluate_sex_plausibility(
+    vcf_path: str | os.PathLike, sample: str = "sample"
+) -> list[QCResult]:
+    """Evaluate germline karyotypic-sex plausibility over a VCF, capped at WARN.
+
+    Computes SexSignals once, then hand-builds two QCResults from it (the
+    derived call is bimodal -- XY/XX/discordant/indeterminate -- so it cannot
+    be expressed through a single rule_pack.evaluate() band, exactly like
+    variant_metrics.py's hand-built UNVERIFIED branch):
+      - `sex_plausibility:{sample}`: the WARN-capped verdict-contributing call.
+      - `x_het_ratio:{sample}`: the raw ratio, informational-always-PASS.
+    """
+    signals = sex_signals(vcf_path)
+    return [
+        _sex_plausibility_result(signals, sample),
+        _x_het_ratio_result(signals, sample),
+    ]
