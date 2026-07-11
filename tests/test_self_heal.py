@@ -414,6 +414,60 @@ def test_finalize_no_harmonized_direction_leaves_identity_unchanged(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# sex_inference capture at _finalize (germline-gated, strictly == "variant_calling")
+# ---------------------------------------------------------------------------
+
+_SEX_VCF_HEADER = (
+    "##fileformat=VCFv4.2\n"
+    "##contig=<ID=chr1,length=248956422>\n"
+    "##contig=<ID=chrX,length=156040895>\n"
+    "##contig=<ID=chrY,length=57227415>\n"
+    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n"
+)
+
+
+def _write_male_pattern_vcf(path):
+    import gzip
+
+    rows = [("chrX", 3_000_000 + i, "A", "G", "0/1") for i in range(2)]
+    rows += [("chrX", 4_000_000 + i, "A", "G", "0/0") for i in range(28)]
+    rows += [("chrY", 10_000_000 + i, "A", "G", "0/1") for i in range(6)]
+    body = "".join(f"{c}\t{p}\t.\t{r}\t{a}\t.\tPASS\t.\tGT\t{gt}\n" for c, p, r, a, gt in rows)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt") as fh:
+        fh.write(_SEX_VCF_HEADER + body)
+    return path
+
+
+def test_finalize_germline_run_captures_sex_inference(tmp_path):
+    _write_male_pattern_vcf(tmp_path / "runs" / "r" / "results" / "sample.vcf.gz")
+
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor, assay="variant_calling")
+
+    assert record.sex_inference is not None
+    assert record.sex_inference.inferred_sex == "XY"
+
+
+def test_finalize_non_germline_run_leaves_sex_inference_none(tmp_path):
+    # Gate is strictly `== "variant_calling"`, NOT the two-assay VARIANT_ASSAYS
+    # tuple -- somatic and rnaseq must both leave sex_inference untouched, even
+    # with a male-pattern VCF sitting under the run dir.
+    _write_male_pattern_vcf(tmp_path / "runs" / "r" / "results" / "sample.vcf.gz")
+
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor, assay="rnaseq")
+
+    assert record.sex_inference is None
+
+
+# ---------------------------------------------------------------------------
 # M8: the reference_harmonized breadcrumb must enumerate still-unmatched GTF
 # contigs, mirroring exactly what cli.py's pre-flight block does: swap
 # params["gtf"] to the harmonized scratch path BEFORE calling self_heal_run.

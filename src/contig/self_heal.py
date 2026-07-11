@@ -26,6 +26,7 @@ from contig.bundle import (
     compute_annotation_identity,
     compute_output_checksums,
     compute_reference_identity,
+    compute_sex_inference,
     write_bundle,
 )
 from contig.corpus import append_case, failure_case_from_run
@@ -1280,6 +1281,13 @@ def _finalize(
     resolved_assay = record.assay or assay_for_pipeline(record.pipeline)
     if resolved_assay is None or resolved_assay in VARIANT_ASSAYS:
         record.annotation_identity = compute_annotation_identity(run_dir)
+    # Germline karyotypic-sex provenance (PRD germline-sex-check-plausibility).
+    # Strictly `== "variant_calling"` -- germline ONLY, unlike the two-assay
+    # VARIANT_ASSAYS gate above: sex_signals is computed over a single-sample
+    # VCF's chrX/chrY genotypes, which is not a meaningful read on a
+    # tumor-normal somatic VCF's mixed sample columns.
+    if resolved_assay == "variant_calling":
+        record.sex_inference = compute_sex_inference(run_dir)
     if harmonized_reference_direction and record.reference_identity is not None:
         record.harmonized_reference_direction = harmonized_reference_direction
         record.reference_identity.harmonized = True
