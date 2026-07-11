@@ -2,7 +2,7 @@ import gzip
 
 import pytest
 
-from contig.models import ExecutionTarget, RunRecord, TaskEvent
+from contig.models import ExecutionTarget, RunRecord, TaskEvent, overall_verdict
 from contig.runner import _discover_qc
 from contig.verification.run_qc import evaluate_run_qc, run_qc
 from contig.verification.structural import ExpectedOutputs
@@ -302,6 +302,70 @@ def test_plausibility_runs_alongside_multiqc(tmp_path):
     checks = [r.check for r in results]
     assert any(c.startswith("ts_tv_ratio") for c in checks)
     assert any(c.startswith("het_hom_ratio") for c in checks)
+
+
+# --- sex_plausibility verdict wiring (germline _discover_qc gate) -----------
+
+# Discordant germline signature: autosomal-level chrX heterozygosity (24 het +
+# 6 hom, ratio 0.8 >= X_HET_HIGH) together with 6 chrY variant sites (>=
+# Y_PRESENT_FLOOR) -- a real VCF can never carry both, so this warns. Rows are
+# added on top of _PLAUSIBLE_ROWS (which drive ts_tv/het_hom) in the SAME VCF,
+# since the gate reuses one located `vcfs[0]` for both checks.
+_DISCORDANT_SEX_ROWS = (
+    _PLAUSIBLE_ROWS
+    + [("chrX", 3_000_000 + i, "A", "G", "0/1") for i in range(24)]
+    + [("chrX", 4_000_000 + i, "A", "G", "0/0") for i in range(3)]
+    + [("chrX", 5_000_000 + i, "A", "G", "1/1") for i in range(3)]
+    + [("chrY", 10_000_000 + i, "A", "G", "0/1") for i in range(6)]
+)
+
+
+def test_discover_qc_includes_sex_plausibility_for_variant_run(tmp_path):
+    # A germline run whose VCF carries a discordant chrX/chrY signature gets
+    # sex_plausibility (WARN) + the informational x_het_ratio, alongside the
+    # still-present ts_tv/het_hom checks -- no regression to those.
+    run_dir = tmp_path / "run"
+    results_dir = run_dir / "results"
+    results_dir.mkdir(parents=True)
+    _write_vcf_gz(results_dir / "x.vcf.gz", _DISCORDANT_SEX_ROWS)
+
+    results = _discover_qc(run_dir, assay="variant_calling")
+    checks = {r.check: r for r in results}
+    sex = next(v for k, v in checks.items() if k.startswith("sex_plausibility:"))
+    assert sex.status == "warn"
+    assert any(k.startswith("x_het_ratio:") for k in checks)
+    assert any(k.startswith("ts_tv_ratio") for k in checks)
+    assert any(k.startswith("het_hom_ratio") for k in checks)
+
+
+def test_sex_plausibility_not_run_for_non_variant_assay(tmp_path):
+    # A non-germline assay (e.g. rnaseq) never gets sex_plausibility, even if a
+    # discordant-shaped VCF happens to sit under its results -- strict gate.
+    run_dir = tmp_path / "run"
+    results_dir = run_dir / "results"
+    results_dir.mkdir(parents=True)
+    _write_vcf_gz(results_dir / "x.vcf.gz", _DISCORDANT_SEX_ROWS)
+
+    results = _discover_qc(run_dir, assay="rnaseq")
+    checks = [r.check for r in results]
+    assert not any(c.startswith("sex_plausibility:") for c in checks)
+    assert not any(c.startswith("x_het_ratio:") for c in checks)
+
+
+def test_sex_plausibility_warn_does_not_force_fail_verdict(tmp_path):
+    # Verdict-invariance: a WARN sex_plausibility result, on its own, reduces
+    # to "warn" -- never "fail" -- confirming (per overall_verdict's fail>warn>
+    # pass>unverified precedence and cli.py's exit-decided-by-pipeline-success-
+    # only contract) that this check cannot force a run's exit code.
+    run_dir = tmp_path / "run"
+    results_dir = run_dir / "results"
+    results_dir.mkdir(parents=True)
+    _write_vcf_gz(results_dir / "x.vcf.gz", _DISCORDANT_SEX_ROWS)
+
+    results = _discover_qc(run_dir, assay="variant_calling")
+    sex_only = [r for r in results if r.check.startswith("sex_plausibility:")]
+    assert sex_only and sex_only[0].status == "warn"
+    assert overall_verdict(sex_only) == "warn"
 
 
 # --- Somatic VAF plausibility runner gate (Phase 4) -------------------------

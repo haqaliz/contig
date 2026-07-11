@@ -56,6 +56,7 @@ from contig.verification.scrnaseq_metrics import (
 from contig.verification.somatic_concordance import evaluate_somatic_concordance_from_run
 from contig.verification.somatic_plausibility import evaluate_somatic_plausibility
 from contig.verification.run_qc import evaluate_run_qc
+from contig.verification.sex_plausibility import evaluate_sex_plausibility
 from contig.verification.structural import evaluate_structural, manifest_for
 from contig.verification.variant_metrics import evaluate_variant_plausibility
 
@@ -262,6 +263,7 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
         vcfs = sorted(p for p in run_dir.rglob(pattern) if p.is_file())
         if vcfs:
             results.extend(evaluate_variant_plausibility(vcfs[0]))
+            results.extend(evaluate_sex_plausibility(vcfs[0]))
     # Annotation structural + plausibility verification (capability C7; germline
     # structural shipped M1, somatic structural enabled M2, plausibility M3 — the
     # SAME located VCF feeds both verifiers, no duplicate scan). Gated to both
