@@ -335,6 +335,39 @@ ANNOTATION_PLAUSIBILITY_PACK: list[dict] = [
 ]
 
 
+# Germline karyotypic-sex plausibility (capability C3 follow-on,
+# germline-sex-check-plausibility). Infers karyotypic sex from X-heterozygosity
+# (+ Y presence) over a germline VCF, WARN-capped like the other plausibility
+# packs. Uncalibrated engineering defaults, NOT a clinical or diagnostic claim;
+# never over-reads a VCF-only signal into a confident call (see
+# sex_plausibility.py's UNVERIFIED-when-uncomputable branch).
+#   X_HET_LOW: at/below this X-het ratio reads XY (mostly hemizygous X calls).
+#   X_HET_HIGH: at/above this X-het ratio reads XX (autosomal-level X het).
+#   Between the two bands is implausible for either karyotype -> discordant/WARN.
+#   MIN_X_SITES: fewer callable (non-PAR) X sites than this -> indeterminate/
+#       UNVERIFIED (too little signal to call).
+#   Y_PRESENT_FLOOR: at/above this many non-PAR chrY variant sites -> Y is
+#       considered present (strengthens/contradicts the X-het call).
+X_HET_LOW = 0.10
+X_HET_HIGH = 0.20
+MIN_X_SITES = 20
+Y_PRESENT_FLOOR = 5
+
+# Like SOMATIC_PLAUSIBILITY_PACK, this is imported directly by its evaluator
+# (sex_plausibility.py) and deliberately NOT registered in _RULE_PACKS: the
+# derived sex_plausibility call is bimodal (XY / XX / discordant / indeterminate),
+# which a single warn_below/warn_above band cannot express, so it is hand-built
+# in the wrapper rather than run through evaluate(). Kept here anyway so the
+# thresholds stay single-sourced and auditable alongside the other packs.
+SEX_PLAUSIBILITY_PACK: list[dict] = [
+    {
+        "check": "x_het_ratio",
+        "metric": "x_het_ratio",
+        "message": "heterozygous fraction of callable (non-PAR) chrX genotypes",
+    },
+]
+
+
 _RULE_PACKS: dict[str, list[dict]] = {
     "rnaseq": RNASEQ_RULE_PACK,
     "variant_calling": VARIANT_RULE_PACK,
