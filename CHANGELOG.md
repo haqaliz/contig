@@ -6,6 +6,54 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Germline sex-check plausibility — the verdict now catches sex-chromosome
+  discordance** (capability C3, biological-plausibility verification; the
+  "sex-check" germline slice named at `CAPABILITY_ROADMAP.md` C3). A germline
+  (`variant_calling`) run's own VCF is now checked for karyotypic-sex
+  consistency, on a path independent of MultiQC and reusing the same
+  `concordance.parse_vcf` reader that already feeds `ts_tv`/`het_hom`. Slices:
+  - **Inference core (`verification/sex_plausibility.py`).** Two independent
+    signals are derived from one VCF: an **X-heterozygosity ratio** over
+    biallelic, non-missing, **non-PAR** X genotypes, and **Y-variant presence**
+    over non-PAR Y sites. Pseudoautosomal regions are excluded from the X-het
+    denominator using standard GRCh37/GRCh38 PAR coordinates, with the assembly
+    detected from the VCF's own `##contig=<ID=…X,length=…>` header (tolerant of
+    the multi-attribute `assembly=`/`md5=`/`species=` headers real GATK/sarek
+    emits); when the build can't be determined it falls back to **unmasked**
+    X-het and says so, never guessing a build. The load-bearing honesty is that
+    **Y-absence is uninformative** (a Y-less reference and a female sample are
+    indistinguishable from the VCF alone), so Y-presence only ever *corroborates*
+    a male call and never forces a discordant one.
+  - **A single WARN-capped `sex_plausibility` verdict + informational
+    `x_het_ratio`.** X-het is bimodal (near-0 for XY, ~autosomal for XX), so the
+    call is derived in code rather than a single threshold band: low X-het → "XY",
+    high X-het with no Y → "XX", high X-het **with** Y present (or a mid-band
+    ratio) → **"discordant" → WARN** (naming the conflict: possible aneuploidy,
+    contamination, or sample swap). Too few X sites, or no X contig, →
+    **UNVERIFIED, never a false pass**. At most WARN, never FAIL, and it **never
+    changes the `contig run`/`verify` exit code** (exit is decided only by
+    pipeline success). Wired into `_discover_qc` gated strictly to
+    `variant_calling`, reusing the same located primary VCF as the existing
+    germline plausibility checks.
+  - **Inferred sex captured into provenance.** A new `SexInference` record is
+    attached to the `RunRecord` at finalize (germline-gated, mirroring the C5
+    `ReferenceIdentity` pattern — `Optional`, no validator, so pre-slice bundles
+    load with `None`), located via the **same** discovery path as the QC verdict
+    so the verdict and the provenance can never disagree. Rendered honestly in
+    `contig methods` and the HTML provenance panel ("undetermined" for the
+    indeterminate case — never a fabricated call — and always labelled a
+    research-use inference, never a clinical/karyotype determination), and it
+    **round-trips through the reproduce bundle** with pre-slice back-compat.
+  - **Research-use only**; thresholds are uncalibrated engineering defaults, kept
+    loose and WARN-capped so a normal XX or XY run reads PASS. Test-first (synthetic
+    gzipped VCF fixtures, no real nf-core/sarek run in CI). **Deferred:**
+    reported-vs-inferred concordance (needs a sample-sheet sex column that does not
+    exist today — this slice catches only cross-sex swaps and aneuploidy),
+    per-sample sex for multi-sample VCFs (first-sample only, inherited), FAIL
+    severity until the bands are calibrated on real data, and a dashboard card.
+
 ## [0.29.0] - 2026-07-11
 
 ### Added

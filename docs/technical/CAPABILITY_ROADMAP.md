@@ -327,7 +327,7 @@ corpus; repair success-rate analytics gain new classes.
 
 ---
 
-## C3. Biological-plausibility verification  ·  SHIPPED v0.3.0 (germline) + RNA-seq slice (v0.6.0) + single-cell ingestion slice (Unreleased)
+## C3. Biological-plausibility verification  ·  SHIPPED v0.3.0 (germline) + RNA-seq slice (v0.6.0) + single-cell ingestion slice (Unreleased) + germline sex-check slice (Unreleased)
 
 **Shipped (germline slice) in v0.3.0.** The germline plausibility rules (Ti/Tv and
 het/hom ratios) already existed in `VARIANT_RULE_PACK` but were dormant because
@@ -344,8 +344,30 @@ metric is absent from the run's ingested MultiQC, wired into `_discover_qc` gate
 `assay == "rnaseq"`. Metric slugs/bands are best-effort and uncalibrated; the
 UNVERIFIED-when-absent guarantee absorbs a wrong/missing slug. **Deferred:**
 gene-body-coverage evenness (needs a new RSeQC compute path), doublet rate
-(single-cell), sex-check, coverage-from-VCF, multi-sample, and FAIL severity until
-the bands are calibrated on real data.
+(single-cell), coverage-from-VCF, multi-sample, and FAIL severity until
+the bands are calibrated on real data. (The **sex-check** slice has since shipped —
+see below.)
+
+**Shipped (germline sex-check slice, Unreleased).** The verdict now catches
+sex-chromosome **discordance**. A new `verification/sex_plausibility.py` infers
+karyotypic sex from the germline VCF — an **X-heterozygosity ratio** over
+biallelic non-PAR X genotypes (PAR excluded via GRCh37/GRCh38 coordinates, the
+build detected from the VCF `##contig` header, falling back to unmasked when
+undetermined) plus **Y-variant presence** (corroboration only; Y-*absence* is
+uninformative and never forces a discordant call). It emits one WARN-capped
+`sex_plausibility` result (low X-het → XY, high X-het + no Y → XX, high X-het +
+Y present or a mid-band ratio → **discordant/WARN**, too-few-X → **UNVERIFIED**)
+plus an informational `x_het_ratio`, gated to `variant_calling` in `_discover_qc`
+and reusing the same primary VCF as `variant_metrics`. The inferred sex is
+captured into a new `SexInference` provenance record on the `RunRecord` (C5
+pattern; located identically to the QC path so the verdict and provenance can
+never disagree), rendered in `contig methods` and the HTML panel ("undetermined"
+when indeterminate — never a fabricated call; always a research-use inference,
+never a clinical determination), and round-tripped through reproduce with
+back-compat. At most WARN, never FAIL, never changes the exit code. **Deferred:**
+reported-vs-inferred concordance (needs a sample-sheet sex column — so this slice
+catches only cross-sex swaps and aneuploidy), per-sample multi-sample sex,
+FAIL severity on calibrated bands, and a dashboard card.
 
 **Shipped (single-cell ingestion slice, Unreleased).** The single-cell (`scrnaseq`)
 assay already had a biological pack (`SCRNASEQ_RULE_PACK`: recovered cells, median
