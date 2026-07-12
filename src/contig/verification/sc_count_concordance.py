@@ -174,6 +174,7 @@ def evaluate_sc_count_concordance(
     primary_mtx: str | os.PathLike,
     second: str | os.PathLike,
     assay: str,
+    second_name: str | None = None,
 ) -> list[QCResult]:
     """Assay-gated single-cell concordance: pseudobulk both matrices, reuse the core.
 
@@ -183,9 +184,16 @@ def evaluate_sc_count_concordance(
     (`ScMatrixError`/`OSError`/`ValueError`), returns exactly one explicit
     `sc_count_concordance` UNVERIFIED naming the offending file and reason — never a
     silent pass, never a crash.
+
+    `second_name` overrides the display label for the second matrix. The user-supplied
+    path leaves it `None` (labelled by basename, unchanged); the autorun passes the tool
+    that produced it (e.g. `"STARsolo"`) so the corroboration line names the second tool
+    instead of an opaque `matrix.mtx vs matrix.mtx`.
     """
     if assay not in _SC_CONCORDANCE_ASSAYS:
         return []
+
+    label_b = second_name or Path(second).name
 
     try:
         a = load_mtx_pseudobulk(primary_mtx)
@@ -197,11 +205,11 @@ def evaluate_sc_count_concordance(
                 status="unverified",
                 message=(
                     f"single-cell matrix {Path(primary_mtx).name} / "
-                    f"{Path(second).name} located but could not be parsed "
+                    f"{label_b} located but could not be parsed "
                     f"({exc}); concordance UNVERIFIED, not a pass"
                 ),
                 value=None,
             )
         ]
 
-    return results_from_counts(a, b, Path(primary_mtx).name, Path(second).name)
+    return results_from_counts(a, b, Path(primary_mtx).name, label_b)

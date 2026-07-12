@@ -93,6 +93,10 @@ from contig.verification.count_quantifier import (
     SecondQuantifierError,
     run_kallisto_quantifier,
 )
+from contig.verification.sc_count_quantifier import (
+    SecondScQuantifierError,
+    run_starsolo_quantifier,
+)
 from contig.verification.structural import manifest_for
 from contig.runner import PipelineExecutionError, default_executor, default_index_builder
 from contig.samplesheet import (
@@ -790,7 +794,11 @@ def verify(
     index: str = typer.Option(
         None,
         "--index",
-        help="Prebuilt kallisto index for --concordance-counts-auto.",
+        help=(
+            "Prebuilt index for the auto second quantifier: a kallisto index for "
+            "--concordance-counts-auto, or a STAR genome directory for "
+            "--concordance-sc-counts-auto."
+        ),
     ),
     concordance_sc_counts: str = typer.Option(
         None,
@@ -801,6 +809,21 @@ def verify(
             "an scrnaseq run's own matrix. Corroboration only: at most WARN, never "
             "changes the exit code."
         ),
+    ),
+    concordance_sc_counts_auto: bool = typer.Option(
+        False,
+        "--concordance-sc-counts-auto",
+        help="Auto-run a second single-cell quantifier (STARsolo) and corroborate the run's own matrix.",
+    ),
+    whitelist: str = typer.Option(
+        None,
+        "--whitelist",
+        help="Barcode whitelist for --concordance-sc-counts-auto (STARsolo).",
+    ),
+    chemistry: str = typer.Option(
+        "10xv3",
+        "--chemistry",
+        help="Single-cell chemistry preset for --concordance-sc-counts-auto (default 10xv3).",
     ),
 ) -> None:
     """Re-hash a finished run's outputs and report any drift from the record.
@@ -833,7 +856,14 @@ def verify(
     TSV; PRD C1, scrnaseq): both are collapsed to per-gene pseudobulk totals and fed to
     the same concordance core, under the same at-most-WARN, never-changes-exit contract.
 
-    The five concordance flags are mutually exclusive.
+    With --concordance-sc-counts-auto (plus --reads, --index and --whitelist), Contig
+    produces that second single-cell matrix itself by running a second quantifier
+    (STARsolo) and corroborates the run against it; the same at-most-WARN, never-changes-
+    exit contract applies. --index is the STAR genome directory here (a kallisto index
+    for --concordance-counts-auto). --reads, --index, --whitelist and --chemistry are
+    ignored unless --concordance-sc-counts-auto is set.
+
+    The six concordance flags are mutually exclusive.
     """
     if not _is_safe_run_id(run_id):
         typer.echo(f"Invalid run id: {run_id!r}", err=True)
@@ -847,13 +877,15 @@ def verify(
                 concordance_counts,
                 concordance_counts_auto,
                 concordance_sc_counts,
+                concordance_sc_counts_auto,
             )
         )
         > 1
     ):
         typer.echo(
             "Choose one of --concordance-vcf, --concordance-auto, --concordance-counts, "
-            "--concordance-counts-auto or --concordance-sc-counts, not more than one.",
+            "--concordance-counts-auto, --concordance-sc-counts or "
+            "--concordance-sc-counts-auto, not more than one.",
             err=True,
         )
         raise typer.Exit(code=1)
@@ -881,6 +913,10 @@ def verify(
     elif concordance_sc_counts:
         concordance = _evaluate_run_sc_counts_concordance(
             record, runs_dir, run_id, concordance_sc_counts
+        )
+    elif concordance_sc_counts_auto:
+        concordance = _evaluate_run_sc_counts_concordance_auto(
+            record, runs_dir, run_id, reads, index, whitelist, chemistry
         )
     else:
         concordance = None
@@ -1156,6 +1192,56 @@ def _evaluate_run_counts_concordance_auto(
             typer.echo(f"Skipping concordance: the second quantifier could not run ({exc}).")
             return []
         return evaluate_count_concordance(primary, second, assay="rnaseq")
+
+
+def _evaluate_run_sc_counts_concordance_auto(
+    record: RunRecord,
+    runs_dir: str,
+    run_id: str,
+    reads: str,
+    index: str,
+    whitelist: str,
+    chemistry: str,
+    quantifier=None,
+) -> list:
+    """Single-cell concordance for an scrnaseq run vs a freshly produced second matrix.
+
+    Like `_evaluate_run_sc_counts_concordance`, but Contig produces the second
+    single-cell matrix itself: it gates to scrnaseq, resolves the same primary matrix,
+    validates that --reads, --index (STAR genome dir) and --whitelist were given and
+    exist, then runs the second quantifier (STARsolo by default; injectable via
+    `quantifier` and monkeypatchable as the module-level `run_starsolo_quantifier`). A
+    missing primary matrix skips BEFORE any spawn; a missing input or any
+    SecondScQuantifierError prints a clear skip note and yields no checks (never a
+    crash, never a false pass). Returns the QCResult list so the caller surfaces it
+    without changing the exit code.
+    """
+    primary = _resolve_primary_sc_matrix(record, runs_dir, run_id)
+    if primary is None:
+        return []
+
+    for label, value in (("--reads", reads), ("--index", index), ("--whitelist", whitelist)):
+        if not value:
+            typer.echo(
+                f"Skipping concordance: {label} is required for --concordance-sc-counts-auto."
+            )
+            return []
+        if not Path(value).exists():
+            typer.echo(f"Skipping concordance: {label} path not found: {value}.")
+            return []
+
+    run_q = quantifier if quantifier is not None else run_starsolo_quantifier
+    with tempfile.TemporaryDirectory() as out_dir:
+        try:
+            second = run_q(reads, index, whitelist, chemistry, out_dir)
+        except SecondScQuantifierError as exc:
+            typer.echo(
+                f"Skipping concordance: the second quantifier could not run ({exc})."
+            )
+            return []
+        return evaluate_sc_count_concordance(
+            str(primary), second, assay="scrnaseq", second_name="STARsolo"
+        )
 
 
 def _echo_concordance(concordance: list | None) -> None:

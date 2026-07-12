@@ -103,10 +103,31 @@ gene TSV, chosen by extension sniff). Same contract as every C1 slice — `spear
 `fraction_agreeing` at most WARN (< 0.90), informational `gene_overlap`, `unverified` below 10
 shared genes, never changes the exit code; a located-but-unparseable matrix is one honest
 `sc_count_concordance` UNVERIFIED, an `.h5ad`-only run skips. Pure-stdlib (no `anndata`/`h5py`),
-`filtered/`-over-`raw/` primary preference. **Deferred:** `.h5ad` parsing (dependency-gated); the
-second-quantifier **autorun** (`--concordance-sc-counts-auto`; turnkey value waits on it);
+`filtered/`-over-`raw/` primary preference. **Deferred:** `.h5ad` parsing (dependency-gated);
 cell-count and cluster-stability agreement (need a downstream clustering step Contig doesn't run);
-FAIL severity on calibrated bands; a dashboard "corroborated by" line.
+FAIL severity on calibrated bands; a dashboard "corroborated by" line. (The second-quantifier
+**autorun** has since shipped — see the single-cell autorun slice below.)
+
+**Shipped (single-cell autorun slice — Unreleased).** The single-cell concordance axis is now
+turnkey: `contig verify --concordance-sc-counts-auto --reads <sheet> --index <STAR genome dir>
+--whitelist <path> [--chemistry 10xv3]` produces the second matrix itself by running a second,
+independent single-cell quantifier (**STARsolo**) behind an injectable seam
+(`verification/sc_count_quantifier.py`, mirroring the RNA-seq `count_quantifier.py`), then feeds
+its native `matrix.mtx` into the shipped `evaluate_sc_count_concordance` core unchanged. This is
+the exact follow-on the single-cell slice named — it mirrors the RNA-seq kallisto autorun
+`--concordance-counts-auto` (v0.24.0). STARsolo emits gene-level counts natively, so there is **no
+transcript→gene collapse** (unlike kallisto); the pure `starsolo_command` argv builder pins the
+`(cDNA, CB)` `--readFilesIn` order (the reverse of the sample sheet's `(fastq_1, fastq_2)`) and is
+CI-asserted-not-executed, while STARsolo itself is **never run in CI** (injected fake; manual
+gate). Same contract: at most WARN, never changes the exit code, `unverified` below 10 shared
+genes; the six concordance flags are mutually exclusive; the corroboration line names **STARsolo**
+as the second tool; every unrunnable path (non-`scrnaseq`, missing input, quantifier failure,
+primary matrix absent → no pointless spawn) is an honest skip. The barcode whitelist/chemistry are
+user-supplied because Contig persists no chemistry/whitelist/aligner today. **Still deferred:**
+auto-deriving inputs from the run record; cell-count and cluster-stability agreement; FAIL
+severity on calibrated bands (the pseudobulk-washout of benign cross-tool cell-calling divergence
+is an unproven assumption — hence WARN-only); a dashboard "corroborated by" line; and
+`.h5ad`/AnnData second-matrix parsing.
 
 The original framing, for reference: today the verdict rests on QC thresholds,
 structural checks, and (where a reference run exists) benchmarking against a
@@ -790,7 +811,7 @@ ever. See [`../planning/variant-annotation-assay/prd.md`](../planning/variant-an
 
 | ID | Capability | Window | Leverage |
 |----|-----------|--------|----------|
-| C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) + somatic slice (Unreleased) + single-cell slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap + somatic auto `somatic_site_overlap` PASS-site Jaccard, Mutect2 vs Strelka2, no user input + single-cell `--concordance-sc-counts` pseudobulk gene-level Spearman/fraction-agreeing over a stdlib `.mtx` triplet loader; auto-run second germline/RNA/single-cell tool + single-cell cluster-stability deferred) |
+| C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) + somatic slice (Unreleased) + single-cell slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap + somatic auto `somatic_site_overlap` PASS-site Jaccard, Mutect2 vs Strelka2, no user input + single-cell `--concordance-sc-counts` pseudobulk gene-level Spearman/fraction-agreeing over a stdlib `.mtx` triplet loader + single-cell **autorun** `--concordance-sc-counts-auto` running STARsolo behind an injectable seam, turnkey; single-cell cluster-stability deferred) |
 | C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; per-contig alias harmonization (mito `M`↔`MT` + GRCh38 scaffold seed) shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); peak-RSS-informed OOM memory scaling shipped (Unreleased, honest two-tier: own-peak → blind fallback; sibling rescue deferred); walltime-informed `time_limit` scaling shipped (Unreleased, floored at blind — censored realtime, tail-only win + field instrument); **input-format-conversion class's first slice shipped (Unreleased): bgzip'd (non-BGZF) reference FASTA self-heal, sarek-scoped (rnaseq immune by construction), stream-decompress to uncompressed `.fa` + retry; CRAM↔BAM conversion is the deferred second half**; bwa-mem2/classic-BWA build+redirect, assembly-signature + exhaustive per-assembly alias completeness pending) | Unattended-completion rate, corpus fuel |
 | C3 | Biological-plausibility verification | SHIPPED v0.3.0 (germline) + RNA-seq (v0.6.0) + single-cell ingestion (Unreleased) + germline sex-check (Unreleased) + RNA-seq mapping-composition (Unreleased) + germline variant-count (Unreleased) | Verdict gets smarter about biology (germline Ti/Tv, het/hom, sex-check, variant-count band; RNA-seq dup/rRNA + exonic/intronic/unassigned read-composition from RSeQC read_distribution; single-cell cell-QC now *fires* via STARsolo/Cell Ranger ingestion — was a dormant no-op; gene-body-coverage/mito/doublet deferred) |
 | C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased); Strelka2-native VAF, FAIL severity + PON reference wiring deferred | Breadth, depth-first, new corpus |

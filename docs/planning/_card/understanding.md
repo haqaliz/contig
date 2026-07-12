@@ -1,93 +1,108 @@
-# Understanding — feat / scrnaseq-concordance (Phase 2 deep dig)
+# Understanding — feat / sc-concordance-autorun (Phase 2 deep dig)
 
 Grounded in a full code map of the worktree (path:line cited). Read with `_card/issue.md`.
 
 ## What the work is really asking
 
-Extend the shipped cross-tool concordance primitive (capability C1) to the `scrnaseq`
-assay — the last assay without it. A user supplies a **second** single-cell count matrix
-(from a different quantifier); Contig corroborates the run's own matrix against it and
-adds a WARN-capped `kind="concordance"` axis to the verdict. Same honest contract as the
-four shipped concordance slices: **at most WARN, never changes the `verify` exit code,
-`unverified` (never a false pass) below a shared-gene floor.**
+Make the single-cell concordance axis **turnkey**. Today `contig verify
+--concordance-sc-counts <matrix>` (v0.32.0) requires the user to hand Contig a *second*
+single-cell count matrix produced by a different tool. Most single-cell users won't have
+one. The autorun `--concordance-sc-counts-auto` makes Contig produce that second matrix
+itself — run a second, independent single-cell quantifier behind an injectable seam, collapse
+its output to per-gene pseudobulk, and feed it into the already-shipped concordance core.
 
-## The central technical finding (drives the whole design)
+This is the exact analogue of the RNA-seq kallisto autorun `--concordance-counts-auto`
+(v0.24.0), which followed the user-supplied `--concordance-counts`.
 
-The concordance **core is reusable**; the **parser is not**.
+## The good news: the hard/scientific half already exists
 
-- **Reusable unchanged** (`verification/count_concordance.py:192-306`): `count_concordance()`
-  → `CountConcordanceStats(shared, rho, fraction_agreeing, overlap)`, the hand-rolled
-  stdlib `_spearman`/`_rank`/`_pearson` (148-162), `_agrees` 10% tolerance (165-171), the
-  shared-gene floor `_MIN_SHARED_GENES=10` (43), and `concordance_results()` which emits the
-  three QCResults — `spearman_concordance` (WARN < 0.90), `fraction_agreeing` (WARN < 0.90),
-  `gene_overlap` (informational, always PASS). All `kind="concordance"`, all WARN-capped.
-  It operates on any `dict[str, float]` = `{gene_id: total}`.
-- **NOT reusable** (`count_concordance.py:80-112`): `parse_count_matrix` assumes a **dense
-  gene×sample TSV** (first col = gene id, sums remaining numeric columns). Single-cell
-  matrices are **sparse MatrixMarket `.mtx`(.gz)** with sibling `features.tsv`/`barcodes.tsv`,
-  and/or **AnnData `.h5ad`**. Feeding an `.mtx` to `parse_count_matrix` yields garbage.
-- **No single-cell matrix parser exists anywhere in the repo** (confirmed: no `read_mtx`,
-  `scipy`, `h5py`, `anndata`). The scrnaseq matrix is referenced only *structurally* —
-  `structural.py:262-264` requires `*.h5ad` + `*matrix.mtx*` for presence, never parsed.
-- **Dependency constraint:** the module is pure-stdlib by contract ("No scipy/numpy",
-  `count_concordance.py:152`). A `.mtx` triplet reader **can stay stdlib-only**; `.h5ad`
-  parsing would pull in `anndata`/`h5py` — a new dependency the repo avoids.
+The plumbing this slice reuses, unchanged:
 
-**Conclusion:** the slice = a new stdlib **`.mtx`-triplet loader** that sums counts across
-cells to a per-gene pseudobulk `{gene_id: float}` (mapping matrix rows→gene ids via
-`features.tsv`), then feeds the *unchanged* concordance core. `.h5ad`-only inputs degrade to
-an honest skip/UNVERIFIED (deferred until a stdlib-safe reader or an accepted dep exists).
+- **Pseudobulk collapse + loader** — `verification/sc_count_concordance.py:61-170`
+  (`load_mtx_pseudobulk`, `load_sc_matrix`). Reads a `matrix.mtx` triplet → `{gene_id: float}`
+  pseudobulk. Pure stdlib, already CI-tested in v0.32.0.
+- **Concordance core** — `verification/count_concordance.py:192-333`
+  (`stats_from_counts` / `results_from_counts`, `{gene_id: float}` in, `list[QCResult]` out).
+  Spearman + fraction-agreeing WARN-capped at 0.90, informational `gene_overlap`, UNVERIFIED
+  below `_MIN_SHARED_GENES = 10`.
+- **The whole CLI concordance contract** — `cli.py:750-935` verify command: flags, the
+  mutual-exclusion counter (`:841-859`), the dispatch `if/elif` (`:869-886`), the
+  "compute-concordance-off-the-critical-path so it can never touch `ok`/exit" guarantee
+  (`:866-868`, `:895-896`), skip-note printing (`_echo_concordance`, `:1161-1168`), and the
+  `scrnaseq`-gated primary-matrix resolver `_resolve_primary_sc_matrix` (`:1070-1100`,
+  prefers `filtered/` over `raw/`).
 
-## Affected code (confirmed by the map)
+So the scientifically load-bearing step (pseudobulk collapse) is **already covered** — this
+slice is a plumbing slice, exactly as the card promises.
 
-- **CLI `verify`** (`cli.py:746-791` flags, `820-832` mutual-exclusion sum, `842-855` branch
-  dispatch, `857-904` result injection + exit code). Exit is driven ONLY by output drift
-  (`result["ok"]`) and `sig_bad`; concordance is surfaced (`result["concordance"]`,
-  `_echo_concordance` 1080-1087) but **never feeds the exit code** — asserted in
-  `tests/test_cli.py:1541`. To mirror: add a flag near cli.py:780, add to the exclusion tuple
-  at 823, add an `elif` at ~853, write `_evaluate_run_sc_counts_concordance` +
-  `_resolve_primary_sc_matrix` modeled on `cli.py:993-1036`.
-- **Primary-matrix locator:** new helper mirroring `_resolve_primary_counts` (`cli.py:993-1020`)
-  — assay-gate to `scrnaseq` via `assay_for_pipeline(record.pipeline)` (`registry.py:62-63`),
-  `results_dir.rglob("*matrix.mtx*")`, resolve sibling `features.tsv`/`barcodes.tsv`, else skip
-  note → `None`.
-- **Concordance module:** either add `"scrnaseq"` to `_COUNT_CONCORDANCE_ASSAYS`
-  (`count_concordance.py:47`) OR a parallel `evaluate_sc_count_concordance` entry point — the
-  latter is cleaner because `evaluate_count_concordance` hardwires the dense `parse_count_matrix`.
-  New parser likely lives in a new `verification/sc_count_concordance.py` (or added to
-  `count_concordance.py`) reusing the core.
-- **QCResult / QCStatus / QCKind** (`models.py:55/64/67-75`): `kind="concordance"` already
-  exists; `overall_verdict` (78-96) is not called by verify on concordance — reuse as-is.
+## The new work (small, well-templated)
 
-## Test approach (mirror exactly)
+Mirror `verification/count_quantifier.py` (the kallisto seam) into a new
+`verification/sc_count_quantifier.py`:
 
-- Module tests `tests/verification/test_count_concordance.py` — real `tmp_path` files, no
-  mocks/network. New: `tests/verification/test_sc_count_concordance.py` with synthetic
-  MatrixMarket fixtures (tiny `matrix.mtx` + `features.tsv` + `barcodes.tsv` written as text).
-- CLI tests `tests/test_cli.py:1477-1624` — `_write_*_run_with_*` + `_write_second_*` +
-  `runner.invoke(app, ["verify", ...])`. New: write a scrnaseq `RunRecord`
-  (`pipeline="nf-core/scrnaseq"`) with a `results/…/matrix.mtx` triplet, a second triplet, and
-  assert emits/at-most-warn-exit/json/non-scrnaseq-skip/mutual-exclusion.
-- **No real nf-core/scrnaseq run in CI** — hard rule.
+- `ScCountQuantifier = Callable[[...], str]` — an injectable callable returning the produced
+  second-matrix path (a `matrix.mtx` the loader can read).
+- A **pure** argv builder (asserted-not-executed in CI) for the chosen tool.
+- `SecondScQuantifierError` — one named error folding every unrunnable path (missing binary,
+  missing reads/index/whitelist, nonzero exit, missing output).
+- A default runner that validates inputs *before* spawn, shells out (**never run in CI**),
+  and returns the triplet path.
 
-## Open questions for the interview (product decisions the code can't resolve)
+Then in `cli.py`: one new flag `--concordance-sc-counts-auto` (+ its inputs), one dispatch
+branch calling `evaluate_sc_count_concordance(primary, second, assay="scrnaseq")`, and
+**extend the mutual-exclusion counter from 5 to 6 flags** (`:841-859` — mechanical, easy to
+miss).
 
-1. **Second-matrix input shape.** A single-cell matrix is a 3-file triplet, awkward as one CLI
-   arg. Options: (a) a **directory** holding `matrix.mtx`+`features.tsv`+`barcodes.tsv`;
-   (b) the `matrix.mtx` path with siblings auto-resolved; (c) also accept a pre-collapsed
-   **dense pseudobulk gene TSV** (reuses `parse_count_matrix`). Recommendation: accept a
-   `.mtx` path (siblings auto-resolved) **and** a dense `.tsv` (sniff by extension) — max reuse,
-   least user burden.
-2. **`.h5ad` handling.** Defer (skip/UNVERIFIED with an honest note) to keep stdlib-only, no
-   `anndata`/`h5py` dep? Recommendation: yes, defer — `.mtx` first slice.
-3. **Metric = pseudobulk gene-level Spearman + fraction-agreeing** (reuse core), deferring
-   cell-count and cluster-stability agreement (need cell-calling/clustering Contig doesn't run).
-   Confirm this is the accepted first-slice metric.
-4. **Flag name:** `--concordance-counts-sc` (brief) vs `--concordance-sc-counts` (reads better
-   next to `--concordance-counts`). Cosmetic.
+Test pattern to copy: `tests/verification/test_count_quantifier.py` (pure argv assert + real
+collapse) and `tests/test_cli.py:2061-2270` (inject a fake quantifier via
+`monkeypatch.setattr("contig.cli.<runner>", fake_writing_a_triplet)`; a "boom" quantifier
+that must NOT be reached on the skip paths).
 
-## Guardrail check (CLAUDE.md)
+## The two real decisions (for the requirements interview)
 
-On-thesis Layer-2 verification depth. No Layer-1 drift. No raw-read egress (compares gene
-totals on the user's compute). No over-claiming (WARN-capped, UNVERIFIED-never-PASS). Test-first.
-No new dependency in the first slice (stdlib `.mtx` reader).
+The code map surfaced two genuine gaps that context cannot resolve — these are the interview's
+core questions, not implementation details:
+
+1. **Which second single-cell quantifier?** The primary `nf-core/scrnaseq@4.1.0` run defaults
+   to **simpleaf / alevin-fry** (`registry.py:60-66` has no `default_params`;
+   `single-cell-plausibility/prd.md:22-23,43`). The natural independent second tool is
+   **STARsolo**: it emits a native 10x-style `matrix.mtx` triplet (Solo output) that
+   `load_sc_matrix` reads directly, and it takes a **STAR genome directory** as its index —
+   the same artifact Contig already builds in the shipped STAR-index self-heal. Recommendation:
+   default to STARsolo; keep the tool behind the seam so a second tool can be added later.
+   *Open:* confirm STARsolo (vs a salmon/alevin second index) as the default.
+
+2. **How are the barcode-whitelist + chemistry supplied?** This is the biggest decision.
+   Contig **does not persist** chemistry / whitelist / protocol anywhere — `RunRecord` has
+   only a generic `parameters: dict[str, object]` (`models.py:313`); grep for
+   `whitelist|chemistry|protocol|barcode|expected_cells` returned zero persisted fields. A
+   single-cell second quantifier's cell-calling **depends** on the whitelist + CB/UMI lengths.
+   So, like the kallisto autorun requires `--reads`/`--index`, the autorun almost certainly
+   needs the user to pass these explicitly. Recommendation: reuse `--reads` (sample sheet) and
+   `--index` (STAR genome dir), and add `--whitelist <path>` (required) + `--chemistry`
+   defaulting to 10x v3 (CB=16, UMI=12). Every missing/invalid input → an honest skip note and
+   zero checks (never a false pass), matching the kallisto autorun.
+
+## Honesty / guardrails held (CLAUDE.md)
+
+- **Layer-2** verification depth — on-thesis, not Layer-1 authoring.
+- **No raw-read egress** — the quantifier runs on the user's compute; only gene totals compared.
+- **No over-claiming** — concordance stays WARN-capped, never changes the `verify` exit code,
+  UNVERIFIED below the shared-gene floor. The divergence-washout claim (pseudobulk summing
+  neutralizes benign chemistry/whitelist differences) is an **unproven engineering
+  assumption**, which is *why* bands stay WARN-only and FAIL is deferred — flag this in the PRD
+  as the calibration open-question, don't paper over it.
+- **No new dependency** — collapse is stdlib; the quantifier is an external binary invoked via
+  the injected seam, never in CI.
+- **Test-first**, no real tool in CI (inject a fake; assert argv without executing).
+
+## Deferred (name in PRD, do not build here)
+
+Cell-count & cluster-stability agreement (needs a downstream clustering step Contig doesn't
+run); FAIL severity until bands are calibrated on real data; a dashboard "corroborated by"
+line for single-cell; `.h5ad`/AnnData second-matrix parsing (dependency-gated); auto-detecting
+the primary run's aligner to key the tool pair (Contig records no aligner today).
+
+## No Layer-1 / scope-drift risk
+
+This is pure verification-harness depth. No workflow authoring, no clinical claim. Clean.

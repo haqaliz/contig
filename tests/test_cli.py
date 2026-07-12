@@ -2296,6 +2296,344 @@ def test_verify_concordance_counts_auto_non_rnaseq_skips(tmp_path, monkeypatch):
     assert "rna-seq" in result.output.lower()
 
 
+# --- contig verify --concordance-sc-counts-auto (PRD C1, STARsolo seam) --------
+# A fake second single-cell quantifier stands in for STARsolo so CI never runs the
+# real binary. It writes a synthetic 10x MatrixMarket triplet under out_dir and
+# returns the produced matrix.mtx path, exactly the contract of
+# run_starsolo_quantifier (reads, index, whitelist, chemistry, out_dir) -> mtx.
+_SC_TOO_FEW = {f"ENSG{i:05d}": float(10 * (i + 1)) for i in range(5)}
+
+
+def _fake_sc_quantifier_writing(counts):
+    """Build a fake STARsolo quantifier that writes a triplet and returns its mtx."""
+
+    def fake(reads, index, whitelist, chemistry, out_dir):
+        return str(_write_triplet(Path(out_dir), counts))
+
+    return fake
+
+
+def _write_sc_autorun_inputs(tmp_path):
+    """A reads sheet, a STAR genome dir, and a barcode whitelist (all exist)."""
+    reads = _make_sheet(tmp_path)
+    index = tmp_path / "star_index"
+    index.mkdir(exist_ok=True)
+    whitelist = tmp_path / "whitelist.txt"
+    whitelist.write_text("AAACCCAAGAAACCCA\n")
+    return reads, index, whitelist
+
+
+def _write_scrnaseq_run_no_matrix(runs_dir, run_id):
+    """An scrnaseq run whose results/ holds no single-cell count matrix triplet."""
+    from contig.bundle import compute_output_checksums
+
+    run_dir = Path(runs_dir) / run_id
+    results = run_dir / "results"
+    results.mkdir(parents=True, exist_ok=True)
+    (results / "placeholder.txt").write_text("no matrix here\n")
+    record = RunRecord(
+        run_id=run_id,
+        pipeline="nf-core/scrnaseq",
+        pipeline_revision="4.1.0",
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_checksums={},
+        events=[TaskEvent(process="X", status="COMPLETED", exit=0)],
+        output_checksums=compute_output_checksums(results),
+    )
+    write_bundle(record, run_dir)
+    return run_dir
+
+
+def test_verify_concordance_sc_counts_auto_emits_checks(tmp_path, monkeypatch):
+    _write_scrnaseq_run_with_matrix(tmp_path, "sca1", _SC_PRIMARY)
+    reads, index, whitelist = _write_sc_autorun_inputs(tmp_path)
+
+    monkeypatch.setattr(
+        "contig.cli.run_starsolo_quantifier", _fake_sc_quantifier_writing(_SC_CONCORDANT)
+    )
+    ok = runner.invoke(
+        app,
+        [
+            "verify",
+            "sca1",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-sc-counts-auto",
+            "--reads",
+            str(reads),
+            "--index",
+            str(index),
+            "--whitelist",
+            str(whitelist),
+        ],
+    )
+    assert ok.exit_code == 0
+    out = ok.output.lower()
+    assert "spearman_concordance" in out
+    assert "gene_overlap" in out
+    assert "pass" in out
+
+    monkeypatch.setattr(
+        "contig.cli.run_starsolo_quantifier", _fake_sc_quantifier_writing(_SC_DIVERGENT)
+    )
+    bad = runner.invoke(
+        app,
+        [
+            "verify",
+            "sca1",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-sc-counts-auto",
+            "--reads",
+            str(reads),
+            "--index",
+            str(index),
+            "--whitelist",
+            str(whitelist),
+        ],
+    )
+    assert bad.exit_code == 0
+    bad_out = bad.output.lower()
+    assert "spearman_concordance" in bad_out
+    assert "warn" in bad_out
+    # The concordance line names the second tool (STARsolo), not an opaque
+    # "matrix.mtx vs matrix.mtx" — the autorun's whole point is "corroborated by STARsolo".
+    assert "STARsolo" in bad.output
+
+
+def test_verify_concordance_sc_counts_auto_at_most_warn_exit(tmp_path, monkeypatch):
+    # A divergent second quantifier is the only issue; outputs are unchanged, so
+    # there is no drift -> exit code stays 0 (concordance is at-most-WARN).
+    _write_scrnaseq_run_with_matrix(tmp_path, "sca2", _SC_PRIMARY)
+    reads, index, whitelist = _write_sc_autorun_inputs(tmp_path)
+
+    monkeypatch.setattr(
+        "contig.cli.run_starsolo_quantifier", _fake_sc_quantifier_writing(_SC_DIVERGENT)
+    )
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "sca2",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-sc-counts-auto",
+            "--reads",
+            str(reads),
+            "--index",
+            str(index),
+            "--whitelist",
+            str(whitelist),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "warn" in result.output.lower()
+
+
+def test_verify_concordance_sc_counts_auto_too_few_genes_unverified(tmp_path, monkeypatch):
+    # The second matrix shares fewer than 10 genes with the primary -> a correlation
+    # is meaningless, so it is surfaced as UNVERIFIED (never a false PASS), exit 0.
+    _write_scrnaseq_run_with_matrix(tmp_path, "sca_few", _SC_PRIMARY)
+    reads, index, whitelist = _write_sc_autorun_inputs(tmp_path)
+
+    monkeypatch.setattr(
+        "contig.cli.run_starsolo_quantifier", _fake_sc_quantifier_writing(_SC_TOO_FEW)
+    )
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "sca_few",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-sc-counts-auto",
+            "--reads",
+            str(reads),
+            "--index",
+            str(index),
+            "--whitelist",
+            str(whitelist),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "unverified" in result.output.lower()
+
+
+def test_verify_concordance_sc_counts_auto_json_includes_results(tmp_path, monkeypatch):
+    _write_scrnaseq_run_with_matrix(tmp_path, "sca3", _SC_PRIMARY)
+    reads, index, whitelist = _write_sc_autorun_inputs(tmp_path)
+
+    monkeypatch.setattr(
+        "contig.cli.run_starsolo_quantifier", _fake_sc_quantifier_writing(_SC_CONCORDANT)
+    )
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "sca3",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-sc-counts-auto",
+            "--reads",
+            str(reads),
+            "--index",
+            str(index),
+            "--whitelist",
+            str(whitelist),
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert "concordance" in data
+    checks = {r["check"] for r in data["concordance"]}
+    assert {"spearman_concordance", "fraction_agreeing", "gene_overlap"} <= checks
+
+
+def test_verify_concordance_sc_counts_auto_non_scrnaseq_skips(tmp_path, monkeypatch):
+    # A germline run with --concordance-sc-counts-auto: single-cell concordance is
+    # not defined for it, so the command prints a clear note, does not crash, and the
+    # quantifier must never be reached.
+    _write_germline_run_with_vcf(tmp_path, "sca_rna", _VCF_SITES_A)
+    reads, index, whitelist = _write_sc_autorun_inputs(tmp_path)
+
+    def boom(reads, index, whitelist, chemistry, out_dir):
+        raise AssertionError("quantifier invoked for a non-scrnaseq run")
+
+    monkeypatch.setattr("contig.cli.run_starsolo_quantifier", boom)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "sca_rna",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-sc-counts-auto",
+            "--reads",
+            str(reads),
+            "--index",
+            str(index),
+            "--whitelist",
+            str(whitelist),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "scrnaseq" in result.output.lower()
+    assert "spearman_concordance" not in result.output.lower()
+
+
+def test_verify_concordance_sc_counts_auto_primary_absent_skips(tmp_path, monkeypatch):
+    # An scrnaseq run whose results/ has no matrix.mtx: the CLI must skip BEFORE
+    # spawning STARsolo (never a false pass), so the quantifier is never reached.
+    _write_scrnaseq_run_no_matrix(tmp_path, "sca_nomtx")
+    reads, index, whitelist = _write_sc_autorun_inputs(tmp_path)
+
+    def boom(reads, index, whitelist, chemistry, out_dir):
+        raise AssertionError("quantifier invoked despite an absent primary matrix")
+
+    monkeypatch.setattr("contig.cli.run_starsolo_quantifier", boom)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "sca_nomtx",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-sc-counts-auto",
+            "--reads",
+            str(reads),
+            "--index",
+            str(index),
+            "--whitelist",
+            str(whitelist),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "spearman_concordance" not in result.output.lower()
+
+
+def test_verify_concordance_sc_counts_auto_missing_inputs_skip(tmp_path, monkeypatch):
+    # Each of --reads/--index/--whitelist missing in turn: the CLI must note the skip
+    # before invoking the quantifier, emit no concordance, and leave the exit code
+    # unaffected. The quantifier must never be reached.
+    _write_scrnaseq_run_with_matrix(tmp_path, "sca4", _SC_PRIMARY)
+    reads, index, whitelist = _write_sc_autorun_inputs(tmp_path)
+
+    def boom(reads, index, whitelist, chemistry, out_dir):
+        raise AssertionError("quantifier invoked despite a missing input")
+
+    monkeypatch.setattr("contig.cli.run_starsolo_quantifier", boom)
+
+    base = ["verify", "sca4", "--runs-dir", str(tmp_path), "--concordance-sc-counts-auto"]
+    variants = [
+        # missing --reads
+        ["--index", str(index), "--whitelist", str(whitelist)],
+        # missing --index
+        ["--reads", str(reads), "--whitelist", str(whitelist)],
+        # missing --whitelist
+        ["--reads", str(reads), "--index", str(index)],
+    ]
+    for extra in variants:
+        result = runner.invoke(app, base + extra)
+        assert result.exit_code == 0
+        assert "skipping concordance" in result.output.lower()
+        assert "spearman_concordance" not in result.output.lower()
+
+
+def test_verify_concordance_sc_counts_auto_quantifier_failure_skips(tmp_path, monkeypatch):
+    # The quantifier raises SecondScQuantifierError (e.g. STAR not on PATH): the CLI
+    # must turn it into a clear note, no PASS, no crash, exit unaffected.
+    _write_scrnaseq_run_with_matrix(tmp_path, "sca5", _SC_PRIMARY)
+    reads, index, whitelist = _write_sc_autorun_inputs(tmp_path)
+
+    from contig.verification.sc_count_quantifier import SecondScQuantifierError
+
+    def boom(reads, index, whitelist, chemistry, out_dir):
+        raise SecondScQuantifierError("STAR not found")
+
+    monkeypatch.setattr("contig.cli.run_starsolo_quantifier", boom)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "sca5",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-sc-counts-auto",
+            "--reads",
+            str(reads),
+            "--index",
+            str(index),
+            "--whitelist",
+            str(whitelist),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "skipping concordance" in result.output.lower()
+    assert "spearman_concordance" not in result.output.lower()
+
+
+def test_verify_concordance_sc_counts_auto_mutually_exclusive(tmp_path):
+    # Two concordance flags at once (--concordance-sc-counts-auto + --concordance-vcf)
+    # -> exit 1 with the "choose one" listing message that names the auto flag.
+    _write_scrnaseq_run_with_matrix(tmp_path, "sca6", _SC_PRIMARY)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "sca6",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-sc-counts-auto",
+            "--concordance-vcf",
+            str(tmp_path / "other.vcf.gz"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "choose one" in result.output.lower()
+    assert "--concordance-sc-counts-auto" in result.output
+
+
 def test_keygen_prints_a_keypair(tmp_path):
     result = runner.invoke(app, ["keygen"])
     assert result.exit_code == 0
