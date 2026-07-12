@@ -135,6 +135,82 @@ def test_gzip_vcf_supported(tmp_path):
     assert gz_metrics.het_hom == 2.0
 
 
+# --- variant_count metric (Phase 1): distinct primary-sample sites -------------
+
+
+def test_variant_count_counts_distinct_sites(tmp_path):
+    # Three distinct (CHROM,POS,REF,ALT) sites -> variant_count == 3.
+    rows = [
+        ("chr1", 100, "A", "G", "0/1"),
+        ("chr1", 200, "C", "T", "0/1"),
+        ("chr1", 300, "A", "C", "1/1"),
+    ]
+    vcf = _write_vcf(tmp_path / "a.vcf", rows)
+
+    metrics = variant_metrics(vcf)
+
+    assert metrics.variant_count == 3
+
+
+def test_variant_count_dedups_repeated_site(tmp_path):
+    # A duplicated (CHROM,POS,REF,ALT) line counts once: len(parse_vcf()) semantics
+    # (parse_vcf keys by site, so a repeated site key collapses to one).
+    rows = [
+        ("chr1", 100, "A", "G", "0/1"),
+        ("chr1", 100, "A", "G", "0/1"),  # exact duplicate site -> counted once
+        ("chr1", 200, "C", "T", "0/1"),
+    ]
+    vcf = _write_vcf(tmp_path / "a.vcf", rows)
+
+    metrics = variant_metrics(vcf)
+
+    assert metrics.variant_count == 2
+
+
+def test_variant_count_gzip(tmp_path):
+    rows = [
+        ("chr1", 100, "A", "G", "0/1"),
+        ("chr1", 200, "C", "T", "1/1"),
+        ("chr1", 300, "A", "C", "0/1"),
+    ]
+    gz = tmp_path / "a.vcf.gz"
+    with gzip.open(gz, "wt") as fh:
+        fh.write(_HEADER + "".join(_vcf_line(*r) for r in rows))
+
+    metrics = variant_metrics(gz)
+
+    assert metrics.variant_count == 3
+
+
+def test_variant_count_multisample_counts_sites(tmp_path):
+    # A multi-sample VCF: variant_count is the number of distinct sites, not
+    # per-sample. Two sites, each with two sample columns -> count 2.
+    header = (
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\n"
+    )
+    body = (
+        "chr1\t100\t.\tA\tG\t.\tPASS\t.\tGT\t0/1\t1/1\n"
+        "chr1\t200\t.\tC\tT\t.\tPASS\t.\tGT\t0/0\t0/1\n"
+    )
+    vcf = tmp_path / "multi.vcf"
+    vcf.write_text(header + body)
+
+    metrics = variant_metrics(vcf)
+
+    assert metrics.variant_count == 2
+
+
+def test_variant_count_empty_vcf_is_zero(tmp_path):
+    # Header-only VCF (no records) -> variant_count == 0.
+    vcf = tmp_path / "empty.vcf"
+    vcf.write_text(_HEADER)
+
+    metrics = variant_metrics(vcf)
+
+    assert metrics.variant_count == 0
+
+
 # --- plausibility evaluator (Phase 2): WARN-capped, explicit unverified --------
 
 

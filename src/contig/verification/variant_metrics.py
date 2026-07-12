@@ -1,6 +1,6 @@
 """Deterministic germline variant metrics from a VCF (PRD C3, slice 1).
 
-Computes two biological-plausibility metrics for a germline call set:
+Computes biological-plausibility metrics for a germline call set:
 
 - ts_tv: transitions / transversions over biallelic SNV sites. Indels and
   multiallelic sites are excluded from the ratio (documented, not silently
@@ -8,6 +8,11 @@ Computes two biological-plausibility metrics for a germline call set:
 - het_hom: heterozygous genotypes / homozygous-alt genotypes. Homozygous-ref
   and missing genotypes are excluded from both counts. None when there are no
   homozygous-alt genotypes (no divide-by-zero).
+- variant_count: number of distinct primary-sample variant sites,
+  `len(parse_vcf(...))`. Keyed by (CHROM, POS, REF, ALT), so a duplicated site
+  line is deduped to one and a multiallelic (comma-ALT) record is a single
+  site; not PASS-filtered. Always an int, so unlike the two ratios it never
+  yields None / unverified.
 
 Pure function of the VCF bytes: no tool execution, no network, no randomness.
 Reuses concordance.parse_vcf, which yields {(CHROM, POS, REF, ALT): normalized_gt}.
@@ -41,10 +46,15 @@ class VariantMetrics:
       transversion was observed (the denominator would be zero).
     - het_hom: het count / hom-alt count, or None when no homozygous-alt
       genotype was observed (the denominator would be zero).
+    - variant_count: number of distinct primary-sample variant sites
+      (`len(parse_vcf(...))`). A site key is (CHROM, POS, REF, ALT), so a
+      repeated site line counts once and a multiallelic record (comma-ALT) is
+      one site; not PASS-filtered. Always an int (0 for a header-only VCF).
     """
 
     ts_tv: float | None
     het_hom: float | None
+    variant_count: int
 
 
 def _is_biallelic_snv(ref: str, alt: str) -> bool:
@@ -105,16 +115,18 @@ def _compute_het_hom(sites: dict[tuple[str, str, str, str], str | None]) -> floa
 
 
 def variant_metrics(vcf_path: str | os.PathLike) -> VariantMetrics:
-    """Compute ts_tv and het_hom for the primary sample of a VCF.
+    """Compute ts_tv, het_hom, and variant_count for the primary sample of a VCF.
 
     Deterministic and side effect free beyond reading the file (gzip transparent
-    via parse_vcf). Returns a frozen VariantMetrics with None for any metric whose
-    denominator is zero.
+    via parse_vcf). Returns a frozen VariantMetrics with None for any ratio whose
+    denominator is zero; variant_count is the distinct-site total and is always an
+    int (0 for a header-only VCF).
     """
     sites = parse_vcf(vcf_path)
     return VariantMetrics(
         ts_tv=_compute_ts_tv(sites),
         het_hom=_compute_het_hom(sites),
+        variant_count=len(sites),
     )
 
 
