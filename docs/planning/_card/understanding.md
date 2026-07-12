@@ -1,123 +1,90 @@
-# Understanding — rnaseq-mapping-composition-plausibility (Phase 2 dig)
-
-Source: `_card/issue.md` brief + two read-only dig agents + on-disk real-run inspection.
-Date: 2026-07-11. Worktree baseline: 1452 passed, 1 skipped.
+# Understanding — germline-variant-count-plausibility (Phase 2 dig)
 
 ## What the work is really asking
 
-Add a **C3 biological-plausibility** signal for the RNA-seq assay that measures where
-aligned reads fall relative to gene annotation — the **exonic / intronic** read-fraction
-composition — and surfaces it as a WARN-capped verdict check. Low exonic fraction (or
-high intronic) is a classic smell for genomic-DNA contamination, failed poly-A / rRNA
-depletion, or a broken annotation, and no incumbent issues this as a correctness signal.
-It is the "exonic-mapping fraction" item named but unbuilt in the C3 RNA-seq list
-(`CAPABILITY_ROADMAP.md:397`) and explicitly deferred by the v0.6.0 rnaseq slice
-(`docs/planning/rnaseq-plausibility/prd.md:93`).
+Add ONE WARN-capped germline plausibility check: the total variant count from a
+`variant_calling` run's primary VCF, in a deliberately wide band, so the verdict catches a
+run that completed but produced a near-empty (failed calling) or absurd call set. It is the
+last unbuilt item on the C3 germline build list (`CAPABILITY_ROADMAP.md:~421`), symmetric to
+the shipped somatic `somatic_variant_count`.
 
-## The feasibility fork — RESOLVED (this was the caveat to dig first)
+## Verified shipped/absent state (in code)
 
-The brief flagged one load-bearing question: is the composition signal reachable from a
-default Contig rnaseq run, and via MultiQC or a dedicated parser? **Resolved by inspecting
-real runs on disk (`runs/testpass2`, `runs/test-2026-06-21T22-18-14-239Z`):**
+- **Germline has no count band today.** `VariantMetrics` (`variant_metrics.py:36-48`) carries
+  only `ts_tv` and `het_hom`. `variant_count` exists ONLY in `somatic_plausibility.py` and
+  `y_variant_count` in `sex_plausibility.py`. Confirmed by grep.
+- **No `graphify-out/` graph in this worktree** — dig navigated source directly.
 
-1. **The RSeQC `read_distribution` artifact IS produced by default** at
-   `results/star_salmon/rseqc/read_distribution/<sample>.read_distribution.txt`
-   on nf-core/rnaseq@3.26.0 (the pinned revision, `registry.py:15-16`). Confirmed on 4+
-   real runs. So no launch-param change is needed to make the artifact exist.
-2. **The composition fractions do NOT reach Contig's MultiQC ingest.** Contig reads only
-   `report_general_stats_data` from `multiqc_data.json` (`qc_ingest.py:7`). A real run's
-   general-stats block has 11 metric keys, **none** exonic/intronic/CDS/tag-related, and
-   there is no read-distribution section Contig parses. Extending the existing
-   MultiQC-fed `RNASEQ_PLAUSIBILITY_PACK` path would therefore only ever emit UNVERIFIED.
+## The seams to reuse (no new machinery)
 
-**Decision: dedicated stdlib parser of the RSeQC artifact** — exactly the shipped
-fires-slice pattern (methylseq/ampliseq/mag). The caveat from the handoff is retired
-favorably: the artifact is default-present, so the check will genuinely fire, not no-op.
+- **Germline VCF reader:** `concordance.parse_vcf` (`concordance.py:87-110`) — gzip-transparent,
+  streamed, returns a dict keyed by `(CHROM,POS,REF,ALT)` → first-sample GT. `variant_metrics()`
+  **already calls it once** (`variant_metrics.py:114`). ts_tv/het_hom are derived from that parse.
+- **Gate:** `runner._discover_qc`, germline block at `runner.py:287-292`:
+  ```python
+  if assay == "variant_calling":
+      pattern = manifest_for("variant_calling").required[0]  # "*.vcf.gz"
+      vcfs = sorted(p for p in run_dir.rglob(pattern) if p.is_file())
+      if vcfs:
+          results.extend(evaluate_variant_plausibility(vcfs[0]))
+          results.extend(evaluate_sex_plausibility(vcfs[0]))
+  ```
+  A count band added to `evaluate_variant_plausibility`/`VARIANT_RULE_PACK` **rides along with
+  no gate edit** (this is the elegant part).
+- **Rule-pack mechanics:** rules are `list[dict]` with `warn_below`/`warn_above`/`fail_*`/`message`,
+  read via `.get()` in `_status_for` (`rule_pack.py:410-429`); WARN-only = omit `fail_*`.
+  Germline's existing WARN-capped rules (`ts_tv_ratio`, `het_hom_ratio`) live in the **registered**
+  `VARIANT_RULE_PACK` (`rule_pack.py:49-75`) and are selected by `_rule_by_check`
+  (`variant_metrics.py:129-134`) — the germline-native precedent to follow.
+- **Provenance:** somatic count is **verdict-only, no RunRecord provenance** (no `SomaticInference`
+  exists). Sex-check attaches `SexInference`, but the count band is symmetric to *somatic count*, so
+  **verdict-only, no new provenance model.**
+- **Tests:** inline VCF strings → `tmp_path`. `tests/verification/test_variant_metrics.py` (helpers
+  `_HEADER`/`_vcf_line`/`_write_vcf`, band tests `test_plausibility_in_band_passes` /
+  `_out_of_band_warns_never_fails` / `_uncomputable_is_unverified`) is the direct template;
+  `test_somatic_plausibility.py` (`test_variant_count_in_band_passes`/`_out_of_band_warns`) shows the
+  count-band assertions.
 
-## The real read_distribution.txt format (from a run on disk)
+## Recommended design (reuse-first, germline-native) — "Design A"
 
-```
-Total Reads                   142111
-Total Tags                    146154
-Total Assigned Tags           129802
-=====================================================================
-Group               Total_bases         Tag_count           Tags/Kb
-CDS_Exons           146030              129779              888.71
-5'UTR_Exons         0                   0                   0.00
-3'UTR_Exons         0                   0                   0.00
-Introns             530                 23                  43.31
-TSS_up_1kb          43552               0                   0.00
-TSS_up_5kb          76907               0                   0.00
-TSS_up_10kb         89031               0                   0.00
-TES_down_1kb        40737               0                   0.00
-TES_down_5kb        81271               0                   0.00
-TES_down_10kb       97060               0                   0.00
-=====================================================================
-```
-(This is the nf-core rnaseq yeast test profile — CDS-dominated, expected.)
+1. Add `variant_count: int` to `VariantMetrics`, computed as `len(sites)` from the **already-parsed**
+   `parse_vcf` result in `variant_metrics()` — **no second parse, no new reader/module/gate**.
+2. Add a `variant_count` rule to the registered `VARIANT_RULE_PACK`, **WARN-only**, wide band.
+3. Select it in `evaluate_variant_plausibility` via the existing `_rule_by_check` idiom.
+4. Tests mirror `test_variant_metrics.py`.
 
-**Metric computation (over the `Tag_count` column):**
-- `exonic_fraction` = (CDS_Exons + 5'UTR_Exons + 3'UTR_Exons) / **Total Assigned Tags** —
-  the mRNA-enrichment signal. WARN **below** a lenient threshold.
-- `intronic_fraction` = Introns / Total Assigned Tags — WARN **above** a lenient threshold
-  (pre-mRNA / gDNA contamination). Candidate; may ship informational.
-- **TSS_up_/TES_down_ bins are nested & overlapping windows (1kb ⊂ 5kb ⊂ 10kb)** — they
-  must NOT be summed into an "intergenic" number (double-counts). A clean intergenic-ish
-  signal, if wanted, is the *unassigned* fraction: `(Total Tags − Total Assigned Tags) /
-  Total Tags`. This is a PRD decision (see open questions).
+No new `FailureClass`, model, persisted-record, dependency, or exit-code change — additive to the
+verdict only. This is the smallest possible C3 slice and mirrors how germline ts_tv/het_hom already work.
 
-## How it wires in (from the code dig)
+**Considered alternative — "Design B" (mechanical somatic mirror):** a new
+`variant_count_plausibility.py` + unregistered pack + new evaluator + new gate line. Rejected: more
+code, a second VCF parse, and it ignores germline's own established structure.
 
-- **New parser** `src/contig/verification/rnaseq_metrics.py`: stdlib-only, pure,
-  `parse_read_distribution(path) -> dict[str, float]` returning `{exonic_fraction: …,
-  intronic_fraction: …}`; omit any metric it can't compute (never coerce to 0); guard
-  `Total Assigned Tags == 0`. Mirrors `methylseq_metrics.py` (one file → one sample).
-- **New locator** `_locate_rnaseq_composition_qc(run_dir)` in `runner.py`: rglob
-  `*.read_distribution.txt`, derive sample id by stripping the `.read_distribution` suffix,
-  return `{sample: {slug: value}}`; a located-but-unparseable file → empty dict for that
-  sample (→ explicit UNVERIFIED at the gate).
-- **New gate block** in `runner._discover_qc` (`runner.py`, alongside the existing
-  `assay == "rnaseq"` plausibility gate at `:347-349`), copied from the methylseq template
-  (`runner.py:385-400`): evaluate `RNASEQ_COMPOSITION_PACK` when metrics present, else emit
-  one `rnaseq_composition_qc:<sample>` UNVERIFIED. **No artifact at all → silent skip**
-  (structural QC owns genuinely-missing outputs; read_distribution is not in the rnaseq
-  structural manifest, `structural.py:245-249`, and must stay out of it).
-- **New rule pack** `RNASEQ_COMPOSITION_PACK` in `rule_pack.py`, WARN-capped (no `fail_*`),
-  **not** registered in `_RULE_PACKS` (matches the other plausibility packs).
-- **`rnaseq` stays OUT of `_DEDICATED_METRIC_ASSAYS`** (`runner.py:67`): the existing
-  `RNASEQ_RULE_PACK` alignment/assignment checks still need the generic MultiQC path
-  (`runner.py:245-248`). The new gate is purely additive.
-- **Tests**: `tests/verification/test_rnaseq_metrics.py` (inline-string fixtures via a
-  local `_write(tmp_path,…)` helper, plain text — the house style) + a committed realistic
-  `tests/fixtures/rnaseq/<sample>.read_distribution.txt` (new dir; author from a real run,
-  sanitized) + gate assertions in `tests/verification/test_run_qc.py`. **No real nf-core
-  run in CI.**
+## The one real semantic choice (flag to PRD)
 
-## Honest contract (matches every sibling C3 slice)
-- WARN-capped bands, uncalibrated engineering defaults, **no FAIL** until real-data
-  calibration. UNVERIFIED (never a false pass) when the artifact/metric is absent.
-- Additive to the verdict only: no new `FailureClass`, model, persisted-record, or
-  dependency; no exit-code change; `eval-guard`/`heal-guard` baselines untouched.
-- Local, deterministic, **no raw-read egress** (parses a small QC text file already on the
-  user's compute).
+`len(parse_vcf())` counts **distinct variant sites of the primary sample** — it dedups identical site
+keys and treats a multiallelic record as ONE comma-ALT key; it does NOT PASS-filter (matches somatic).
+This is **not byte-identical** to somatic's "biallelic streamed record count." For a wide WARN-only
+gross-failure band the difference is negligible (a few %), so the recommendation is: **define the
+metric honestly as "distinct germline variant sites (primary sample)" via the existing parse** rather
+than adding a raw record counter. Decide + document in the PRD.
 
-## Guardrail check (CLAUDE.md)
-Squarely Layer-2 verify-layer work ("make every verdict harder to fool"). Not Layer-1.
-No wet-lab/clinical credentials. Research-use sanity signal, never a clinical judgement.
-**No drift detected.**
+## Band calibration note (flag to PRD)
 
-## Open questions for the requirements interview
-1. **Metric set.** Ship `exonic_fraction` alone (tightest, clearest), or also
-   `intronic_fraction` and/or the `unassigned_fraction` intergenic-ish signal? Which get
-   WARN bands vs. informational-only?
-2. **Denominator.** Total Assigned Tags (excludes off-annotation) vs. Total Tags. Exonic
-   over Assigned is the cleaner enrichment ratio; Total Tags folds in the unassigned smell.
-3. **Band values.** Lenient defaults so a normal run reads PASS — e.g. `exonic_fraction`
-   warn_below ~0.50? These are uncalibrated; state them as engineering defaults.
-4. **Multi-sample.** read_distribution is one-file-per-sample; confirm per-sample checks
-   (like the other packs) with no cross-sample aggregation this slice.
-5. **Naming.** Check names (`exonic_fraction`, …) and the located-but-empty UNVERIFIED key
-   (`rnaseq_composition_qc:<sample>`).
-6. **Scope guard.** Gene-body-coverage evenness stays deferred (needs the non-default
-   `geneBody_coverage` module); FAIL severity deferred to real-data calibration; no
-   dashboard card this slice unless trivial.
+Germline counts span orders of magnitude by capture: WGS ~4–5M, WES ~20–50k, targeted panel ~hundreds.
+Somatic used `[10, 100000]`; germline needs a **much wider** upper bound (e.g. `warn_above` ~2e7) and a
+low `warn_below` (~10) to catch only near-total-failure and absurd counts. Deliberately loose,
+uncalibrated, WARN-only; FAIL + real-data calibration deferred (matches every prior C3 slice).
+
+## Zero-count handling (flag to PRD)
+
+`variant_count` is always an int, so it never hits the UNVERIFIED branch; a genuinely-empty/unparseable
+VCF → count 0 → **WARN below band** (honest, never a false pass). No VCF at all → the gate never fires
+(silent skip; structural QC owns a genuinely-missing output). Symmetric to somatic. Recommend NOT adding
+a special UNVERIFIED-on-zero case for slice 1.
+
+## Guardrail check (CLAUDE.md) — clean
+
+Layer-2 verify-only; reads a VCF already on the user's compute (no raw-read egress); research-use sanity
+signal, never a clinical judgement; WARN-capped, UNVERIFIED-never-PASS; test-first, synthetic fixtures,
+no real nf-core/sarek in CI.

@@ -6,6 +6,47 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Germline variant-count plausibility — the verdict now catches a grossly-off
+  call-set size** (capability C3, biological-plausibility verification; the
+  "expected variant-count band" germline slice named at `CAPABILITY_ROADMAP.md`
+  C3). A completed germline (`variant_calling`) run whose primary VCF has a
+  near-zero count (failed / truncated calling) or an absurd count previously passed
+  the verdict silently; the germline plausibility verdict now gains a WARN-capped
+  **count-band axis** so the gross failure surfaces to the researcher without ever
+  blocking a legitimate run. Details:
+  - **`variant_count` on `VariantMetrics`.** Computed as `len(parse_vcf(vcf))` — the
+    number of **distinct primary-sample `(CHROM, POS, REF, ALT)` sites** — reusing
+    the same `concordance.parse_vcf` reader that already feeds `ts_tv`/`het_hom`, so
+    a duplicated site line dedups to one, a multiallelic (comma-ALT) record is a
+    single site, and the count is **not** PASS-filtered. It is always an `int` (0 for
+    a header-only VCF), so unlike the two ratios it is always computable.
+  - **One WARN-only `variant_count` rule in `VARIANT_RULE_PACK`** (`warn_below: 10`,
+    `warn_above: 20_000_000`, no `fail_*`), riding the existing germline plausibility
+    gate — no `runner`/`_discover_qc` edit. The wide band is an uncalibrated
+    engineering default; `warn_above` is a **soft "absurd-count" tripwire, not a
+    validated ceiling**, so a very large joint-called cohort tripping it is an honest
+    "unusually large, check it" WARN, never a block. Wired into
+    `evaluate_variant_plausibility` by adding `"variant_count"` to
+    `_PLAUSIBILITY_CHECKS` and `metrics.variant_count` to `by_metric`, so it flows
+    through the shared `evaluate()` alongside `ts_tv_ratio:<sample>` /
+    `het_hom_ratio:<sample>` as `variant_count:<sample>` with `expected_range`
+    `[10, 20000000]`.
+  - **Honest contract, identical to every sibling C3 slice.** At most WARN, never
+    FAIL, never changes the `contig run`/`verify` exit code. Because the count is
+    always an int, a **real 0 rides the band as a WARN and never routes into the
+    `ts_tv`/`het_hom` UNVERIFIED branch** — the key guarantee that an empty call set
+    is not mistaken for "nothing to check". No VCF at all skips silently (structural
+    QC owns a genuinely-missing output). Verdict-only: no new module, `FailureClass`,
+    model, provenance/persisted record, dependency, or dashboard card; no exit-code
+    change. Local, deterministic, **no raw-read egress** (reads a small VCF already on
+    the user's compute). Research-use sanity signal, never a clinical judgement.
+    Test-first with synthetic inline VCF fixtures — **no real nf-core/sarek run in
+    CI**. **Deferred:** FAIL severity and band calibration on real cohorts,
+    capture-aware bands (panel/WES/WGS differ by orders of magnitude), per-sample
+    counts for multi-sample VCFs, a dashboard card, and the C6 fold-in.
+
 ## [0.31.0] - 2026-07-12
 
 ### Added

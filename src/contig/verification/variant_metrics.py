@@ -1,6 +1,6 @@
 """Deterministic germline variant metrics from a VCF (PRD C3, slice 1).
 
-Computes two biological-plausibility metrics for a germline call set:
+Computes biological-plausibility metrics for a germline call set:
 
 - ts_tv: transitions / transversions over biallelic SNV sites. Indels and
   multiallelic sites are excluded from the ratio (documented, not silently
@@ -8,6 +8,11 @@ Computes two biological-plausibility metrics for a germline call set:
 - het_hom: heterozygous genotypes / homozygous-alt genotypes. Homozygous-ref
   and missing genotypes are excluded from both counts. None when there are no
   homozygous-alt genotypes (no divide-by-zero).
+- variant_count: number of distinct primary-sample variant sites,
+  `len(parse_vcf(...))`. Keyed by (CHROM, POS, REF, ALT), so a duplicated site
+  line is deduped to one and a multiallelic (comma-ALT) record is a single
+  site; not PASS-filtered. Always an int, so unlike the two ratios it never
+  yields None / unverified.
 
 Pure function of the VCF bytes: no tool execution, no network, no randomness.
 Reuses concordance.parse_vcf, which yields {(CHROM, POS, REF, ALT): normalized_gt}.
@@ -41,10 +46,15 @@ class VariantMetrics:
       transversion was observed (the denominator would be zero).
     - het_hom: het count / hom-alt count, or None when no homozygous-alt
       genotype was observed (the denominator would be zero).
+    - variant_count: number of distinct primary-sample variant sites
+      (`len(parse_vcf(...))`). A site key is (CHROM, POS, REF, ALT), so a
+      repeated site line counts once and a multiallelic record (comma-ALT) is
+      one site; not PASS-filtered. Always an int (0 for a header-only VCF).
     """
 
     ts_tv: float | None
     het_hom: float | None
+    variant_count: int
 
 
 def _is_biallelic_snv(ref: str, alt: str) -> bool:
@@ -105,25 +115,29 @@ def _compute_het_hom(sites: dict[tuple[str, str, str, str], str | None]) -> floa
 
 
 def variant_metrics(vcf_path: str | os.PathLike) -> VariantMetrics:
-    """Compute ts_tv and het_hom for the primary sample of a VCF.
+    """Compute ts_tv, het_hom, and variant_count for the primary sample of a VCF.
 
     Deterministic and side effect free beyond reading the file (gzip transparent
-    via parse_vcf). Returns a frozen VariantMetrics with None for any metric whose
-    denominator is zero.
+    via parse_vcf). Returns a frozen VariantMetrics with None for any ratio whose
+    denominator is zero; variant_count is the distinct-site total and is always an
+    int (0 for a header-only VCF).
     """
     sites = parse_vcf(vcf_path)
     return VariantMetrics(
         ts_tv=_compute_ts_tv(sites),
         het_hom=_compute_het_hom(sites),
+        variant_count=len(sites),
     )
 
 
-# The two germline plausibility rules, sourced from the shared pack by their
+# The germline plausibility rules, sourced from the shared pack by their
 # "check" field so the bands stay single-sourced in rule_pack.py (this module
 # never hardcodes a threshold). Each VariantMetrics field maps to one rule via the
-# rule's "metric" key. mean_coverage is intentionally absent: it is a MultiQC
-# metric, not VCF-derived, so it is not part of the VCF plausibility pass.
-_PLAUSIBILITY_CHECKS = ("ts_tv_ratio", "het_hom_ratio")
+# rule's "metric" key. variant_count is always an int, so unlike the two ratios it
+# is always computable and never yields an unverified result. mean_coverage is
+# intentionally absent: it is a MultiQC metric, not VCF-derived, so it is not part
+# of the VCF plausibility pass.
+_PLAUSIBILITY_CHECKS = ("ts_tv_ratio", "het_hom_ratio", "variant_count")
 
 
 def _rule_by_check(check_name: str) -> dict:
@@ -139,20 +153,27 @@ def evaluate_variant_plausibility(
 ) -> list[QCResult]:
     """Evaluate the germline plausibility rules over a VCF, capped at WARN.
 
-    Computes ts_tv and het_hom (Phase 1), then runs the two WARN-capped germline
-    rules from VARIANT_RULE_PACK over the COMPUTABLE metrics via the shared
-    evaluate() (so the band logic and check naming, "<check>:<sample>", stay
-    single-sourced). A metric that could not be computed (None: no transversion,
-    or no homozygous-alt genotype) is NOT silently skipped: it gets an explicit
-    "unverified" QCResult, which carries no severity and so can never read as a
-    pass (PRODUCT_SPEC false-pass rate ~0). Every result is kind "metric".
+    Computes ts_tv, het_hom, and variant_count, then runs the three WARN-capped
+    germline rules from VARIANT_RULE_PACK over the COMPUTABLE metrics via the
+    shared evaluate() (so the band logic and check naming, "<check>:<sample>",
+    stay single-sourced). The two ratios can be None (no transversion, or no
+    homozygous-alt genotype); such a metric is NOT silently skipped but gets an
+    explicit "unverified" QCResult, which carries no severity and so can never
+    read as a pass (PRODUCT_SPEC false-pass rate ~0). variant_count is always an
+    int, so it is always computable — a real 0 (empty call set) rides the band as
+    a WARN and never routes into the unverified branch. Every result is kind
+    "metric".
     """
     metrics = variant_metrics(vcf_path)
     rules = [_rule_by_check(name) for name in _PLAUSIBILITY_CHECKS]
 
     # The computable metrics, keyed by each rule's "metric" so evaluate() picks
     # them up; a None metric is omitted here and handled as unverified below.
-    by_metric = {"ts_tv": metrics.ts_tv, "het_hom": metrics.het_hom}
+    by_metric = {
+        "ts_tv": metrics.ts_tv,
+        "het_hom": metrics.het_hom,
+        "variant_count": metrics.variant_count,
+    }
     computable = {
         metric: value for metric, value in by_metric.items() if value is not None
     }

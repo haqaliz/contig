@@ -6,7 +6,9 @@ Mirrors the style of test_concordance.py (tiny inline VCFs).
 
 import gzip
 
+from contig.verification.rule_pack import _status_for
 from contig.verification.variant_metrics import (
+    _rule_by_check,
     evaluate_variant_plausibility,
     variant_metrics,
 )
@@ -135,6 +137,82 @@ def test_gzip_vcf_supported(tmp_path):
     assert gz_metrics.het_hom == 2.0
 
 
+# --- variant_count metric (Phase 1): distinct primary-sample sites -------------
+
+
+def test_variant_count_counts_distinct_sites(tmp_path):
+    # Three distinct (CHROM,POS,REF,ALT) sites -> variant_count == 3.
+    rows = [
+        ("chr1", 100, "A", "G", "0/1"),
+        ("chr1", 200, "C", "T", "0/1"),
+        ("chr1", 300, "A", "C", "1/1"),
+    ]
+    vcf = _write_vcf(tmp_path / "a.vcf", rows)
+
+    metrics = variant_metrics(vcf)
+
+    assert metrics.variant_count == 3
+
+
+def test_variant_count_dedups_repeated_site(tmp_path):
+    # A duplicated (CHROM,POS,REF,ALT) line counts once: len(parse_vcf()) semantics
+    # (parse_vcf keys by site, so a repeated site key collapses to one).
+    rows = [
+        ("chr1", 100, "A", "G", "0/1"),
+        ("chr1", 100, "A", "G", "0/1"),  # exact duplicate site -> counted once
+        ("chr1", 200, "C", "T", "0/1"),
+    ]
+    vcf = _write_vcf(tmp_path / "a.vcf", rows)
+
+    metrics = variant_metrics(vcf)
+
+    assert metrics.variant_count == 2
+
+
+def test_variant_count_gzip(tmp_path):
+    rows = [
+        ("chr1", 100, "A", "G", "0/1"),
+        ("chr1", 200, "C", "T", "1/1"),
+        ("chr1", 300, "A", "C", "0/1"),
+    ]
+    gz = tmp_path / "a.vcf.gz"
+    with gzip.open(gz, "wt") as fh:
+        fh.write(_HEADER + "".join(_vcf_line(*r) for r in rows))
+
+    metrics = variant_metrics(gz)
+
+    assert metrics.variant_count == 3
+
+
+def test_variant_count_multisample_counts_sites(tmp_path):
+    # A multi-sample VCF: variant_count is the number of distinct sites, not
+    # per-sample. Two sites, each with two sample columns -> count 2.
+    header = (
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\tS2\n"
+    )
+    body = (
+        "chr1\t100\t.\tA\tG\t.\tPASS\t.\tGT\t0/1\t1/1\n"
+        "chr1\t200\t.\tC\tT\t.\tPASS\t.\tGT\t0/0\t0/1\n"
+    )
+    vcf = tmp_path / "multi.vcf"
+    vcf.write_text(header + body)
+
+    metrics = variant_metrics(vcf)
+
+    assert metrics.variant_count == 2
+
+
+def test_variant_count_empty_vcf_is_zero(tmp_path):
+    # Header-only VCF (no records) -> variant_count == 0.
+    vcf = tmp_path / "empty.vcf"
+    vcf.write_text(_HEADER)
+
+    metrics = variant_metrics(vcf)
+
+    assert metrics.variant_count == 0
+
+
 # --- plausibility evaluator (Phase 2): WARN-capped, explicit unverified --------
 
 
@@ -200,3 +278,85 @@ def test_plausibility_uncomputable_is_unverified(tmp_path):
     assert by_check["het_hom_ratio:sample"].status == "unverified"
     assert by_check["het_hom_ratio:sample"].kind == "metric"
     assert by_check["het_hom_ratio:sample"].value is None
+
+
+# --- variant_count band (Phase 2): WARN-capped, never unverified ---------------
+
+
+def _n_distinct_sites(n):
+    """n distinct het SNV rows at increasing positions (all A>G transitions)."""
+    return [("chr1", 100 + i, "A", "G", "0/1") for i in range(n)]
+
+
+def test_variant_count_in_band_passes(tmp_path):
+    # A normal count (12 distinct sites) is inside [10, 20000000] -> PASS, with
+    # the two-sided expected_range rendered.
+    vcf = _write_vcf(tmp_path / "a.vcf", _n_distinct_sites(12))
+
+    results = evaluate_variant_plausibility(vcf)
+
+    count = [r for r in results if r.check == "variant_count:sample"]
+    assert len(count) == 1
+    assert count[0].status == "pass"
+    assert count[0].kind == "metric"
+    assert count[0].value == 12
+    assert count[0].expected_range == "[10, 20000000]"
+
+
+def test_variant_count_below_band_warns(tmp_path):
+    # 2 distinct sites is below warn_below (10) -> WARN, never FAIL.
+    vcf = _write_vcf(tmp_path / "a.vcf", _n_distinct_sites(2))
+
+    results = evaluate_variant_plausibility(vcf)
+
+    count = [r for r in results if r.check == "variant_count:sample"]
+    assert len(count) == 1
+    assert count[0].status == "warn"
+    assert count[0].status != "fail"
+    assert count[0].value == 2
+
+
+def test_variant_count_zero_warns_not_unverified(tmp_path):
+    # Header-only VCF -> variant_count == 0 -> WARN (below band). Critically it is
+    # NOT unverified: a real 0 must not route into the ts_tv/het_hom unverified
+    # branch (PRD R4). The count metric is always computable.
+    vcf = tmp_path / "empty.vcf"
+    vcf.write_text(_HEADER)
+
+    results = evaluate_variant_plausibility(vcf)
+    by_check = {r.check: r for r in results}
+
+    assert by_check["variant_count:sample"].status == "warn"
+    assert by_check["variant_count:sample"].status != "unverified"
+    assert by_check["variant_count:sample"].value == 0
+
+
+def test_variant_count_above_band_warns_via_rule(tmp_path):
+    # The upper tripwire fires above warn_above (20_000_000) without building a
+    # 20M-record VCF: exercise the band directly at the rule level.
+    rule = _rule_by_check("variant_count")
+    assert _status_for(20_000_001, rule) == "warn"
+    assert _status_for(5000, rule) == "pass"
+
+
+def test_variant_count_check_key_and_grouping(tmp_path):
+    # The count result's check key is exactly variant_count:sample, .value is the
+    # int count, and it sits alongside the ts_tv_ratio / het_hom_ratio rows.
+    rows = [
+        ("chr1", 100, "A", "G", "0/1"),  # transition, het
+        ("chr1", 200, "C", "T", "0/1"),  # transition, het
+        ("chr1", 300, "G", "A", "0/1"),  # transition, het
+        ("chr1", 400, "T", "C", "0/1"),  # transition, het
+        ("chr1", 500, "A", "C", "1/1"),  # transversion, hom-alt
+        ("chr1", 600, "G", "T", "0/1"),  # transversion, het
+    ]
+    vcf = _write_vcf(tmp_path / "a.vcf", rows)
+
+    results = evaluate_variant_plausibility(vcf)
+    checks = {r.check for r in results}
+
+    assert "variant_count:sample" in checks
+    assert "ts_tv_ratio:sample" in checks
+    assert "het_hom_ratio:sample" in checks
+    count = next(r for r in results if r.check == "variant_count:sample")
+    assert count.value == 6
