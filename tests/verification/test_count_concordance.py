@@ -14,6 +14,8 @@ from contig.verification.count_concordance import (
     count_concordance,
     evaluate_count_concordance,
     parse_count_matrix,
+    results_from_counts,
+    stats_from_counts,
 )
 
 
@@ -246,3 +248,37 @@ def test_evaluate_gate_skips_non_rnaseq(tmp_path):
     a, b = _concordant_pair(tmp_path)
 
     assert evaluate_count_concordance(a, b, assay="variant_calling") == []
+
+
+# --- Phase 1 (this slice): dict-based concordance seam ------------------------
+
+
+def test_stats_from_counts_matches_path_wrapper(tmp_path):
+    # The dict seam over pre-parsed counts equals count_concordance over the same
+    # counts written to TSVs and parsed back.
+    dict_a = {f"gene{i:02d}": float((i + 1) * 100) for i in range(12)}
+    dict_b = {f"gene{i:02d}": float((i + 2) * 100) for i in range(12)}
+    a = _write_counts(tmp_path / "a.tsv", dict_a)
+    b = _write_counts(tmp_path / "b.tsv", dict_b)
+
+    from_dicts = stats_from_counts(dict_a, dict_b)
+    from_paths = count_concordance(a, b)
+
+    assert from_dicts == from_paths
+
+
+def test_results_from_counts_matches_path_wrapper(tmp_path):
+    # results_from_counts over the dicts + display names returns three QCResults
+    # identical (check, status, value, message) to concordance_results over files.
+    dict_a = {f"gene{i:02d}": float((i + 1) * 100) for i in range(12)}
+    dict_b = {f"gene{i:02d}": float((i + 2) * 100) for i in range(12)}
+    a = _write_counts(tmp_path / "a.tsv", dict_a)
+    b = _write_counts(tmp_path / "b.tsv", dict_b)
+
+    from_dicts = results_from_counts(dict_a, dict_b, a.name, b.name)
+    from_paths = concordance_results(a, b)
+
+    assert len(from_dicts) == 3
+    assert [
+        (r.check, r.status, r.value, r.message) for r in from_dicts
+    ] == [(r.check, r.status, r.value, r.message) for r in from_paths]
