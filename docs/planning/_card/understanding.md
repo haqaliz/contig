@@ -1,90 +1,93 @@
-# Understanding — germline-variant-count-plausibility (Phase 2 dig)
+# Understanding — feat / scrnaseq-concordance (Phase 2 deep dig)
+
+Grounded in a full code map of the worktree (path:line cited). Read with `_card/issue.md`.
 
 ## What the work is really asking
 
-Add ONE WARN-capped germline plausibility check: the total variant count from a
-`variant_calling` run's primary VCF, in a deliberately wide band, so the verdict catches a
-run that completed but produced a near-empty (failed calling) or absurd call set. It is the
-last unbuilt item on the C3 germline build list (`CAPABILITY_ROADMAP.md:~421`), symmetric to
-the shipped somatic `somatic_variant_count`.
+Extend the shipped cross-tool concordance primitive (capability C1) to the `scrnaseq`
+assay — the last assay without it. A user supplies a **second** single-cell count matrix
+(from a different quantifier); Contig corroborates the run's own matrix against it and
+adds a WARN-capped `kind="concordance"` axis to the verdict. Same honest contract as the
+four shipped concordance slices: **at most WARN, never changes the `verify` exit code,
+`unverified` (never a false pass) below a shared-gene floor.**
 
-## Verified shipped/absent state (in code)
+## The central technical finding (drives the whole design)
 
-- **Germline has no count band today.** `VariantMetrics` (`variant_metrics.py:36-48`) carries
-  only `ts_tv` and `het_hom`. `variant_count` exists ONLY in `somatic_plausibility.py` and
-  `y_variant_count` in `sex_plausibility.py`. Confirmed by grep.
-- **No `graphify-out/` graph in this worktree** — dig navigated source directly.
+The concordance **core is reusable**; the **parser is not**.
 
-## The seams to reuse (no new machinery)
+- **Reusable unchanged** (`verification/count_concordance.py:192-306`): `count_concordance()`
+  → `CountConcordanceStats(shared, rho, fraction_agreeing, overlap)`, the hand-rolled
+  stdlib `_spearman`/`_rank`/`_pearson` (148-162), `_agrees` 10% tolerance (165-171), the
+  shared-gene floor `_MIN_SHARED_GENES=10` (43), and `concordance_results()` which emits the
+  three QCResults — `spearman_concordance` (WARN < 0.90), `fraction_agreeing` (WARN < 0.90),
+  `gene_overlap` (informational, always PASS). All `kind="concordance"`, all WARN-capped.
+  It operates on any `dict[str, float]` = `{gene_id: total}`.
+- **NOT reusable** (`count_concordance.py:80-112`): `parse_count_matrix` assumes a **dense
+  gene×sample TSV** (first col = gene id, sums remaining numeric columns). Single-cell
+  matrices are **sparse MatrixMarket `.mtx`(.gz)** with sibling `features.tsv`/`barcodes.tsv`,
+  and/or **AnnData `.h5ad`**. Feeding an `.mtx` to `parse_count_matrix` yields garbage.
+- **No single-cell matrix parser exists anywhere in the repo** (confirmed: no `read_mtx`,
+  `scipy`, `h5py`, `anndata`). The scrnaseq matrix is referenced only *structurally* —
+  `structural.py:262-264` requires `*.h5ad` + `*matrix.mtx*` for presence, never parsed.
+- **Dependency constraint:** the module is pure-stdlib by contract ("No scipy/numpy",
+  `count_concordance.py:152`). A `.mtx` triplet reader **can stay stdlib-only**; `.h5ad`
+  parsing would pull in `anndata`/`h5py` — a new dependency the repo avoids.
 
-- **Germline VCF reader:** `concordance.parse_vcf` (`concordance.py:87-110`) — gzip-transparent,
-  streamed, returns a dict keyed by `(CHROM,POS,REF,ALT)` → first-sample GT. `variant_metrics()`
-  **already calls it once** (`variant_metrics.py:114`). ts_tv/het_hom are derived from that parse.
-- **Gate:** `runner._discover_qc`, germline block at `runner.py:287-292`:
-  ```python
-  if assay == "variant_calling":
-      pattern = manifest_for("variant_calling").required[0]  # "*.vcf.gz"
-      vcfs = sorted(p for p in run_dir.rglob(pattern) if p.is_file())
-      if vcfs:
-          results.extend(evaluate_variant_plausibility(vcfs[0]))
-          results.extend(evaluate_sex_plausibility(vcfs[0]))
-  ```
-  A count band added to `evaluate_variant_plausibility`/`VARIANT_RULE_PACK` **rides along with
-  no gate edit** (this is the elegant part).
-- **Rule-pack mechanics:** rules are `list[dict]` with `warn_below`/`warn_above`/`fail_*`/`message`,
-  read via `.get()` in `_status_for` (`rule_pack.py:410-429`); WARN-only = omit `fail_*`.
-  Germline's existing WARN-capped rules (`ts_tv_ratio`, `het_hom_ratio`) live in the **registered**
-  `VARIANT_RULE_PACK` (`rule_pack.py:49-75`) and are selected by `_rule_by_check`
-  (`variant_metrics.py:129-134`) — the germline-native precedent to follow.
-- **Provenance:** somatic count is **verdict-only, no RunRecord provenance** (no `SomaticInference`
-  exists). Sex-check attaches `SexInference`, but the count band is symmetric to *somatic count*, so
-  **verdict-only, no new provenance model.**
-- **Tests:** inline VCF strings → `tmp_path`. `tests/verification/test_variant_metrics.py` (helpers
-  `_HEADER`/`_vcf_line`/`_write_vcf`, band tests `test_plausibility_in_band_passes` /
-  `_out_of_band_warns_never_fails` / `_uncomputable_is_unverified`) is the direct template;
-  `test_somatic_plausibility.py` (`test_variant_count_in_band_passes`/`_out_of_band_warns`) shows the
-  count-band assertions.
+**Conclusion:** the slice = a new stdlib **`.mtx`-triplet loader** that sums counts across
+cells to a per-gene pseudobulk `{gene_id: float}` (mapping matrix rows→gene ids via
+`features.tsv`), then feeds the *unchanged* concordance core. `.h5ad`-only inputs degrade to
+an honest skip/UNVERIFIED (deferred until a stdlib-safe reader or an accepted dep exists).
 
-## Recommended design (reuse-first, germline-native) — "Design A"
+## Affected code (confirmed by the map)
 
-1. Add `variant_count: int` to `VariantMetrics`, computed as `len(sites)` from the **already-parsed**
-   `parse_vcf` result in `variant_metrics()` — **no second parse, no new reader/module/gate**.
-2. Add a `variant_count` rule to the registered `VARIANT_RULE_PACK`, **WARN-only**, wide band.
-3. Select it in `evaluate_variant_plausibility` via the existing `_rule_by_check` idiom.
-4. Tests mirror `test_variant_metrics.py`.
+- **CLI `verify`** (`cli.py:746-791` flags, `820-832` mutual-exclusion sum, `842-855` branch
+  dispatch, `857-904` result injection + exit code). Exit is driven ONLY by output drift
+  (`result["ok"]`) and `sig_bad`; concordance is surfaced (`result["concordance"]`,
+  `_echo_concordance` 1080-1087) but **never feeds the exit code** — asserted in
+  `tests/test_cli.py:1541`. To mirror: add a flag near cli.py:780, add to the exclusion tuple
+  at 823, add an `elif` at ~853, write `_evaluate_run_sc_counts_concordance` +
+  `_resolve_primary_sc_matrix` modeled on `cli.py:993-1036`.
+- **Primary-matrix locator:** new helper mirroring `_resolve_primary_counts` (`cli.py:993-1020`)
+  — assay-gate to `scrnaseq` via `assay_for_pipeline(record.pipeline)` (`registry.py:62-63`),
+  `results_dir.rglob("*matrix.mtx*")`, resolve sibling `features.tsv`/`barcodes.tsv`, else skip
+  note → `None`.
+- **Concordance module:** either add `"scrnaseq"` to `_COUNT_CONCORDANCE_ASSAYS`
+  (`count_concordance.py:47`) OR a parallel `evaluate_sc_count_concordance` entry point — the
+  latter is cleaner because `evaluate_count_concordance` hardwires the dense `parse_count_matrix`.
+  New parser likely lives in a new `verification/sc_count_concordance.py` (or added to
+  `count_concordance.py`) reusing the core.
+- **QCResult / QCStatus / QCKind** (`models.py:55/64/67-75`): `kind="concordance"` already
+  exists; `overall_verdict` (78-96) is not called by verify on concordance — reuse as-is.
 
-No new `FailureClass`, model, persisted-record, dependency, or exit-code change — additive to the
-verdict only. This is the smallest possible C3 slice and mirrors how germline ts_tv/het_hom already work.
+## Test approach (mirror exactly)
 
-**Considered alternative — "Design B" (mechanical somatic mirror):** a new
-`variant_count_plausibility.py` + unregistered pack + new evaluator + new gate line. Rejected: more
-code, a second VCF parse, and it ignores germline's own established structure.
+- Module tests `tests/verification/test_count_concordance.py` — real `tmp_path` files, no
+  mocks/network. New: `tests/verification/test_sc_count_concordance.py` with synthetic
+  MatrixMarket fixtures (tiny `matrix.mtx` + `features.tsv` + `barcodes.tsv` written as text).
+- CLI tests `tests/test_cli.py:1477-1624` — `_write_*_run_with_*` + `_write_second_*` +
+  `runner.invoke(app, ["verify", ...])`. New: write a scrnaseq `RunRecord`
+  (`pipeline="nf-core/scrnaseq"`) with a `results/…/matrix.mtx` triplet, a second triplet, and
+  assert emits/at-most-warn-exit/json/non-scrnaseq-skip/mutual-exclusion.
+- **No real nf-core/scrnaseq run in CI** — hard rule.
 
-## The one real semantic choice (flag to PRD)
+## Open questions for the interview (product decisions the code can't resolve)
 
-`len(parse_vcf())` counts **distinct variant sites of the primary sample** — it dedups identical site
-keys and treats a multiallelic record as ONE comma-ALT key; it does NOT PASS-filter (matches somatic).
-This is **not byte-identical** to somatic's "biallelic streamed record count." For a wide WARN-only
-gross-failure band the difference is negligible (a few %), so the recommendation is: **define the
-metric honestly as "distinct germline variant sites (primary sample)" via the existing parse** rather
-than adding a raw record counter. Decide + document in the PRD.
+1. **Second-matrix input shape.** A single-cell matrix is a 3-file triplet, awkward as one CLI
+   arg. Options: (a) a **directory** holding `matrix.mtx`+`features.tsv`+`barcodes.tsv`;
+   (b) the `matrix.mtx` path with siblings auto-resolved; (c) also accept a pre-collapsed
+   **dense pseudobulk gene TSV** (reuses `parse_count_matrix`). Recommendation: accept a
+   `.mtx` path (siblings auto-resolved) **and** a dense `.tsv` (sniff by extension) — max reuse,
+   least user burden.
+2. **`.h5ad` handling.** Defer (skip/UNVERIFIED with an honest note) to keep stdlib-only, no
+   `anndata`/`h5py` dep? Recommendation: yes, defer — `.mtx` first slice.
+3. **Metric = pseudobulk gene-level Spearman + fraction-agreeing** (reuse core), deferring
+   cell-count and cluster-stability agreement (need cell-calling/clustering Contig doesn't run).
+   Confirm this is the accepted first-slice metric.
+4. **Flag name:** `--concordance-counts-sc` (brief) vs `--concordance-sc-counts` (reads better
+   next to `--concordance-counts`). Cosmetic.
 
-## Band calibration note (flag to PRD)
+## Guardrail check (CLAUDE.md)
 
-Germline counts span orders of magnitude by capture: WGS ~4–5M, WES ~20–50k, targeted panel ~hundreds.
-Somatic used `[10, 100000]`; germline needs a **much wider** upper bound (e.g. `warn_above` ~2e7) and a
-low `warn_below` (~10) to catch only near-total-failure and absurd counts. Deliberately loose,
-uncalibrated, WARN-only; FAIL + real-data calibration deferred (matches every prior C3 slice).
-
-## Zero-count handling (flag to PRD)
-
-`variant_count` is always an int, so it never hits the UNVERIFIED branch; a genuinely-empty/unparseable
-VCF → count 0 → **WARN below band** (honest, never a false pass). No VCF at all → the gate never fires
-(silent skip; structural QC owns a genuinely-missing output). Symmetric to somatic. Recommend NOT adding
-a special UNVERIFIED-on-zero case for slice 1.
-
-## Guardrail check (CLAUDE.md) — clean
-
-Layer-2 verify-only; reads a VCF already on the user's compute (no raw-read egress); research-use sanity
-signal, never a clinical judgement; WARN-capped, UNVERIFIED-never-PASS; test-first, synthetic fixtures,
-no real nf-core/sarek in CI.
+On-thesis Layer-2 verification depth. No Layer-1 drift. No raw-read egress (compares gene
+totals on the user's compute). No over-claiming (WARN-capped, UNVERIFIED-never-PASS). Test-first.
+No new dependency in the first slice (stdlib `.mtx` reader).

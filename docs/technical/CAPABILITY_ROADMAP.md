@@ -33,7 +33,7 @@ better base model should make each of these stronger, never redundant.
 
 ---
 
-## C1. Cross-tool concordance verification  ·  SHIPPED v0.2.0 (germline) + RNA-seq slice (Unreleased) + somatic slice (Unreleased)
+## C1. Cross-tool concordance verification  ·  SHIPPED v0.2.0 (germline) + RNA-seq slice (Unreleased) + somatic slice (Unreleased) + single-cell slice (Unreleased)
 
 **Shipped (slice 1) in v0.2.0.** The verdict gained a third axis alongside QC
 thresholds and structural checks: `verification/concordance.py` computes a
@@ -91,6 +91,23 @@ single-caller run skips, and a multi/mismatched tumor-pair layout yields one hon
 tumor-VAF agreement, FAIL severity once the overlap band is calibrated on real data, and an
 explicit `contig verify` concordance flag/echo (auto-in-verdict covers slice 1).
 
+**Shipped (single-cell slice — Unreleased).** The concordance axis now reaches the last wired
+assay without it: bulk-RNA-seq's count concordance is extended to **single-cell** via `contig
+verify --concordance-sc-counts <matrix>`. The dict-based core of `count_concordance.py` was
+factored out (`stats_from_counts`/`results_from_counts`, byte-identical RNA-seq behavior), and a
+new pure-stdlib `verification/sc_count_concordance.py` reads the run's own `matrix.mtx`(.gz)
+triplet (siblings resolved, gene axis inferred from the MatrixMarket dims vs the feature/barcode
+counts) and **sums counts across all cells to a per-gene pseudobulk** `{gene_id: total}`, fed into
+that unchanged core against a user-supplied second matrix (a `.mtx` triplet or a dense pseudobulk
+gene TSV, chosen by extension sniff). Same contract as every C1 slice — `spearman_concordance` and
+`fraction_agreeing` at most WARN (< 0.90), informational `gene_overlap`, `unverified` below 10
+shared genes, never changes the exit code; a located-but-unparseable matrix is one honest
+`sc_count_concordance` UNVERIFIED, an `.h5ad`-only run skips. Pure-stdlib (no `anndata`/`h5py`),
+`filtered/`-over-`raw/` primary preference. **Deferred:** `.h5ad` parsing (dependency-gated); the
+second-quantifier **autorun** (`--concordance-sc-counts-auto`; turnkey value waits on it);
+cell-count and cluster-stability agreement (need a downstream clustering step Contig doesn't run);
+FAIL severity on calibrated bands; a dashboard "corroborated by" line.
+
 The original framing, for reference: today the verdict rests on QC thresholds,
 structural checks, and (where a reference run exists) benchmarking against a
 known-good prior run. Concordance adds an independent axis: run a **second,
@@ -114,8 +131,9 @@ models get better at adjudicating *why* two tools disagree.
 - RNA-seq quantification: a second quantifier (for example Salmon against
   STAR plus featureCounts, or kallisto), reported as per-gene rank correlation
   (Spearman) and the fraction of genes agreeing within a tolerance.
-- Single-cell RNA-seq: cell-count and cluster-stability agreement across two
-  quantifiers (for example STARsolo against alevin-fry).
+- Single-cell RNA-seq: **shipped (user-supplied slice)** as pseudobulk gene-level
+  concordance (`--concordance-sc-counts`); cell-count and cluster-stability agreement across
+  two quantifiers (for example STARsolo against alevin-fry) remain deferred.
 - A new `verification.concordance` module and a `ConcordanceResult` model
   (metric, value, tolerance, status, the two tools compared), wired into
   `run_qc` and the verdict reduction. Concordance can move a verdict to WARN; it
@@ -772,7 +790,7 @@ ever. See [`../planning/variant-annotation-assay/prd.md`](../planning/variant-an
 
 | ID | Capability | Window | Leverage |
 |----|-----------|--------|----------|
-| C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) + somatic slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap + somatic auto `somatic_site_overlap` PASS-site Jaccard, Mutect2 vs Strelka2, no user input; auto-run second germline/RNA tool + single-cell deferred) |
+| C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) + somatic slice (Unreleased) + single-cell slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap + somatic auto `somatic_site_overlap` PASS-site Jaccard, Mutect2 vs Strelka2, no user input + single-cell `--concordance-sc-counts` pseudobulk gene-level Spearman/fraction-agreeing over a stdlib `.mtx` triplet loader; auto-run second germline/RNA/single-cell tool + single-cell cluster-stability deferred) |
 | C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; per-contig alias harmonization (mito `M`↔`MT` + GRCh38 scaffold seed) shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); peak-RSS-informed OOM memory scaling shipped (Unreleased, honest two-tier: own-peak → blind fallback; sibling rescue deferred); walltime-informed `time_limit` scaling shipped (Unreleased, floored at blind — censored realtime, tail-only win + field instrument); **input-format-conversion class's first slice shipped (Unreleased): bgzip'd (non-BGZF) reference FASTA self-heal, sarek-scoped (rnaseq immune by construction), stream-decompress to uncompressed `.fa` + retry; CRAM↔BAM conversion is the deferred second half**; bwa-mem2/classic-BWA build+redirect, assembly-signature + exhaustive per-assembly alias completeness pending) | Unattended-completion rate, corpus fuel |
 | C3 | Biological-plausibility verification | SHIPPED v0.3.0 (germline) + RNA-seq (v0.6.0) + single-cell ingestion (Unreleased) + germline sex-check (Unreleased) + RNA-seq mapping-composition (Unreleased) + germline variant-count (Unreleased) | Verdict gets smarter about biology (germline Ti/Tv, het/hom, sex-check, variant-count band; RNA-seq dup/rRNA + exonic/intronic/unassigned read-composition from RSeQC read_distribution; single-cell cell-QC now *fires* via STARsolo/Cell Ranger ingestion — was a dormant no-op; gene-body-coverage/mito/doublet deferred) |
 | C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased); Strelka2-native VAF, FAIL severity + PON reference wiring deferred | Breadth, depth-first, new corpus |

@@ -47,6 +47,54 @@ All notable changes to Contig are recorded here. The format follows
     capture-aware bands (panel/WES/WGS differ by orders of magnitude), per-sample
     counts for multi-sample VCFs, a dashboard card, and the C6 fold-in.
 
+- **Single-cell RNA-seq cross-tool count concordance** (`contig verify
+  --concordance-sc-counts <matrix>`) (capability C1, single-cell slice — the last wired
+  assay without a concordance axis; named as deferred in every prior C1 list at
+  `CAPABILITY_ROADMAP.md:58,73,117`). A completed `scrnaseq` run's verdict gains a
+  cross-tool corroboration axis: the run's own cell×gene count matrix is corroborated
+  against a user-supplied **second** single-cell matrix from a different quantifier, so a
+  tool-specific quantification error (wrong chemistry, bad barcode whitelist, aligner bias)
+  that passes cell-QC and structural checks but skews the counts is caught. This applies the
+  shipped C1 concordance primitive — already live for germline, bulk RNA-seq, somatic, and
+  annotation — to single-cell for the first time. Slices:
+  - **Dict-based concordance seam (pure refactor).** `verification/count_concordance.py`
+    grew `stats_from_counts(a, b)` and `results_from_counts(a, b, name_a, name_b)` that
+    operate on already-parsed `{gene_id: float}` dicts; the path-based `count_concordance`/
+    `concordance_results` became thin wrappers over them. Behavior-preserving — the RNA-seq
+    concordance path is byte-identical — so the single-cell path can feed **pseudobulk**
+    dicts into the exact same Spearman / fraction-agreeing / shared-gene-floor math.
+  - **Stdlib MatrixMarket loader → per-gene pseudobulk.** A new `verification/
+    sc_count_concordance.py` with `load_mtx_pseudobulk` reads a `matrix.mtx`(.gz) triplet —
+    resolving its sibling `features.tsv`/`barcodes.tsv`(.gz), keying genes by **column 1**
+    of features (10x id/name/type; sole token when single-column), inferring the gene axis
+    by matching the MatrixMarket dimensions against the feature/barcode counts (an ambiguous
+    or mismatched shape → honest error, never an arbitrary transpose) — and **sums each
+    gene's counts across all cells** to `{gene_id: pseudobulk_total}`, feeding the reused
+    core. It is **pure-stdlib** (no `scipy`/`numpy`/`anndata`/`h5py`; the repo's
+    no-new-dependency contract holds). `load_sc_matrix` sniffs by extension: a `.mtx`(.gz)
+    path → the triplet loader, anything else → the existing dense-TSV `parse_count_matrix`,
+    so the second matrix may be a raw triplet **or** a pre-collapsed pseudobulk gene TSV.
+  - **`verify` CLI wiring, contract-faithful.** `--concordance-sc-counts` is mutually
+    exclusive with the other four concordance flags; the primary matrix is located by
+    `rglob("*matrix.mtx*")` **preferring a `filtered/` over a `raw/` copy**, assay-gated to
+    `scrnaseq`. Same honest contract as every concordance slice: **at most WARN, never
+    changes the `contig verify` exit code**, and `unverified` (never a false pass) below the
+    10-shared-gene floor. Every uncomputable path is explicit — a located-but-unparseable
+    matrix (missing sibling, malformed, ambiguous orientation) yields one
+    `sc_count_concordance` **UNVERIFIED**; no `matrix.mtx` at all (e.g. an `.h5ad`-only
+    simpleaf run) prints an honest skip note and emits nothing; a non-`scrnaseq` run skips.
+  - **Honest scope.** Verify-time flag only — additive to the verdict, no new `FailureClass`,
+    model, persisted record, dependency, or exit-code/reproduce-contract change. No raw-read
+    egress (compares gene totals on the user's compute). Research-use corroboration, never a
+    clinical claim. Test-first with synthetic MatrixMarket fixtures — **no real
+    nf-core/scrnaseq, STARsolo, or Cell Ranger run in CI**. **Deferred:** `.h5ad`/AnnData
+    parsing (would add an `anndata`/`h5py` dependency — an `.h5ad`-only run degrades to an
+    honest skip); the second-quantifier **autorun** (`--concordance-sc-counts-auto`, mirroring
+    the RNA-seq kallisto autorun — a second single-cell quantifier's barcode/cell-calling has
+    no clean CI story, so turnkey value waits on it); cell-count and cluster-stability
+    agreement (need a downstream clustering step Contig doesn't run); FAIL severity until the
+    bands are calibrated on real data; and a dashboard "corroborated by" surface.
+
 ## [0.31.0] - 2026-07-12
 
 ### Added

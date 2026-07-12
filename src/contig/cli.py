@@ -81,6 +81,10 @@ from contig.verification.count_concordance import (
     _COUNT_MATRIX_GLOB,
     evaluate_count_concordance,
 )
+from contig.verification.sc_count_concordance import (
+    _SC_MATRIX_GLOB,
+    evaluate_sc_count_concordance,
+)
 from contig.verification.second_caller import (
     SecondCallerError,
     run_bcftools_caller,
@@ -788,6 +792,16 @@ def verify(
         "--index",
         help="Prebuilt kallisto index for --concordance-counts-auto.",
     ),
+    concordance_sc_counts: str = typer.Option(
+        None,
+        "--concordance-sc-counts",
+        help=(
+            "Second single-cell count matrix (a matrix.mtx(.gz) with sibling "
+            "features.tsv/barcodes.tsv, or a dense pseudobulk gene TSV) to corroborate "
+            "an scrnaseq run's own matrix. Corroboration only: at most WARN, never "
+            "changes the exit code."
+        ),
+    ),
 ) -> None:
     """Re-hash a finished run's outputs and report any drift from the record.
 
@@ -812,7 +826,14 @@ def verify(
     second gene-count matrix itself by running a second quantifier (kallisto) and
     corroborates the run against it; the same at-most-WARN, never-changes-exit
     contract applies. --reads and --index are ignored unless --concordance-counts-auto
-    is set. The four concordance flags are mutually exclusive.
+    is set.
+
+    With --concordance-sc-counts, corroborate an scrnaseq run's own count matrix against
+    a second single-cell matrix (a matrix.mtx(.gz) triplet or a dense pseudobulk gene
+    TSV; PRD C1, scrnaseq): both are collapsed to per-gene pseudobulk totals and fed to
+    the same concordance core, under the same at-most-WARN, never-changes-exit contract.
+
+    The five concordance flags are mutually exclusive.
     """
     if not _is_safe_run_id(run_id):
         typer.echo(f"Invalid run id: {run_id!r}", err=True)
@@ -820,13 +841,19 @@ def verify(
     if (
         sum(
             bool(x)
-            for x in (concordance_vcf, concordance_auto, concordance_counts, concordance_counts_auto)
+            for x in (
+                concordance_vcf,
+                concordance_auto,
+                concordance_counts,
+                concordance_counts_auto,
+                concordance_sc_counts,
+            )
         )
         > 1
     ):
         typer.echo(
-            "Choose one of --concordance-vcf, --concordance-auto, --concordance-counts or "
-            "--concordance-counts-auto, not more than one.",
+            "Choose one of --concordance-vcf, --concordance-auto, --concordance-counts, "
+            "--concordance-counts-auto or --concordance-sc-counts, not more than one.",
             err=True,
         )
         raise typer.Exit(code=1)
@@ -850,6 +877,10 @@ def verify(
     elif concordance_counts_auto:
         concordance = _evaluate_run_counts_concordance_auto(
             record, runs_dir, run_id, reads, index
+        )
+    elif concordance_sc_counts:
+        concordance = _evaluate_run_sc_counts_concordance(
+            record, runs_dir, run_id, concordance_sc_counts
         )
     else:
         concordance = None
@@ -1034,6 +1065,56 @@ def _evaluate_run_counts_concordance(
     if primary is None:
         return []
     return evaluate_count_concordance(primary, counts_matrix, assay="rnaseq")
+
+
+def _resolve_primary_sc_matrix(record: RunRecord, runs_dir: str, run_id: str):
+    """Resolve an scrnaseq run's primary count matrix (.mtx), or None with a skip note.
+
+    Gates the run's assay to scrnaseq and finds its primary single-cell count matrix by
+    globbing `_SC_MATRIX_GLOB` under the results dir (a STARsolo/Cell Ranger
+    `matrix.mtx`(.gz) triplet). A non-scrnaseq assay or a missing matrix prints a clear
+    note and returns None (never a crash, never a false pass). When both `filtered/` and
+    `raw/` triplets are present, the filtered matrix is preferred (the analysis-ready
+    cell set); ties are broken by the deterministic sorted first.
+    """
+    assay = assay_for_pipeline(record.pipeline)
+    if assay != "scrnaseq":
+        typer.echo(
+            "Skipping concordance: single-cell count concordance is only defined for "
+            f"scrnaseq today (run {run_id} is {assay or record.pipeline})."
+        )
+        return None
+
+    results_dir = _results_dir_for(record, runs_dir, run_id)
+    matches = sorted(p for p in results_dir.rglob(_SC_MATRIX_GLOB) if p.is_file())
+    if not matches:
+        typer.echo(
+            "Skipping concordance: no single-cell count matrix (matrix.mtx) found "
+            f"for run {run_id}."
+        )
+        return None
+
+    filtered = [p for p in matches if "filtered" in p.parts]
+    if filtered:
+        return filtered[0]
+    return matches[0]
+
+
+def _evaluate_run_sc_counts_concordance(
+    record: RunRecord, runs_dir: str, run_id: str, second: str
+) -> list:
+    """Single-cell count-concordance for an scrnaseq run vs a second matrix, or [].
+
+    Resolves the run's primary single-cell count matrix (gating to scrnaseq) and
+    corroborates it against the provided second matrix (a `.mtx`(.gz) triplet or a dense
+    pseudobulk TSV, sniffed by the loader). A non-scrnaseq assay or a missing primary
+    matrix yields no checks. Returns the QCResult list so the caller surfaces it without
+    changing the exit code.
+    """
+    primary = _resolve_primary_sc_matrix(record, runs_dir, run_id)
+    if primary is None:
+        return []
+    return evaluate_sc_count_concordance(primary, second, assay="scrnaseq")
 
 
 def _evaluate_run_counts_concordance_auto(

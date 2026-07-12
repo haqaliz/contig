@@ -189,13 +189,15 @@ class CountConcordanceStats:
     overlap: float
 
 
-def count_concordance(
-    matrix_a: str | os.PathLike, matrix_b: str | os.PathLike
+def stats_from_counts(
+    a: dict[str, float], b: dict[str, float]
 ) -> CountConcordanceStats:
-    """Compare two count matrices over their shared genes; deterministic, reads only."""
-    a = parse_count_matrix(matrix_a)
-    b = parse_count_matrix(matrix_b)
+    """Compare two already-parsed count dicts over their shared genes.
 
+    The pure-dict seam under `count_concordance`: takes pre-parsed {gene_id: count}
+    maps so a non-TSV source (e.g. a single-cell pseudobulk) can feed the identical,
+    deterministic concordance math without a file round-trip.
+    """
     keys_a = set(a)
     keys_b = set(b)
     shared_keys = keys_a & keys_b
@@ -224,6 +226,13 @@ def count_concordance(
     )
 
 
+def count_concordance(
+    matrix_a: str | os.PathLike, matrix_b: str | os.PathLike
+) -> CountConcordanceStats:
+    """Compare two count matrices over their shared genes; deterministic, reads only."""
+    return stats_from_counts(parse_count_matrix(matrix_a), parse_count_matrix(matrix_b))
+
+
 def concordance_results(
     matrix_a: str | os.PathLike, matrix_b: str | os.PathLike
 ) -> list[QCResult]:
@@ -239,9 +248,27 @@ def concordance_results(
     in the other two. All results carry kind "concordance". Messages name both
     matrices by basename so the comparison is auditable.
     """
-    stats = count_concordance(matrix_a, matrix_b)
-    name_a = Path(matrix_a).name
-    name_b = Path(matrix_b).name
+    return results_from_counts(
+        parse_count_matrix(matrix_a),
+        parse_count_matrix(matrix_b),
+        Path(matrix_a).name,
+        Path(matrix_b).name,
+    )
+
+
+def results_from_counts(
+    a: dict[str, float],
+    b: dict[str, float],
+    name_a: str,
+    name_b: str,
+) -> list[QCResult]:
+    """Emit the three count-concordance checks for two already-parsed count dicts.
+
+    The pure-dict seam under `concordance_results`: same WARN-cap / UNVERIFIED-on-
+    too-few-genes / informational-overlap contract, but keyed off pre-parsed maps and
+    caller-supplied display names so a non-TSV source can reuse the identical checks.
+    """
+    stats = stats_from_counts(a, b)
 
     too_few = stats.shared < _MIN_SHARED_GENES
 

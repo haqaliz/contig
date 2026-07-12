@@ -1632,6 +1632,206 @@ def test_verify_concordance_counts_auto_mutually_exclusive_with_others(tmp_path)
     assert "choose one" in result.output.lower()
 
 
+# --- contig verify --concordance-sc-counts (PRD C1, scrnaseq cross-tool) -------
+# A single-cell run's primary matrix is a STARsolo-style MatrixMarket triplet. We
+# pseudobulk it (sum across cells) into a per-gene total and reuse the concordance
+# core, so the same >= 10-shared-genes floor applies -> use 12 genes.
+_SC_PRIMARY = {f"ENSG{i:05d}": float(10 * (i + 1)) for i in range(12)}
+# Concordant: identical pseudobulk totals -> rho 1.0, all agree -> PASS.
+_SC_CONCORDANT = dict(_SC_PRIMARY)
+# Divergent: same gene ids, totals reversed -> rho -1.0, most disagree -> WARN.
+_SC_DIVERGENT = {
+    gene: count
+    for gene, count in zip(_SC_PRIMARY, reversed(list(_SC_PRIMARY.values())))
+}
+
+
+def _write_triplet(directory, counts, cells=2):
+    """Render a 10x-style MatrixMarket triplet (genes as rows) into `directory`.
+
+    Each gene's whole pseudobulk total is placed in cell 1, so summing across cells
+    reproduces `counts[gene]`. features.tsv is the 10x (id, name, type) 3-column form;
+    barcodes.tsv holds `cells` barcodes.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    genes = list(counts.keys())
+    (directory / "features.tsv").write_text(
+        "".join(f"{g}\t{g}_name\tGene Expression\n" for g in genes)
+    )
+    (directory / "barcodes.tsv").write_text(
+        "".join(f"CELL{i:03d}-1\n" for i in range(cells))
+    )
+    lines = [
+        "%%MatrixMarket matrix coordinate integer general",
+        "% a synthetic single-cell matrix",
+        f"{len(genes)} {cells} {len(genes)}",
+    ]
+    for row, gene in enumerate(genes, start=1):
+        lines.append(f"{row} 1 {counts[gene]}")
+    (directory / "matrix.mtx").write_text("\n".join(lines) + "\n")
+    return directory / "matrix.mtx"
+
+
+def _write_scrnaseq_run_with_matrix(runs_dir, run_id, counts, subpath="filtered"):
+    """An scrnaseq run whose results/ holds a primary STARsolo count-matrix triplet."""
+    from contig.bundle import compute_output_checksums
+
+    run_dir = Path(runs_dir) / run_id
+    results = run_dir / "results"
+    triplet_dir = results / "star" / "S1.Solo.out" / "Gene" / subpath
+    _write_triplet(triplet_dir, counts)
+    record = RunRecord(
+        run_id=run_id,
+        pipeline="nf-core/scrnaseq",  # scrnaseq assay
+        pipeline_revision="4.1.0",
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_checksums={},
+        events=[TaskEvent(process="X", status="COMPLETED", exit=0)],
+        output_checksums=compute_output_checksums(results),
+    )
+    write_bundle(record, run_dir)
+    return run_dir
+
+
+def _write_second_sc_matrix(tmp_path, name, counts):
+    """A second single-cell matrix as its own MatrixMarket triplet; returns the .mtx."""
+    return _write_triplet(tmp_path / name, counts)
+
+
+def _write_second_sc_tsv(tmp_path, name, counts):
+    """A second single-cell matrix as a dense pseudobulk gene TSV (sniff route)."""
+    path = tmp_path / name
+    path.write_text(_counts_tsv(counts))
+    return path
+
+
+def test_verify_concordance_sc_counts_emits_checks(tmp_path):
+    _write_scrnaseq_run_with_matrix(tmp_path, "sc1", _SC_PRIMARY)
+    second = _write_second_sc_matrix(tmp_path, "second_ok", _SC_CONCORDANT)
+
+    ok = runner.invoke(
+        app,
+        ["verify", "sc1", "--runs-dir", str(tmp_path), "--concordance-sc-counts", str(second)],
+    )
+    assert ok.exit_code == 0
+    out = ok.output.lower()
+    assert "spearman_concordance" in out
+    assert "gene_overlap" in out
+    assert "pass" in out
+
+
+def test_verify_concordance_sc_counts_at_most_warn_exit(tmp_path):
+    # The only issue is a divergent (WARN) concordance; outputs are unchanged, so
+    # there is no drift and no signature mismatch -> exit code must stay 0.
+    _write_scrnaseq_run_with_matrix(tmp_path, "sc2", _SC_PRIMARY)
+    second = _write_second_sc_matrix(tmp_path, "second_bad", _SC_DIVERGENT)
+    result = runner.invoke(
+        app,
+        ["verify", "sc2", "--runs-dir", str(tmp_path), "--concordance-sc-counts", str(second)],
+    )
+    assert result.exit_code == 0
+    assert "warn" in result.output.lower()
+
+
+def test_verify_concordance_sc_counts_json_includes_results(tmp_path):
+    _write_scrnaseq_run_with_matrix(tmp_path, "sc3", _SC_PRIMARY)
+    second = _write_second_sc_matrix(tmp_path, "second_ok", _SC_CONCORDANT)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "sc3",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-sc-counts",
+            str(second),
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert "concordance" in data
+    checks = {r["check"] for r in data["concordance"]}
+    assert {"spearman_concordance", "fraction_agreeing", "gene_overlap"} <= checks
+
+
+def test_verify_concordance_sc_counts_non_scrnaseq_skips(tmp_path):
+    # An rnaseq run with --concordance-sc-counts: single-cell concordance is only
+    # defined for scrnaseq, so the command prints a clear skip note, does not crash,
+    # and (with clean outputs) the exit code stays 0.
+    _write_rnaseq_run_with_counts(tmp_path, "rna_sc", _COUNTS_PRIMARY)
+    second = _write_second_sc_matrix(tmp_path, "second_ok", _SC_CONCORDANT)
+    result = runner.invoke(
+        app,
+        ["verify", "rna_sc", "--runs-dir", str(tmp_path), "--concordance-sc-counts", str(second)],
+    )
+    assert result.exit_code == 0
+    assert "scrnaseq" in result.output.lower()
+    assert "spearman_concordance" not in result.output.lower()
+
+
+def test_verify_concordance_sc_counts_mutually_exclusive_with_counts(tmp_path):
+    _write_scrnaseq_run_with_matrix(tmp_path, "sc4", _SC_PRIMARY)
+    second = _write_second_sc_matrix(tmp_path, "second_ok", _SC_CONCORDANT)
+    other = _write_second_counts(tmp_path, "counts.tsv", _COUNTS_CONCORDANT)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "sc4",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-sc-counts",
+            str(second),
+            "--concordance-counts",
+            str(other),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "choose one" in result.output.lower()
+
+
+def test_verify_concordance_sc_counts_second_dense_tsv(tmp_path):
+    # The second matrix may be a dense pseudobulk gene TSV; the loader sniffs by
+    # extension and routes it through parse_count_matrix.
+    _write_scrnaseq_run_with_matrix(tmp_path, "sc5", _SC_PRIMARY)
+    second = _write_second_sc_tsv(tmp_path, "second_pseudobulk.tsv", _SC_CONCORDANT)
+    result = runner.invoke(
+        app,
+        ["verify", "sc5", "--runs-dir", str(tmp_path), "--concordance-sc-counts", str(second)],
+    )
+    assert result.exit_code == 0
+    out = result.output.lower()
+    assert "spearman_concordance" in out
+    assert "pass" in out
+
+
+def test_verify_concordance_sc_counts_prefers_filtered_over_raw(tmp_path):
+    # A run with BOTH raw/ and filtered/ triplets: raw is divergent, filtered is
+    # concordant. The resolver must pick the filtered matrix, so a concordant second
+    # matrix corroborates -> PASS (never WARN from the raw triplet).
+    run_dir = _write_scrnaseq_run_with_matrix(tmp_path, "sc6", _SC_CONCORDANT, subpath="filtered")
+    raw_dir = run_dir / "results" / "star" / "S1.Solo.out" / "Gene" / "raw"
+    _write_triplet(raw_dir, _SC_DIVERGENT)
+    # Re-write the bundle so output_checksums cover the added raw triplet.
+    from contig.bundle import compute_output_checksums
+
+    record = load_bundle(run_dir)
+    record.output_checksums = compute_output_checksums(run_dir / "results")
+    write_bundle(record, run_dir)
+
+    second = _write_second_sc_matrix(tmp_path, "second_ok", _SC_CONCORDANT)
+    result = runner.invoke(
+        app,
+        ["verify", "sc6", "--runs-dir", str(tmp_path), "--concordance-sc-counts", str(second)],
+    )
+    assert result.exit_code == 0
+    out = result.output.lower()
+    assert "spearman_concordance" in out
+    assert "pass" in out
+    assert "warn" not in out
+
+
 # --- contig verify --concordance-auto (PRD C1, second-caller seam) -------------
 # A fake second caller stands in for bcftools so CI never runs the real binary.
 # It writes a recorded second VCF under out_dir and returns that path, exactly the
