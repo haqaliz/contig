@@ -66,6 +66,17 @@ VARIANT_RULE_PACK: list[dict] = [
         "message": "heterozygous/homozygous-alt genotype ratio",
     },
     {
+        # WARN-capped germline count band (see ts_tv_ratio): no fail_*.
+        # warn_above is a SOFT, uncalibrated "absurd-count" tripwire, NOT a
+        # validated ceiling — a very large joint-called cohort tripping it is an
+        # honest "unusually large, check it" WARN, never a block.
+        "check": "variant_count",
+        "metric": "variant_count",
+        "warn_below": 10,
+        "warn_above": 20_000_000,
+        "message": "number of distinct germline variant sites (primary sample)",
+    },
+    {
         "check": "mean_coverage",
         "metric": "mean_coverage",
         "warn_below": 20.0,
