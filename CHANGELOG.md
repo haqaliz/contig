@@ -6,6 +6,58 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Turnkey single-cell cross-tool count concordance autorun** (`contig verify
+  --concordance-sc-counts-auto`) (capability C1, single-cell slice — the autorun follow-on
+  to the user-supplied `--concordance-sc-counts` shipped v0.32.0, mirroring how the germline
+  autorun `--concordance-auto` (v0.4.0) followed `--concordance-vcf` and the RNA-seq kallisto
+  autorun `--concordance-counts-auto` (v0.24.0) followed `--concordance-counts`). Contig now
+  produces the **second** single-cell count matrix itself: given `--reads <sample sheet>`, a
+  prebuilt STAR genome `--index`, and a barcode `--whitelist`, it runs a second, independent
+  single-cell quantifier (**STARsolo**) behind an injectable seam and corroborates the run's
+  own `scrnaseq` count matrix against STARsolo's — no user-produced second matrix required.
+  This is where the single-cell concordance axis gains turnkey value (the v0.32.0 slice
+  acknowledged single-cell users may not have a second matrix on hand). Slices:
+  - A new `verification/sc_count_quantifier.py` mirrors the RNA-seq `count_quantifier.py`
+    seam: an `ScCountQuantifier` type, a pure `starsolo_command` argv builder (asserted in
+    tests, never executed), chemistry presets (`10xv3` default, `10xv2`), a pure
+    `readfiles_order` that pins STARsolo's `(cDNA, CB)` `--readFilesIn` order — the reverse of
+    the sample sheet's `(fastq_1=CB, fastq_2=cDNA)`, the classic STARsolo footgun — and a
+    default `run_starsolo_quantifier` that validates inputs, shells out, locates the Solo
+    `matrix.mtx`, and re-raises every failure (missing binary/reads/index/whitelist, nonzero
+    exit, missing output) as one named `SecondScQuantifierError`. **STARsolo is never run in
+    CI** (the subprocess path is covered only by a manual gate); tests inject a fake
+    quantifier. STARsolo emits gene-level counts natively, so — unlike the kallisto seam —
+    there is **no transcript→gene collapse step**; the returned `matrix.mtx` feeds the
+    **shipped** v0.32.0 `load_sc_matrix` → `evaluate_sc_count_concordance` core unchanged
+    (the scientifically load-bearing pseudobulk collapse is already CI-tested from v0.32.0).
+  - `verify` CLI wiring, contract-faithful: `--concordance-sc-counts-auto` (with new
+    `--whitelist` and `--chemistry` defaulting to `10xv3`; **reuses** `--reads`/`--index`,
+    whose help now names both the kallisto-index and STAR-genome-dir uses) is **mutually
+    exclusive** with the other five concordance flags. The dispatch resolves the run's own
+    primary matrix **first** (assay-gated to `scrnaseq`, `filtered/` over `raw/`) and skips
+    without ever spawning STARsolo when it is absent; then validates the three inputs; then
+    runs the injected-or-default quantifier in a temp dir. Same honest contract as every
+    concordance slice: **at most WARN, never changes the `contig verify` exit code**, and
+    `unverified` (never a false pass) below the 10-shared-gene floor. Every unrunnable path —
+    a non-`scrnaseq` run, a missing `--reads`/`--index`/`--whitelist`, a quantifier failure,
+    or a malformed sample sheet — prints a clear skip note and emits zero checks. The
+    corroboration line **names STARsolo** as the second tool (a backward-compatible
+    `second_name` on `evaluate_sc_count_concordance`; the v0.32.0 user-supplied path is
+    unchanged), rather than an opaque `matrix.mtx vs matrix.mtx`.
+  - **Honest scope.** Verify-time flag only — additive to the verdict, no new `FailureClass`,
+    model, persisted record, dependency, or exit-code/reproduce-contract change. No raw-read
+    egress (STARsolo runs on the user's compute; only gene totals are compared). Research-use
+    corroboration, never a clinical claim. Test-first with synthetic MatrixMarket fixtures and
+    an injected fake quantifier — **no real STARsolo or nf-core/scrnaseq run in CI**.
+    **Deferred:** auto-deriving reads/index/whitelist/chemistry from the run record (Contig
+    persists no chemistry/whitelist/aligner today); cell-count and cluster-stability agreement
+    (need a downstream clustering step Contig doesn't run); FAIL severity until the bands are
+    calibrated on real data (the pseudobulk-washout of benign cross-tool cell-calling
+    divergence is an unproven engineering assumption — hence WARN-only); a dashboard
+    "corroborated by" surface; and `.h5ad`/AnnData second-matrix parsing.
+
 ## [0.32.0] - 2026-07-12
 
 ### Added
