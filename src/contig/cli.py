@@ -1239,7 +1239,9 @@ def _evaluate_run_sc_counts_concordance_auto(
                 f"Skipping concordance: the second quantifier could not run ({exc})."
             )
             return []
-        return evaluate_sc_count_concordance(str(primary), second, assay="scrnaseq")
+        return evaluate_sc_count_concordance(
+            str(primary), second, assay="scrnaseq", second_name="STARsolo"
+        )
 
 
 def _echo_concordance(concordance: list | None) -> None:

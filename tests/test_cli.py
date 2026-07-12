@@ -2396,8 +2396,9 @@ def test_verify_concordance_sc_counts_auto_emits_checks(tmp_path, monkeypatch):
     bad_out = bad.output.lower()
     assert "spearman_concordance" in bad_out
     assert "warn" in bad_out
-    # The concordance line names both matrices under comparison (matrix vs matrix).
-    assert "matrix.mtx" in bad.output
+    # The concordance line names the second tool (STARsolo), not an opaque
+    # "matrix.mtx vs matrix.mtx" — the autorun's whole point is "corroborated by STARsolo".
+    assert "STARsolo" in bad.output
 
 
 def test_verify_concordance_sc_counts_auto_at_most_warn_exit(tmp_path, monkeypatch):
