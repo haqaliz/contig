@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-07-12
+
 ### Added
 
 - **Germline variant-count plausibility — the verdict now catches a grossly-off
