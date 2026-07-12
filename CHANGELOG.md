@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-07-13
+
 ### Added
 
 - **Turnkey single-cell cross-tool count concordance autorun** (`contig verify
@@ -1405,6 +1407,8 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.33.0]: https://github.com/haqaliz/contig/releases/tag/v0.33.0
+[0.32.0]: https://github.com/haqaliz/contig/releases/tag/v0.32.0
 [0.31.0]: https://github.com/haqaliz/contig/releases/tag/v0.31.0
 [0.30.0]: https://github.com/haqaliz/contig/releases/tag/v0.30.0
 [0.29.0]: https://github.com/haqaliz/contig/releases/tag/v0.29.0
