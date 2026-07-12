@@ -1,123 +1,93 @@
-# Understanding — rnaseq-mapping-composition-plausibility (Phase 2 dig)
+# Understanding — feat / scrnaseq-concordance (Phase 2 deep dig)
 
-Source: `_card/issue.md` brief + two read-only dig agents + on-disk real-run inspection.
-Date: 2026-07-11. Worktree baseline: 1452 passed, 1 skipped.
+Grounded in a full code map of the worktree (path:line cited). Read with `_card/issue.md`.
 
 ## What the work is really asking
 
-Add a **C3 biological-plausibility** signal for the RNA-seq assay that measures where
-aligned reads fall relative to gene annotation — the **exonic / intronic** read-fraction
-composition — and surfaces it as a WARN-capped verdict check. Low exonic fraction (or
-high intronic) is a classic smell for genomic-DNA contamination, failed poly-A / rRNA
-depletion, or a broken annotation, and no incumbent issues this as a correctness signal.
-It is the "exonic-mapping fraction" item named but unbuilt in the C3 RNA-seq list
-(`CAPABILITY_ROADMAP.md:397`) and explicitly deferred by the v0.6.0 rnaseq slice
-(`docs/planning/rnaseq-plausibility/prd.md:93`).
+Extend the shipped cross-tool concordance primitive (capability C1) to the `scrnaseq`
+assay — the last assay without it. A user supplies a **second** single-cell count matrix
+(from a different quantifier); Contig corroborates the run's own matrix against it and
+adds a WARN-capped `kind="concordance"` axis to the verdict. Same honest contract as the
+four shipped concordance slices: **at most WARN, never changes the `verify` exit code,
+`unverified` (never a false pass) below a shared-gene floor.**
 
-## The feasibility fork — RESOLVED (this was the caveat to dig first)
+## The central technical finding (drives the whole design)
 
-The brief flagged one load-bearing question: is the composition signal reachable from a
-default Contig rnaseq run, and via MultiQC or a dedicated parser? **Resolved by inspecting
-real runs on disk (`runs/testpass2`, `runs/test-2026-06-21T22-18-14-239Z`):**
+The concordance **core is reusable**; the **parser is not**.
 
-1. **The RSeQC `read_distribution` artifact IS produced by default** at
-   `results/star_salmon/rseqc/read_distribution/<sample>.read_distribution.txt`
-   on nf-core/rnaseq@3.26.0 (the pinned revision, `registry.py:15-16`). Confirmed on 4+
-   real runs. So no launch-param change is needed to make the artifact exist.
-2. **The composition fractions do NOT reach Contig's MultiQC ingest.** Contig reads only
-   `report_general_stats_data` from `multiqc_data.json` (`qc_ingest.py:7`). A real run's
-   general-stats block has 11 metric keys, **none** exonic/intronic/CDS/tag-related, and
-   there is no read-distribution section Contig parses. Extending the existing
-   MultiQC-fed `RNASEQ_PLAUSIBILITY_PACK` path would therefore only ever emit UNVERIFIED.
+- **Reusable unchanged** (`verification/count_concordance.py:192-306`): `count_concordance()`
+  → `CountConcordanceStats(shared, rho, fraction_agreeing, overlap)`, the hand-rolled
+  stdlib `_spearman`/`_rank`/`_pearson` (148-162), `_agrees` 10% tolerance (165-171), the
+  shared-gene floor `_MIN_SHARED_GENES=10` (43), and `concordance_results()` which emits the
+  three QCResults — `spearman_concordance` (WARN < 0.90), `fraction_agreeing` (WARN < 0.90),
+  `gene_overlap` (informational, always PASS). All `kind="concordance"`, all WARN-capped.
+  It operates on any `dict[str, float]` = `{gene_id: total}`.
+- **NOT reusable** (`count_concordance.py:80-112`): `parse_count_matrix` assumes a **dense
+  gene×sample TSV** (first col = gene id, sums remaining numeric columns). Single-cell
+  matrices are **sparse MatrixMarket `.mtx`(.gz)** with sibling `features.tsv`/`barcodes.tsv`,
+  and/or **AnnData `.h5ad`**. Feeding an `.mtx` to `parse_count_matrix` yields garbage.
+- **No single-cell matrix parser exists anywhere in the repo** (confirmed: no `read_mtx`,
+  `scipy`, `h5py`, `anndata`). The scrnaseq matrix is referenced only *structurally* —
+  `structural.py:262-264` requires `*.h5ad` + `*matrix.mtx*` for presence, never parsed.
+- **Dependency constraint:** the module is pure-stdlib by contract ("No scipy/numpy",
+  `count_concordance.py:152`). A `.mtx` triplet reader **can stay stdlib-only**; `.h5ad`
+  parsing would pull in `anndata`/`h5py` — a new dependency the repo avoids.
 
-**Decision: dedicated stdlib parser of the RSeQC artifact** — exactly the shipped
-fires-slice pattern (methylseq/ampliseq/mag). The caveat from the handoff is retired
-favorably: the artifact is default-present, so the check will genuinely fire, not no-op.
+**Conclusion:** the slice = a new stdlib **`.mtx`-triplet loader** that sums counts across
+cells to a per-gene pseudobulk `{gene_id: float}` (mapping matrix rows→gene ids via
+`features.tsv`), then feeds the *unchanged* concordance core. `.h5ad`-only inputs degrade to
+an honest skip/UNVERIFIED (deferred until a stdlib-safe reader or an accepted dep exists).
 
-## The real read_distribution.txt format (from a run on disk)
+## Affected code (confirmed by the map)
 
-```
-Total Reads                   142111
-Total Tags                    146154
-Total Assigned Tags           129802
-=====================================================================
-Group               Total_bases         Tag_count           Tags/Kb
-CDS_Exons           146030              129779              888.71
-5'UTR_Exons         0                   0                   0.00
-3'UTR_Exons         0                   0                   0.00
-Introns             530                 23                  43.31
-TSS_up_1kb          43552               0                   0.00
-TSS_up_5kb          76907               0                   0.00
-TSS_up_10kb         89031               0                   0.00
-TES_down_1kb        40737               0                   0.00
-TES_down_5kb        81271               0                   0.00
-TES_down_10kb       97060               0                   0.00
-=====================================================================
-```
-(This is the nf-core rnaseq yeast test profile — CDS-dominated, expected.)
+- **CLI `verify`** (`cli.py:746-791` flags, `820-832` mutual-exclusion sum, `842-855` branch
+  dispatch, `857-904` result injection + exit code). Exit is driven ONLY by output drift
+  (`result["ok"]`) and `sig_bad`; concordance is surfaced (`result["concordance"]`,
+  `_echo_concordance` 1080-1087) but **never feeds the exit code** — asserted in
+  `tests/test_cli.py:1541`. To mirror: add a flag near cli.py:780, add to the exclusion tuple
+  at 823, add an `elif` at ~853, write `_evaluate_run_sc_counts_concordance` +
+  `_resolve_primary_sc_matrix` modeled on `cli.py:993-1036`.
+- **Primary-matrix locator:** new helper mirroring `_resolve_primary_counts` (`cli.py:993-1020`)
+  — assay-gate to `scrnaseq` via `assay_for_pipeline(record.pipeline)` (`registry.py:62-63`),
+  `results_dir.rglob("*matrix.mtx*")`, resolve sibling `features.tsv`/`barcodes.tsv`, else skip
+  note → `None`.
+- **Concordance module:** either add `"scrnaseq"` to `_COUNT_CONCORDANCE_ASSAYS`
+  (`count_concordance.py:47`) OR a parallel `evaluate_sc_count_concordance` entry point — the
+  latter is cleaner because `evaluate_count_concordance` hardwires the dense `parse_count_matrix`.
+  New parser likely lives in a new `verification/sc_count_concordance.py` (or added to
+  `count_concordance.py`) reusing the core.
+- **QCResult / QCStatus / QCKind** (`models.py:55/64/67-75`): `kind="concordance"` already
+  exists; `overall_verdict` (78-96) is not called by verify on concordance — reuse as-is.
 
-**Metric computation (over the `Tag_count` column):**
-- `exonic_fraction` = (CDS_Exons + 5'UTR_Exons + 3'UTR_Exons) / **Total Assigned Tags** —
-  the mRNA-enrichment signal. WARN **below** a lenient threshold.
-- `intronic_fraction` = Introns / Total Assigned Tags — WARN **above** a lenient threshold
-  (pre-mRNA / gDNA contamination). Candidate; may ship informational.
-- **TSS_up_/TES_down_ bins are nested & overlapping windows (1kb ⊂ 5kb ⊂ 10kb)** — they
-  must NOT be summed into an "intergenic" number (double-counts). A clean intergenic-ish
-  signal, if wanted, is the *unassigned* fraction: `(Total Tags − Total Assigned Tags) /
-  Total Tags`. This is a PRD decision (see open questions).
+## Test approach (mirror exactly)
 
-## How it wires in (from the code dig)
+- Module tests `tests/verification/test_count_concordance.py` — real `tmp_path` files, no
+  mocks/network. New: `tests/verification/test_sc_count_concordance.py` with synthetic
+  MatrixMarket fixtures (tiny `matrix.mtx` + `features.tsv` + `barcodes.tsv` written as text).
+- CLI tests `tests/test_cli.py:1477-1624` — `_write_*_run_with_*` + `_write_second_*` +
+  `runner.invoke(app, ["verify", ...])`. New: write a scrnaseq `RunRecord`
+  (`pipeline="nf-core/scrnaseq"`) with a `results/…/matrix.mtx` triplet, a second triplet, and
+  assert emits/at-most-warn-exit/json/non-scrnaseq-skip/mutual-exclusion.
+- **No real nf-core/scrnaseq run in CI** — hard rule.
 
-- **New parser** `src/contig/verification/rnaseq_metrics.py`: stdlib-only, pure,
-  `parse_read_distribution(path) -> dict[str, float]` returning `{exonic_fraction: …,
-  intronic_fraction: …}`; omit any metric it can't compute (never coerce to 0); guard
-  `Total Assigned Tags == 0`. Mirrors `methylseq_metrics.py` (one file → one sample).
-- **New locator** `_locate_rnaseq_composition_qc(run_dir)` in `runner.py`: rglob
-  `*.read_distribution.txt`, derive sample id by stripping the `.read_distribution` suffix,
-  return `{sample: {slug: value}}`; a located-but-unparseable file → empty dict for that
-  sample (→ explicit UNVERIFIED at the gate).
-- **New gate block** in `runner._discover_qc` (`runner.py`, alongside the existing
-  `assay == "rnaseq"` plausibility gate at `:347-349`), copied from the methylseq template
-  (`runner.py:385-400`): evaluate `RNASEQ_COMPOSITION_PACK` when metrics present, else emit
-  one `rnaseq_composition_qc:<sample>` UNVERIFIED. **No artifact at all → silent skip**
-  (structural QC owns genuinely-missing outputs; read_distribution is not in the rnaseq
-  structural manifest, `structural.py:245-249`, and must stay out of it).
-- **New rule pack** `RNASEQ_COMPOSITION_PACK` in `rule_pack.py`, WARN-capped (no `fail_*`),
-  **not** registered in `_RULE_PACKS` (matches the other plausibility packs).
-- **`rnaseq` stays OUT of `_DEDICATED_METRIC_ASSAYS`** (`runner.py:67`): the existing
-  `RNASEQ_RULE_PACK` alignment/assignment checks still need the generic MultiQC path
-  (`runner.py:245-248`). The new gate is purely additive.
-- **Tests**: `tests/verification/test_rnaseq_metrics.py` (inline-string fixtures via a
-  local `_write(tmp_path,…)` helper, plain text — the house style) + a committed realistic
-  `tests/fixtures/rnaseq/<sample>.read_distribution.txt` (new dir; author from a real run,
-  sanitized) + gate assertions in `tests/verification/test_run_qc.py`. **No real nf-core
-  run in CI.**
+## Open questions for the interview (product decisions the code can't resolve)
 
-## Honest contract (matches every sibling C3 slice)
-- WARN-capped bands, uncalibrated engineering defaults, **no FAIL** until real-data
-  calibration. UNVERIFIED (never a false pass) when the artifact/metric is absent.
-- Additive to the verdict only: no new `FailureClass`, model, persisted-record, or
-  dependency; no exit-code change; `eval-guard`/`heal-guard` baselines untouched.
-- Local, deterministic, **no raw-read egress** (parses a small QC text file already on the
-  user's compute).
+1. **Second-matrix input shape.** A single-cell matrix is a 3-file triplet, awkward as one CLI
+   arg. Options: (a) a **directory** holding `matrix.mtx`+`features.tsv`+`barcodes.tsv`;
+   (b) the `matrix.mtx` path with siblings auto-resolved; (c) also accept a pre-collapsed
+   **dense pseudobulk gene TSV** (reuses `parse_count_matrix`). Recommendation: accept a
+   `.mtx` path (siblings auto-resolved) **and** a dense `.tsv` (sniff by extension) — max reuse,
+   least user burden.
+2. **`.h5ad` handling.** Defer (skip/UNVERIFIED with an honest note) to keep stdlib-only, no
+   `anndata`/`h5py` dep? Recommendation: yes, defer — `.mtx` first slice.
+3. **Metric = pseudobulk gene-level Spearman + fraction-agreeing** (reuse core), deferring
+   cell-count and cluster-stability agreement (need cell-calling/clustering Contig doesn't run).
+   Confirm this is the accepted first-slice metric.
+4. **Flag name:** `--concordance-counts-sc` (brief) vs `--concordance-sc-counts` (reads better
+   next to `--concordance-counts`). Cosmetic.
 
 ## Guardrail check (CLAUDE.md)
-Squarely Layer-2 verify-layer work ("make every verdict harder to fool"). Not Layer-1.
-No wet-lab/clinical credentials. Research-use sanity signal, never a clinical judgement.
-**No drift detected.**
 
-## Open questions for the requirements interview
-1. **Metric set.** Ship `exonic_fraction` alone (tightest, clearest), or also
-   `intronic_fraction` and/or the `unassigned_fraction` intergenic-ish signal? Which get
-   WARN bands vs. informational-only?
-2. **Denominator.** Total Assigned Tags (excludes off-annotation) vs. Total Tags. Exonic
-   over Assigned is the cleaner enrichment ratio; Total Tags folds in the unassigned smell.
-3. **Band values.** Lenient defaults so a normal run reads PASS — e.g. `exonic_fraction`
-   warn_below ~0.50? These are uncalibrated; state them as engineering defaults.
-4. **Multi-sample.** read_distribution is one-file-per-sample; confirm per-sample checks
-   (like the other packs) with no cross-sample aggregation this slice.
-5. **Naming.** Check names (`exonic_fraction`, …) and the located-but-empty UNVERIFIED key
-   (`rnaseq_composition_qc:<sample>`).
-6. **Scope guard.** Gene-body-coverage evenness stays deferred (needs the non-default
-   `geneBody_coverage` module); FAIL severity deferred to real-data calibration; no
-   dashboard card this slice unless trivial.
+On-thesis Layer-2 verification depth. No Layer-1 drift. No raw-read egress (compares gene
+totals on the user's compute). No over-claiming (WARN-capped, UNVERIFIED-never-PASS). Test-first.
+No new dependency in the first slice (stdlib `.mtx` reader).
