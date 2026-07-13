@@ -253,6 +253,14 @@ def evaluate_somatic_plausibility(
 
     for rule in SOMATIC_PLAUSIBILITY_PACK:
         metric = rule["metric"]
+        # SOMATIC_PLAUSIBILITY_PACK is shared with the Strelka2 evaluator
+        # (strelka_vaf.evaluate_strelka_vaf_plausibility), whose
+        # strelka_median_vaf rule this evaluator does not track in by_metric --
+        # skip any rule this evaluator has no metric for, rather than KeyError
+        # or (worse) emitting a spurious unverified check for a metric it never
+        # attempted to compute.
+        if metric not in by_metric:
+            continue
         if by_metric[metric] is None:
             results.append(
                 QCResult(

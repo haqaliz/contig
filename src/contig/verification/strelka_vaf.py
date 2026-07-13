@@ -25,6 +25,9 @@ import os
 import statistics
 from pathlib import Path
 
+from contig.models import QCResult
+from contig.verification.rule_pack import SOMATIC_PLAUSIBILITY_PACK, evaluate
+
 _ACGT = frozenset("ACGT")
 
 
@@ -200,3 +203,66 @@ def strelka_median_vaf(
     vafs, tumor_found = read_strelka_vafs(snv_path=snv_path, indel_path=indel_path)
     median = statistics.median(vafs) if vafs else None
     return median, tumor_found
+
+
+def evaluate_strelka_vaf_plausibility(
+    snv_vcf: str | os.PathLike | None = None,
+    indel_vcf: str | os.PathLike | None = None,
+    sample: str | None = None,
+) -> list[QCResult]:
+    """Evaluate the Strelka2 tumor-VAF plausibility rule, capped at WARN.
+
+    Computes the pooled ``strelka_median_vaf`` (see ``strelka_median_vaf``), then
+    runs it through the shared ``rule_pack.evaluate()`` against
+    ``SOMATIC_PLAUSIBILITY_PACK`` -- the same pack the Mutect2
+    ``evaluate_somatic_plausibility`` uses -- so band logic and
+    "<check>:<sample>" naming stay single-sourced across both callers.
+
+    ``evaluate()`` skips any rule whose metric key is absent from the sample
+    dict it is given (see rule_pack.evaluate), so the ``by_metric`` dict passed
+    here contains ONLY ``strelka_median_vaf``. That means this call emits
+    exactly the ``strelka_median_vaf`` rule and never re-emits Mutect2's
+    ``median_vaf``/``somatic_variant_count`` rules, even though all three share
+    ``SOMATIC_PLAUSIBILITY_PACK``.
+
+    A ``None`` median (no derivable tumor VAF -- e.g. no literal ``TUMOR``
+    column found, or no record yielded a usable tier-count ratio) is not
+    silently skipped: it produces one explicit "unverified" QCResult (no
+    severity, so it can never read as a pass), mirroring
+    ``evaluate_somatic_plausibility``'s None-handling loop.
+
+    Every emitted message names Strelka2 as the source caller (PRD S1), so the
+    verdict surface can tell this metric apart from the Mutect2 ``median_vaf``
+    metric even though both check tumor VAF plausibility.
+
+    The sample label is ``sample`` if given, else the literal ``TUMOR`` column
+    name when one was found in either VCF, else ``"sample"``.
+    """
+    median, tumor_found = strelka_median_vaf(snv_vcf, indel_vcf)
+    label = sample or ("TUMOR" if tumor_found else None) or "sample"
+
+    by_metric = {"strelka_median_vaf": median}
+    computable = {
+        metric: value for metric, value in by_metric.items() if value is not None
+    }
+
+    results = [
+        result.model_copy(update={"message": f"Strelka2: {result.message}"})
+        for result in evaluate({label: computable}, SOMATIC_PLAUSIBILITY_PACK)
+    ]
+
+    if median is None:
+        results.append(
+            QCResult(
+                check=f"strelka_median_vaf:{label}",
+                status="unverified",
+                message=(
+                    f"Strelka2: {label}: strelka_median_vaf could not be computed "
+                    "(no derivable tumor VAF)"
+                ),
+                value=None,
+                kind="metric",
+            )
+        )
+
+    return results

@@ -17,6 +17,7 @@ import gzip
 import pytest
 
 from contig.verification.strelka_vaf import (
+    evaluate_strelka_vaf_plausibility,
     read_strelka_vafs,
     strelka_median_vaf,
 )
@@ -179,3 +180,100 @@ def test_median_none_when_empty(tmp_path):
 
     assert median is None
     assert tumor_found is False
+
+
+# --- Phase 2: evaluate_strelka_vaf_plausibility -----------------------------
+
+
+def test_in_band_median_passes(tmp_path):
+    # Pooled median 0.30 (see test_pooled_median_exact), squarely inside
+    # [0.05, 0.95] -> a single "pass" QCResult, and ONLY the strelka rule fires
+    # (never Mutect2's median_vaf/somatic_variant_count, which share the same
+    # SOMATIC_PLAUSIBILITY_PACK).
+    recs = [
+        _snv_rec("chr1", 100, "C", "A", "6,7:14,15:0,0:0,0"),  # 0.30
+    ]
+    vcf = _write(tmp_path / "snv.vcf", _snv_header(), recs)
+
+    results = evaluate_strelka_vaf_plausibility(snv_vcf=vcf)
+
+    assert len(results) == 1
+    result = results[0]
+    assert result.check == "strelka_median_vaf:TUMOR"
+    assert result.status == "pass"
+    assert result.value == pytest.approx(0.30)
+    assert result.kind == "metric"
+
+
+def test_out_of_band_warns_never_fails(tmp_path):
+    # tumor AU=99,99 CU=1,1 -> VAF = 99/(1+99) = 0.99, above warn_above=0.95.
+    recs = [_snv_rec("chr1", 100, "C", "A", "99,99:1,1:0,0:0,0")]
+    vcf = _write(tmp_path / "snv.vcf", _snv_header(), recs)
+
+    results = evaluate_strelka_vaf_plausibility(snv_vcf=vcf)
+
+    assert len(results) == 1
+    result = results[0]
+    assert result.check == "strelka_median_vaf:TUMOR"
+    assert result.status == "warn"
+    assert result.status != "fail"
+    assert result.value == pytest.approx(0.99)
+
+
+def test_uncomputable_is_unverified(tmp_path):
+    # No literal TUMOR column -> median is None -> a single "unverified"
+    # QCResult with value None, never emitted as a Mutect2-named check.
+    header = (
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tNORMAL\n"
+    )
+    recs = [
+        "chr1\t100\t.\tC\tA\t.\tPASS\t.\tAU:CU:GU:TU\t6,7:14,15:0,0:0,0\n",
+    ]
+    vcf = _write(tmp_path / "snv.vcf", header, recs)
+
+    results = evaluate_strelka_vaf_plausibility(snv_vcf=vcf)
+
+    assert len(results) == 1
+    result = results[0]
+    assert result.check == "strelka_median_vaf:sample"
+    assert result.status == "unverified"
+    assert result.value is None
+    assert result.kind == "metric"
+
+
+def test_message_names_strelka2(tmp_path):
+    # S1: the message names Strelka2 as the source caller, in both the
+    # computed (pass/warn) and uncomputable (unverified) branches.
+    recs = [_snv_rec("chr1", 100, "C", "A", "6,7:14,15:0,0:0,0")]  # 0.30
+    vcf = _write(tmp_path / "snv.vcf", _snv_header(), recs)
+    computed = evaluate_strelka_vaf_plausibility(snv_vcf=vcf)
+    assert "Strelka2" in computed[0].message
+
+    uncomputable = evaluate_strelka_vaf_plausibility()
+    assert "Strelka2" in uncomputable[0].message
+
+
+def test_evaluator_never_emits_mutect2_checks(tmp_path):
+    # Belt-and-suspenders on the top risk called out in the brief: no result's
+    # check is ever a median_vaf:* or somatic_variant_count:* (the Mutect2
+    # rules sharing SOMATIC_PLAUSIBILITY_PACK).
+    recs = [_snv_rec("chr1", 100, "C", "A", "6,7:14,15:0,0:0,0")]
+    vcf = _write(tmp_path / "snv.vcf", _snv_header(), recs)
+
+    results = evaluate_strelka_vaf_plausibility(snv_vcf=vcf)
+
+    for result in results:
+        assert not result.check.startswith("median_vaf:")
+        assert not result.check.startswith("somatic_variant_count:")
+        assert result.check.startswith("strelka_median_vaf:")
+
+
+def test_sample_label_override(tmp_path):
+    recs = [_snv_rec("chr1", 100, "C", "A", "6,7:14,15:0,0:0,0")]
+    vcf = _write(tmp_path / "snv.vcf", _snv_header(), recs)
+
+    results = evaluate_strelka_vaf_plausibility(snv_vcf=vcf, sample="patient42")
+
+    assert len(results) == 1
+    assert results[0].check == "strelka_median_vaf:patient42"
