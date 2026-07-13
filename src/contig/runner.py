@@ -55,8 +55,12 @@ from contig.verification.scrnaseq_metrics import (
     parse_cellranger_metrics,
     parse_starsolo_summary,
 )
-from contig.verification.somatic_concordance import evaluate_somatic_concordance_from_run
+from contig.verification.somatic_concordance import (
+    evaluate_somatic_concordance_from_run,
+    select_caller_vcfs,
+)
 from contig.verification.somatic_plausibility import evaluate_somatic_plausibility
+from contig.verification.strelka_vaf import evaluate_strelka_vaf_plausibility
 from contig.verification.run_qc import evaluate_run_qc
 from contig.verification.sex_plausibility import evaluate_sex_plausibility
 from contig.verification.structural import evaluate_structural, manifest_for
@@ -365,6 +369,42 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
             # reuses the same globbed VCF list but self-selects both callers'
             # files and skips cleanly (or reports UNVERIFIED) on its own terms.
             results.extend(evaluate_somatic_concordance_from_run(run_dir, vcfs))
+            # Strelka2 tumor-VAF plausibility (capability C4 follow-on, PRD S1):
+            # mirrors the Mutect2 median_vaf gate above, but sourced from
+            # Strelka2's own tier-count VAF definition (AU/CU/GU/TU for SNVs,
+            # TAR/TIR for indels), since Strelka2 emits no AF/AD FORMAT field.
+            # Reuses select_caller_vcfs -- the same locator the concordance
+            # wiring above uses -- so a "strelka" caller directory is resolved
+            # once, the same way, everywhere. A uniquely-resolved pair yields
+            # exactly the strelka file list (never mutect2's), split into its
+            # SNV and indel halves by filename (sarek names them
+            # `*.somatic_snvs*` / `*.somatic_indels*`). No strelka VCF at all
+            # -> emit nothing (structural QC already owns a missing required
+            # output). A strelka VCF present but the layout is non-unique or
+            # mismatched with Mutect2's pair (the same condition
+            # select_caller_vcfs flags for concordance) -> one honest
+            # UNVERIFIED, never a silent pass and never an arbitrary pick.
+            _, strelka, strelka_reason = select_caller_vcfs(run_dir, vcfs)
+            if strelka:
+                snv = next((p for p in strelka if "snv" in p.name.lower()), None)
+                indel = next((p for p in strelka if "indel" in p.name.lower()), None)
+                results.extend(evaluate_strelka_vaf_plausibility(snv, indel))
+            elif strelka_reason is not None and any(
+                "strelka" in {part.lower() for part in p.relative_to(run_dir).parts}
+                for p in vcfs
+            ):
+                results.append(
+                    QCResult(
+                        check="strelka_median_vaf",
+                        status="unverified",
+                        message=(
+                            "no unique Strelka2 tumor-normal pair found to assess "
+                            f"VAF distribution: {strelka_reason}"
+                        ),
+                        value=None,
+                        kind="metric",
+                    )
+                )
     # RNA-seq biological-plausibility checks (capability C3, RNA-seq slice, Phase 3).
     # Gated: only when the assay is rnaseq AND a MultiQC report was found. One extra
     # parse of the same JSON is intentional — mirrors the germline path independently
