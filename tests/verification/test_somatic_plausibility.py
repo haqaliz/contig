@@ -314,6 +314,17 @@ def test_sample_label_is_tumor_name(tmp_path):
     assert any(r.check == "median_vaf:TUMOR" for r in results)
 
 
+def test_tumor_path_emits_no_normal_median_vaf_check(tmp_path):
+    # evaluate_somatic_plausibility (the tumor path) shares SOMATIC_PLAUSIBILITY_PACK
+    # with the swap evaluator's normal_median_vaf rule, but never computes that
+    # metric -- lock in that it never emits a normal_median_vaf check either.
+    vcf = _write(tmp_path / "a.vcf", _header(), _recs_with_af(0.30, 12))
+
+    results = evaluate_somatic_plausibility(vcf)
+
+    assert not any(r.check.startswith("normal_median_vaf") for r in results)
+
+
 def test_sample_label_falls_back_when_unidentifiable(tmp_path):
     # No ##tumor_sample= header -> tumor unidentifiable -> label "sample".
     recs = [_rec("chr1", 100, "A", "G", "0/1:0.30:14,6:20")]
@@ -427,6 +438,8 @@ def test_swap_check_high_normal_warns(tmp_path):
     check = _swap_check(results)
     assert check.status == "warn"
     assert "swap" in check.message.lower()
+    assert "mislabel" in check.message.lower()
+    assert "contamination" in check.message.lower()
 
 
 def test_swap_check_unverified_when_no_normal_sample_header(tmp_path):

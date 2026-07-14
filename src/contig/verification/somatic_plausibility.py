@@ -434,8 +434,8 @@ def evaluate_swap_plausibility(
         result.model_copy(
             update={
                 "message": (
-                    "normal-sample VAF (tumor/normal swap check): "
-                    f"{result.message}"
+                    "normal-sample VAF (high => possible tumor/normal swap, "
+                    f"mislabel, or contamination): {result.message}"
                 )
             }
         )
