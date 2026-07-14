@@ -311,6 +311,20 @@ SOMATIC_PLAUSIBILITY_PACK: list[dict] = [
         "warn_above": 100000,
         "message": "number of somatic variant records called",
     },
+    {   # Strelka2's own tier1-count VAF (see strelka_vaf.py), NOT the Mutect2
+        # AF/AD-DP metric above. Reuses median_vaf's band verbatim: same
+        # uncalibrated engineering default, shared across both callers rather
+        # than re-derived, WARN-capped (no fail_*). Evaluated by its own
+        # evaluate_strelka_vaf_plausibility() over a by_metric dict containing
+        # ONLY this key, so this rule fires without ever re-emitting the two
+        # Mutect2 rules above (evaluate() skips any rule whose metric is absent
+        # from the sample dict).
+        "check": "strelka_median_vaf",
+        "metric": "strelka_median_vaf",
+        "warn_below": 0.05,
+        "warn_above": 0.95,
+        "message": "median tumor variant allele fraction (Strelka2 tier1 counts)",
+    },
 ]
 
 

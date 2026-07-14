@@ -591,6 +591,129 @@ def test_discover_qc_no_somatic_concordance_for_rnaseq_assay(tmp_path):
     assert not any(r.check == "somatic_site_overlap" for r in results)
 
 
+# --- Strelka2 VAF-plausibility runner gate (Phase 3) -------------------------
+#
+# Reuses select_caller_vcfs (Phase 2's locator, same one the concordance gate
+# above uses) to resolve the Strelka2 SNV+indel pair; additive to, and
+# independent of, the Mutect2 median_vaf gate and the cross-caller concordance
+# gate above.
+
+_STRELKA_HEADER = (
+    "##fileformat=VCFv4.2\n"
+    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tNORMAL\tTUMOR\n"
+)
+
+
+def _write_strelka_snv_vcf_gz(path, rows):
+    """rows: (chrom, pos, ref, alt, tumor_AU_CU_GU_TU) tuples -- real tier FORMAT
+    (AU:CU:GU:TU) so strelka_median_vaf actually computes a VAF."""
+    body = "".join(
+        f"{c}\t{p}\t.\t{r}\t{a}\t.\tPASS\t.\tAU:CU:GU:TU\t0,0:0,0:0,0:0,0\t{t}\n"
+        for (c, p, r, a, t) in rows
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(gzip.compress((_STRELKA_HEADER + body).encode()))
+    return path
+
+
+def _write_strelka_indel_vcf_gz(path, rows):
+    """rows: (chrom, pos, ref, alt, tumor_TAR_TIR) tuples -- real tier FORMAT
+    (TAR:TIR) so strelka_median_vaf actually computes a VAF."""
+    body = "".join(
+        f"{c}\t{p}\t.\t{r}\t{a}\t.\tPASS\t.\tTAR:TIR\t0,0:0,0\t{t}\n"
+        for (c, p, r, a, t) in rows
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(gzip.compress((_STRELKA_HEADER + body).encode()))
+    return path
+
+
+def test_somatic_run_emits_both_vaf_metrics(tmp_path):
+    # A two-caller run (Mutect2 + a unique Strelka2 SNV+indel pair) gets BOTH
+    # the Mutect2 median_vaf check and the strelka_median_vaf check.
+    run_dir = tmp_path / "run"
+    _write_somatic_vcf_gz(
+        run_dir / "results" / "variant_calling" / "mutect2" / "T_vs_N" / "x.vcf.gz"
+    )
+    _write_strelka_snv_vcf_gz(
+        run_dir
+        / "results"
+        / "variant_calling"
+        / "strelka"
+        / "T_vs_N"
+        / "T_vs_N.strelka.somatic_snvs.vcf.gz",
+        [("chr1", 100, "C", "A", "6,7:14,15:0,0:0,0")],  # 6/(14+6) = 0.30
+    )
+    _write_strelka_indel_vcf_gz(
+        run_dir
+        / "results"
+        / "variant_calling"
+        / "strelka"
+        / "T_vs_N"
+        / "T_vs_N.strelka.somatic_indels.vcf.gz",
+        [("chr1", 300, "AT", "A", "18,20:2,3")],  # 2/(18+2) = 0.10
+    )
+
+    results = _discover_qc(run_dir, assay="somatic_variant_calling")
+    checks = [r.check for r in results]
+
+    assert any(c.startswith("median_vaf") for c in checks)
+    assert any(c.startswith("strelka_median_vaf") for c in checks)
+    strelka_result = next(r for r in results if r.check.startswith("strelka_median_vaf"))
+    assert strelka_result.status == "pass"
+    # pooled median of [0.30 (snv), 0.10 (indel)] = 0.20
+    assert strelka_result.value == pytest.approx(0.20)
+
+
+def test_somatic_run_no_strelka_skips_silently(tmp_path):
+    # Mutect2 only, no strelka dir at all -> no strelka_median_vaf result is
+    # emitted (structural QC already owns a missing required output), and the
+    # Mutect2 metric is untouched.
+    run_dir = tmp_path / "run"
+    _write_somatic_vcf_gz(
+        run_dir / "results" / "variant_calling" / "mutect2" / "T_vs_N" / "x.vcf.gz"
+    )
+
+    results = _discover_qc(run_dir, assay="somatic_variant_calling")
+    checks = [r.check for r in results]
+
+    assert not any(c.startswith("strelka_median_vaf") for c in checks)
+    assert any(c.startswith("median_vaf") for c in checks)
+
+
+def test_somatic_run_nonunique_strelka_is_unverified(tmp_path):
+    # A multi-tumor-pair Strelka2 layout (the shape select_caller_vcfs flags as
+    # ambiguous) -> one strelka_median_vaf UNVERIFIED, never a silent skip and
+    # never an arbitrary pick of one pair.
+    run_dir = tmp_path / "run"
+    for pair in ("T1_vs_N", "T2_vs_N"):
+        _write_strelka_snv_vcf_gz(
+            run_dir
+            / "results"
+            / "variant_calling"
+            / "strelka"
+            / pair
+            / f"{pair}.strelka.somatic_snvs.vcf.gz",
+            [("chr1", 100, "C", "A", "6,7:14,15:0,0:0,0")],
+        )
+        _write_strelka_indel_vcf_gz(
+            run_dir
+            / "results"
+            / "variant_calling"
+            / "strelka"
+            / pair
+            / f"{pair}.strelka.somatic_indels.vcf.gz",
+            [("chr1", 300, "AT", "A", "18,20:2,3")],
+        )
+
+    results = _discover_qc(run_dir, assay="somatic_variant_calling")
+    strelka_results = [r for r in results if r.check == "strelka_median_vaf"]
+
+    assert len(strelka_results) == 1
+    assert strelka_results[0].status == "unverified"
+    assert strelka_results[0].value is None
+
+
 # --------------------------------------------------------------------------- #
 # scrnaseq cell-QC ingestion gate (single-cell metric ingestion).
 # The base pipeline does not route these metrics into MultiQC, so a dedicated

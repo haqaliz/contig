@@ -1,86 +1,89 @@
-# Card: feat / sc-concordance-autorun
+# Card: feat / somatic-strelka2-vaf
 
 - **Type:** feat
-- **Id/slug:** sc-concordance-autorun
+- **Id/slug:** somatic-strelka2-vaf
 - **Owner:** aliz
-
-No GitHub issue — this unit of work came from a `/contig-next` recommendation
-(2026-07-12). Source of truth for the pipeline is the inline brief below.
+- **Branch:** feat/somatic-strelka2-vaf/aliz
+- **Source:** inline brief (no GitHub issue) — carried from the `/contig-next`
+  recommendation (2026-07-14, re-run after `self-heal-cram-bam` was found blocked).
 
 ## Brief
 
-Build the single-cell concordance **autorun** `contig verify --concordance-sc-counts-auto`:
-given `--reads <sample sheet>` and the needed index/whitelist, Contig runs a *second,
-independent* single-cell quantifier itself behind an injectable seam (mirroring the RNA-seq
-kallisto autorun in `verification/count_quantifier.py`, v0.24.0) and feeds its pseudobulk
-gene totals into the already-shipped `stats_from_counts` core rather than requiring a
-user-supplied second matrix.
+Add a **Strelka2-native VAF plausibility** metric to the somatic verdict (capability
+**C4**, biological-plausibility axis of the somatic assay). This closes the named
+"non-Mutect2 VCFs degrade to UNVERIFIED" gap the shipped Mutect2-only VAF slice left open
+(`CAPABILITY_ROADMAP.md` C4: "Strelka2-native VAF (tier-count derivation — non-Mutect2
+VCFs degrade to UNVERIFIED)").
 
-This is the named follow-on to the user-supplied single-cell slice `--concordance-sc-counts`
-shipped in **v0.32.0**, and it mirrors how the germline autorun `--concordance-auto` (v0.4.0)
-followed `--concordance-vcf`, and the RNA-seq kallisto autorun `--concordance-counts-auto`
-(v0.24.0) followed `--concordance-counts`. It is where the single-cell concordance axis
-gains turnkey value (the v0.32.0 slice acknowledged single-cell users may not have a second
-matrix on hand).
+Today `verification/somatic_plausibility.py` computes `median_vaf` **only** from the
+**Mutect2** VCF (FORMAT `AF`, else `AD_alt/DP`; tumor identified by `##tumor_sample=`).
+Every Contig somatic run launches sarek with `--tools strelka,mutect2`, so a **Strelka2**
+call set is always on disk too — and the shipped C1 somatic-concordance slice already
+**locates and parses both call sets**. This slice adds a Strelka2-specific VAF derivation
+so the somatic VAF axis fires from the Strelka2 call set as well (corroboration /
+verdict-hardening), instead of degrading to UNVERIFIED on a non-Mutect2 VCF.
 
-## Honest contract (standing concordance contract, non-negotiable)
+## Why (moat framing)
 
-- at most WARN, never changes the `contig verify` exit code,
-- `unverified` (never a false pass) below the 10-shared-gene floor,
-- the concordance flags are **mutually exclusive**: `--concordance-vcf`,
-  `--concordance-auto`, `--concordance-counts`, `--concordance-counts-auto`,
-  `--concordance-sc-counts`, and the new `--concordance-sc-counts-auto`.
-- gated to `assay == "scrnaseq"`; every unrunnable path (non-scrnaseq run, missing
-  `--reads`/`--index`, quantifier failure, malformed sample sheet) prints a clear skip
-  note and emits zero checks — never a false pass.
+- **Verdict-hardening** (moat rule #2): turns a UNVERIFIED gap into a real check —
+  "widen what we can verify" — on an assay `CLAUDE.md` says is "being hardened to the
+  [RNA-seq] bar."
+- **Fully unblocked:** the Strelka2 VCF is already produced and already located by the
+  C1 somatic-concordance seam; this is a parser + metric, no new pipeline wiring, no new
+  dependency.
+- **Corpus fuel** (moat #2): a second-caller VAF distribution joins the eval corpus.
+- **Depth-first** on the shipped somatic assay; reuses the shipped dedicated-parser
+  pattern (`somatic_plausibility.py`, plus the ampliseq/mag/methylseq per-tool parsers).
 
-## CI story (mirror v0.24.0 exactly)
+## KNOWN CAVEAT — Strelka2 VAF derivation (pin this FIRST in the dig)
 
-- The second-quantifier subprocess is **never run in CI** — tests inject a fake quantifier.
-- The scientifically load-bearing step — pseudobulk gene collapse — is a **pure, CI-tested**
-  function. For single-cell this already exists and shipped in v0.32.0
-  (`sc_count_concordance.load_mtx_pseudobulk` + `count_concordance.stats_from_counts`), so
-  the collapse is already covered; this slice adds the injectable-quantifier seam + CLI
-  wiring on top.
+Strelka2 is the reason this was deferred from the Mutect2-only slice: **Strelka2 somatic
+VCFs carry no conventional per-sample `GT` and no `AF`** (the C1 somatic slice notes its
+metric was "sample-agnostic" because "Strelka2 somatic SNVs carry no conventional
+per-sample `GT`"). VAF must be **derived from Strelka2's tier-count FORMAT fields**:
 
-## Caveat to resolve first (in the dig / PRD)
+- **SNVs** (`*.somatic_snvs.vcf.gz`): per-allele tier counts `AU`, `CU`, `GU`, `TU` (each
+  a `(tier1, tier2)` pair). VAF ≈ tier1 ALT count / (tier1 REF count + tier1 ALT count),
+  reading REF/ALT bases to pick the right `?U` field.
+- **Indels** (`*.somatic_indels.vcf.gz`): `TAR` (tier1,tier2 REF) and `TIR` (tier1,tier2
+  ALT). VAF ≈ TIR.tier1 / (TAR.tier1 + TIR.tier1).
+- **Tumor column** identified by Strelka2's **`NORMAL`/`TUMOR` sample-column convention**
+  (fixed column names), NOT Mutect2's `##tumor_sample=` header.
 
-A second single-cell quantifier's own **barcode detection / cell calling** can cause benign
-gene-total divergence (chemistry, whitelist, aligner bias — not error). Pseudobulk-summing
-across all cells washes much of this out at the gene level, and the shipped contract absorbs
-the rest (WARN-capped, uncalibrated band, exit-code untouched, UNVERIFIED below the
-shared-gene floor). The dig must:
-- confirm the second quantifier is fed the **same reads / barcode whitelist** as the primary,
-- decide which quantifier pair is the sane default (e.g. STARsolo ⇄ alevin-fry, keyed off
-  what the primary `nf-core/scrnaseq` run used), and how `--index`/whitelist inputs are
-  supplied,
-- name what "second matrix" the quantifier emits and how it maps into `load_sc_matrix`.
+The dig's first task: confirm this formula + column resolution against a **real Strelka2
+somatic header** (the C1 somatic-concordance slice already reads these files — reuse/verify
+its assumptions). The honest fallback (UNVERIFIED when tier fields are absent/unparseable)
+absorbs any edge case.
+
+## Honest contract (mirror the shipped C3/somatic-plausibility contract exactly)
+
+- **WARN-capped, never FAIL, never changes the `contig run`/`verify` exit code** (bands are
+  uncalibrated engineering defaults; reuse `SOMATIC_PLAUSIBILITY_PACK`'s band shape).
+- **UNVERIFIED-when-absent, never a false pass:** no Strelka2 VCF, no derivable tier VAF,
+  or an unidentifiable tumor column → one honest UNVERIFIED; no VCF at all skips silently.
+- Additive to the verdict only — **no new `FailureClass`, model, persisted record,
+  dependency, or exit-code/reproduce change**; gated to `assay == "somatic_variant_calling"`
+  in `_discover_qc`.
+- No raw-read egress (reads a small VCF already on the user's compute); research-use only,
+  never a clinical judgement. Test-first with synthetic Strelka2 VCF fixtures — **no real
+  nf-core/sarek run in CI**.
 
 ## Shipped precedents to mirror
 
-- **v0.24.0** — RNA-seq kallisto autorun `--concordance-counts-auto`
-  (`verification/count_quantifier.py`: `CountQuantifier` seam, pure `kallisto_command` argv
-  builder asserted-not-executed, `run_kallisto_quantifier`, `SecondQuantifierError`, pure
-  CI-tested `collapse_to_gene`). The closest structural template.
-- **v0.4.0** — germline autorun `--concordance-auto` (`verification/second_caller.py`).
-- **v0.32.0** — user-supplied single-cell slice `--concordance-sc-counts`
-  (`verification/sc_count_concordance.py`: `load_mtx_pseudobulk`, `load_sc_matrix`; reuses
-  `count_concordance.stats_from_counts` / `results_from_counts`).
+- **Somatic VAF-plausibility slice (Unreleased)** — `verification/somatic_plausibility.py`,
+  `SOMATIC_PLAUSIBILITY_PACK`, `_discover_qc` somatic gate. The Mutect2 half this slice
+  extends. (`CAPABILITY_ROADMAP.md` C4.)
+- **C1 somatic-concordance slice (Unreleased)** — `verification/somatic_concordance.py`
+  already locates the Mutect2 VCF (by `mutect2` path component) and the Strelka2 split
+  `*.somatic_snvs`/`*.somatic_indels` files (by `strelka` component). **Reuse this
+  discovery seam** rather than re-globbing.
+- Dedicated per-tool parsers (`ampliseq_metrics.py`, `mag_metrics.py`,
+  `methylseq_metrics.py`, `scrnaseq_metrics.py`) — the stdlib-only, omit-never-guess parser
+  shape.
 
-## Guardrails (CLAUDE.md)
+## Deferred (name in PRD, out of scope for this slice)
 
-- Layer-2 only (run/self-heal/verify/reproduce). Verification depth — on-thesis.
-- No raw-read egress: the quantifier runs on the user's compute; only gene-count metrics are
-  compared.
-- No correctness over-claiming: concordance is corroboration, at most WARN; UNVERIFIED is
-  never rendered as PASS.
-- No new dependency (stdlib collapse); research-use, never a clinical claim.
-- Test-first: every capability lands with its failing test written first.
-
-## Deferred (out of scope for this slice, name in PRD)
-
-- Cell-count and cluster-stability agreement (needs a downstream clustering step Contig
-  doesn't run — same blocker as single-cell doublet/mito plausibility).
-- FAIL severity until bands are calibrated on real data.
-- A dashboard "corroborated by" line for single-cell.
-- `.h5ad`/AnnData second-matrix parsing (dependency-gated).
+- FAIL severity + band calibration on real somatic cohorts.
+- The cross-column swapped-pair smell test (a sibling deferred item — separate slice).
+- PON / germline-resource reference wiring for a real Mutect2 somatic run.
+- Any Strelka2 QSS/QSI quality-score plausibility beyond VAF.

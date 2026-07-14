@@ -6,6 +6,53 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Strelka2-native tumor-VAF plausibility — independent cross-caller corroboration of
+  somatic VAF** (capability C4 follow-on, closing the "Strelka2-native VAF (tier-count
+  derivation — non-Mutect2 VCFs degrade to UNVERIFIED)" item deferred by the v0.14.0
+  VAF-plausibility slice). The somatic verdict's biological-plausibility axis previously
+  derived tumor VAF from Mutect2's VCF alone; a Strelka2-only or Strelka2-and-Mutect2 run now
+  gets a **second, independently-computed** `strelka_median_vaf` metric that fires **alongside**
+  the existing Mutect2 `median_vaf` — two callers converging on a similar tumor VAF is stronger
+  evidence than one, without either metric depending on the other.
+  - **VAF derived from Strelka2's own tier counts, not Mutect2's `AF`/`AD`.** Strelka2 emits no
+    `AF`/`AD` FORMAT field; a new `verification/strelka_vaf.py` parses its documented tier1
+    ratio directly: for SNVs, `tier1({ALT}U) / (tier1({REF}U) + tier1({ALT}U))` over the
+    `AU`/`CU`/`GU`/`TU` FORMAT fields; for indels, `tier1(TIR) / (tier1(TAR) + tier1(TIR))` over
+    `TAR`/`TIR`. The tumor sample column is resolved by the **literal column name `TUMOR`** on
+    `#CHROM` (Strelka2 emits no `##tumor_sample=` header the way Mutect2 does, so the existing
+    header-based resolver doesn't apply here — never a positional guess). A pure, stdlib,
+    streaming parser pools tumor VAFs across the **SNV and indel VCFs together** into one median
+    (sarek's `*.somatic_snvs*`/`*.somatic_indels*` split), matching how Strelka2 itself is always
+    consumed as a pair.
+  - **A `strelka_median_vaf` rule riding the existing `SOMATIC_PLAUSIBILITY_PACK`.** WARN-capped
+    (`warn_below 0.05`, `warn_above 0.95`, no `fail_*`), deliberately reusing `median_vaf`'s
+    uncalibrated band verbatim rather than deriving a new one, and evaluated by its own
+    `evaluate_strelka_vaf_plausibility()` over a `by_metric` dict containing only this key — so it
+    emits `strelka_median_vaf:<TUMOR>` without ever re-emitting Mutect2's `median_vaf`/
+    `somatic_variant_count` rules from the same shared pack. (`evaluate_somatic_plausibility`'s
+    None-handling loop now skips any rule it has no metric for, rather than mishandling the new
+    shared rule it doesn't track.)
+  - **Wired into the somatic `_discover_qc` gate by reusing `select_caller_vcfs`** — the same
+    locator the Strelka2-vs-Mutect2 concordance gate already uses, so a "strelka" caller directory
+    is resolved once, the same way, everywhere. Three outcomes: a uniquely-resolved Strelka2
+    SNV+indel pair → the `strelka_median_vaf` metric; a Strelka2 VCF present but the layout is
+    non-unique or mismatched with Mutect2's pair (the same condition `select_caller_vcfs` flags
+    for concordance) → one honest UNVERIFIED, never a silent pass; no Strelka2 VCF at all → a
+    silent skip (structural QC already owns a genuinely-missing output).
+  - **Honest contract, identical to every sibling C3/C4 plausibility slice.** At most WARN, never
+    FAIL, never changes the `contig run`/`verify` exit code. UNVERIFIED (never a false pass) when
+    no Strelka2 VCF is found, no literal `TUMOR` column is present, or no record yields a
+    derivable tier-count ratio; omit-never-guess per record. Verdict-only: no new
+    `FailureClass`, model, persisted record, dependency, or reproduce-contract change; no raw-read
+    egress (parses VCFs already on the user's compute); research-use corroboration signal, never
+    a cancer diagnosis. Test-first with synthetic Strelka2 tier-FORMAT VCF fixtures — **no real
+    nf-core/sarek or samtools run in CI**. **Deferred:** FAIL severity and band calibration on
+    real tumor–normal cohorts; the cross-column swapped-pair smell test; panel-of-normals /
+    germline-resource reference wiring; a dashboard "corroborated by" surface for somatic VAF; and
+    QSS/QSI quality-score plausibility.
+
 ## [0.33.0] - 2026-07-13
 
 ### Added
