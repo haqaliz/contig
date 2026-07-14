@@ -366,14 +366,16 @@ corpus; repair success-rate analytics gain new classes.
 
 ---
 
-## C3. Biological-plausibility verification  ·  SHIPPED v0.3.0 (germline) + RNA-seq slice (v0.6.0) + single-cell ingestion slice (Unreleased) + germline sex-check slice (Unreleased) + RNA-seq mapping-composition slice (Unreleased) + germline variant-count slice (Unreleased)
+## C3. Biological-plausibility verification  ·  SHIPPED v0.3.0 (germline) + RNA-seq slice (v0.6.0) + single-cell ingestion slice (Unreleased) + germline sex-check slice (Unreleased) + RNA-seq mapping-composition slice (Unreleased) + germline variant-count slice (Unreleased) + germline plausibility FAIL-severity slice (Unreleased)
 
 **Shipped (germline slice) in v0.3.0.** The germline plausibility rules (Ti/Tv and
 het/hom ratios) already existed in `VARIANT_RULE_PACK` but were dormant because
 their metrics were never ingested. `verification/variant_metrics.py` now computes
 `ts_tv` and `het_hom` from the run's VCF and feeds them to the verdict on a path
-independent of MultiQC, capped at WARN (corroboration, not a clinical claim), with
-`unverified` when a ratio is uncomputable.
+independent of MultiQC, originally capped at WARN (corroboration, not a clinical
+claim), with `unverified` when a ratio is uncomputable. (Ti/Tv and het/hom have
+since gained gross-implausibility FAIL bands — see the germline plausibility
+FAIL-severity slice below.)
 
 **Shipped (RNA-seq slice, Unreleased).** The plausibility axis now extends to bulk
 RNA-seq: a `RNASEQ_PLAUSIBILITY_PACK` with two WARN-capped checks — `duplication_rate`
@@ -442,14 +444,36 @@ an `int`, so unlike the two ratios it is always computable. One WARN-only
 `evaluate_variant_plausibility` by adding it to `_PLAUSIBILITY_CHECKS`/`by_metric`, so it
 rides the **existing** germline plausibility gate (no `runner`/`_discover_qc` edit) and
 emits `variant_count:<sample>` with `expected_range` `[10, 20000000]` alongside the two
-ratios. Same contract as every C3 slice: at most WARN, never FAIL, never changes the exit
-code. The always-int count means a **real 0 rides the band as a WARN and never routes into
-the `ts_tv`/`het_hom` UNVERIFIED branch** (an empty call set is not mistaken for "nothing
-to check"); no VCF at all → silent skip (structural QC owns a missing output). Verdict-only:
-no new module, provenance record, `FailureClass`, model, or dashboard card. **Deferred:**
-FAIL severity and band calibration on real cohorts, capture-aware bands (panel/WES/WGS
-differ by orders of magnitude), per-sample multi-sample counts, a dashboard card, and the
-C6 fold-in.
+ratios. Contract as shipped in this slice: at most WARN, never changes the exit
+code — though the germline plausibility FAIL-severity slice below later gives
+`variant_count` a `fail_below: 1` empty-call-set floor (an empty set becomes FAIL, a
+strictly stronger signal than the prior WARN). The always-int count means a **real 0 rides
+the band and never routes into the `ts_tv`/`het_hom` UNVERIFIED branch** (an empty call set
+is not mistaken for "nothing to check"); no VCF at all → silent skip (structural QC owns a
+missing output). Verdict-only: no new module, provenance record, `FailureClass`, model, or
+dashboard card. **Deferred:** band calibration on real cohorts, capture-aware bands
+(panel/WES/WGS differ by orders of magnitude), per-sample multi-sample counts, a dashboard
+card, and the C6 fold-in.
+
+**Shipped (germline plausibility FAIL-severity slice, Unreleased).** The germline
+plausibility axis gains its **first FAIL severity**: `ts_tv_ratio` (`fail_below 1.2` /
+`fail_above 3.6`), `het_hom_ratio` (`fail_below 1.0` / `fail_above 3.0`), and
+`variant_count` (`fail_below 1` only — no `fail_above`; the `warn_above 20_000_000` upper
+bound stays a soft WARN ceiling) now drive `record.verdict` → **FAIL** on a
+grossly-implausible germline call set (a noise-level Ti/Tv ~0.5, or an empty/near-empty
+call set — now FAIL, not the prior WARN). The WARN bands are unchanged, so a legitimate WGS
+(Ti/Tv ~2.0, het/hom ~1.5) or WES (Ti/Tv ~3.0–3.3) run stays PASS/WARN and never
+false-FAILs. Pure data change to the three `VARIANT_RULE_PACK` dicts — the scorer
+(`_status_for`), evaluator, verdict reducer (`overall_verdict`), report, provenance, and
+dashboard consume it unchanged. The bands are **WES-safe gross-implausibility engineering
+tripwires** (same honesty tier as `mean_coverage fail_below`), **not** a clinical or
+biological claim. **Verdict-only:** the `contig run`/`verify` exit code is unchanged — no QC
+verdict, including pre-existing FAIL packs like `mean_coverage`, moves the exit code today;
+wiring that is a deliberate, separately-scoped follow-on. FAIL severity for the somatic,
+RNA-seq, RNA-composition, and annotation plausibility packs stays **deferred** (they remain
+WARN-only), as does the sex-check axis. **Deferred:** capture-type-aware (WGS/WES/panel)
+bands and tighter band calibration on real cohorts (the WES-safe bands are deliberately
+gross-only).
 
 **Shipped (single-cell ingestion slice, Unreleased).** The single-cell (`scrnaseq`)
 assay already had a biological pack (`SCRNASEQ_RULE_PACK`: recovered cells, median
@@ -825,7 +849,7 @@ ever. See [`../planning/variant-annotation-assay/prd.md`](../planning/variant-an
 |----|-----------|--------|----------|
 | C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) + somatic slice (Unreleased) + single-cell slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap + somatic auto `somatic_site_overlap` PASS-site Jaccard, Mutect2 vs Strelka2, no user input + single-cell `--concordance-sc-counts` pseudobulk gene-level Spearman/fraction-agreeing over a stdlib `.mtx` triplet loader + single-cell **autorun** `--concordance-sc-counts-auto` running STARsolo behind an injectable seam, turnkey; single-cell cluster-stability deferred) |
 | C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; per-contig alias harmonization (mito `M`↔`MT` + GRCh38 scaffold seed) shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); peak-RSS-informed OOM memory scaling shipped (Unreleased, honest two-tier: own-peak → blind fallback; sibling rescue deferred); walltime-informed `time_limit` scaling shipped (Unreleased, floored at blind — censored realtime, tail-only win + field instrument); **input-format-conversion class's first slice shipped (Unreleased): bgzip'd (non-BGZF) reference FASTA self-heal, sarek-scoped (rnaseq immune by construction), stream-decompress to uncompressed `.fa` + retry; CRAM↔BAM conversion is the deferred second half**; bwa-mem2/classic-BWA build+redirect, assembly-signature + exhaustive per-assembly alias completeness pending) | Unattended-completion rate, corpus fuel |
-| C3 | Biological-plausibility verification | SHIPPED v0.3.0 (germline) + RNA-seq (v0.6.0) + single-cell ingestion (Unreleased) + germline sex-check (Unreleased) + RNA-seq mapping-composition (Unreleased) + germline variant-count (Unreleased) | Verdict gets smarter about biology (germline Ti/Tv, het/hom, sex-check, variant-count band; RNA-seq dup/rRNA + exonic/intronic/unassigned read-composition from RSeQC read_distribution; single-cell cell-QC now *fires* via STARsolo/Cell Ranger ingestion — was a dormant no-op; gene-body-coverage/mito/doublet deferred) |
+| C3 | Biological-plausibility verification | SHIPPED v0.3.0 (germline) + RNA-seq (v0.6.0) + single-cell ingestion (Unreleased) + germline sex-check (Unreleased) + RNA-seq mapping-composition (Unreleased) + germline variant-count (Unreleased) + germline plausibility FAIL-severity (Unreleased) | Verdict gets smarter about biology (germline Ti/Tv, het/hom, sex-check, variant-count band — germline Ti/Tv, het/hom, and variant-count now **FAIL** on gross implausibility via WES-safe bands, verdict-only exit unchanged; RNA-seq dup/rRNA + exonic/intronic/unassigned read-composition from RSeQC read_distribution; single-cell cell-QC now *fires* via STARsolo/Cell Ranger ingestion — was a dormant no-op; gene-body-coverage/mito/doublet and somatic/RNA-seq/annotation FAIL severity deferred) |
 | C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased) + Strelka2-native VAF slice (Unreleased); FAIL severity, swapped-pair smell test + PON reference wiring deferred | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
 | C6 | Eval flywheel as a continuous loop | M6 (detector held-out guard slice 1 SHIPPED, Unreleased — honestly 0.833/10:12, two classes structurally unreachable; repair-loop outcome-match guard slice 2 SHIPPED, Unreleased — honestly 1.0/7:7, 5 classes covered; both wired into CI; folding C1/C3 signals + held-out-accuracy trend pending) | Compounding accuracy from real runs |
