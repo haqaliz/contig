@@ -325,6 +325,17 @@ SOMATIC_PLAUSIBILITY_PACK: list[dict] = [
         "warn_above": 0.95,
         "message": "median tumor variant allele fraction (Strelka2 tier1 counts)",
     },
+    {   # normal-sample VAF: a correct tumor/normal pair has ~0 VAF in the NORMAL column
+        # at somatic sites. An implausibly high normal VAF means the somatic signal is in
+        # the normal -> a tumor/normal swap, a mislabel, or heavy contamination. warn_above
+        # only (a low normal VAF is the healthy expected case); uncalibrated engineering
+        # default, WARN-capped (no fail_*). Emitted ONLY by evaluate_swap_plausibility over a
+        # by_metric dict containing just this key, so it never re-emits the rules above.
+        "check": "normal_median_vaf",
+        "metric": "normal_median_vaf",
+        "warn_above": 0.30,
+        "message": "median normal-sample variant allele fraction (high => possible tumor/normal swap or contamination)",
+    },
 ]
 
 
