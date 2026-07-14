@@ -1,51 +1,84 @@
-# Card: germline-plausibility-fail-severity
+# Card: verdict-exit-code
 
 - **Type:** feat
-- **Id / slug:** germline-plausibility-fail-severity
-- **Branch:** feat/germline-plausibility-fail-severity/aliz
+- **Id / slug:** verdict-exit-code
+- **Branch:** feat/verdict-exit-code/aliz
 - **Owner:** aliz
 - **Source:** inline brief (from `contig-next` handoff — no GitHub issue)
 
 ## Brief
 
-Give the germline biological-plausibility axis its first FAIL gate, Ti/Tv-first, by
-adding conservative `fail_below`/`fail_above` bands to the germline checks in
-`src/contig/verification/rule_pack.py` (`ts_tv`, then `het_hom`, and a gross ceiling on
-`variant_count`) — the checks already compute; only the bands/severity change.
+Wire Contig's verified **FAIL** verdict into the CLI exit code as an **opt-in**
+policy. Add a flag (working name `--fail-on-verdict`, default off) to `contig run`
+and `contig verify` so that when the reduced verdict is **FAIL**, the command exits
+non-zero — making the moat's "verified verdict" enforceable in scripts and CI.
 
-Use **gross-implausibility-only** bands sourced from published literature (e.g. Ti/Tv
-`fail_below ~1.2`, `fail_above ~3.6` so a legitimate WES run at ~3.3 stays PASS/WARN
-while a noise call set at ~0.5 FAILs), keeping the existing tight WARN band intact —
-this is a "the call set is broken" claim on the same honesty tier as
-`mean_coverage fail_below 10`, never a clinical/biological claim.
+This is the explicit, repeatedly-deferred follow-on named in v0.35.0's changelog and
+across the C3 slices. It's unblocked now that the germline plausibility FAIL bands
+shipped (v0.35.0), and it needs **no real-cohort calibration** — a plumbing slice
+with a crisp test-first shape.
 
-**Caveat to resolve in the dig:** this reverses the stated "germline plausibility never
-FAILs / never changes the exit code" contract, so confirm that's intended and update the
-tests and CHANGELOG/roadmap language that assert WARN-only; keep it test-first (fixtures
-at, just-inside, and grossly-outside each band).
+### Grounding (verified in code before recommending)
 
-Leave the somatic/RNA-seq/annotation plausibility packs WARN-only for now — germline
-Ti/Tv is the depth-first first slice.
+- `src/contig/cli.py:619-620` — `contig run` exits non-zero **only** when the pipeline
+  itself didn't succeed (`RunSummary.from_events(record.events).succeeded`). A FAIL
+  verdict does not move the exit code.
+- `src/contig/cli.py:957-971` — `contig verify` exits non-zero **only** on output
+  drift or a signature mismatch. Concordance/QC verdict never changes the exit code.
+- So today: Contig can render a scientific **FAIL** (structural missing/corrupt
+  output, or the new v0.35.0 germline Ti/Tv / het-hom / empty-call-set bands) while the
+  CLI still returns **0**. The headline moat — "the verified verdict"
+  (`FEATURES.md:36-38`) — has no teeth in automation.
+
+### The named-deferral trail
+
+- `CHANGELOG.md:47-52` (v0.35.0): *"the `contig run`/`verify` exit code is unchanged —
+  no QC verdict, including pre-existing FAIL packs like `mean_coverage`, moves the exit
+  code today; wiring that is a deliberate, separately-scoped, cross-cutting follow-on."*
+- `docs/technical/CAPABILITY_ROADMAP.md:469-472` — same "exit-code wiring deferred" note
+  on the germline plausibility FAIL-severity slice.
 
 ## Why (moat framing, from contig-next)
 
-- The biological-plausibility axis is entirely WARN-only today; C1/C3/C4/C7 each ship
-  plausibility/concordance checks WARN-capped with "FAIL severity deferred until
-  calibrated" (`docs/technical/CAPABILITY_ROADMAP.md:387,427,449,526`). Code confirms:
-  `ts_tv`, `het_hom`, `variant_count` carry no `fail_*` (`rule_pack.py:49-86`).
-- A plausibility check that can only WARN can never fail a run whose biology is broken
-  but which ran fine — exactly the silent-failure class the axis exists to catch. Giving
-  it teeth is CLAUDE.md #2: "make every verdict harder to fool."
-- Precedent already set: the did-it-run packs (`mean_coverage fail_below:10`,
-  methylseq/ampliseq/mag, scrnaseq capture) already FAIL on gross failure as honest
-  engineering defaults (`rule_pack.py:80-264`). The germline pack's own comment already
-  names a defensible gross band — "values far outside [1.5, 3.0] flag a likely run
-  problem" (`rule_pack.py:44-48`).
+- CLAUDE.md #2: "make every verdict harder to fool." A verdict the CLI ignores can't
+  gate automation — the FAIL is cosmetic in a script/CI context.
+- The verified verdict is Contig's headline differentiator (`FEATURES.md:36-38`); no
+  incumbent issues an output-correctness verdict. Making FAIL enforceable is the
+  natural next step after v0.35.0 gave germline plausibility its first FAIL bands.
+- No real-cohort calibration required (unlike the other open C3/C4 FAIL-severity
+  items) — this is pure plumbing, high-leverage, unblocked.
+
+### Caveat — keep it opt-in and back-compatible
+
+Cross-cutting and back-compat-sensitive:
+
+- Existing users/CI rely on `contig run`/`verify` exiting 0 on a completed pipeline.
+- Several **structural FAIL packs already exist** (`mean_coverage fail_below`,
+  missing/corrupt output), so a non-opt-in change would suddenly start failing runs
+  that pass today.
+- Therefore: **opt-in flag, default off.** Default behavior and `--json` payloads must
+  stay identical.
+- Slice 1 maps **only FAIL → non-zero**; WARN and UNVERIFIED stay zero.
+
+## Open questions for the dig / interview
+
+1. Flag surface: a per-command flag on both `run` and `verify`, or a shared policy?
+2. Does slice 1 cover both `run` and `verify`, or `verify` first?
+3. Exit code value: `1`, or a distinct code (e.g. `2`) to disambiguate "FAIL verdict"
+   from "pipeline crashed / bad args"?
+4. Interaction with `--json` (payload unchanged; exit code still applies).
+5. How is the "reduced verdict" obtained at the CLI layer for each command
+   (`run` renders a report; `verify` re-hashes)? Where does FAIL come from on each path?
+
+## Acceptance (test-first)
+
+- A FAIL-verdict fixture run asserts **non-zero** exit under the flag.
+- PASS / WARN / UNVERIFIED assert **zero** under the flag.
+- Default (no flag) is **byte-identical** to today (exit + `--json` payload).
 
 ## Guardrails (CLAUDE.md)
 
 - Layer 2 only (run/verify/reproduce). This is verification depth — on-thesis.
-- No clinical/diagnostic claim: FAIL bands are "the call set is broken" engineering
-  tripwires, not biological/pathogenicity claims. Research-use only.
-- No proprietary data: bands come from published literature (public knowledge).
+- No clinical/diagnostic claim: enforces the existing verdict, adds no new science.
+- No new dependency expected. No raw-read egress.
 - Test-first (repo standing discipline).
