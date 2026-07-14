@@ -467,9 +467,13 @@ false-FAILs. Pure data change to the three `VARIANT_RULE_PACK` dicts — the sco
 (`_status_for`), evaluator, verdict reducer (`overall_verdict`), report, provenance, and
 dashboard consume it unchanged. The bands are **WES-safe gross-implausibility engineering
 tripwires** (same honesty tier as `mean_coverage fail_below`), **not** a clinical or
-biological claim. **Verdict-only:** the `contig run`/`verify` exit code is unchanged — no QC
-verdict, including pre-existing FAIL packs like `mean_coverage`, moves the exit code today;
-wiring that is a deliberate, separately-scoped follow-on. FAIL severity for the somatic,
+biological claim. **Verdict-only (at the time of this slice):** the `contig run`/`verify`
+exit code was unchanged — no QC verdict, including pre-existing FAIL packs like
+`mean_coverage`, moved the exit code; wiring that is a deliberate, separately-scoped
+follow-on. *(Update: that CLI exit-code wiring has since shipped as the opt-in
+`--fail-on-verdict` flag on `contig run`/`verify` — a FAIL verdict exits `1` when the flag
+is set, WARN/UNVERIFIED/PASS stay `0`; the **default** exit code remains unchanged, so this
+slice's "verdict-only" claim holds unless a caller opts in.)* FAIL severity for the somatic,
 RNA-seq, RNA-composition, and annotation plausibility packs stays **deferred** (they remain
 WARN-only), as does the sex-check axis. **Deferred:** capture-type-aware (WGS/WES/panel)
 bands and tighter band calibration on real cohorts (the WES-safe bands are deliberately
