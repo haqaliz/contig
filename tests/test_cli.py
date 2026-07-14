@@ -207,6 +207,116 @@ def test_run_incomplete_still_fails_with_flag(tmp_path, monkeypatch):
     assert result.exit_code != 0
 
 
+# --- Phase 2: `contig verify --fail-on-verdict` ------------------------------------
+#
+# Mint a persisted, COMPLETED run whose reduced verdict is driven purely by its
+# qc_results (mirror of tests/verification/test_run_qc.py::_record_with). The verdict
+# gate reads the already-serialized record.verdict, so these fixtures never touch a
+# real pipeline. Optionally write a results/ dir with matching output_checksums so the
+# has-checksums (no-drift) verify path is exercised.
+def _write_verdict_run(runs_dir, run_id, qc_results, *, with_outputs=False):
+    run_dir = Path(runs_dir) / run_id
+    output_checksums = {}
+    if with_outputs:
+        from contig.bundle import compute_output_checksums
+
+        results = run_dir / "results"
+        results.mkdir(parents=True, exist_ok=True)
+        (results / "out.txt").write_text("verified output")
+        output_checksums = compute_output_checksums(results)
+    record = RunRecord(
+        run_id=run_id,
+        pipeline="nf-core/rnaseq",
+        pipeline_revision="3.26.0",
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_checksums={},
+        events=[TaskEvent(process="X", status="COMPLETED", exit=0)],
+        qc_results=qc_results,
+        output_checksums=output_checksums,
+    )
+    write_bundle(record, run_dir)
+    return run_dir
+
+
+_FAIL_QC = [QCResult(check="x", status="fail", message="m")]
+_WARN_QC = [QCResult(check="x", status="warn", message="m")]
+
+
+def test_verify_fail_on_verdict_no_checksums_fails(tmp_path):
+    # The sharp edge: no output_checksums is a `return 0` path today. A FAIL verdict
+    # + flag must convert it to exit 1.
+    _write_verdict_run(tmp_path, "vf", _FAIL_QC, with_outputs=False)
+    assert load_bundle(tmp_path / "vf").verdict == "fail"  # confirm fixture verdict
+    result = runner.invoke(
+        app, ["verify", "vf", "--runs-dir", str(tmp_path), "--fail-on-verdict"]
+    )
+    assert result.exit_code == 1
+    assert "verdict is FAIL" in result.output
+
+
+def test_verify_fail_on_verdict_has_checksums_no_drift_fails(tmp_path):
+    # FAIL verdict WITH matching output_checksums (no drift): verify_outputs reports
+    # ok, so only the verdict gate can make it non-zero.
+    _write_verdict_run(tmp_path, "vfc", _FAIL_QC, with_outputs=True)
+    assert load_bundle(tmp_path / "vfc").verdict == "fail"
+    result = runner.invoke(
+        app, ["verify", "vfc", "--runs-dir", str(tmp_path), "--fail-on-verdict"]
+    )
+    assert result.exit_code == 1
+    assert "verdict is FAIL" in result.output
+
+
+def test_verify_fail_on_verdict_json_fails_and_payload_unchanged(tmp_path):
+    # --json + flag: exit 1, but the payload is byte-identical to the no-flag payload
+    # (no `verdict` key added; N1 deferred).
+    _write_verdict_run(tmp_path, "vfj", _FAIL_QC, with_outputs=True)
+    without = runner.invoke(app, ["verify", "vfj", "--runs-dir", str(tmp_path), "--json"])
+    with_flag = runner.invoke(
+        app, ["verify", "vfj", "--runs-dir", str(tmp_path), "--json", "--fail-on-verdict"]
+    )
+    assert without.exit_code == 0
+    assert with_flag.exit_code == 1
+
+    def _payload(res):  # the JSON line on stdout (the reason goes to stderr)
+        line = next(ln for ln in res.output.splitlines() if ln.startswith("{"))
+        return json.loads(line)
+
+    payload_without = _payload(without)
+    payload_with = _payload(with_flag)
+    assert payload_with == payload_without  # payload unchanged
+    assert set(payload_with) == {"ok", "changed", "missing"}
+    assert "verdict" not in payload_with
+
+
+def test_verify_fail_on_verdict_warn_is_zero(tmp_path):
+    # WARN verdict, no drift, + flag -> exit 0 (only FAIL trips the gate).
+    _write_verdict_run(tmp_path, "vw", _WARN_QC, with_outputs=True)
+    assert load_bundle(tmp_path / "vw").verdict == "warn"
+    result = runner.invoke(
+        app, ["verify", "vw", "--runs-dir", str(tmp_path), "--fail-on-verdict"]
+    )
+    assert result.exit_code == 0
+
+
+def test_verify_unverified_with_flag_is_zero(tmp_path):
+    # UNVERIFIED (completed, no qc) + flag -> exit 0: the flag never converts
+    # "we couldn't check" into "it failed".
+    _write_verdict_run(tmp_path, "vu", [], with_outputs=False)
+    assert load_bundle(tmp_path / "vu").verdict == "unverified"
+    result = runner.invoke(
+        app, ["verify", "vu", "--runs-dir", str(tmp_path), "--fail-on-verdict"]
+    )
+    assert result.exit_code == 0
+
+
+def test_verify_fail_verdict_without_flag_is_zero(tmp_path):
+    # Default-unchanged guard: the SAME FAIL fixture, no flag -> exit 0.
+    _write_verdict_run(tmp_path, "vnf", _FAIL_QC, with_outputs=False)
+    assert load_bundle(tmp_path / "vnf").verdict == "fail"
+    result = runner.invoke(app, ["verify", "vnf", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+
+
 def test_run_with_samplesheet_checksums_real_inputs(tmp_path, monkeypatch):
     sheet = _make_sheet(tmp_path)
     monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
