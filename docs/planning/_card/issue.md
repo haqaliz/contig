@@ -1,89 +1,51 @@
-# Card: feat / somatic-strelka2-vaf
+# Card: germline-plausibility-fail-severity
 
 - **Type:** feat
-- **Id/slug:** somatic-strelka2-vaf
+- **Id / slug:** germline-plausibility-fail-severity
+- **Branch:** feat/germline-plausibility-fail-severity/aliz
 - **Owner:** aliz
-- **Branch:** feat/somatic-strelka2-vaf/aliz
-- **Source:** inline brief (no GitHub issue) — carried from the `/contig-next`
-  recommendation (2026-07-14, re-run after `self-heal-cram-bam` was found blocked).
+- **Source:** inline brief (from `contig-next` handoff — no GitHub issue)
 
 ## Brief
 
-Add a **Strelka2-native VAF plausibility** metric to the somatic verdict (capability
-**C4**, biological-plausibility axis of the somatic assay). This closes the named
-"non-Mutect2 VCFs degrade to UNVERIFIED" gap the shipped Mutect2-only VAF slice left open
-(`CAPABILITY_ROADMAP.md` C4: "Strelka2-native VAF (tier-count derivation — non-Mutect2
-VCFs degrade to UNVERIFIED)").
+Give the germline biological-plausibility axis its first FAIL gate, Ti/Tv-first, by
+adding conservative `fail_below`/`fail_above` bands to the germline checks in
+`src/contig/verification/rule_pack.py` (`ts_tv`, then `het_hom`, and a gross ceiling on
+`variant_count`) — the checks already compute; only the bands/severity change.
 
-Today `verification/somatic_plausibility.py` computes `median_vaf` **only** from the
-**Mutect2** VCF (FORMAT `AF`, else `AD_alt/DP`; tumor identified by `##tumor_sample=`).
-Every Contig somatic run launches sarek with `--tools strelka,mutect2`, so a **Strelka2**
-call set is always on disk too — and the shipped C1 somatic-concordance slice already
-**locates and parses both call sets**. This slice adds a Strelka2-specific VAF derivation
-so the somatic VAF axis fires from the Strelka2 call set as well (corroboration /
-verdict-hardening), instead of degrading to UNVERIFIED on a non-Mutect2 VCF.
+Use **gross-implausibility-only** bands sourced from published literature (e.g. Ti/Tv
+`fail_below ~1.2`, `fail_above ~3.6` so a legitimate WES run at ~3.3 stays PASS/WARN
+while a noise call set at ~0.5 FAILs), keeping the existing tight WARN band intact —
+this is a "the call set is broken" claim on the same honesty tier as
+`mean_coverage fail_below 10`, never a clinical/biological claim.
 
-## Why (moat framing)
+**Caveat to resolve in the dig:** this reverses the stated "germline plausibility never
+FAILs / never changes the exit code" contract, so confirm that's intended and update the
+tests and CHANGELOG/roadmap language that assert WARN-only; keep it test-first (fixtures
+at, just-inside, and grossly-outside each band).
 
-- **Verdict-hardening** (moat rule #2): turns a UNVERIFIED gap into a real check —
-  "widen what we can verify" — on an assay `CLAUDE.md` says is "being hardened to the
-  [RNA-seq] bar."
-- **Fully unblocked:** the Strelka2 VCF is already produced and already located by the
-  C1 somatic-concordance seam; this is a parser + metric, no new pipeline wiring, no new
-  dependency.
-- **Corpus fuel** (moat #2): a second-caller VAF distribution joins the eval corpus.
-- **Depth-first** on the shipped somatic assay; reuses the shipped dedicated-parser
-  pattern (`somatic_plausibility.py`, plus the ampliseq/mag/methylseq per-tool parsers).
+Leave the somatic/RNA-seq/annotation plausibility packs WARN-only for now — germline
+Ti/Tv is the depth-first first slice.
 
-## KNOWN CAVEAT — Strelka2 VAF derivation (pin this FIRST in the dig)
+## Why (moat framing, from contig-next)
 
-Strelka2 is the reason this was deferred from the Mutect2-only slice: **Strelka2 somatic
-VCFs carry no conventional per-sample `GT` and no `AF`** (the C1 somatic slice notes its
-metric was "sample-agnostic" because "Strelka2 somatic SNVs carry no conventional
-per-sample `GT`"). VAF must be **derived from Strelka2's tier-count FORMAT fields**:
+- The biological-plausibility axis is entirely WARN-only today; C1/C3/C4/C7 each ship
+  plausibility/concordance checks WARN-capped with "FAIL severity deferred until
+  calibrated" (`docs/technical/CAPABILITY_ROADMAP.md:387,427,449,526`). Code confirms:
+  `ts_tv`, `het_hom`, `variant_count` carry no `fail_*` (`rule_pack.py:49-86`).
+- A plausibility check that can only WARN can never fail a run whose biology is broken
+  but which ran fine — exactly the silent-failure class the axis exists to catch. Giving
+  it teeth is CLAUDE.md #2: "make every verdict harder to fool."
+- Precedent already set: the did-it-run packs (`mean_coverage fail_below:10`,
+  methylseq/ampliseq/mag, scrnaseq capture) already FAIL on gross failure as honest
+  engineering defaults (`rule_pack.py:80-264`). The germline pack's own comment already
+  names a defensible gross band — "values far outside [1.5, 3.0] flag a likely run
+  problem" (`rule_pack.py:44-48`).
 
-- **SNVs** (`*.somatic_snvs.vcf.gz`): per-allele tier counts `AU`, `CU`, `GU`, `TU` (each
-  a `(tier1, tier2)` pair). VAF ≈ tier1 ALT count / (tier1 REF count + tier1 ALT count),
-  reading REF/ALT bases to pick the right `?U` field.
-- **Indels** (`*.somatic_indels.vcf.gz`): `TAR` (tier1,tier2 REF) and `TIR` (tier1,tier2
-  ALT). VAF ≈ TIR.tier1 / (TAR.tier1 + TIR.tier1).
-- **Tumor column** identified by Strelka2's **`NORMAL`/`TUMOR` sample-column convention**
-  (fixed column names), NOT Mutect2's `##tumor_sample=` header.
+## Guardrails (CLAUDE.md)
 
-The dig's first task: confirm this formula + column resolution against a **real Strelka2
-somatic header** (the C1 somatic-concordance slice already reads these files — reuse/verify
-its assumptions). The honest fallback (UNVERIFIED when tier fields are absent/unparseable)
-absorbs any edge case.
-
-## Honest contract (mirror the shipped C3/somatic-plausibility contract exactly)
-
-- **WARN-capped, never FAIL, never changes the `contig run`/`verify` exit code** (bands are
-  uncalibrated engineering defaults; reuse `SOMATIC_PLAUSIBILITY_PACK`'s band shape).
-- **UNVERIFIED-when-absent, never a false pass:** no Strelka2 VCF, no derivable tier VAF,
-  or an unidentifiable tumor column → one honest UNVERIFIED; no VCF at all skips silently.
-- Additive to the verdict only — **no new `FailureClass`, model, persisted record,
-  dependency, or exit-code/reproduce change**; gated to `assay == "somatic_variant_calling"`
-  in `_discover_qc`.
-- No raw-read egress (reads a small VCF already on the user's compute); research-use only,
-  never a clinical judgement. Test-first with synthetic Strelka2 VCF fixtures — **no real
-  nf-core/sarek run in CI**.
-
-## Shipped precedents to mirror
-
-- **Somatic VAF-plausibility slice (Unreleased)** — `verification/somatic_plausibility.py`,
-  `SOMATIC_PLAUSIBILITY_PACK`, `_discover_qc` somatic gate. The Mutect2 half this slice
-  extends. (`CAPABILITY_ROADMAP.md` C4.)
-- **C1 somatic-concordance slice (Unreleased)** — `verification/somatic_concordance.py`
-  already locates the Mutect2 VCF (by `mutect2` path component) and the Strelka2 split
-  `*.somatic_snvs`/`*.somatic_indels` files (by `strelka` component). **Reuse this
-  discovery seam** rather than re-globbing.
-- Dedicated per-tool parsers (`ampliseq_metrics.py`, `mag_metrics.py`,
-  `methylseq_metrics.py`, `scrnaseq_metrics.py`) — the stdlib-only, omit-never-guess parser
-  shape.
-
-## Deferred (name in PRD, out of scope for this slice)
-
-- FAIL severity + band calibration on real somatic cohorts.
-- The cross-column swapped-pair smell test (a sibling deferred item — separate slice).
-- PON / germline-resource reference wiring for a real Mutect2 somatic run.
-- Any Strelka2 QSS/QSI quality-score plausibility beyond VAF.
+- Layer 2 only (run/verify/reproduce). This is verification depth — on-thesis.
+- No clinical/diagnostic claim: FAIL bands are "the call set is broken" engineering
+  tripwires, not biological/pathogenicity claims. Research-use only.
+- No proprietary data: bands come from published literature (public knowledge).
+- Test-first (repo standing discipline).
