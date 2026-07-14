@@ -78,6 +78,28 @@ def _tumor_column_index(header_lines: list[str]) -> int | None:
     return None
 
 
+def _normal_column_index(header_lines: list[str]) -> int | None:
+    """Find the normal sample's column index from the VCF header.
+
+    Reads ``##normal_sample=<name>`` then locates <name> among the sample
+    columns of the ``#CHROM`` line (index >= 9). Returns None if either the
+    header line or the name's column is absent (never guess a column).
+    """
+    normal_name: str | None = None
+    chrom_cols: list[str] | None = None
+    for line in header_lines:
+        if line.startswith("##normal_sample="):
+            normal_name = line[len("##normal_sample="):].strip()
+        elif line.startswith("#CHROM"):
+            chrom_cols = line.rstrip("\n").split("\t")
+    if normal_name is None or chrom_cols is None:
+        return None
+    for idx in range(9, len(chrom_cols)):
+        if chrom_cols[idx] == normal_name:
+            return idx
+    return None
+
+
 def _biallelic(ref: str, alt: str) -> bool:
     """True for a biallelic record (no comma in ALT); indels allowed."""
     return "," not in alt
@@ -193,6 +215,14 @@ def _tumor_sample_name(header_lines: list[str]) -> str | None:
     for line in header_lines:
         if line.startswith("##tumor_sample="):
             return line[len("##tumor_sample="):].strip()
+    return None
+
+
+def _normal_sample_name(header_lines: list[str]) -> str | None:
+    """Return the ``##normal_sample=`` name, or None if the header is absent."""
+    for line in header_lines:
+        if line.startswith("##normal_sample="):
+            return line[len("##normal_sample="):].strip()
     return None
 
 

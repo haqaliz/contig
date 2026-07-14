@@ -10,6 +10,8 @@ import gzip
 import pytest
 
 from contig.verification.somatic_plausibility import (
+    _normal_column_index,
+    _normal_sample_name,
     evaluate_somatic_plausibility,
     somatic_metrics,
 )
@@ -18,10 +20,12 @@ _TUMOR = "TUMOR"
 _NORMAL = "NORMAL"
 
 
-def _header(tumor=_TUMOR, normal=_NORMAL, tumor_line=True, extra=()):
+def _header(tumor=_TUMOR, normal=_NORMAL, tumor_line=True, normal_line=False, extra=()):
     lines = ["##fileformat=VCFv4.2"]
     if tumor_line:
         lines.append(f"##tumor_sample={tumor}")
+    if normal_line:
+        lines.append(f"##normal_sample={normal}")
     lines.extend(extra)
     # column order: NORMAL then TUMOR, to prove we select by name not position
     lines.append(
@@ -178,6 +182,50 @@ def test_gzip_supported(tmp_path):
 
     assert gz_m == plain_m
     assert gz_m.median_vaf == pytest.approx(0.30)
+
+
+# --- swap-verdict Phase 1: normal-column resolver -------------------------------
+
+
+def test_normal_column_index_found():
+    # ``##normal_sample=NORMAL`` + a #CHROM line with NORMAL then TUMOR columns
+    # -> NORMAL resolves to index 9 (the first sample column).
+    header = _header(normal_line=True).splitlines(keepends=True)
+
+    assert _normal_column_index(header) == 9
+
+
+def test_normal_column_index_none_when_no_normal_sample_header():
+    # No ``##normal_sample=`` line -> never guess a column -> None.
+    header = _header(normal_line=False).splitlines(keepends=True)
+
+    assert _normal_column_index(header) is None
+
+
+def test_normal_column_index_none_when_name_not_in_chrom_columns():
+    # ``##normal_sample=NORMAL`` present, but the #CHROM line's sample columns
+    # don't include "NORMAL" -> None (never a positional guess).
+    lines = [
+        "##fileformat=VCFv4.2",
+        "##tumor_sample=TUMOR",
+        "##normal_sample=NORMAL",
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tOTHER\tTUMOR",
+    ]
+    header = [line + "\n" for line in lines]
+
+    assert _normal_column_index(header) is None
+
+
+def test_normal_sample_name_returns_header_value():
+    header = _header(normal_line=True).splitlines(keepends=True)
+
+    assert _normal_sample_name(header) == _NORMAL
+
+
+def test_normal_sample_name_none_when_header_absent():
+    header = _header(normal_line=False).splitlines(keepends=True)
+
+    assert _normal_sample_name(header) is None
 
 
 # --- Phase 2: WARN-capped rule pack + plausibility evaluator --------------------
