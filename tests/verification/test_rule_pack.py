@@ -175,13 +175,34 @@ def test_variant_rule_pack_non_empty_and_covers_ts_tv():
     assert "ts_tv" in metrics
 
 
-def test_variant_pack_ts_tv_and_het_hom_are_warn_only():
-    # The activated germline plausibility rules are WARN-capped in this slice: no
-    # FAIL band. mean_coverage is unchanged (it may keep its fail band).
+def test_variant_pack_ts_tv_and_het_hom_have_fail_bands():
+    # The germline plausibility rules now carry gross-implausibility FAIL bands
+    # (WES-safe engineering tripwires), on top of their existing WARN bands.
     by_check = {c["check"]: c for c in VARIANT_RULE_PACK}
-    for name in ("ts_tv_ratio", "het_hom_ratio"):
-        assert "fail_below" not in by_check[name]
-        assert "fail_above" not in by_check[name]
+    assert by_check["ts_tv_ratio"]["fail_below"] == 1.2
+    assert by_check["ts_tv_ratio"]["fail_above"] == 3.6
+    assert by_check["het_hom_ratio"]["fail_below"] == 1.0
+    assert by_check["het_hom_ratio"]["fail_above"] == 3.0
+
+
+def test_variant_count_has_fail_below_only():
+    # variant_count gains a hard floor (empty/near-empty call set FAILs) but keeps
+    # its upper bound a SOFT WARN ceiling: no fail_above.
+    by_check = {c["check"]: c for c in VARIANT_RULE_PACK}
+    assert by_check["variant_count"]["fail_below"] == 1
+    assert "fail_above" not in by_check["variant_count"]
+
+
+def test_germline_bands_are_well_ordered():
+    # Invariant (PRD R8): for every germline rule, the bounds that are present must
+    # be ordered fail_below <= warn_below <= warn_above <= fail_above.
+    for rule in VARIANT_RULE_PACK:
+        bounds = [
+            rule.get(key)
+            for key in ("fail_below", "warn_below", "warn_above", "fail_above")
+        ]
+        present = [b for b in bounds if b is not None]
+        assert present == sorted(present), f"{rule['check']!r} bands out of order"
 
 
 def test_rule_pack_for_known_assays():

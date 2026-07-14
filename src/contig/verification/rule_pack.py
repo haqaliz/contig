@@ -48,30 +48,42 @@ RNASEQ_RULE_PACK: list[dict] = [
 # likely run problem rather than a biological claim.
 VARIANT_RULE_PACK: list[dict] = [
     {
-        # WARN-capped: these germline plausibility rules never FAIL a verdict in
-        # this slice (the bands flag a likely run problem, not a clinical claim),
-        # so they carry no fail_below/fail_above.
+        # The FAIL bands are gross-implausibility engineering tripwires (same tier
+        # as mean_coverage's fail_below): a call set this far off a real germline
+        # Ti/Tv (~2.0 WGS, up to ~3.0-3.3 WES) is almost certainly broken, not a
+        # biological/clinical claim. Deliberately WES-safe — fail_above 3.6 leaves
+        # exome Ti/Tv comfortably inside WARN. The WARN band (1.8-2.4) still flags
+        # the softer "unusual, check it" range between the FAIL bounds.
         "check": "ts_tv_ratio",
         "metric": "ts_tv",
+        "fail_below": 1.2,
         "warn_below": 1.8,
         "warn_above": 2.4,
+        "fail_above": 3.6,
         "message": "transition/transversion ratio of called variants",
     },
     {
-        # WARN-capped (see ts_tv_ratio): no fail_below/fail_above.
+        # Gross-implausibility FAIL bands (see ts_tv_ratio): a het/hom this far from
+        # the typical germline range flags a broken call set, WES-safe and not a
+        # clinical claim. WARN band (1.4-2.5) covers the softer range.
         "check": "het_hom_ratio",
         "metric": "het_hom",
+        "fail_below": 1.0,
         "warn_below": 1.4,
         "warn_above": 2.5,
+        "fail_above": 3.0,
         "message": "heterozygous/homozygous-alt genotype ratio",
     },
     {
-        # WARN-capped germline count band (see ts_tv_ratio): no fail_*.
-        # warn_above is a SOFT, uncalibrated "absurd-count" tripwire, NOT a
-        # validated ceiling — a very large joint-called cohort tripping it is an
-        # honest "unusually large, check it" WARN, never a block.
+        # fail_below 1 is a hard floor: an empty/near-empty call set (0 sites) is a
+        # broken run and FAILs, same tier as mean_coverage's fail_below. There is
+        # deliberately NO fail_above — warn_above stays a SOFT, uncalibrated
+        # "absurd-count" tripwire, NOT a validated ceiling, so a very large
+        # joint-called cohort tripping it is an honest "unusually large, check it"
+        # WARN, never a block.
         "check": "variant_count",
         "metric": "variant_count",
+        "fail_below": 1,
         "warn_below": 10,
         "warn_above": 20_000_000,
         "message": "number of distinct germline variant sites (primary sample)",
