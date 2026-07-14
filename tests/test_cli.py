@@ -24,6 +24,16 @@ GOOD_MQC = (
     '"S1":{"uniquely_mapped_percent":92.0,"percent_assigned":85.0,"total_reads":1000000.0},'
     '"S2":{"uniquely_mapped_percent":90.0,"percent_assigned":84.0,"total_reads":1100000.0}}]}'
 )
+FAIL_MQC = (  # uniquely_mapped_percent below fail_below (40.0) -> verdict FAIL
+    '{"report_general_stats_data":[{'
+    '"S1":{"uniquely_mapped_percent":30.0,"percent_assigned":85.0,"total_reads":1000000.0},'
+    '"S2":{"uniquely_mapped_percent":30.0,"percent_assigned":84.0,"total_reads":1100000.0}}]}'
+)
+WARN_MQC = (  # uniquely_mapped_percent in [40, 60) -> WARN, not FAIL
+    '{"report_general_stats_data":[{'
+    '"S1":{"uniquely_mapped_percent":50.0,"percent_assigned":85.0,"total_reads":1000000.0},'
+    '"S2":{"uniquely_mapped_percent":50.0,"percent_assigned":84.0,"total_reads":1100000.0}}]}'
+)
 TRACE_OK = (
     "task_id\thash\tnative_id\tname\tstatus\texit\tsubmit\tduration\trealtime\n"
     "1\tab/cd\t1\tFASTQC (S1)\tCOMPLETED\t0\t-\t-\t-\n"
@@ -142,6 +152,59 @@ def test_run_reports_failure_but_still_captures_bundle(tmp_path, monkeypatch):
     assert "FAIL" in result.output
     # the bundle was still written despite the failure
     assert (tmp_path / "rf" / "run_record.json").exists()
+
+
+def test_fail_mqc_fixture_actually_yields_fail_verdict(tmp_path, monkeypatch):
+    # Guardrail: confirm the FAIL_MQC fixture produces a completed run whose
+    # reduced verdict is FAIL (VERDICT: FAIL in the rendered report) before the
+    # exit-code tests below rely on it.
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_OK, FAIL_MQC))
+    result = runner.invoke(app, ["run", "--run-id", "fv", "--runs-dir", str(tmp_path)])
+    assert "FAIL" in result.output
+    rec = load_bundle(tmp_path / "fv")
+    assert rec.verdict == "fail"
+
+
+def test_run_fail_on_verdict_fails_on_fail_qc(tmp_path, monkeypatch):
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_OK, FAIL_MQC))
+    result = runner.invoke(
+        app, ["run", "--run-id", "fov", "--runs-dir", str(tmp_path), "--fail-on-verdict"]
+    )
+    assert result.exit_code == 1
+    assert "verdict is FAIL" in result.output
+
+
+def test_run_fail_on_verdict_passes_on_pass(tmp_path, monkeypatch):
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_OK, GOOD_MQC))
+    result = runner.invoke(
+        app, ["run", "--run-id", "pov", "--runs-dir", str(tmp_path), "--fail-on-verdict"]
+    )
+    assert result.exit_code == 0
+
+
+def test_run_fail_on_verdict_passes_on_warn(tmp_path, monkeypatch):
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_OK, WARN_MQC))
+    result = runner.invoke(
+        app, ["run", "--run-id", "wov", "--runs-dir", str(tmp_path), "--fail-on-verdict"]
+    )
+    assert result.exit_code == 0
+
+
+def test_run_fail_verdict_without_flag_is_zero(tmp_path, monkeypatch):
+    # The most important regression guard: the SAME FAIL fixture, no flag -> exit 0.
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_OK, FAIL_MQC))
+    result = runner.invoke(app, ["run", "--run-id", "nof", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+
+
+def test_run_incomplete_still_fails_with_flag(tmp_path, monkeypatch):
+    # A non-completing run already exits non-zero via .succeeded; the flag must not
+    # regress that (and must not double-fire — the .succeeded gate returns first).
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_FAIL))
+    result = runner.invoke(
+        app, ["run", "--run-id", "inc", "--runs-dir", str(tmp_path), "--fail-on-verdict"]
+    )
+    assert result.exit_code != 0
 
 
 def test_run_with_samplesheet_checksums_real_inputs(tmp_path, monkeypatch):

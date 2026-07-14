@@ -262,6 +262,7 @@ def run(
     auto_approve: bool = typer.Option(False, "--auto-approve", help="Apply gated patches without waiting (non-interactive/CI)."),
     approval_timeout: float = typer.Option(1800, "--approval-timeout", help="Seconds to wait for a human approval before stopping."),
     notify: str = typer.Option(None, "--notify", help="Webhook URL to POST run lifecycle events to (http/https)."),
+    fail_on_verdict: bool = typer.Option(False, "--fail-on-verdict", help="Exit non-zero if the run's verdict is FAIL (opt-in; WARN/UNVERIFIED do not). Default off."),
 ) -> None:
     """Run a pipeline, self-heal recoverable failures, verify it, and report the verdict.
 
@@ -297,6 +298,7 @@ def run(
         auto_approve=auto_approve,
         approval_timeout=approval_timeout,
         notify=notify,
+        fail_on_verdict=fail_on_verdict,
     )
 
 
@@ -353,6 +355,7 @@ def _dispatch_run(
     auto_approve: bool = False,
     approval_timeout: float = 1800,
     notify: str | None = None,
+    fail_on_verdict: bool = False,
 ) -> None:
     """Validate, write the reproduce sidecar, run through self-heal, and report.
 
@@ -617,6 +620,9 @@ def _dispatch_run(
 
     typer.echo(render_run_report(record))
     if not RunSummary.from_events(record.events).succeeded:
+        raise typer.Exit(code=1)
+    if fail_on_verdict and record.verdict == "fail":
+        typer.echo(f"Run {run_id} verdict is FAIL (--fail-on-verdict).", err=True)
         raise typer.Exit(code=1)
 
 
