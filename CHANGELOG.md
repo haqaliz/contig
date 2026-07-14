@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-07-14
+
 ### Added
 
 - **Strelka2-native tumor-VAF plausibility — independent cross-caller corroboration of
@@ -1454,6 +1456,7 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.34.0]: https://github.com/haqaliz/contig/releases/tag/v0.34.0
 [0.33.0]: https://github.com/haqaliz/contig/releases/tag/v0.33.0
 [0.32.0]: https://github.com/haqaliz/contig/releases/tag/v0.32.0
 [0.31.0]: https://github.com/haqaliz/contig/releases/tag/v0.31.0
