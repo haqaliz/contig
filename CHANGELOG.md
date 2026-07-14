@@ -6,6 +6,49 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Germline biological-plausibility checks gain their first FAIL severity — a grossly
+  broken germline call set now FAILs the verdict, not just WARNs** (capability C3 follow-on;
+  the "FAIL severity deferred" item the germline slices — Ti/Tv + het/hom (v0.3.0),
+  variant-count (v0.32.0) — each left open "until calibrated on real data"). The germline
+  `VARIANT_RULE_PACK` metrics were WARN-only, so a call set that is essentially noise
+  (Ti/Tv ≈ 0.5, the signature of random/garbage calls) or an empty/near-empty call set
+  produced only a WARN — easy to overlook, and inconsistent with the *did-it-run* QC packs
+  (`mean_coverage fail_below`, methylseq, ampliseq, mag, scrnaseq) that already FAIL on
+  gross failure through the exact same scorer. Three metrics now carry gross-implausibility
+  FAIL bands:
+  - **`ts_tv_ratio`:** `fail_below 1.2` / `fail_above 3.6` (the WARN band `1.8`–`2.4` is
+    unchanged). A noise-level Ti/Tv (~0.5) FAILs; a legitimate WGS (~2.0) or WES (~3.0–3.3)
+    call set stays PASS/WARN.
+  - **`het_hom_ratio`:** `fail_below 1.0` / `fail_above 3.0` (WARN band `1.4`–`2.5`
+    unchanged). The FAIL band is deliberately wider than the WARN band — het/hom is more
+    population/capture-sensitive than Ti/Tv, so only a grossly-off ratio trips it.
+  - **`variant_count`:** `fail_below 1` only — **no `fail_above`**. An essentially-empty
+    call set (broken/truncated calling) is now a **FAIL**, not the prior WARN — a strictly
+    stronger, correct signal (previously the always-int 0 rode the band as a soft WARN). The
+    `warn_above 20_000_000` ceiling stays a soft WARN, so a large joint-called cohort is
+    never FAILed for being legitimately large.
+  - **Pure data change; the whole verdict path is unchanged.** Only the three
+    `VARIANT_RULE_PACK` rule dicts changed — the scorer (`_status_for`), evaluator
+    (`evaluate_variant_plausibility`), verdict reducer (`overall_verdict`), report,
+    `contig show --explain`, provenance, and dashboard consume it unchanged. A failing
+    germline plausibility result now drives `record.verdict` → FAIL wherever the verdict is
+    surfaced. An empty germline VCF yields `variant_count` FAIL **and** `ts_tv`/`het_hom`
+    UNVERIFIED (the ratios are uncomputable with no variants); FAIL dominates, so the overall
+    verdict is FAIL.
+  - **Honest framing.** The bands are **WES-safe gross-implausibility engineering
+    tripwires** (same honesty tier as `mean_coverage fail_below`, literature-grounded Ti/Tv
+    ~2.0 WGS / ~3.0–3.3 WES / noise ~0.5), **not** a clinical or biological/pathogenicity
+    claim. **Verdict-only:** the `contig run`/`verify` exit code is unchanged — no QC verdict,
+    including pre-existing FAIL packs like `mean_coverage`, moves the exit code today; wiring
+    that is a deliberate, separately-scoped, cross-cutting follow-on. **Still WARN-only /
+    FAIL deferred:** the somatic, RNA-seq, RNA-seq-composition, and annotation plausibility
+    packs, and the germline sex-check axis. Test-first with synthetic inline VCF fixtures —
+    **no real nf-core/sarek run in CI**. **Deferred:** CLI exit-code wiring; capture-type-aware
+    (WGS/WES/panel) bands; tighter calibration on real cohorts (the WES-safe bands are
+    deliberately gross-only); and FAIL severity for the non-germline plausibility packs.
+
 ## [0.34.0] - 2026-07-14
 
 ### Added
