@@ -315,10 +315,17 @@ SOMATIC_PLAUSIBILITY_PACK: list[dict] = [
         "warn_above": 0.95,
         "message": "median tumor variant allele fraction",
     },
-    {   # coarse count floor/ceiling to catch a grossly failed call set; band is wide
-        # because target type (panel/WES/WGS) varies by orders of magnitude.
+    {   # fail_below 1 is a hard floor: an empty call set (0 records) is a broken
+        # run and FAILs, same engineering tier as mean_coverage's fail_below —
+        # not a biological or clinical claim. There is deliberately NO
+        # fail_above: warn_above stays a SOFT, uncalibrated "absurd-count"
+        # tripwire, never a validated ceiling, because a hypermutator
+        # (MSI-high, POLE-mutant) or a WGS tumor legitimately exceeds it. The
+        # band is otherwise coarse because target type (panel/WES/WGS) varies
+        # by orders of magnitude.
         "check": "somatic_variant_count",
         "metric": "somatic_variant_count",
+        "fail_below": 1,
         "warn_below": 10,
         "warn_above": 100000,
         "message": "number of somatic variant records called",
