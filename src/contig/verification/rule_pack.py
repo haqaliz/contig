@@ -277,32 +277,60 @@ MAG_RULE_PACK: list[dict] = [
 
 
 # RNA-seq biological-plausibility checks (capability C3, RNA-seq slice).
-# WARN-capped (no fail_*) BY DECISION, not pending calibration. Do not add a fail
-# band here. Two independent reasons, either one sufficient:
-#   1. Biology: every metric below has a legitimate protocol sitting at its
-#      extreme. A deep/high-input library legitimately exceeds 90% duplication;
-#      total-RNA / ribo-depletion legitimately retains rRNA. "Extreme" and
-#      "unusual protocol" are the same number here, so any fail band FAILs real
-#      science. Unlike germline Ti/Tv — which has a physically constrained
-#      expectation (~2.0 WGS, ~3.0-3.3 WES) with noise distinguishable at ~0.5,
-#      and therefore could ship honest FAIL bands — these metrics have no
-#      protocol-independent expected value to band against.
-#   2. Engineering: both slugs below are unverified AND absent from the repo's
-#      only real-shaped MultiQC report (demo/sample-run/results/multiqc/
-#      multiqc_data.json carries only uniquely_mapped_percent, percent_assigned,
-#      total_reads). These rules have never once fired on a real report, so FAIL
-#      severity here would be severity on dead code.
-# The bands are illustrative, tunable engineering defaults, NOT biological claims.
-# Metric slugs are the best-effort nf-core/rnaseq MultiQC general-stats keys
-# (UNVERIFIED-when-absent absorbs a wrong/missing slug — see
-# evaluate_rnaseq_plausibility). Scale 0-100, matching METHYLSEQ_RULE_PACK's
-# percent_duplication usage.
+#
+# This pack is now MIXED-UNIT and MIXED-VERIFICATION-STATUS on purpose — the
+# two rules below share a pack, not a code path or a provenance story:
+#
+#   duplication_rate (PERCENT_DUPLICATION, Picard MarkDuplicates via MultiQC):
+#     VERIFIED slug and unit, from source, not from an observed run: MultiQC
+#     republishes Picard's own field name verbatim, and it is uppercase
+#     (PERCENT_DUPLICATION), not the lowercase percent_duplication this pack
+#     used to key on. Picard's javadoc is explicit that the value is "the
+#     fraction of mapped sequence that is marked as duplicate" — a raw 0-1
+#     fraction, with no x100 anywhere in its formula, despite the "PERCENT" in
+#     its name. This is UNLIKE METHYLSEQ_RULE_PACK's percent_duplication,
+#     which genuinely is 0-100: that parser reads Bismark's own parenthesized
+#     percent text ("duplicated alignments removed: N (12.34%)", see
+#     methylseq_metrics.py:81-84). The two slugs share a name and nothing
+#     else — never assume one's scale from the other.
+#     NO BAND: informational only, always pass when in [0, 1]. A deep/
+#     high-input library legitimately exceeds 90% duplication (real science),
+#     so any warn/fail band here would flag a legitimate protocol, not a
+#     broken run — see the biology reason below, which still applies. A band
+#     becomes justifiable only if real per-protocol duplication distributions
+#     are collected, or the pack gains a library-prep/input-amount signal that
+#     could separate "deep library" from "broken library"; neither exists
+#     today. The "unit": "fraction" key below drives a guard in
+#     evaluate_rnaseq_plausibility: a value PRESENT but outside [0, 1] (e.g. a
+#     pre-scaled 95.0) is refused as unverified, never rescaled — a value like
+#     0.5 would be ambiguous between "50%" and "0.5%", so guessing would be
+#     worse than refusing.
+#     No real nf-core/rnaseq multiqc_data.json exists in this repo to confirm
+#     the key against (demo/sample-run's is synthetic; see
+#     demo/make_sample_run.py:59,105) — the key and unit above are read from
+#     MultiQC's and Picard's own source, not from an observed report.
+#
+#   rrna_contamination (percent_rRNA, featureCounts rRNA biotype):
+#     Slug UNVERIFIED — a best-effort guess, never confirmed against a real
+#     report (demo/sample-run/results/multiqc/multiqc_data.json carries only
+#     uniquely_mapped_percent, percent_assigned, total_reads; this rule has
+#     never once fired on a real report). Declared scale 0-100.
+#     WARN-capped BY DECISION, not pending calibration: total-RNA /
+#     ribo-depletion protocols legitimately retain rRNA, so "extreme" and
+#     "unusual protocol" are the same number here too — the biology reason
+#     duplication_rate no longer needs still applies to this metric.
+#
+# Neither rule carries a fail band, for the two independent per-metric reasons
+# documented above — this is no longer one shared policy statement.
 RNASEQ_PLAUSIBILITY_PACK: list[dict] = [
     {
         "check": "duplication_rate",
-        "metric": "percent_duplication",   # Picard MarkDuplicates; slug unverified
-        "warn_above": 80.0,                # lenient: RNA-seq tolerates high dup
-        "message": "fraction of alignments flagged as duplicates",
+        "metric": "PERCENT_DUPLICATION",   # Picard MarkDuplicates via MultiQC; verified
+        "unit": "fraction",                # raw 0-1 fraction; see header — no x100
+        "message": (
+            "fraction of alignments flagged as duplicates (0-1; Picard "
+            "PERCENT_DUPLICATION via MultiQC)"
+        ),
     },
     {
         "check": "rrna_contamination",

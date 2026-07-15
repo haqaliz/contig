@@ -609,11 +609,37 @@ def test_rnaseq_plausibility_pack_covers_duplication_and_rrna():
     assert "rrna_contamination" in checks
 
 
-def test_rnaseq_plausibility_pack_rules_have_warn_above():
+def test_rnaseq_plausibility_rrna_contamination_has_warn_above():
+    # rrna_contamination keeps its WARN-capped band; duplication_rate does not
+    # (see test_rnaseq_plausibility_duplication_rate_has_no_band) — the pack is
+    # deliberately mixed-severity now, not one shared warn_above policy.
     from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK
 
-    for rule in RNASEQ_PLAUSIBILITY_PACK:
-        assert "warn_above" in rule, f"{rule['check']!r} missing warn_above"
+    rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "rrna_contamination")
+    assert "warn_above" in rule
+
+
+def test_rnaseq_plausibility_duplication_rate_has_no_band():
+    # duplication_rate is informational-only: no warn_above/warn_below and no
+    # fail_* — see rule_pack.py's header for why a band would flag a
+    # legitimate deep/high-input protocol as broken.
+    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK
+
+    rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "duplication_rate")
+    assert "warn_above" not in rule
+    assert "warn_below" not in rule
+    assert "fail_above" not in rule
+    assert "fail_below" not in rule
+
+
+def test_rnaseq_plausibility_duplication_rate_declares_fraction_unit():
+    # The "unit": "fraction" key drives the [0, 1] range guard in
+    # evaluate_rnaseq_plausibility (a present-but-out-of-range value is
+    # refused as unverified, never rescaled).
+    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK
+
+    rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "duplication_rate")
+    assert rule["unit"] == "fraction"
 
 
 def test_rnaseq_plausibility_pack_rules_have_no_fail_keys():
@@ -632,11 +658,16 @@ def test_rnaseq_plausibility_duplication_below_band_is_pass():
     assert _status_for(30.0, rule) == "pass"
 
 
-def test_rnaseq_plausibility_duplication_above_band_is_warn():
+def test_rnaseq_plausibility_duplication_high_value_is_pass_not_warn():
+    # duplication_rate has no band (informational only): even a high, in-range
+    # fraction like 0.95 passes, it never warns. (The unit-range guard for a
+    # present-but-out-of-[0,1] value like 95.0 lives in
+    # evaluate_rnaseq_plausibility, not in _status_for, which only applies
+    # bounds a rule actually declares.)
     from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK, _status_for
 
     rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "duplication_rate")
-    assert _status_for(95.0, rule) == "warn"
+    assert _status_for(0.95, rule) == "pass"
 
 
 def test_rnaseq_plausibility_duplication_never_fails():
