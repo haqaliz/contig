@@ -39,6 +39,7 @@ def _gene_symbol_pass() -> QCResult:
         value=0.9,
         expected_range=None,
         kind="concordance",
+        informational=True,
     )
 
 

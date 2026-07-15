@@ -284,6 +284,7 @@ def test_gene_symbol_informational_pass(tmp_path):
     assert result.value == 0.4
     assert result.kind == "concordance"
     assert "informational" in result.message
+    assert result.informational is True
 
 
 def test_symbol_casefold_match(tmp_path):
@@ -302,6 +303,7 @@ def test_symbol_casefold_match(tmp_path):
 
     assert result.status == "pass"
     assert result.value == 1.0
+    assert result.informational is True
 
 
 def test_symbol_unresolvable_excluded(tmp_path):
@@ -326,6 +328,7 @@ def test_symbol_unresolvable_excluded(tmp_path):
     assert result.status == "pass"
     assert result.value == 1.0
     assert "10/10" in result.message
+    assert result.informational is True
 
 
 def test_symbol_too_few_resolvable_unverified(tmp_path):
