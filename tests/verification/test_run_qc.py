@@ -355,8 +355,10 @@ def test_sex_plausibility_not_run_for_non_variant_assay(tmp_path):
 def test_sex_plausibility_warn_does_not_force_fail_verdict(tmp_path):
     # Verdict-invariance: a WARN sex_plausibility result, on its own, reduces
     # to "warn" -- never "fail" -- confirming (per overall_verdict's fail>warn>
-    # pass>unverified precedence and cli.py's exit-decided-by-pipeline-success-
-    # only contract) that this check cannot force a run's exit code.
+    # pass>unverified precedence) that this check cannot force a FAIL verdict.
+    # By default cli.py decides the exit code by pipeline success only; the
+    # opt-in --fail-on-verdict flag makes a FAIL verdict exit non-zero, but a
+    # WARN (as here) never does -- so this check still cannot force a run's exit.
     run_dir = tmp_path / "run"
     results_dir = run_dir / "results"
     results_dir.mkdir(parents=True)

@@ -262,6 +262,7 @@ def run(
     auto_approve: bool = typer.Option(False, "--auto-approve", help="Apply gated patches without waiting (non-interactive/CI)."),
     approval_timeout: float = typer.Option(1800, "--approval-timeout", help="Seconds to wait for a human approval before stopping."),
     notify: str = typer.Option(None, "--notify", help="Webhook URL to POST run lifecycle events to (http/https)."),
+    fail_on_verdict: bool = typer.Option(False, "--fail-on-verdict", help="Exit non-zero if the run's verdict is FAIL (opt-in; WARN/UNVERIFIED do not). Default off."),
 ) -> None:
     """Run a pipeline, self-heal recoverable failures, verify it, and report the verdict.
 
@@ -297,6 +298,7 @@ def run(
         auto_approve=auto_approve,
         approval_timeout=approval_timeout,
         notify=notify,
+        fail_on_verdict=fail_on_verdict,
     )
 
 
@@ -353,6 +355,7 @@ def _dispatch_run(
     auto_approve: bool = False,
     approval_timeout: float = 1800,
     notify: str | None = None,
+    fail_on_verdict: bool = False,
 ) -> None:
     """Validate, write the reproduce sidecar, run through self-heal, and report.
 
@@ -618,6 +621,9 @@ def _dispatch_run(
     typer.echo(render_run_report(record))
     if not RunSummary.from_events(record.events).succeeded:
         raise typer.Exit(code=1)
+    if fail_on_verdict and record.verdict == "fail":
+        typer.echo(f"Run {run_id} verdict is FAIL (--fail-on-verdict).", err=True)
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -756,6 +762,14 @@ def verify(
     run_id: str = typer.Argument(..., help="The run whose outputs to re-verify."),
     runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
     json_out: bool = typer.Option(False, "--json", help="Emit the result as JSON (for the dashboard)."),
+    fail_on_verdict: bool = typer.Option(
+        False,
+        "--fail-on-verdict",
+        help=(
+            "Exit non-zero if the run's stored verdict is FAIL (opt-in; WARN/UNVERIFIED do "
+            "not). Composes with output-drift/signature checks. Default off."
+        ),
+    ),
     concordance_vcf: str = typer.Option(
         None,
         "--concordance-vcf",
@@ -832,6 +846,12 @@ def verify(
     output that changed or disappeared is drift and exits non-zero. A run whose
     record captured no outputs reports "nothing to verify" (PRD contract B).
 
+    With --fail-on-verdict (opt-in, default off), a loaded record whose reduced
+    verdict is FAIL also exits non-zero (code 1), on every path — no-checksums and
+    has-checksums, text and --json. It composes with the output-drift and signature
+    checks (any one non-zero exits non-zero); WARN/UNVERIFIED/PASS still exit 0, the
+    --json payload is unchanged, and concordance still NEVER affects the exit code.
+
     With --concordance-vcf, also corroborate the run's germline variants against a
     second call set (PRD C1): the concordance checks are printed (and included in
     the JSON payload), but concordance is at-most-WARN and NEVER changes the exit
@@ -895,6 +915,14 @@ def verify(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
 
+    # Opt-in verdict gate (PRD M2): a loaded FAIL verdict makes verify exit non-zero
+    # on every terminal path below, composing with drift/signature (any one non-zero
+    # exits non-zero). Computed once; WARN/UNVERIFIED/PASS never trip it.
+    verdict_fail = fail_on_verdict and record.verdict == "fail"
+
+    def _echo_verdict_reason() -> None:
+        typer.echo(f"Run {run_id} verdict is FAIL (--fail-on-verdict).", err=True)
+
     # Concordance is independent of output-drift: compute it (if requested) up front
     # so it is surfaced on BOTH the no-checksums and has-checksums paths, and so it
     # can never influence the `ok`/exit decision below.
@@ -932,11 +960,17 @@ def verify(
             result["concordance"] = [c.model_dump() for c in concordance]
         if json_out:
             typer.echo(_json.dumps(result))
-            if sig_bad:
+            if verdict_fail:
+                _echo_verdict_reason()
+            if sig_bad or verdict_fail:
                 raise typer.Exit(code=1)
             return
         if sig_bad:
             typer.echo(f"Signature mismatch for run {run_id}: the record was modified.", err=True)
+            _echo_concordance(concordance)
+            raise typer.Exit(code=1)
+        if verdict_fail:
+            _echo_verdict_reason()
             _echo_concordance(concordance)
             raise typer.Exit(code=1)
         signed_note = " (signature verified)" if sig.get("signature_ok") else ""
@@ -950,11 +984,13 @@ def verify(
         result["concordance"] = [c.model_dump() for c in concordance]
     if json_out:
         typer.echo(_json.dumps(result))
-        if not result["ok"] or sig_bad:
+        if verdict_fail:
+            _echo_verdict_reason()
+        if not result["ok"] or sig_bad or verdict_fail:
             raise typer.Exit(code=1)
         return
 
-    if result["ok"] and not sig_bad:
+    if result["ok"] and not sig_bad and not verdict_fail:
         signed_note = " Signature verified." if sig.get("signature_ok") else ""
         typer.echo(f"Outputs verified for run {run_id}: all recorded outputs match.{signed_note}")
         _echo_concordance(concordance)
@@ -967,6 +1003,8 @@ def verify(
             typer.echo(f"  changed: {rel}", err=True)
         for rel in result["missing"]:
             typer.echo(f"  missing: {rel}", err=True)
+    if verdict_fail:
+        _echo_verdict_reason()
     _echo_concordance(concordance)
     raise typer.Exit(code=1)
 

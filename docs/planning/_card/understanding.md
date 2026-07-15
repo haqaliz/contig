@@ -1,83 +1,115 @@
-# Understanding: germline-plausibility-fail-severity
+# Understanding: verdict-exit-code
 
-_Phase 2 deep-dig note. Grounded in a read-only trace of the worktree at HEAD
-(origin/master). Two dig agents: verdict/exit-code path + WARN-only contract inventory._
+Phase 2 dig output. Source: `_card/issue.md` + read-only code map of `src/contig/`
+and `tests/` (worktree `feat-verdict-exit-code`).
 
 ## What the work is really asking
 
-Give the **germline biological-plausibility** checks their first FAIL severity by adding
-`fail_below`/`fail_above` bands to three rule dicts in
-`src/contig/verification/rule_pack.py` (`VARIANT_RULE_PACK`): `ts_tv_ratio`,
-`het_hom_ratio`, `variant_count`. Today all three are WARN-only (no `fail_*`). The bands
-must be **gross-implausibility-only** engineering tripwires ("this call set is broken"),
-wide enough that a legitimate WES run (Ti/Tv ~3.0–3.3) never FAILs, on the same honesty
-tier as the existing `mean_coverage fail_below: 10` — never a clinical/biological claim.
+Make Contig's already-computed **FAIL verdict** able to fail the process, so a
+researcher can gate a script or CI step on it — without changing today's default
+behavior. The verdict is rendered and printed today but never consulted for the exit
+code. This is enforcement plumbing, not new science.
 
-## How the code actually behaves (the important corrections)
+## Key finding: the verdict is already a single, safe source of truth
 
-1. **Adding the band data is the ONLY functional change.** `rule_pack._status_for()`
-   (`rule_pack.py:435-454`) already honors `fail_below`/`fail_above` via `.get()`;
-   `evaluate()` passes the status through; `evaluate_variant_plausibility()`
-   (`variant_metrics.py:151-200`) hands the germline rule dicts straight to `evaluate()`
-   with **no WARN clamp**. So adding `fail_*` keys to the three dicts automatically yields
-   `status="fail"` — identical to how `mean_coverage`/methylseq/scrnaseq packs already
-   fail. No evaluator/plumbing change needed.
+`RunRecord.verdict` (`models.py:357-369`) is a `@computed_field` property that:
 
-2. **The verdict reducer already handles a failing plausibility result.**
-   `overall_verdict()` (`models.py:78-96`) inspects only `.status` — `if "fail" in
-   statuses: return "fail"`. It does **not** special-case `kind` (structural / metric /
-   concordance are equal). One failing germline plausibility QCResult drives
-   `record.verdict` → FAIL. Concordance's "at most WARN" is by *construction*
-   (`concordance.py` only emits warn/pass) and because the verify CLI never adds
-   concordance to `qc_results` — NOT a reducer clamp. Germline plausibility results ARE
-   added to `qc_results` uncapped (`runner.py:295`).
+- returns `"fail"` if the pipeline didn't complete (`RunSummary...succeeded` is false),
+- returns `"unverified"` if the run completed but has **no** QC results,
+- else returns `overall_verdict(self.qc_results)` — `"fail"` dominates `"warn"`
+  dominates `"pass"` (`models.py:78-96`).
 
-3. **⚠️ The brief's premise "reverses … never changes the verify exit code" is
-   misleading.** No QC verdict changes the CLI exit code today — not even the
-   already-failing did-it-run packs.
-   - `contig verify` exit code: set ONLY from output drift (`verify_outputs`) + signature
-     (`cli.py:953-954, 964-971`). Never reads `record.verdict`.
-   - `contig run` exit code: gated on pipeline execution success
-     (`cli.py:618-620`), not the QC verdict.
-   So a germline plausibility FAIL surfaces in `record.verdict`, `render_run_report`,
-   `render_explain`, provenance, and the dashboard — but the process exit stays 0 unless
-   we add NEW wiring. **This is the central scope question for the interview** (see below).
+It **never raises** (the `ValueError` in `overall_verdict` on an empty list is guarded
+by the `not self.qc_results` branch). `render_run_report` already prints it
+(`report.py:90`). So both commands can gate on `record.verdict == "fail"` with **no
+new computation and no new loading** — the record is already in hand.
 
-4. **History:** the germline pack ORIGINALLY carried FAIL bands `[1.5, 3.0]` on
-   ts_tv/het_hom; v0.3.0 deliberately **removed** them "until calibrated on real data"
-   (`CHANGELOG.md:1386-1388`). A synthetic test `_ts_tv_range_pack()`
-   (`test_rule_pack.py:126-137`) with `fail_below:1.5`/`fail_above:3.0` already models the
-   scorer path. Re-adding fail bands is reinstating a removed contract with wider,
-   WES-safe bands.
+Vocabulary: `Verdict = Literal["pass","warn","fail","unverified"]` (`models.py:58`).
 
 ## Affected areas
 
-- **Change (data):** `src/contig/verification/rule_pack.py:54-78` — add `fail_*` to the
-  three germline dicts; update the WARN-capped comments (`:44-48, 51-53, 61, 69-72`).
-- **Docstrings (cosmetic):** `variant_metrics.py:154, 166`.
-- **Tests to update (assert WARN-only today):** `test_variant_metrics.py:242, 306, 319,
-  334`; `test_rule_pack.py:178`. Plus add new RED tests for the FAIL bands.
-- **Docs to sync:** `CHANGELOG.md` (new entry), `docs/technical/CAPABILITY_ROADMAP.md`
-  (C3 germline rows `:432-452, 828`), `FEATURES.md:252`, and the germline planning PRDs.
-- **Baseline:** `uv run pytest` → **1479 passed, 1 skipped** (from the most recent
-  germline slice's PRD).
+### `contig run` — `cli.py` (`run` at :237, real work in `_dispatch_run` at :327)
+- Exit is decided **only** by pipeline success at `cli.py:618-620`:
+  ```python
+  typer.echo(render_run_report(record))
+  if not RunSummary.from_events(record.events).succeeded:
+      raise typer.Exit(code=1)
+  ```
+- `record` (a `RunRecord`) is in scope; `record.verdict` is available and already
+  printed. **No `--json` option on `run`.**
+- Slice: add an opt-in check right here — `if fail_on_verdict and record.verdict ==
+  "fail": raise typer.Exit(...)`. Because a non-completing run already exits 1
+  unconditionally (and its verdict is `"fail"` too), the flag is a **strict superset**
+  that adds only the *completed-but-QC-FAIL* case. Flag off ⇒ byte-identical to today.
 
-## Open questions for the interview (context can't resolve these)
+### `contig verify` — `cli.py` (`verify` at :754, body :868-971)
+- Loads the record: `record = load_run(runs_dir, run_id)` (`cli.py:893`). `record.verdict`
+  is available but **never consulted** today.
+- Exit is decided **only** by output drift (`result["ok"]` from `verify_outputs`) and
+  signature mismatch (`sig_bad`). Concordance is at-most-WARN, never exits.
+- Multiple return/exit paths: no-checksums branch (`:929-945`) and has-checksums branch
+  (`:947-971`), each with a `--json` sub-path and a text sub-path.
+- Slice: fold a `verdict_fail = fail_on_verdict and record.verdict == "fail"` into the
+  exit decision **on every path** (including no-checksums — a run with a FAIL verdict but
+  no captured outputs must still fail under the flag). `verify` reads the **stored**
+  verdict; it does not recompute QC.
+- `--json` payload (`result` dict) keys today: `ok`, `changed`, `missing`, `signed`,
+  `signature_ok`, optional `concordance`. Open question: whether to surface `verdict` in
+  the payload when the flag is on (default-off path must stay identical).
 
-- **Q1 — Scope of "FAIL": verdict-only, or also wire a non-zero CLI exit?** Verdict-only
-  is consistent with every existing fail-capable pack (mean_coverage etc.) and keeps this
-  slice depth-first. Wiring `contig verify`/`run` to exit non-zero on a QC FAIL is a
-  cross-cutting change affecting ALL fail packs, arguably a separate feature. Recommend
-  **verdict-only** for this slice, flag the exit-code wiring as a deliberate follow-on.
-- **Q2 — Exact FAIL bands.** Proposed, WES-safe, literature-grounded:
-  ts_tv `fail_below 1.2 / fail_above 3.6`; het_hom `fail_below ~1.0 / fail_above ~3.0`;
-  variant_count `fail_below 1` (essentially-empty call set) and **no** `fail_above` (a
-  huge joint cohort is legitimately large — the absurd-count ceiling stays a soft WARN).
-- **Q3 — Which checks this slice.** Brief says all three germline. Confirm variant_count
-  gets only a `fail_below` (broken/truncated calling), not a `fail_above`.
+## Contract this reverses, and what must move
+
+The repo currently documents "exit decided by pipeline success only" / "concordance
+never changes the exit code." The flag is **opt-in**, so those statements stay true by
+default. The one written pin that becomes stale is the docstring/comment at
+`tests/verification/test_run_qc.py:356-360` ("cli.py's exit-decided-by-pipeline-
+success-only contract") — reword to "…by default; `--fail-on-verdict` opts in."
+
+Tests to respect (all remain GREEN because the flag defaults off and only acts on the
+QC verdict, never on concordance):
+- `tests/test_cli.py` concordance-exit-0 tests (`:1438, 1473, 1550, 1586, 1732, 1768,
+  1930, 2138, 2406, 2557` and comments) — concordance still never changes exit.
+- `tests/test_cli.py:131-144` — `run` PASS→exit 0, non-completing→exit≠0 (unchanged; the
+  non-completing case exits via the existing `.succeeded` gate regardless of the flag).
+
+New tests needed (no existing CLI test covers completed-but-FAIL-QC):
+- `run` + `--fail-on-verdict`: a completed run whose QC verdict is FAIL exits non-zero;
+  WARN/PASS/UNVERIFIED exit 0; **without** the flag the same FAIL run exits 0.
+- `verify` + `--fail-on-verdict`: same matrix, on a loaded record; plus the no-checksums
+  branch (FAIL verdict, no outputs) fails under the flag; `--json` still emits and the
+  exit code still applies.
+
+## Test idioms to reuse
+- `typer.testing.CliRunner` (`tests/test_cli.py:4,20`), `from contig.cli import app`.
+- `_fake_run_executor(trace_text, mqc_json)` (`tests/test_cli.py:57-65`) + fixtures
+  `TRACE_OK`/`TRACE_FAIL`, `GOOD_MQC`/`VARIANT_MQC` drive `run` success + verdict.
+- `_record_with(qc_results, pipeline=..., revision=...)` (`tests/verification/test_run_qc.py:162-171`)
+  builds a completed `RunRecord` with arbitrary `QCResult`s — the idiomatic way to mint a
+  FAIL-verdict record for `verify` (pass a `QCResult(status="fail", ...)`), then `_write_run`
+  (`tests/test_cli.py:45-54`) to persist a bundle for `verify` to load.
+
+## Ambiguities / open questions (for the interview)
+1. **Flag name & surface:** `--fail-on-verdict` on both `run` and `verify` (recommended,
+   parallel + discoverable), vs a shared `--strict`, vs an env var. Recommend a
+   per-command bool flag, same name on both.
+2. **Scope of slice 1:** both `run` and `verify` (recommended — the caveat names both),
+   vs `verify`-first.
+3. **Exit code value:** reuse `1` (recommended — matches every other `typer.Exit(code=1)`
+   and pipeline-failure), vs a distinct code (e.g. `2`) to disambiguate "FAIL verdict"
+   from "crash/bad args." A distinct code is friendlier for CI branching but diverges
+   from the existing idiom.
+4. **WARN handling:** slice 1 = only FAIL → non-zero; WARN/UNVERIFIED stay 0 (per brief).
+   Confirm no `--fail-on-warn` in this slice.
+5. **`--json` on `verify`:** keep payload identical by default; when the flag is on, may
+   add a `"verdict"` key. Decide whether that's in-scope for slice 1.
+6. **Docs:** update `CHANGELOG.md` (Unreleased), and reword the WARN-only / "never changes
+   the exit code" language in `CAPABILITY_ROADMAP.md` / `FEATURES.md` to "by default;
+   opt-in via `--fail-on-verdict`."
 
 ## Guardrail check (CLAUDE.md)
-
-On-thesis Layer-2 verification depth (make the verdict harder to fool). No Layer-1, no
-clinical claim (engineering "broken call set" tripwire), no proprietary data (bands are
-public literature). Test-first.
+- **Layer 2, on-thesis** — hardens the verify surface; makes the verified verdict
+  enforceable. Not Layer 1. ✓
+- **No over-claiming** — enforces the *existing* verdict; adds no new science, no new
+  band, no clinical claim. UNVERIFIED still never treated as PASS (it exits 0, correctly —
+  it is not a FAIL). ✓
+- **No new dependency, no raw-read egress.** ✓

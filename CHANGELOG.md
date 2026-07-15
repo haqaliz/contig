@@ -6,6 +6,38 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`contig run` and `contig verify` gain an opt-in `--fail-on-verdict` flag that makes a
+  verified **FAIL** verdict exit non-zero** — closing the "CLI exit-code wiring" follow-on
+  that was deliberately deferred in v0.35.0 (the germline-plausibility-FAIL-severity slice
+  noted "the `contig run`/`verify` exit code is unchanged … wiring that is a deliberate,
+  separately-scoped, cross-cutting follow-on"). Until now no QC verdict, not even a FAIL,
+  moved the exit code: a run that *completed* but whose science was broken (a structural
+  FAIL, or a germline gross-implausibility FAIL — noise-level Ti/Tv, grossly-off het/hom,
+  empty call set) still returned exit `0`, so any researcher wiring Contig into a shell
+  script or CI step got a green result on a FAILed analysis. This gives the verdict teeth
+  without changing anyone's defaults:
+  - **Opt-in, FAIL-only.** When `--fail-on-verdict` is set and the run's reduced verdict is
+    `FAIL`, the command exits `1` after rendering the report. `WARN`, `UNVERIFIED`, and
+    `PASS` always exit `0` — `UNVERIFIED` in particular never converts "we couldn't check"
+    into "it failed." A one-line reason (`Run <id> verdict is FAIL (--fail-on-verdict).`) is
+    echoed to **stderr** on the verdict-driven exit.
+  - **Default behavior is byte-identical to before.** Without the flag, exit codes, stdout,
+    and `--json` payloads are unchanged; the flag reads the existing `record.verdict` (no
+    recomputation, no new model field, no reproduce/signature-contract change).
+  - **On `verify`, the flag composes with the existing checks.** A FAIL verdict ORs into the
+    output-drift and signature-mismatch exit decision across all four sub-paths (no-checksums
+    and has-checksums, text and `--json`) — any one non-zero ⇒ non-zero, including the former
+    "nothing to verify" `return 0` path. Concordance still never affects the exit.
+  - **Honest scope / deferred.** Only `FAIL` triggers non-zero — no `--fail-on-warn` or
+    `--fail-on={fail,warn}` level argument (deferred). The exit code is `1`, reusing the
+    crash idiom — no distinct science-FAIL code. No `verdict` key is added to the `verify
+    --json` payload (deferred to keep it stable). `rerun`/`resume` inherit the default
+    (`False`) and are unaffected, and the dashboard "Run test profile" launch path does not
+    expose the flag yet. Test-first (RED→GREEN) for every behavior; **no real nf-core run in
+    CI** — the gate is driven by the deterministic verdict reduction over synthetic fixtures.
+
 ## [0.35.0] - 2026-07-15
 
 ### Changed
