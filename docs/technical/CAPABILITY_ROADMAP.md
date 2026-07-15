@@ -366,7 +366,7 @@ corpus; repair success-rate analytics gain new classes.
 
 ---
 
-## C3. Biological-plausibility verification  ·  SHIPPED v0.3.0 (germline) + RNA-seq slice (v0.6.0) + single-cell ingestion slice (Unreleased) + germline sex-check slice (Unreleased) + RNA-seq mapping-composition slice (Unreleased) + germline variant-count slice (Unreleased) + germline plausibility FAIL-severity slice (Unreleased) + somatic empty-call-set FAIL floor slice (Unreleased; the remaining VAF/RNA-seq FAIL bands **declined by design** — see below)
+## C3. Biological-plausibility verification  ·  SHIPPED v0.3.0 (germline) + RNA-seq slice (v0.6.0) + single-cell ingestion slice (Unreleased) + germline sex-check slice (Unreleased) + RNA-seq mapping-composition slice (Unreleased) + germline variant-count slice (Unreleased) + germline plausibility FAIL-severity slice (Unreleased) + somatic empty-call-set FAIL floor slice (Unreleased; the remaining VAF/RNA-seq FAIL bands **declined by design** — see below) + RNA-seq plausibility ingestion fix slice (Unreleased; `duplication_rate` corrected to its real MultiQC key/unit, shipped informational-only — no band)
 
 **Shipped (germline slice) in v0.3.0.** The germline plausibility rules (Ti/Tv and
 het/hom ratios) already existed in `VARIANT_RULE_PACK` but were dormant because
@@ -526,17 +526,28 @@ would fix them:**
   appended alongside the pack's results, not routed through it, so no band on it could ever
   fire). PON absence is also a legitimate configuration Contig itself does not wire.
 - **RNA-seq (`RNASEQ_PLAUSIBILITY_PACK`, `RNASEQ_COMPOSITION_PACK`):** two independent
-  blockers. *Biology:* every metric has a legitimate protocol occupying its extreme —
-  deep/high-input libraries legitimately exceed 90% duplication, total-RNA/ribo-depletion
-  legitimately retains rRNA, nuclear/FFPE/3' libraries are legitimately intron-dominated,
-  non-model annotation legitimately leaves most tags unassigned. "Extreme" and "unusual
-  protocol" are the same number, and the packs see no prep or annotation-quality signal that
-  separates them. *Engineering:* `percent_duplication`/`percent_rRNA` (`rule_pack.py:303,309`,
-  both already commented "slug unverified") are **absent from the repo's only real-shaped
-  MultiQC report** (`demo/sample-run/results/multiqc/multiqc_data.json` carries only
-  `uniquely_mapped_percent`, `percent_assigned`, `total_reads`) — FAIL severity on a metric
-  that has never once arrived is severity on dead code. *Also:* the one genuinely broken case,
-  `unassigned_fraction == 1.0`, is already caught more honestly by `RNASEQ_RULE_PACK`'s
+  blockers, though the *engineering* one has since narrowed to a single metric. *Biology:*
+  every metric has a legitimate protocol occupying its extreme — deep/high-input libraries
+  legitimately exceed 90% duplication, total-RNA/ribo-depletion legitimately retains rRNA,
+  nuclear/FFPE/3' libraries are legitimately intron-dominated, non-model annotation
+  legitimately leaves most tags unassigned. "Extreme" and "unusual protocol" are the same
+  number, and the packs see no prep or annotation-quality signal that separates them — this
+  reason stands alone and needs no engineering support. *Engineering (now `percent_rRNA`
+  only):* at the time this record was first written, both `percent_duplication` and
+  `percent_rRNA` were absent from the repo's only real-shaped MultiQC report — FAIL severity
+  on a metric that never arrives is severity on dead code. **The RNA-seq plausibility
+  ingestion fix slice (below) removes half of that claim:** `duplication_rate` was keyed on
+  the wrong case (`percent_duplication` vs MultiQC's actual `PERCENT_DUPLICATION`) and banded
+  on the wrong unit (0–100 vs Picard's true 0–1 fraction) — a data bug, not an absent metric —
+  and now resolves against every real report that ran Picard MarkDuplicates. It no longer
+  qualifies for the "dead code" argument, so its declined band rests on the biology reason
+  alone, which now also covers WARN, not just FAIL: the fix shipped `duplication_rate`
+  **informational-only, with no band at all** (a deep/high-input library legitimately exceeds
+  90% duplication, so even a WARN would flag a legitimate protocol). `percent_rRNA`
+  (`rule_pack.py:337`, still commented "slug unverified") keeps the full engineering
+  argument — it genuinely has no default machine-readable source in `nf-core/rnaseq` (see the
+  ingestion fix slice below for the research). *Also:* the one genuinely broken composition
+  case, `unassigned_fraction == 1.0`, is already caught more honestly by `RNASEQ_RULE_PACK`'s
   `assignment_rate fail_below: 40` on the did-it-run tier — a second FAIL is redundant, not
   new signal.
 The decision is recorded in the pack comments (`rule_pack.py`) as well as here, so the reason
@@ -550,11 +561,20 @@ would FAIL (the engine has no target-type signal; `--fail-on-verdict` is opt-in,
 revisit trigger is the first real-world report of one). **Honest limit:** no real nf-core/sarek
 run in CI — the floor catches a failure that is *reasoned* (a truncated/crashed Mutect2 step
 yields 0 records) rather than *observed*, with the germline sibling as the existence proof.
-**Surfaced, not fixed (a stronger `/contig-next` candidate than any FAIL band):**
-`RNASEQ_PLAUSIBILITY_PACK` is a **silent no-op on every real rnaseq run** — the same defect
-class as the single-cell dormant pack fixed below — and carries a live unit ambiguity (the
-pack declares 0–100 while Picard's native `PERCENT_DUPLICATION` is a 0–1 fraction and
-`qc_ingest.py:5-23` does a bare `float()` with no normalization).
+**Surfaced here, then fixed (see the RNA-seq plausibility ingestion fix slice below):** at
+the time this record was first written, `RNASEQ_PLAUSIBILITY_PACK` was **dormant, not a
+silent no-op** — `evaluate_rnaseq_plausibility` already emitted an explicit `unverified`
+result per absent metric per sample (four on the repo's own demo fixture) on every real
+rnaseq run. That is *not* the single-cell/methylseq defect class: those packs ran through
+the bare `evaluate()`, which silently **skips** a metric it can't find, producing no result
+at all — dormant but honest is a different failure mode from silent. Only half of the live
+defect matched that class, too: `duplication_rate`'s wrong key/unit was a pure data bug — the
+key was reachable in MultiQC all along, misspelled by case, with a live unit ambiguity on top
+(the pack declared 0–100 while Picard's native `PERCENT_DUPLICATION` is a 0–1 fraction) — so
+no dedicated parser was needed, unlike the single-cell/methylseq fixes below. `percent_rRNA`
+is the metric that genuinely matches the single-cell defect class (no default
+machine-readable source in `nf-core/rnaseq` at all), and it remains unfixed and out of scope
+(see the ingestion fix slice below).
 
 **Shipped (single-cell ingestion slice, Unreleased).** The single-cell (`scrnaseq`)
 assay already had a biological pack (`SCRNASEQ_RULE_PACK`: recovered cells, median
@@ -572,6 +592,78 @@ machine-readable artifact; no HTML scraping). The dead `pct_reads_mito` check wa
 FAIL bands were kept (consistent with the sibling did-it-run packs). **Deferred:** a
 structured QCatch-JSON recognizer for the default simpleaf path, and mitochondrial-fraction
 / doublet-rate plausibility (need a downstream scanpy/scDblFinder step).
+
+**Shipped (RNA-seq plausibility ingestion fix slice, Unreleased).** The RNA-seq slice above
+shipped `duplication_rate` keyed on `percent_duplication`, banded `warn_above: 80.0` on a
+declared 0–100 scale — and it had never once fired on a real `nf-core/rnaseq` run, for two
+compounding reasons, not one. MultiQC republishes Picard MarkDuplicates' own field name
+verbatim as **`PERCENT_DUPLICATION`** (uppercase); `qc_ingest.py`'s general-stats merge
+(`qc_ingest.py:14-22`) is an exact-key match with no case normalization, so the lowercase slug
+missed forever. And Picard's own javadoc is explicit that the value is "the fraction of
+mapped sequence that is marked as duplicate" — a raw **0–1** fraction, with no `x100` anywhere
+in its formula, despite the "PERCENT" in its name; a 70%-duplicated sample reads `0.707214`,
+not `70.0`. Fixing the key alone would have been worse than the bug: an unrescaled fraction
+against the old 0–100 band would have silently PASSed every real report. `duplication_rate`
+now keys `PERCENT_DUPLICATION` and carries `"unit": "fraction"`; the check ships
+**informational-only — no band at all** (see below), so it always PASSes when present and
+in range. A new guard in `rnaseq_plausibility.py` (any rule carrying `"unit": "fraction"`)
+refuses a value present-but-outside-`[0,1]` as `unverified` rather than rescaling it — `0.5`
+is ambiguous between "50%" and "0.5%," and refusing beats guessing — so a wrong key was
+already safe (unverified) and a wrong unit is now safe too: **every known way for this check
+to be wrong degrades to honest, never a silent lie.** `_expected_range` (`rule_pack.py:554`)
+previously assumed every check had a `warn_below`/`warn_above` and rendered the literal string
+`">= None"` for a band-less rule; it now returns `None` for a check with neither bound, which
+`duplication_rate` is the repo's first rule to exercise. The fabricated
+`percent_duplication: 95.0` test fixture — a shape nf-core never emits — was re-pointed to a
+realistic `PERCENT_DUPLICATION: 0.707214` one; that fixture is why a green suite masked a
+dead check for six releases (v0.6.0 through v0.37.0): it proved the wiring, never the
+ingestion. `rrna_contamination` is untouched.
+
+**The band: declined by design, not pending calibration.** `duplication_rate` ships with no
+WARN or FAIL band at all, per the pack's own docstring: a deep/high-input library
+legitimately exceeds 90% duplication, so *any* band — not just FAIL — would flag a legitimate
+protocol as a problem. A band becomes justifiable only if real per-protocol duplication
+distributions are collected, or the pack gains a library-prep/input-amount signal that could
+separate "deep library" from "broken library"; neither exists today.
+
+**Honest limit (reasoned, not observed — same tier as the somatic FAIL floor's disclosure).**
+The corrected key and unit are read from MultiQC's and Picard's own source, not from an
+observed run: **no real `nf-core/rnaseq multiqc_data.json` exists in this repo** to confirm
+against — `demo/sample-run`'s is synthetic (`demo/make_sample_run.py:59,105` hand-writes
+`uniquely_mapped_percent`/`percent_assigned`/`total_reads` only, no `PERCENT_DUPLICATION` key
+at all). The `[0,1]` guard is what makes that acceptable: if the reasoning is wrong in either
+direction, the check degrades to `unverified` rather than scoring a mis-keyed or mis-scaled
+value as a false PASS. MarkDuplicates is also legitimately absent under
+`--with_umi`/`--skip_markduplicates`; that no-key path already reports `unverified`, not a
+false pass.
+
+**Deferred/known debt, named:**
+- **`rrna_contamination`'s `percent_rRNA` remains a guessed slug** — researched, and there is
+  genuinely no default machine-readable rRNA source in `nf-core/rnaseq`: SortMeRNA is off by
+  default (`remove_ribo_rna = false`); featureCounts biotype QC depends entirely on the user's
+  GTF carrying a `gene_biotype` attribute, is silently skipped when absent (common for NCBI
+  GTFs), and even when it runs emits per-biotype **counts** as custom content, not a
+  general-stats percentage; and its artifact name is **unconfirmed for 3.26.0**, since the
+  workflow appears refactored since the name was last observed. Recommended follow-on: drop
+  the check, or build a dedicated parser that degrades to `unverified` rather than keep a
+  guessed slug in place.
+- **`runner.py:412`'s `multiqc is not None` gate:** a run with **no MultiQC report at all**
+  makes both RNA-seq plausibility checks vanish rather than reporting `unverified` — the
+  composition gate (`runner.py:428`) correctly gates on assay alone, so this is a real,
+  pre-existing honesty gap, deferred rather than fixed here.
+- **Informational checks have no verdict-neutral status** (surfaced by this slice's review;
+  the strongest follow-on candidate here). `duplication_rate` is now the **only band-less
+  rule in the repo**, and its always-`pass` is *unfalsifiable* — it asserts "the number is a
+  number", not "the data is good" — yet it is verdict-eligible through `overall_verdict` like
+  any other pass. A report carrying only `PERCENT_DUPLICATION` therefore reduces to verdict
+  `pass` with nothing biological actually verified. **Not a regression** (that scenario
+  already reduced to `pass` via `min_sample_count`), and the shape is not new
+  (`gene_symbol_concordance` and `x_het_ratio` are informational too) — but `QCStatus` is
+  `pass`/`warn`/`fail`/`unverified` with no verdict-neutral option, and this is the first rule
+  to need one. **Decide before a second band-less rule lands:** either add a verdict-neutral
+  status/kind, or exclude band-less rules from `overall_verdict`. Deliberately *not* folded
+  into this slice: it changes the shared verdict reducer that all seven assays run through,
+  which is a semantics change, not a bug fix.
 
 Deepen the verdict scientifically with **assay-aware sanity checks** that encode
 what a biologically reasonable result looks like, beyond generic QC thresholds.
@@ -1004,7 +1096,7 @@ raw-data egress — runs on the user's / CI compute; only hashes and claim diffs
 |----|-----------|--------|----------|
 | C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) + somatic slice (Unreleased) + single-cell slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap + somatic auto `somatic_site_overlap` PASS-site Jaccard, Mutect2 vs Strelka2, no user input + single-cell `--concordance-sc-counts` pseudobulk gene-level Spearman/fraction-agreeing over a stdlib `.mtx` triplet loader + single-cell **autorun** `--concordance-sc-counts-auto` running STARsolo behind an injectable seam, turnkey; single-cell cluster-stability deferred) |
 | C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; per-contig alias harmonization (mito `M`↔`MT` + GRCh38 scaffold seed) shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); peak-RSS-informed OOM memory scaling shipped (Unreleased, honest two-tier: own-peak → blind fallback; sibling rescue deferred); walltime-informed `time_limit` scaling shipped (Unreleased, floored at blind — censored realtime, tail-only win + field instrument); **input-format-conversion class's first slice shipped (Unreleased): bgzip'd (non-BGZF) reference FASTA self-heal, sarek-scoped (rnaseq immune by construction), stream-decompress to uncompressed `.fa` + retry; CRAM↔BAM conversion is the deferred second half**; bwa-mem2/classic-BWA build+redirect, assembly-signature + exhaustive per-assembly alias completeness pending) | Unattended-completion rate, corpus fuel |
-| C3 | Biological-plausibility verification | SHIPPED v0.3.0 (germline) + RNA-seq (v0.6.0) + single-cell ingestion (Unreleased) + germline sex-check (Unreleased) + RNA-seq mapping-composition (Unreleased) + germline variant-count (Unreleased) + germline plausibility FAIL-severity (Unreleased) + somatic empty-call-set FAIL floor (Unreleased) | Verdict gets smarter about biology (germline Ti/Tv, het/hom, sex-check, variant-count band — germline Ti/Tv, het/hom, and variant-count now **FAIL** on gross implausibility via WES-safe bands; somatic `variant_count` now **FAILs** on an empty call set; a FAIL verdict reaches the exit code only under the opt-in `--fail-on-verdict`; RNA-seq dup/rRNA + exonic/intronic/unassigned read-composition from RSeQC read_distribution; single-cell cell-QC now *fires* via STARsolo/Cell Ranger ingestion — was a dormant no-op; gene-body-coverage/mito/doublet deferred; **somatic-VAF and RNA-seq FAIL severity declined by design, not deferred** — tumor VAF's expectation depends on unobserved purity/clonality, and every RNA-seq extreme is a legitimate protocol; annotation-pack FAIL severity is a separate C7 item, still deferred) |
+| C3 | Biological-plausibility verification | SHIPPED v0.3.0 (germline) + RNA-seq (v0.6.0) + single-cell ingestion (Unreleased) + germline sex-check (Unreleased) + RNA-seq mapping-composition (Unreleased) + germline variant-count (Unreleased) + germline plausibility FAIL-severity (Unreleased) + somatic empty-call-set FAIL floor (Unreleased) + RNA-seq plausibility ingestion fix (Unreleased) | Verdict gets smarter about biology (germline Ti/Tv, het/hom, sex-check, variant-count band — germline Ti/Tv, het/hom, and variant-count now **FAIL** on gross implausibility via WES-safe bands; somatic `variant_count` now **FAILs** on an empty call set; a FAIL verdict reaches the exit code only under the opt-in `--fail-on-verdict`; RNA-seq `duplication_rate` now correctly keyed to MultiQC's `PERCENT_DUPLICATION`/a 0-1 fraction — informational-only, no band by design — after never once firing under its old wrong key/unit; `rRNA` remains a guessed slug, WARN-capped; + exonic/intronic/unassigned read-composition from RSeQC read_distribution; single-cell cell-QC now *fires* via STARsolo/Cell Ranger ingestion — was a dormant no-op; gene-body-coverage/mito/doublet deferred; **somatic-VAF and RNA-seq FAIL severity declined by design, not deferred** — tumor VAF's expectation depends on unobserved purity/clonality, and every RNA-seq extreme is a legitimate protocol; annotation-pack FAIL severity is a separate C7 item, still deferred) |
 | C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased) + Strelka2-native VAF slice (Unreleased) + empty-call-set FAIL floor (Unreleased — `somatic_variant_count fail_below: 1`; **VAF/PON FAIL bands declined by design, not deferred**: tumor VAF depends on unobserved purity/clonality, `strelka_median_vaf` is bounded to [0,1] so a ceiling is dead code, `pon_applied` is a non-numeric 3-state string); swapped-pair smell test + PON reference wiring deferred | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
 | C6 | Eval flywheel as a continuous loop | M6 (detector held-out guard slice 1 SHIPPED, Unreleased — honestly 0.833/10:12, two classes structurally unreachable; repair-loop outcome-match guard slice 2 SHIPPED, Unreleased — honestly 1.0/7:7, 5 classes covered; both wired into CI; folding C1/C3 signals + held-out-accuracy trend pending) | Compounding accuracy from real runs |

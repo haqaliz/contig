@@ -6,6 +6,53 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **RNA-seq `duplication_rate` now actually ingests from a real MultiQC report — it never had
+  before** (capability C3 follow-on). `RNASEQ_PLAUSIBILITY_PACK` keyed the lowercase
+  `percent_duplication`; MultiQC republishes Picard MarkDuplicates' field name verbatim as
+  uppercase `PERCENT_DUPLICATION`, and `qc_ingest.py`'s general-stats merge is an exact-key
+  match, so the check missed on every real run. A second, independent bug compounded the
+  first: the pack banded a declared 0-100 scale, but Picard's own javadoc says the value is a
+  raw 0-1 fraction ("the fraction of mapped sequence marked as duplicate," no `x100`
+  anywhere) — a 70%-duplicated sample reads `0.707214`. Fixing the key alone would have been
+  worse than the bug: an unrescaled fraction against the old `warn_above: 80.0` band would
+  have silently PASSed every real report.
+  - `duplication_rate` now keys `PERCENT_DUPLICATION` and carries `"unit": "fraction"`, and
+    ships **informational-only — no band at all**: the pack's own docstring records that a
+    deep/high-input library legitimately exceeds 90% duplication, so any band (WARN or FAIL)
+    would flag a legitimate protocol, not a broken run. Declined by design, not pending
+    calibration — a band becomes justifiable only with real per-protocol duplication
+    distributions, or a library-prep/input-amount signal the pack does not have.
+  - A new guard in `rnaseq_plausibility.py` refuses a value present but outside `[0, 1]` as
+    `unverified` rather than rescaling it (`0.5` is ambiguous between "50%" and "0.5%"), so a
+    wrong key was already safe and a wrong unit now is too — every known way this check can be
+    wrong degrades to honest, never a silent lie.
+  - `rule_pack.py`'s `_expected_range` previously rendered the literal string `">= None"` for
+    a band-less rule; it now returns `None`, which `duplication_rate` is the first rule in the
+    repo to exercise.
+  - `rrna_contamination` is untouched and remains a guessed `percent_rRNA` slug — researched,
+    and there is genuinely no default machine-readable rRNA source in `nf-core/rnaseq`
+    (SortMeRNA is off by default; featureCounts biotype QC is GTF-dependent and emits
+    per-biotype counts, not a percentage). Recommended follow-on: drop the check or build a
+    dedicated parser that degrades to UNVERIFIED.
+  - **Honest limit:** the corrected key and unit are read from MultiQC's and Picard's own
+    source, not from an observed run — no real `nf-core/rnaseq multiqc_data.json` exists in
+    this repo (`demo/sample-run`'s is synthetic, `demo/make_sample_run.py:59,105`). The `[0,1]`
+    guard is what makes that acceptable: a wrong key or unit degrades to `unverified`, never a
+    false PASS.
+  - **Caveat for signing users, same shape as v0.35.0/v0.37.0's:** `verdict` is a
+    `@computed_field` serialized into the signed canonical payload, so re-verifying an old
+    bundle re-reduces the verdict under the corrected pack. Blast radius here is unusually
+    small: this check moves from an `unverified` result to an always-PASS informational one,
+    and neither carries severity, so a re-reduced verdict should not flip for any bundle whose
+    verdict was already set by another check.
+  - Corrected `docs/technical/CAPABILITY_ROADMAP.md`'s C3 record, which had called the pack a
+    "silent no-op" (it was dormant but honest — it emitted explicit `unverified` results, unlike
+    a true silent no-op) and claimed the same defect class as the single-cell dormant pack
+    (true only for `percent_rRNA`; `duplication_rate` needed no dedicated parser, only a key/unit
+    fix).
+
 ## [0.37.0] - 2026-07-15
 
 ### Changed

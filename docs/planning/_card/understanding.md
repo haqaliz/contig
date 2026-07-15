@@ -1,178 +1,181 @@
-# Phase 2 — Understanding: sibling-plausibility-fail-severity
+# Phase 2 — Understanding: rnaseq-plausibility-ingestion
 
-Dug by four parallel read-only agents (chokepoint/plumbing, somatic metrics, RNA-seq metrics,
-germline test pattern). Every claim below is file:line-grounded.
+Dug by three parallel read-only agents (QC call path, unit blast radius, tests) plus direct
+upstream verification from the main thread. Every claim is grounded in a file:line or a pinned
+upstream source.
 
-## Headline: the brief's premise holds, but its scope collapses from three packs to one line
+**Status: dig complete. The brief's premise is partly WRONG and the design has changed.**
+Read the two corrections first.
 
-The brief proposed extending gross-implausibility FAIL severity to `SOMATIC_PLAUSIBILITY_PACK`,
-`RNASEQ_PLAUSIBILITY_PACK`, and possibly `RNASEQ_COMPOSITION_PACK`. The dig says:
+---
 
-| Pack / metric | Universal gross floor? | Honest outcome |
-|---|---|---|
-| `somatic_variant_count` | **YES (floor only)** | **`fail_below: 1`** — the whole slice |
-| `median_vaf` (Mutect2) | No | Stay WARN-only |
-| `strelka_median_vaf` | No | Stay WARN-only |
-| `pon_applied` | N/A (not a numeric metric) | Stay WARN, unbandable |
-| `duplication_rate` | No | Stay WARN-only |
-| `rrna_contamination` | No | Stay WARN-only |
-| `exonic_fraction` | Marginal (exact-0 only) | Stay WARN-only |
-| `intronic_fraction` | No | Stay WARN-only |
-| `unassigned_fraction` | No (redundant with `assignment_rate fail_below 40`) | Stay WARN-only |
+## Correction 1 — this is NOT the single-cell defect class (the important one)
 
-**The slice is one line of production code** (`"fail_below": 1` on `rule_pack.py:320-325`) plus its
-tests and docstring/roadmap honesty updates. That is the honest success case the card predicted;
-it is not a failure of the dig.
+The card (inheriting `CAPABILITY_ROADMAP.md`'s nomination) says `RNASEQ_PLAUSIBILITY_PACK` is
+*"the same defect class as the single-cell dormant pack"* — i.e. the metric genuinely never
+reaches MultiQC, so a dedicated artifact parser is required.
 
-## 1. It IS a pure data edit (confirmed)
+**That is true for `percent_rRNA`. It is false for `percent_duplication`.**
 
-- `_status_for` (`rule_pack.py:447-466`) reads all four band keys via `.get()`; the docstring at
-  `:450-452` says any subset is legal. **The WARN cap is enforced only by the absence of `fail_*`
-  keys in the pack data — no code clamps FAIL→WARN anywhere.** (Agent grepped
-  `src/contig/verification/`, `runner.py`, `models.py` for clamp patterns; every hit is a
-  hand-built check or a docstring.)
-- Every plausibility evaluator funnels through the shared `evaluate()` (`rule_pack.py:480-499`);
-  `evaluate_somatic_plausibility` (`somatic_plausibility.py:252`) passes status straight through.
-- `overall_verdict` (`models.py:78-96`): a single `fail` dominates; `unverified` carries no
-  severity and can never become a pass. `RunRecord.verdict` (`models.py:358-369`) consumes it.
-- So a new `fail` QCResult reaches `record.verdict == "fail"` with **zero code change**, and
-  v0.36.0's `--fail-on-verdict` then exits 1. The chain is proven end to end.
+Verified against pinned upstream sources:
 
-## 2. Why `somatic_variant_count fail_below: 1` is defensible without calibration
+| Fact | Evidence |
+|---|---|
+| MultiQC's Picard module **does** add duplication to General Statistics | MultiQC `modules/picard/MarkDuplicates.py`: `module.general_stats_addcols(data_by_sample, headers, namespace="Mark Duplicates")` |
+| The key is **`PERCENT_DUPLICATION`** (UPPERCASE) | same file: `headers = {"PERCENT_DUPLICATION": {...}}` |
+| The stored value is the **raw 0–1 fraction** | same file: values go `float(v)` straight from the metrics table into `data_by_sample`, which is what `general_stats_addcols` stores |
+| The `×100` is **display-only** | same file: `"modify": lambda x: util.multiply_hundred(x)` — a header render hook, not applied to stored data |
+| nf-core/rnaseq runs MarkDuplicates **by default** | `nextflow.config@3.26.0`: `skip_markduplicates = false` |
+| Default aligner / artifact path | `aligner = 'star_salmon'`; docs: `<ALIGNER>/picard_metrics/<SAMPLE>.markdup.sorted.MarkDuplicates.metrics.txt` |
 
-- **It is the direct structural mirror of shipped germline `variant_count`**
-  (`rule_pack.py:84-90`: `fail_below: 1`, `warn_below: 10`, `warn_above: 20_000_000`, and
-  deliberately **no `fail_above`**). The germline comment (`:77-83`) is the precedent verbatim:
-  *"fail_below 1 is a hard floor: an empty/near-empty call set (0 sites) is a broken run and
-  FAILs, same tier as mean_coverage's fail_below."*
-- **The floor actually fires.** `count` is initialized to `0` (`somatic_plausibility.py:133`) and
-  incremented at `:155` — *before* the tumor-column guard at `:156` — so it is always a real int,
-  independent of tumor identification. The `computable` filter is `if value is not None`
-  (`:248-250`), so **0 survives into `evaluate()` and rides the band** rather than routing to
-  UNVERIFIED. The docstring already states this (`:233-234`): *"variant_count is always an int, so
-  it is always computable."*
-- **It needs no cohort.** An empty call set is broken regardless of target type — which is exactly
-  why it escapes the "deferred until calibrated" blocker that legitimately still binds the VAF
-  metrics.
+So the metric **is** in `multiqc_data.json` on every real default rnaseq run. Contig misses it
+for two independent, compounding reasons:
 
-## 3. Why everything else is honestly out (this is the load-bearing finding)
+1. **Case.** The pack asks for `percent_duplication`; MultiQC emits `PERCENT_DUPLICATION`.
+   `qc_ingest.py:5-23` does an exact-key merge → the lookup misses → UNVERIFIED, forever.
+2. **Scale.** The pack bands `warn_above: 80.0` on a declared 0–100 scale; the JSON carries
+   `0.85`. **This is the dangerous half.** A wrong *slug* is safe (UNVERIFIED, never a false
+   pass). A wrong *scale* is a **false PASS**: a 96%-duplicated library scores `0.96` against
+   `warn_above: 80.0` and silently PASSES. **Fixing the slug without the scale would convert a
+   safe dormant check into an actively wrong one.**
 
-**The VAF metrics have no universal floor.** Germline Ti/Tv could ship a FAIL band because it has a
-*physically constrained* expected value (~2.0 WGS, ~3.0-3.3 WES) with noise at a *distinguishable*
-~0.5. Tumor VAF has no such structure: its expected value is a function of **purity and clonality,
-which the code never observes** (no purity estimate, no ploidy, no copy-number, no target type). A
-low median VAF is legitimate science (low-purity tumor, subclonal population). Any `fail_below`
-here would FAIL a real sample — the worst outcome in the brief.
+**Design consequence:** duplication needs **no new parser, no locator, no `_discover_qc` gate,
+no unit-normalization layer**. It is very nearly a pure data edit in `rule_pack.py`. This also
+dissolves both risks the agents raised: the sample-id/phantom-sample risk (we reuse MultiQC's
+own sample keys) and the merge/unit-collision risk (there is no second source to merge).
 
-- `strelka_median_vaf` is **arithmetically bounded to [0,1] by construction**
-  (`strelka_vaf.py:95-98`, `:121-124` reject `denom <= 0`), so a `fail_above: 1.0` is **provably
-  dead code**. Do not add it.
-- `pon_applied` is a 3-state string from a header search (`somatic_plausibility.py:199-221`)
-  emitted with `value=None` (`:279-287`); it never enters `evaluate()`. `_status_for` would
-  `TypeError` on `None < fail_below`. It is **structurally unbandable** — and PON absence is a
-  legitimate configuration Contig itself does not wire (`somatic-vaf-plausibility/prd.md:196-198`).
+`CAPABILITY_ROADMAP.md`'s "silent no-op / same defect class" sentence is what made this look
+bigger than it is; it should be corrected in this PR.
 
-**The RNA-seq metrics fail on biology AND engineering.**
+## Correction 2 — the pack is dormant but HONEST, not a "silent no-op"
 
-- *Biology:* every one has a legitimate protocol occupying the extreme — deep/high-input libraries
-  legitimately exceed 90% duplication; total-RNA/ribo-depletion legitimately retains rRNA;
-  nuclear/FFPE/3' libraries are legitimately intron-dominated; non-model annotation legitimately
-  leaves most tags unassigned. "Extreme" and "unusual protocol" are the same number.
-- *Engineering:* **both `RNASEQ_PLAUSIBILITY_PACK` slugs are dormant on real output.**
-  `percent_duplication` / `percent_rRNA` (`rule_pack.py:288`, `:294`, both commented "slug
-  unverified") are **absent from the repo's only real-shaped MultiQC**
-  (`demo/sample-run/results/multiqc/multiqc_data.json` carries only `uniquely_mapped_percent`,
-  `percent_assigned`, `total_reads` — verified directly). A FAIL band there is severity on
-  code that has never once fired. There is also a live unit ambiguity: the pack declares 0-100
-  (`rule_pack.py:283-284`) while Picard's native `PERCENT_DUPLICATION` is a 0-1 fraction, and
-  `qc_ingest.py:5-23` does a bare `float()` with no normalization.
-- `unassigned_fraction == 1.0` is genuinely broken but **already caught more honestly** by
-  `RNASEQ_RULE_PACK`'s `assignment_rate fail_below: 40` (`rule_pack.py:24-30`) on the did-it-run
-  tier. A second FAIL is redundant, not new signal.
+The roadmap calls it a *"silent no-op on every real rnaseq run"*. It does not score, but it is
+not silent: `evaluate_rnaseq_plausibility` (`rnaseq_plausibility.py:69-79`) emits an explicit
+`unverified` QCResult per absent metric per sample — four on the repo's own demo fixture.
 
-**Annotation pack is out of scope**: `ANNOTATION_PLAUSIBILITY_PACK` (`rule_pack.py:351-373`) is
-deliberately loose (`warn_below 0.10`, `warn_above 0.95`) and belongs to the separate C7 M-track
-with its own deferral trail (M5 eval fold-in blocked on labeling design).
+Not pedantic. methylseq/scrnaseq were **true** silent no-ops: their packs ran through the bare
+`evaluate()`, which *skips* absent metrics (`rule_pack.py:543-544`). RNA-seq has a wrapper with
+a per-metric honesty branch, so its failure mode is **loud**. We are lighting up a metric, **not**
+repairing a hole in the verdict's integrity. The PRD must not claim we fixed a false-pass bug:
+the current code is honest. The false-pass risk is one we would *introduce* by fixing the slug
+alone.
 
-## 4. The one real risk to decide (R3, inherited)
+---
 
-Unlike germline, **a somatic zero can be legitimate**: a small hotspot/targeted panel on a tumor
-with no mutation in the assayed regions genuinely calls zero. Already logged as R3 in
-`somatic-vaf-plausibility/prd.md:174-177` (*"band is assay/target-dependent … revisit when
-target-type is known to the engine"*).
+## What is really being asked
 
-Mitigating facts:
-- The escalation is **the narrowest possible**: `warn_below: 10` already catches near-zero as WARN,
-  so `fail_below: 1` moves **only the exactly-zero case**. 1-9 records stay WARN, unchanged.
-- sarek's Mutect2 emits unfiltered-plus-FILTER-annotated records, and the count is **not**
-  PASS-filtered (`somatic_plausibility.py:81-83,155`), so a genuinely 0-record VCF from a real run
-  is a truncation/crash artifact, not a biological result.
-- `--fail-on-verdict` is opt-in (v0.36.0), so the blast radius is callers who asked for teeth.
+Make the two RNA-seq plausibility checks produce a real score on a real default
+`nf-core/rnaseq@3.26.0` run, without weakening UNVERIFIED-never-PASS, and without touching
+severity (WARN-capped stays — see Closed).
 
-This is a judgement call the PRD must state explicitly, not bury.
+Two metrics, **two genuinely different problems**:
 
-## 5. Test pattern to mirror (correction to the card)
+### `duplication_rate` — a data bug. Buildable now, high confidence.
+Fix the key case (`percent_duplication` → `PERCENT_DUPLICATION`) **and** the band scale
+(`warn_above: 80.0` → a 0–1 band). Both halves must land together or we ship a false pass.
 
-**The card's acceptance criteria were slightly wrong.** The germline slice's tests do **not** build a
-`RunRecord` or assert `record.verdict`. They assert `QCResult.status == "fail"` on the individual
-check, and call the free function `overall_verdict(results)` exactly once
-(`test_variant_metrics.py:388-419`). Shipping commit `69b6385` touched exactly 4 files (2 source,
-2 test), with **no CLI test and no `run_qc` gate test**.
+### `rrna_contamination` — genuinely the single-cell defect class. Needs a decision.
+`percent_rRNA` is **not** a general-stats key from any default rnaseq module; it was guessed.
+Verified options:
 
-The mirror for this slice:
-- `tests/verification/test_rule_pack.py` — add a `fail_below`-only assertion (mirroring
-  `test_variant_count_has_fail_below_only:186-192`) and a `bands_are_well_ordered` invariant loop
-  over the somatic pack (mirroring `:196-206`).
-- `tests/verification/test_somatic_plausibility.py` — extend the existing inline tumor-normal VCF
-  helpers (`:22-40`); invert `test_variant_count_out_of_band_warns` (`:246-256`).
-- Bodies to add: 0-record VCF → `status == "fail"`, `value == 0`, **`status != "unverified"`**
-  (the anti-confusion guard, mirroring `test_variant_count_zero_fails_not_unverified:376-386`),
-  closed with `overall_verdict(results) == "fail"`; a legitimate small count (e.g. 5) still WARN,
-  **not** FAIL; `median_vaf`/`strelka_median_vaf` extremes still `!= "fail"` (the WARN-cap tests
-  must STAY green — they are now a deliberate guarantee, not an accident).
-- Conventions: `uv run pytest`; flat `tests/` + `tests/verification/`; **no conftest.py anywhere**,
-  each file defines local helpers; real files via `tmp_path`, never mocks; every non-obvious test
-  opens with a 2-4 line why-comment citing the PRD requirement id.
+| Candidate | Default? | Artifact | Catch |
+|---|---|---|---|
+| SortMeRNA | **NO** — `remove_ribo_rna = false` | `sortmerna/*.sortmerna.log` | not default; dead end |
+| featureCounts biotype QC | **YES** — `skip_biotype_qc = false`, `featurecounts_group_type = 'gene_biotype'` | `<ALIGNER>/featurecounts/*_mqc.tsv`, `*.featureCounts.txt.summary` | **GTF-dependent** (needs a `gene_biotype` attribute; a GTF without it skips the step). It is a **biotype counts table** — the rRNA *fraction* must be computed by us, not read off. |
 
-**A CLI exit-code test is out of scope**: `--fail-on-verdict` is already proven generically against
-`QCResult(status="fail")` (`test_cli.py:217+`); the check that produced the fail is irrelevant to
-the gate.
+So rRNA is buildable **only** via a dedicated parser of the biotype TSV (the composition-slice
+shape), and only when the user's GTF carries `gene_biotype`. Three honest options:
+**(a)** build the parser + gate, degrading to UNVERIFIED when the attribute is absent;
+**(b)** **drop** the check — precedent: the single-cell slice *deleted* its dead `pct_reads_mito`
+rather than keep it; **(c)** keep it UNVERIFIED but retarget its comment at a named artifact.
+(a) or (b) are defensible. Leaving a guessed `percent_rRNA` slug in place is not.
 
-## 6. Tests that will go RED
+**Recommended scope: split.** Ship duplication (data fix, small, high-confidence) as slice 1;
+treat rRNA as a separate decision so a hard, GTF-dependent problem doesn't hold the real bug fix
+hostage, and so the diff stays honest and reviewable.
 
-- `test_somatic_plausibility.py:246-256` `test_variant_count_out_of_band_warns` — **must change**
-  (this is the RED).
-- `test_rule_pack.py:558-565` / `:636-644` (`..._have_no_fail_keys` for the RNA-seq packs) —
-  **stay green** under the recommended scope; RNA-seq is untouched.
-- No `no_fail_keys` guard test exists for `SOMATIC_PLAUSIBILITY_PACK` itself — only behavioral
-  WARN assertions.
+---
 
-Docstrings stating the cap as design intent also need updating: `rule_pack.py:302`, `:311`, `:329`;
-`somatic_plausibility.py:6`, `:227`, `:230-234`.
+## Affected areas
 
-## 7. Guardrail check (CLAUDE.md)
+- `src/contig/verification/rule_pack.py:295-315` — `RNASEQ_PLAUSIBILITY_PACK`. **The chokepoint.**
+  Plus `:298-299` (the misleading METHYLSEQ comment) and `:287-288` (the band contradiction).
+- `src/contig/verification/rnaseq_plausibility.py` — **likely zero changes**. Its message
+  `"{metric} not reported by MultiQC"` (`:75`) stays accurate for duplication; needs care only
+  if rRNA gains a non-MultiQC source.
+- `src/contig/runner.py:412-414` — the gate (+ the fiction at `:420-422`).
+- `tests/verification/test_run_qc.py:118`, `tests/verification/test_rnaseq_plausibility.py:21` —
+  tests that fabricate the wrong slug/scale; must be re-pointed.
+- **No** new module, model, `FailureClass`, dashboard card, or dependency for duplication.
 
-- **Layer 2 only** — verify axis. On-thesis. ✅
-- **No over-claiming** — the floor is an engineering tripwire ("an empty call set is a broken
-  run"), explicitly not a biological/clinical claim. The dig actively *refused* the bands that
-  would have over-claimed. ✅
-- **UNVERIFIED never becomes FAIL** — preserved; the anti-confusion test names the failure mode. ✅
-- No new dependency, no raw-read egress, test-first. ✅
+## Contradictions / latent bugs surfaced (flag, don't silently fix)
 
-## 8. Open question for the interview (needs a human decision)
+1. **`runner.py:420-422` is a fiction.** *"the MultiQC pack above still owns
+   alignment/duplication/rRNA."* It owns duplication **on paper only** — no pack scores it,
+   because the key case is wrong. Fixing the slug makes the sentence true for the first time.
+2. **`rule_pack.py:298-299` borrows credibility it hasn't earned.** *"Scale 0-100, matching
+   METHYLSEQ_RULE_PACK's percent_duplication usage."* Methylseq's 0–100 is **earned** — its
+   parser reads an already-percent Bismark artifact (`methylseq_metrics.py:81-84` captures the
+   digits inside a literal `%`; fixture `12.34%` → `12.34`). RNA-seq's 0–100 is **declared and
+   enforced by nothing**. The two slugs share a name, never a code path. That sentence is
+   exactly what made this ambiguity look resolved. Fix it in the same PR.
+3. **`multiqc is not None` erases the checks** (`runner.py:412`). With no MultiQC report the
+   evaluator is never called and the two checks **vanish** rather than reporting UNVERIFIED. The
+   composition gate (`:428`) correctly gates on assay alone. Pre-existing honesty gap; PRD to
+   decide: fix here or file separately.
+4. **The tests fabricate the bug.** `test_run_qc.py:118`
+   `DUP_HIGH_MQC = '{"report_general_stats_data":[{"S1":{"percent_duplication":95.0}}]}'`
+   asserts `duplication_rate:S1` WARNs — off a report shape real nf-core/rnaseq **never emits**
+   (wrong case AND wrong scale: `95.0`, not `0.95`). Same at `test_rnaseq_plausibility.py:21`.
+   **This is how a green suite masked a dead check:** the tests prove the *wiring*, never the
+   *ingestion*. Any fix must re-point them at a realistic fixture or we re-ship the blindness.
 
-The slice is honestly one line. Three ways to spend this branch:
+## The band question — must be decided, not inherited
 
-- **(A) Ship the narrow floor only.** Closes part of the named deferral; somatic verdict gains
-  teeth for the empty-call-set case.
-- **(B) Narrow floor + convert the rest from vague "deferred until calibrated" into a decided
-  "will-not-do, and here is why."** The dig proved the VAF/RNA-seq FAIL bands are not a
-  calibration problem — they are *structurally impossible to do honestly*. Recording that stops
-  the item from being re-picked forever. Same code, better roadmap honesty.
-- **(C) Pivot/extend to the dormant-slug bug the dig surfaced.** `percent_duplication` /
-  `percent_rRNA` never resolve on real nf-core/rnaseq output, so `RNASEQ_PLAUSIBILITY_PACK` is a
-  **silent no-op today** — the same class of defect as the shipped single-cell ingestion slice
-  (`CAPABILITY_ROADMAP.md:482-497`), which fixed a pack that "silently no-oped". Arguably higher
-  user value than any FAIL band, but it is a different unit of work.
+`rule_pack.py:287-288` says *"A deep/high-input library **legitimately exceeds 90%
+duplication**"*, while the band is `warn_above: 80.0`, annotated *"lenient"*. The moment the
+metric arrives, **every deep library the pack's own docstring vouches for will WARN.** Invisible
+today only because the check has never fired. WARN is not FAIL (no exit-code consequence), so it
+does not block the slice — but a tripwire firing on a large share of normal runs is noise, and
+noise is how a verdict axis gets ignored (a softer version of the failure this card exists to
+fix). Decide explicitly: re-band (~0.90) citing the docstring's own sentence, or keep the
+0–1 equivalent of 80 and record that WARNs on deep libraries are expected and acceptable.
+**No calibration data exists in the repo; any "typical value" claim would be invented.** The
+argument rests solely on the file's internal contradiction, which needs no external data.
 
-Recommendation: **B**, with **C** filed as the next `contig-next` candidate.
+## Closed — do not reopen
+
+**FAIL severity.** `CAPABILITY_ROADMAP.md` (C3) records RNA-seq FAIL severity as **declined by
+design, not deferred**: every RNA-seq metric has a legitimate protocol occupying its extreme,
+*and* severity would sit on code that never fires. This slice removes only the **engineering**
+half of that reasoning. **The biological half stands untouched** → both checks stay WARN-capped.
+Note honestly: this slice partially invalidates one sentence of that record (the "never once
+resolved against a real MultiQC report" claim becomes false for duplication). The *conclusion* is
+unchanged; the roadmap's stated *reasoning* needs a small correction so it stays true.
+
+## Guardrails check (CLAUDE.md)
+
+- **Layer 2 only** — verify-axis hardening. Satisfied by construction; no Layer-1 drift.
+- **No over-claiming** — WARN-capped; UNVERIFIED-never-PASS preserved; **and we must not
+  introduce** the false pass the scale bug would create.
+- **No guessed slugs** — the whole defect. Every slug in the fix is cited to upstream source,
+  not inferred.
+- **Test-first**, stdlib-only, no real nf-core/Picard run in CI.
+
+## Honest limits of this dig (top residual risk)
+
+- **Not verified against a real `multiqc_data.json` from a real rnaseq run.** No such artifact
+  exists in the repo: `demo/sample-run/results/multiqc/multiqc_data.json` is **synthetic**
+  (generated by `demo/make_sample_run.py`) and carries only `uniquely_mapped_percent`,
+  `percent_assigned`, `total_reads`. The `PERCENT_DUPLICATION` key and its 0–1 scale are read
+  from MultiQC's **source** — strong evidence, but not an observed artifact. **The PRD must
+  state this**, because the scale half is exactly where being wrong yields a false pass rather
+  than an honest UNVERIFIED. The UNVERIFIED-when-absent guarantee absorbs a wrong *key*;
+  **nothing absorbs a wrong *scale***. If a real report can be obtained, that beats every
+  argument here.
+- **MultiQC version coupling:** key/scale were read from MultiQC `main`, not the exact MultiQC
+  pinned inside nf-core/rnaseq 3.26.0. Worth confirming.
+- `dig-artifacts` (the upstream-research agent) never reported; its questions were answered
+  directly from upstream sources in the main thread instead. The featureCounts biotype TSV's
+  exact column layout is therefore **unconfirmed** — it must be checked before any rRNA parser
+  is written.

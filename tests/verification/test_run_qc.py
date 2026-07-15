@@ -115,20 +115,36 @@ def test_successful_run_with_good_qc_reads_pass(tmp_path):
     assert record.verdict == "pass"
 
 
-DUP_HIGH_MQC = '{"report_general_stats_data":[{"S1":{"percent_duplication":95.0}}]}'
+# The unit collision that would silently mis-verdict: 92.3% -> 0.923, NOT 92.3.
+# This fixture's realism IS the point. The old DUP_HIGH_MQC fixture asserted a
+# shape real nf-core/rnaseq never produces: lowercase "percent_duplication" on a
+# 0-100 scale (95.0). MultiQC's Picard module actually publishes uppercase
+# "PERCENT_DUPLICATION" as a raw 0-1 fraction (Picard's own javadoc: "the
+# fraction of mapped sequence that is marked as duplicate" — no x100 anywhere in
+# its formula, despite the "PERCENT" in the field name). A green suite built on
+# the fabricated shape proved the WIRING (band/status plumbing) but never the
+# INGESTION (the actual key and scale MultiQC emits) — that let a dead check
+# hide behind six releases of passing tests. duplication_rate now carries no
+# band at all (see rule_pack.py) — it is informational-only and always PASSes
+# when the value sits in [0, 1] — so this fixture uses 0.96 (a legitimately
+# high but real duplication fraction for a deep/high-input library).
+DUP_MQC = '{"report_general_stats_data":{"picard":{"S1":{"PERCENT_DUPLICATION":0.96}}}}'
 
 
 def test_discover_qc_emits_rnaseq_plausibility_for_rnaseq_assay(tmp_path):
-    # An RNA-seq run with a MultiQC report carrying percent_duplication above the
-    # warn band (95.0 > 80.0) must emit a duplication_rate:<sample> warn result.
+    # An RNA-seq run with a MultiQC report carrying a real PERCENT_DUPLICATION
+    # fraction must emit a duplication_rate:<sample> result that reports the
+    # value verbatim (0.96, never rescaled to 96.0) and always PASSes — the
+    # check is informational-only, with no warn/fail band (see rule_pack.py).
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    (run_dir / "multiqc_data.json").write_text(DUP_HIGH_MQC)
+    (run_dir / "multiqc_data.json").write_text(DUP_MQC)
 
     results = _discover_qc(run_dir, assay="rnaseq")
     checks = {r.check: r for r in results}
     assert "duplication_rate:S1" in checks
-    assert checks["duplication_rate:S1"].status == "warn"
+    assert checks["duplication_rate:S1"].status == "pass"
+    assert checks["duplication_rate:S1"].value == 0.96
 
 
 def test_discover_qc_does_not_emit_rnaseq_plausibility_for_non_rnaseq_assay(tmp_path):
@@ -136,12 +152,29 @@ def test_discover_qc_does_not_emit_rnaseq_plausibility_for_non_rnaseq_assay(tmp_
     # checks, even when a MultiQC report is present — strict assay gate.
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    (run_dir / "multiqc_data.json").write_text(DUP_HIGH_MQC)
+    (run_dir / "multiqc_data.json").write_text(DUP_MQC)
 
     results = _discover_qc(run_dir, assay="variant_calling")
     checks = [r.check for r in results]
     assert not any(c.startswith("duplication_rate:") for c in checks)
     assert not any(c.startswith("rrna_contamination:") for c in checks)
+
+
+def test_discover_qc_marks_duplication_rate_unverified_when_key_absent(tmp_path):
+    # nf-core/rnaseq auto-skips MarkDuplicates under --with_umi (or an explicit
+    # --skip_markduplicates), per its own docs. A MultiQC report with no
+    # PERCENT_DUPLICATION key at all is therefore a LEGITIMATE production
+    # configuration, not a hypothetical edge case — and it must read as an
+    # honest "unverified", never a silent pass and never a fabricated band hit.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    no_dup_mqc = '{"report_general_stats_data":[{"S1":{}}]}'
+    (run_dir / "multiqc_data.json").write_text(no_dup_mqc)
+
+    results = _discover_qc(run_dir, assay="rnaseq")
+    checks = {r.check: r for r in results}
+    assert "duplication_rate:S1" in checks
+    assert checks["duplication_rate:S1"].status == "unverified"
 
 
 _VCF_HEADER = (
