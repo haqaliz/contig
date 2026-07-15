@@ -843,6 +843,60 @@ ever. See [`../planning/variant-annotation-assay/prd.md`](../planning/variant-an
 
 ---
 
+## C8. Reproduce & verify *existing published* work  ·  proposed  ·  M7+
+
+Point the shipped run → self-heal → verify → reproduce engine at a **third-party,
+already-published** bioinformatics repository (a paper + its code/data) and report which of
+the paper's stated numbers, tables, and figures **actually regenerate** — ending in a signed,
+re-runnable verdict, exactly like a first-party run. This is not a new assay; it is the same
+Layer-2 engine turned around to face *other people's* published analyses.
+
+**Why it is moat.** Two compounding wins, both already prized by the ROADMAP:
+- **The strongest quantified pain of the whole verification thesis.** Of **27,271**
+  biomedical-paper notebooks, only **~879 (~3.2%)** reproduced the original result
+  (Samuel & Mietchen, *GigaScience* 2024); Pimentel's 1.4M-notebook study finds **~4%**
+  reproduce their own outputs; the best agent scores **21%** on CORE-Bench (code+data
+  *provided*). CODECHECK proves the demand exists but is done **by hand**. No tool parses a
+  paper to extract every numeric claim and aligns it to a *generated* artifact.
+- **The cheapest acquisition channel we have (Principle #5).** "I ran 50 published papers'
+  code — here is how many reproduced, and why" is Biostars / r/bioinformatics / nf-core
+  reputation in a bottle, and a free, viral top-of-funnel that feeds paying Layer-2 usage.
+
+A better base model makes the claim-extraction and the environment-resurrection *better*,
+never redundant — the verdict and the reproduce guarantee are the durable part.
+
+**What we build:**
+- **Environment resurrection (the load-bearing piece).** Reconstruct a runnable environment
+  for an *uncooperative* existing repo from a **traced real execution** (observed imports /
+  loaded versions), not a trusted manifest — ModuleNotFoundError / ImportError + dependency
+  installs are ~76% of reproduction failures. Reuses and extends C2's self-heal and the
+  container/pin machinery.
+- **Claim-to-artifact alignment.** Parse the paper (or a claims file) for numeric
+  claims — a reported statistic, a table cell, a figure — and semantically diff each against
+  the regenerated artifact with the existing float-tolerance / plot-hash / seed-aware diffing.
+- **A per-claim verdict** (`REPRODUCED` / `WITHIN-TOLERANCE` / `DIVERGED` / `UNVERIFIED`) and a
+  signed, re-runnable bundle — the same honesty contract as every verdict (UNVERIFIED is never
+  rendered as reproduced).
+- A **`contig reproduce <repo|doi>`** surface (CLI + dashboard card), community-facing and free.
+
+**Acceptance (test-first):** a synthetic repo whose script regenerates a known figure/number
+yields a `REPRODUCED` verdict per claim; a deliberately drifted dependency or altered constant
+yields `DIVERGED` with the exact claim and the observed-vs-stated values named; a repo with an
+unresolvable environment yields `UNVERIFIED`, never a false reproduce. Deterministic, no network.
+
+**Eval data captured:** every reproduction attempt (the environment-repair chain, the
+per-claim diff outcome) is a labeled corpus case — a whole new, publicly-sourced stream of
+failure-and-fix data feeding C6.
+
+**Dependencies:** builds on C2 (self-heal / environment repair), C5 (input-data integrity),
+C6 (eval flywheel), and the shipped reproduce bundle. Verify-and-reproduce only.
+
+**Guardrail:** we report whether the *computation* reproduces the paper's stated numbers; we
+never issue a scientific judgement on whether the paper's *conclusions* are correct. No
+raw-data egress — runs on the user's / CI compute; only hashes and claim diffs leave the box.
+
+---
+
 ## Sequencing summary
 
 | ID | Capability | Window | Leverage |
@@ -854,6 +908,8 @@ ever. See [`../planning/variant-annotation-assay/prd.md`](../planning/variant-an
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
 | C6 | Eval flywheel as a continuous loop | M6 (detector held-out guard slice 1 SHIPPED, Unreleased — honestly 0.833/10:12, two classes structurally unreachable; repair-loop outcome-match guard slice 2 SHIPPED, Unreleased — honestly 1.0/7:7, 5 classes covered; both wired into CI; folding C1/C3 signals + held-out-accuracy trend pending) | Compounding accuracy from real runs |
 | C7 | Research-use variant annotation & prioritization | M1 + M2 + M3 + M4 + M5 surface+provenance SHIPPED (Unreleased) — germline structural verify + provenance, somatic annotation gate, annotation plausibility (both assays), VEP-vs-SnpEff concordance (both assays: `consequence_concordance` WARN-capped + `gene_symbol_concordance` informational, auto in the verdict, both VCF layouts, annotator-version provenance pair), M5 "corroborated by" line across text/HTML report + `contig methods` + dashboard (reads M4 results, never recomputes) + `AnnotationProvenance.db_version` cache/build token (VEP `cache=` / SnpEff genome) rendered and round-tripped through reproduce with pre-M5 back-compat; **M5 C6 eval fold-in still DEFERRED** (blocked on labeling design) (germline+somatic `annotation_present`/`annotation_complete` structural checks via `VARIANT_ASSAYS`, `AnnotationProvenance` tool+cache/build capture, `--tools …,vep` enablement on both assays, `annotation_real_fraction`/`annotation_consequence_distribution` plausibility checks, all WARN-capped/UNVERIFIED-when-absent; live run may still need a VEP/SnpEff cache Contig does not yet wire — absent annotation degrades to UNVERIFIED, never a false pass; verify-only, prioritization deferred) | Disease-research breadth on-thesis, new corpus; run+verify annotation, never a clinical verdict |
+
+| C8 | Reproduce & verify *existing published* work | proposed · M7+ | Turns the engine on third-party papers (repo+claims → per-claim `REPRODUCED`/`DIVERGED`/`UNVERIFIED`); strongest quantified pain (~3.2% of 27,271 notebooks reproduce), a free viral community-trust channel, and a new publicly-sourced corpus stream. Env-resurrection from a traced execution + claim-to-artifact semantic diff; reuses C2/C5/C6 + reproduce bundle |
 
 **One-line mantra:** make every verdict harder to fool, recover more failures
 without a human, and let every run make the next verdict smarter.
