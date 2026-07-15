@@ -245,7 +245,8 @@ def test_variant_count_in_band_passes(tmp_path):
 
 
 def test_variant_count_out_of_band_warns(tmp_path):
-    # 2 considered records is below the count floor (10) -> WARN, never FAIL.
+    # 2 considered records is below the warn floor (10) but at or above the fail
+    # floor (1) -> WARN.
     vcf = _write(tmp_path / "a.vcf", _header(), _recs_with_af(0.30, 2))
 
     results = evaluate_somatic_plausibility(vcf)
@@ -254,6 +255,28 @@ def test_variant_count_out_of_band_warns(tmp_path):
     assert len(vc) == 1
     assert vc[0].status == "warn"
     assert vc[0].status != "fail"
+
+
+def test_empty_somatic_vcf_count_fails(tmp_path):
+    # PRD AC1-AC3: a header-only VCF has somatic_variant_count 0, which is below
+    # fail_below (1) -> FAIL, while median_vaf is uncomputable -> UNVERIFIED. A
+    # single FAIL dominates the reduction (models.py overall_verdict), so the
+    # combined verdict is FAIL.
+    from contig.models import overall_verdict
+
+    vcf = _write(tmp_path / "empty.vcf", _header(), [])
+
+    results = evaluate_somatic_plausibility(vcf)
+    by_check = {r.check: r for r in results}
+
+    assert by_check["somatic_variant_count:TUMOR"].status == "fail"
+    assert by_check["somatic_variant_count:TUMOR"].value == 0
+    # AC2: a real 0 must not be misread as "couldn't compute". This assert looks
+    # redundant next to == "fail" and is deliberate: it names the failure mode,
+    # mirroring test_variant_metrics.py::test_variant_count_zero_fails_not_unverified.
+    assert by_check["somatic_variant_count:TUMOR"].status != "unverified"
+    assert by_check["median_vaf:TUMOR"].status == "unverified"
+    assert overall_verdict(results) == "fail"
 
 
 def test_sample_label_is_tumor_name(tmp_path):

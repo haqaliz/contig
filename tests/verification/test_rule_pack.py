@@ -5,6 +5,7 @@ from contig.verification.rule_pack import (
     METHYLSEQ_RULE_PACK,
     RNASEQ_RULE_PACK,
     SCRNASEQ_RULE_PACK,
+    SOMATIC_PLAUSIBILITY_PACK,
     VARIANT_RULE_PACK,
     _status_for,
     evaluate,
@@ -700,3 +701,44 @@ def test_rnaseq_composition_extreme_values_never_fail():
     results = evaluate({"WORST": sample}, RNASEQ_COMPOSITION_PACK)
     assert len(results) == 3
     assert all(r.status != "fail" for r in results)
+
+
+# --- somatic biological-plausibility pack: fail-floor / WARN-cap guarantees ----
+
+
+def test_somatic_variant_count_has_fail_below_only():
+    # somatic_variant_count gains a hard floor (an empty call set FAILs) but
+    # keeps its upper bound a SOFT, uncalibrated warn_above ceiling: a
+    # hypermutator (MSI-high, POLE-mutant) or a WGS tumor legitimately exceeds
+    # it, so a fail_above would false-FAIL real science.
+    by_check = {c["check"]: c for c in SOMATIC_PLAUSIBILITY_PACK}
+    assert by_check["somatic_variant_count"]["fail_below"] == 1
+    assert "fail_above" not in by_check["somatic_variant_count"]
+
+
+def test_somatic_bands_are_well_ordered():
+    # Invariant (PRD S1): for every somatic rule, the bounds that are present must
+    # be ordered fail_below <= warn_below <= warn_above <= fail_above.
+    for rule in SOMATIC_PLAUSIBILITY_PACK:
+        bounds = [
+            rule.get(key)
+            for key in ("fail_below", "warn_below", "warn_above", "fail_above")
+        ]
+        present = [b for b in bounds if b is not None]
+        assert present == sorted(present), f"{rule['check']!r} bands out of order"
+
+
+def test_somatic_vaf_rules_have_no_fail_keys():
+    # Deliberate guarantee, not an oversight: tumor VAF's expected value is a
+    # function of purity and clonality the code never observes, so no band can
+    # separate "broken" from "legitimately low" (a low-purity tumor or a
+    # subclonal population is real science, not a failed run). Unlike
+    # somatic_variant_count, these two rules must stay WARN-capped forever.
+    # strelka_median_vaf is additionally bounded to [0, 1] given non-negative
+    # tier counts, so a fail_above: 1.0 there would be provably dead code on
+    # top of being scientifically wrong.
+    by_check = {c["check"]: c for c in SOMATIC_PLAUSIBILITY_PACK}
+    for check in ("median_vaf", "strelka_median_vaf"):
+        rule = by_check[check]
+        assert "fail_below" not in rule, f"{check!r} has forbidden fail_below"
+        assert "fail_above" not in rule, f"{check!r} has forbidden fail_above"

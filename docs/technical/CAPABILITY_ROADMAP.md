@@ -366,7 +366,7 @@ corpus; repair success-rate analytics gain new classes.
 
 ---
 
-## C3. Biological-plausibility verification  ·  SHIPPED v0.3.0 (germline) + RNA-seq slice (v0.6.0) + single-cell ingestion slice (Unreleased) + germline sex-check slice (Unreleased) + RNA-seq mapping-composition slice (Unreleased) + germline variant-count slice (Unreleased) + germline plausibility FAIL-severity slice (Unreleased)
+## C3. Biological-plausibility verification  ·  SHIPPED v0.3.0 (germline) + RNA-seq slice (v0.6.0) + single-cell ingestion slice (Unreleased) + germline sex-check slice (Unreleased) + RNA-seq mapping-composition slice (Unreleased) + germline variant-count slice (Unreleased) + germline plausibility FAIL-severity slice (Unreleased) + somatic empty-call-set FAIL floor slice (Unreleased; the remaining VAF/RNA-seq FAIL bands **declined by design** — see below)
 
 **Shipped (germline slice) in v0.3.0.** The germline plausibility rules (Ti/Tv and
 het/hom ratios) already existed in `VARIANT_RULE_PACK` but were dormant because
@@ -385,9 +385,15 @@ metric is absent from the run's ingested MultiQC, wired into `_discover_qc` gate
 `assay == "rnaseq"`. Metric slugs/bands are best-effort and uncalibrated; the
 UNVERIFIED-when-absent guarantee absorbs a wrong/missing slug. **Deferred:**
 gene-body-coverage evenness (needs a new RSeQC compute path), doublet rate
-(single-cell), coverage-from-VCF, multi-sample, and FAIL severity until
-the bands are calibrated on real data. (The **sex-check** and **mapping-composition**
-slices have since shipped — see below.)
+(single-cell), coverage-from-VCF, and multi-sample. **FAIL severity for this pack is
+settled, not deferred: declined by design** — every RNA-seq metric has a legitimate protocol
+occupying its extreme (deep/high-input libraries legitimately exceed 90% duplication;
+total-RNA / ribo-depletion legitimately retains rRNA), so "extreme" and "unusual protocol"
+are the same number, and no amount of calibration separates them; and both of this pack's
+slugs are still `# slug unverified` — they have never once resolved against a real
+`nf-core/rnaseq` MultiQC report, so a band there would be severity on code that has never
+fired. Full reasoning in the somatic empty-call-set FAIL floor slice below. (The
+**sex-check** and **mapping-composition** slices have since shipped — see below.)
 
 **Shipped (RNA-seq mapping-composition slice, Unreleased).** The RNA-seq axis now catches
 where reads fall relative to gene annotation — the gDNA-contamination / failed-enrichment
@@ -407,8 +413,14 @@ intentional denominators; the nested TSS/TES windows never summed) — via a new
 Same contract as every C3 slice: at most WARN, never FAIL, never changes the exit code;
 omit-never-guess on uncomputable metrics; a located-but-unparseable artifact →
 `rnaseq_composition_qc:<sample>` **UNVERIFIED**; no artifact → silent skip. **Deferred:**
-gene-body-coverage evenness (non-default RSeQC module), FAIL severity until calibrated on
-real human RNA-seq, cross-sample aggregation, and a dashboard card.
+gene-body-coverage evenness (non-default RSeQC module), cross-sample aggregation, and a
+dashboard card. **FAIL severity for this pack is settled, not deferred: declined by design** —
+nuclear / FFPE / 3'-biased libraries are legitimately intron-dominated and non-model annotation
+legitimately leaves most tags unassigned, so here too "extreme" and "unusual protocol" are the
+same number; and the one genuinely broken case, `unassigned_fraction == 1.0`, is already caught
+more honestly by `RNASEQ_RULE_PACK`'s `assignment_rate fail_below: 40` on the did-it-run tier —
+a second FAIL would be redundant, not new signal. Full reasoning in the somatic empty-call-set
+FAIL floor slice below.
 
 **Shipped (germline sex-check slice, Unreleased).** The verdict now catches
 sex-chromosome **discordance**. A new `verification/sex_plausibility.py` infers
@@ -473,11 +485,76 @@ exit code was unchanged — no QC verdict, including pre-existing FAIL packs lik
 follow-on. *(Update: that CLI exit-code wiring has since shipped as the opt-in
 `--fail-on-verdict` flag on `contig run`/`verify` — a FAIL verdict exits `1` when the flag
 is set, WARN/UNVERIFIED/PASS stay `0`; the **default** exit code remains unchanged, so this
-slice's "verdict-only" claim holds unless a caller opts in.)* FAIL severity for the somatic,
-RNA-seq, RNA-composition, and annotation plausibility packs stays **deferred** (they remain
-WARN-only), as does the sex-check axis. **Deferred:** capture-type-aware (WGS/WES/panel)
-bands and tighter band calibration on real cohorts (the WES-safe bands are deliberately
-gross-only).
+slice's "verdict-only" claim holds unless a caller opts in.)* This slice left FAIL severity
+for the sibling plausibility packs deferred; *(update: that item is now **settled, not
+pending** — the somatic empty-call-set floor below shipped the one band that could be
+derived honestly, and the somatic-VAF and RNA-seq bands are **declined by design**, with
+reasons. The annotation pack (C7 M3) and the sex-check axis remain WARN-only and are not
+covered by that decision.)* **Deferred:** capture-type-aware (WGS/WES/panel) bands and
+tighter band calibration on real cohorts (the WES-safe bands are deliberately gross-only).
+
+**Shipped (somatic empty-call-set FAIL floor slice, Unreleased) — and the rest declined by
+design.** The germline slice above left "FAIL severity for the somatic/RNA-seq/composition
+packs" open; a dig proved that item was **one line of ship and the rest a will-not-do**, so
+it is settled here rather than deferred a sixth time (it had been re-deferred across the
+germline v0.3.0, RNA-seq v0.6.0, somatic-VAF, composition, and variant-count slices).
+**Shipped:** `somatic_variant_count` gains `fail_below: 1` — a somatic run with no biallelic
+records called (almost always an empty or truncated call set) now FAILs the verdict, the
+failure `--fail-on-verdict` (v0.36.0) previously could not catch on this assay. The band's
+shape and rationale mirror the germline `variant_count` floor; the counted population
+differs, since `somatic_variant_count` counts biallelic records only while germline
+`variant_count` counts distinct sites including multiallelic ones. The escalation is the
+narrowest possible: `warn_below: 10` is unchanged, so 1–9 records still
+WARN and only the exactly-zero case moves. There is deliberately **no `fail_above`** — a
+hypermutator (MSI-high, POLE-mutant) or a WGS tumor legitimately exceeds the soft `100000`
+ceiling. It is an engineering tripwire ("an empty call set is a broken run"), the same tier
+as `mean_coverage fail_below`, **not** a biological or clinical claim.
+**Declined by design — these are not waiting on calibration, and no amount of calibration
+would fix them:**
+- **Somatic VAF (`median_vaf`, `strelka_median_vaf`):** germline Ti/Tv could ship FAIL bands
+  because its expected value is *physically constrained* (~2.0 WGS, ~3.0–3.3 WES) with noise
+  at a *distinguishable* ~0.5. A tumor VAF has no such structure — its expected value is a
+  function of **purity and clonality, which the engine never observes** (no purity estimate,
+  no ploidy, no copy-number, no target type). A low median VAF is legitimate science
+  (low-purity tumor, subclonal population), so any `fail_below` would FAIL a real sample.
+  `strelka_median_vaf` adds a second, independent reason: the tier1 ratio is arithmetically
+  bounded to [0,1] given non-negative tier counts — which the VCF spec guarantees — since
+  `strelka_vaf.py:95-98,121-124` reject `denom <= 0` and the numerator is one of the two
+  summands. A `fail_above: 1.0` is therefore **dead code for every real input**.
+- **`pon_applied`:** structurally unbandable — a 3-state string from a header search, not a
+  numeric metric, emitted with `value=None` and never entering `evaluate()` at all (it is
+  appended alongside the pack's results, not routed through it, so no band on it could ever
+  fire). PON absence is also a legitimate configuration Contig itself does not wire.
+- **RNA-seq (`RNASEQ_PLAUSIBILITY_PACK`, `RNASEQ_COMPOSITION_PACK`):** two independent
+  blockers. *Biology:* every metric has a legitimate protocol occupying its extreme —
+  deep/high-input libraries legitimately exceed 90% duplication, total-RNA/ribo-depletion
+  legitimately retains rRNA, nuclear/FFPE/3' libraries are legitimately intron-dominated,
+  non-model annotation legitimately leaves most tags unassigned. "Extreme" and "unusual
+  protocol" are the same number, and the packs see no prep or annotation-quality signal that
+  separates them. *Engineering:* `percent_duplication`/`percent_rRNA` (`rule_pack.py:303,309`,
+  both already commented "slug unverified") are **absent from the repo's only real-shaped
+  MultiQC report** (`demo/sample-run/results/multiqc/multiqc_data.json` carries only
+  `uniquely_mapped_percent`, `percent_assigned`, `total_reads`) — FAIL severity on a metric
+  that has never once arrived is severity on dead code. *Also:* the one genuinely broken case,
+  `unassigned_fraction == 1.0`, is already caught more honestly by `RNASEQ_RULE_PACK`'s
+  `assignment_rate fail_below: 40` on the did-it-run tier — a second FAIL is redundant, not
+  new signal.
+The decision is recorded in the pack comments (`rule_pack.py`) as well as here, so the reason
+travels with the code. **Known caveat (disclosed, not fixed):** `verdict` is a
+`@computed_field` serialized into the signed canonical payload, so re-verifying an affected
+old bundle re-reduces the verdict under the new band and its Ed25519 signature no longer
+matches. The blast radius is only bundles whose verdict actually flips — empty somatic call
+sets, i.e. broken runs — and it is a pre-existing property of any rule-pack edit, inherited
+unchanged from v0.35.0. **Accepted, eyes open:** a legitimately mutation-free targeted panel
+would FAIL (the engine has no target-type signal; `--fail-on-verdict` is opt-in, and the
+revisit trigger is the first real-world report of one). **Honest limit:** no real nf-core/sarek
+run in CI — the floor catches a failure that is *reasoned* (a truncated/crashed Mutect2 step
+yields 0 records) rather than *observed*, with the germline sibling as the existence proof.
+**Surfaced, not fixed (a stronger `/contig-next` candidate than any FAIL band):**
+`RNASEQ_PLAUSIBILITY_PACK` is a **silent no-op on every real rnaseq run** — the same defect
+class as the single-cell dormant pack fixed below — and carries a live unit ambiguity (the
+pack declares 0–100 while Picard's native `PERCENT_DUPLICATION` is a 0–1 fraction and
+`qc_ingest.py:5-23` does a bare `float()` with no normalization).
 
 **Shipped (single-cell ingestion slice, Unreleased).** The single-cell (`scrnaseq`)
 assay already had a biological pack (`SCRNASEQ_RULE_PACK`: recovered cells, median
@@ -525,7 +602,7 @@ distributions and flag implausible-but-completed runs for review.
 
 ---
 
-## C4. New assay, depth-first: somatic variant calling  ·  SHIPPED v0.13.0 (intake→launch→verify) + VAF plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased) + Strelka2-native VAF slice (Unreleased)
+## C4. New assay, depth-first: somatic variant calling  ·  SHIPPED v0.13.0 (intake→launch→verify) + VAF plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased) + Strelka2-native VAF slice (Unreleased) + empty-call-set FAIL floor slice (Unreleased; VAF FAIL bands **declined by design**)
 
 **Shipped (slice 1) in v0.13.0.** A somatic (tumor–normal) assay is now on the engine end
 to end: a `somatic_variant_calling` registry entry + routing served by `nf-core/sarek`
@@ -544,16 +621,20 @@ axis (C3-style, so the assay is no longer structural-only). A new
 (median tumor allele fraction over biallelic records — FORMAT `AF`, else `AD_alt/DP`; tumor
 identified by the `##tumor_sample=` header, never a guessed column), `somatic_variant_count`
 (a deliberately wide band), and `pon_applied` (panel-of-normals presence from the GATK
-command header). Both metric bands are **WARN-capped** in a new `SOMATIC_PLAUSIBILITY_PACK`
+command header). Both metric bands shipped **WARN-capped** in a new `SOMATIC_PLAUSIBILITY_PACK`
 (uncalibrated defaults, no `fail_*`); every uncomputable path — no derivable VAF, an
 unidentifiable tumor column, no GATK header — is **UNVERIFIED, never a false pass**. The
 Mutect2 VCF is selected by a path component below the run dir; a VCF present but non-Mutect2
 yields one honest UNVERIFIED, and no VCF skips silently. The second-somatic-caller
 **concordance hook** (C1-style — Strelka2 vs Mutect2) has since **shipped** (see C1, somatic
-slice). **Deferred to follow-on slices:** FAIL severity until bands are calibrated on real
-data; a cross-column swapped-pair smell test; and panel-of-normals / germline-resource
-reference wiring for a real Mutect2 somatic run (today the verification runs against injected
-fixtures).
+slice). *(Update: `somatic_variant_count` has since gained a `fail_below: 1` empty-call-set
+floor — see the FAIL-floor slice below. The **VAF** bands stay WARN-capped, no longer as a
+deferral but as a **decision**: a tumor VAF's expected value is a function of purity and
+clonality that the engine never observes, so any `fail_below` would FAIL a legitimate
+low-purity or subclonal sample. `pon_applied` is structurally unbandable — a 3-state string,
+not a numeric metric.)* **Deferred to follow-on slices:** a cross-column swapped-pair smell
+test; and panel-of-normals / germline-resource reference wiring for a real Mutect2 somatic
+run (today the verification runs against injected fixtures).
 
 **Shipped (Strelka2-native VAF slice — Unreleased).** The deferred "Strelka2-native VAF
 (tier-count derivation — non-Mutect2 VCFs degrade to UNVERIFIED)" item above has since
@@ -564,9 +645,25 @@ tier1({ALT}U))` over `AU`/`CU`/`GU`/`TU`; indel: `tier1(TIR) / (tier1(TAR) + tie
 column name (Strelka2 emits no `##tumor_sample=` header). It fires **alongside** — not instead
 of — Mutect2's `median_vaf`, as independent cross-caller corroboration of tumor VAF, riding the
 same WARN-capped `SOMATIC_PLAUSIBILITY_PACK` band and wired via the same `select_caller_vcfs`
-locator the concordance hook uses. **Still deferred:** FAIL severity + real-cohort band
-calibration, the cross-column swapped-pair smell test, and panel-of-normals / germline-resource
-reference wiring — unchanged from the slice above.
+locator the concordance hook uses. **Still deferred:** the cross-column swapped-pair smell
+test, and panel-of-normals / germline-resource reference wiring — unchanged from the slice
+above. *(Update: this metric's WARN cap is now **declined by design**, not deferred. Beyond
+inheriting `median_vaf`'s purity/clonality reason, a `fail_above: 1.0` here would be dead code
+for every real input — the tier1 ratio is arithmetically bounded to [0,1] given non-negative
+tier counts, which the VCF spec guarantees (`strelka_vaf.py:95-98,121-124` reject
+`denom <= 0`, and the numerator is one of the two summands).)*
+
+**Shipped (empty-call-set FAIL floor slice, Unreleased).** `somatic_variant_count` gains
+`fail_below: 1`, so a somatic run with **no biallelic records called** (almost always a
+truncated or crashed Mutect2 step yielding an empty call set, though a VCF whose calls are
+all multiallelic would also read `0`) now FAILs the verdict instead of WARNing — the germline
+equivalent of that exact failure already FAILed, and under `--fail-on-verdict` (v0.36.0) the
+somatic run previously still exited `0`. `warn_below: 10` is unchanged, so 1–9 records still
+WARN and only the exactly-zero case escalates; there is deliberately **no `fail_above`** (a
+hypermutator or WGS tumor legitimately exceeds the soft `100000` ceiling). An engineering
+tripwire, not a biological or clinical claim. The durable half of the slice is the
+**declined-by-design** record for every other proposed band — see C3, which carries the full
+reasoning, the signature caveat, and the accepted risks.
 
 The original framing, for reference: add one assay end to end rather than several
 shallowly. Recommended:
@@ -907,8 +1004,8 @@ raw-data egress — runs on the user's / CI compute; only hashes and claim diffs
 |----|-----------|--------|----------|
 | C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) + somatic slice (Unreleased) + single-cell slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap + somatic auto `somatic_site_overlap` PASS-site Jaccard, Mutect2 vs Strelka2, no user input + single-cell `--concordance-sc-counts` pseudobulk gene-level Spearman/fraction-agreeing over a stdlib `.mtx` triplet loader + single-cell **autorun** `--concordance-sc-counts-auto` running STARsolo behind an injectable seam, turnkey; single-cell cluster-stability deferred) |
 | C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; per-contig alias harmonization (mito `M`↔`MT` + GRCh38 scaffold seed) shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); peak-RSS-informed OOM memory scaling shipped (Unreleased, honest two-tier: own-peak → blind fallback; sibling rescue deferred); walltime-informed `time_limit` scaling shipped (Unreleased, floored at blind — censored realtime, tail-only win + field instrument); **input-format-conversion class's first slice shipped (Unreleased): bgzip'd (non-BGZF) reference FASTA self-heal, sarek-scoped (rnaseq immune by construction), stream-decompress to uncompressed `.fa` + retry; CRAM↔BAM conversion is the deferred second half**; bwa-mem2/classic-BWA build+redirect, assembly-signature + exhaustive per-assembly alias completeness pending) | Unattended-completion rate, corpus fuel |
-| C3 | Biological-plausibility verification | SHIPPED v0.3.0 (germline) + RNA-seq (v0.6.0) + single-cell ingestion (Unreleased) + germline sex-check (Unreleased) + RNA-seq mapping-composition (Unreleased) + germline variant-count (Unreleased) + germline plausibility FAIL-severity (Unreleased) | Verdict gets smarter about biology (germline Ti/Tv, het/hom, sex-check, variant-count band — germline Ti/Tv, het/hom, and variant-count now **FAIL** on gross implausibility via WES-safe bands, verdict-only exit unchanged; RNA-seq dup/rRNA + exonic/intronic/unassigned read-composition from RSeQC read_distribution; single-cell cell-QC now *fires* via STARsolo/Cell Ranger ingestion — was a dormant no-op; gene-body-coverage/mito/doublet and somatic/RNA-seq/annotation FAIL severity deferred) |
-| C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased) + Strelka2-native VAF slice (Unreleased); FAIL severity, swapped-pair smell test + PON reference wiring deferred | Breadth, depth-first, new corpus |
+| C3 | Biological-plausibility verification | SHIPPED v0.3.0 (germline) + RNA-seq (v0.6.0) + single-cell ingestion (Unreleased) + germline sex-check (Unreleased) + RNA-seq mapping-composition (Unreleased) + germline variant-count (Unreleased) + germline plausibility FAIL-severity (Unreleased) + somatic empty-call-set FAIL floor (Unreleased) | Verdict gets smarter about biology (germline Ti/Tv, het/hom, sex-check, variant-count band — germline Ti/Tv, het/hom, and variant-count now **FAIL** on gross implausibility via WES-safe bands; somatic `variant_count` now **FAILs** on an empty call set; a FAIL verdict reaches the exit code only under the opt-in `--fail-on-verdict`; RNA-seq dup/rRNA + exonic/intronic/unassigned read-composition from RSeQC read_distribution; single-cell cell-QC now *fires* via STARsolo/Cell Ranger ingestion — was a dormant no-op; gene-body-coverage/mito/doublet deferred; **somatic-VAF and RNA-seq FAIL severity declined by design, not deferred** — tumor VAF's expectation depends on unobserved purity/clonality, and every RNA-seq extreme is a legitimate protocol; annotation-pack FAIL severity is a separate C7 item, still deferred) |
+| C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased) + Strelka2-native VAF slice (Unreleased) + empty-call-set FAIL floor (Unreleased — `somatic_variant_count fail_below: 1`; **VAF/PON FAIL bands declined by design, not deferred**: tumor VAF depends on unobserved purity/clonality, `strelka_median_vaf` is bounded to [0,1] so a ceiling is dead code, `pon_applied` is a non-numeric 3-state string); swapped-pair smell test + PON reference wiring deferred | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
 | C6 | Eval flywheel as a continuous loop | M6 (detector held-out guard slice 1 SHIPPED, Unreleased — honestly 0.833/10:12, two classes structurally unreachable; repair-loop outcome-match guard slice 2 SHIPPED, Unreleased — honestly 1.0/7:7, 5 classes covered; both wired into CI; folding C1/C3 signals + held-out-accuracy trend pending) | Compounding accuracy from real runs |
 | C7 | Research-use variant annotation & prioritization | M1 + M2 + M3 + M4 + M5 surface+provenance SHIPPED (Unreleased) — germline structural verify + provenance, somatic annotation gate, annotation plausibility (both assays), VEP-vs-SnpEff concordance (both assays: `consequence_concordance` WARN-capped + `gene_symbol_concordance` informational, auto in the verdict, both VCF layouts, annotator-version provenance pair), M5 "corroborated by" line across text/HTML report + `contig methods` + dashboard (reads M4 results, never recomputes) + `AnnotationProvenance.db_version` cache/build token (VEP `cache=` / SnpEff genome) rendered and round-tripped through reproduce with pre-M5 back-compat; **M5 C6 eval fold-in still DEFERRED** (blocked on labeling design) (germline+somatic `annotation_present`/`annotation_complete` structural checks via `VARIANT_ASSAYS`, `AnnotationProvenance` tool+cache/build capture, `--tools …,vep` enablement on both assays, `annotation_real_fraction`/`annotation_consequence_distribution` plausibility checks, all WARN-capped/UNVERIFIED-when-absent; live run may still need a VEP/SnpEff cache Contig does not yet wire — absent annotation degrades to UNVERIFIED, never a false pass; verify-only, prioritization deferred) | Disease-research breadth on-thesis, new corpus; run+verify annotation, never a clinical verdict |

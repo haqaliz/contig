@@ -277,11 +277,26 @@ MAG_RULE_PACK: list[dict] = [
 
 
 # RNA-seq biological-plausibility checks (capability C3, RNA-seq slice).
-# WARN-capped (no fail_*): bands are illustrative, tunable engineering defaults,
-# NOT biological claims, uncalibrated on real data. Metric slugs are the
-# best-effort nf-core/rnaseq MultiQC general-stats keys (UNVERIFIED-when-absent
-# absorbs a wrong/missing slug — see evaluate_rnaseq_plausibility). Scale 0-100,
-# matching METHYLSEQ_RULE_PACK's percent_duplication usage.
+# WARN-capped (no fail_*) BY DECISION, not pending calibration. Do not add a fail
+# band here. Two independent reasons, either one sufficient:
+#   1. Biology: every metric below has a legitimate protocol sitting at its
+#      extreme. A deep/high-input library legitimately exceeds 90% duplication;
+#      total-RNA / ribo-depletion legitimately retains rRNA. "Extreme" and
+#      "unusual protocol" are the same number here, so any fail band FAILs real
+#      science. Unlike germline Ti/Tv — which has a physically constrained
+#      expectation (~2.0 WGS, ~3.0-3.3 WES) with noise distinguishable at ~0.5,
+#      and therefore could ship honest FAIL bands — these metrics have no
+#      protocol-independent expected value to band against.
+#   2. Engineering: both slugs below are unverified AND absent from the repo's
+#      only real-shaped MultiQC report (demo/sample-run/results/multiqc/
+#      multiqc_data.json carries only uniquely_mapped_percent, percent_assigned,
+#      total_reads). These rules have never once fired on a real report, so FAIL
+#      severity here would be severity on dead code.
+# The bands are illustrative, tunable engineering defaults, NOT biological claims.
+# Metric slugs are the best-effort nf-core/rnaseq MultiQC general-stats keys
+# (UNVERIFIED-when-absent absorbs a wrong/missing slug — see
+# evaluate_rnaseq_plausibility). Scale 0-100, matching METHYLSEQ_RULE_PACK's
+# percent_duplication usage.
 RNASEQ_PLAUSIBILITY_PACK: list[dict] = [
     {
         "check": "duplication_rate",
@@ -299,26 +314,49 @@ RNASEQ_PLAUSIBILITY_PACK: list[dict] = [
 
 
 # Somatic (tumor-normal) biological-plausibility checks (capability C4 follow-on).
-# WARN-capped (no fail_*): the bands are illustrative, tunable engineering defaults,
-# NOT biological claims, uncalibrated on real cohorts. Computed from the tumor
-# column of the Mutect2 somatic VCF (AF else AD/DP); UNVERIFIED-when-uncomputable
-# absorbs a non-Mutect2 / stripped VCF (see evaluate_somatic_plausibility). Like the
-# germline/RNA-seq plausibility packs, this is imported directly by its evaluator
-# and is deliberately NOT registered in _RULE_PACKS.
+# Mixed severity, deliberately: somatic_variant_count carries a fail_below: 1
+# floor that fires when no biallelic records were called (an empty or truncated
+# call set is a broken run — an engineering tripwire, not a biological or
+# clinical claim), while BOTH VAF metrics are WARN-capped BY DECISION, not
+# pending calibration. See each rule's comment for its reason; the short
+# version is that a tumor VAF has no protocol-independent expected value the
+# code can observe, so no fail band on it can be honest.
+# The bands are otherwise illustrative, tunable engineering defaults, NOT
+# biological claims. Computed from the tumor column of the Mutect2 somatic VCF
+# (AF else AD/DP); UNVERIFIED-when-uncomputable absorbs a non-Mutect2 / stripped
+# VCF (see evaluate_somatic_plausibility). Like the germline/RNA-seq plausibility
+# packs, this is imported directly by its evaluator and is deliberately NOT
+# registered in _RULE_PACKS.
 SOMATIC_PLAUSIBILITY_PACK: list[dict] = [
     {   # tumor VAF distribution: a somatic set spans low subclonal to ~0.5 clonal-het;
         # a median pinned near 1.0 (germline leakage) or ~0.5 (mis-paired normal) is
-        # suspicious. Uncalibrated engineering defaults, WARN-capped.
+        # suspicious. WARN-capped BY DECISION — do not add a fail band here.
+        # Germline Ti/Tv could ship FAIL bands because its expected value is
+        # physically constrained (~2.0 WGS, ~3.0-3.3 WES) with noise at a
+        # distinguishable ~0.5. Tumor VAF has no such structure: its expected
+        # value is a function of purity and clonality, NEITHER OF WHICH THIS CODE
+        # EVER OBSERVES (no purity estimate, no ploidy, no copy-number, no target
+        # type). A low median VAF is legitimate science — a low-purity tumor or a
+        # subclonal population — so any fail_below would FAIL a real sample. The
+        # bands stay soft, uncalibrated engineering defaults.
         "check": "median_vaf",
         "metric": "median_vaf",
         "warn_below": 0.05,
         "warn_above": 0.95,
         "message": "median tumor variant allele fraction",
     },
-    {   # coarse count floor/ceiling to catch a grossly failed call set; band is wide
-        # because target type (panel/WES/WGS) varies by orders of magnitude.
+    {   # fail_below 1 is a hard floor: no biallelic records called (an empty or
+        # truncated call set — count is incremented only for biallelic records,
+        # see somatic_plausibility.py) is a broken run and FAILs, same
+        # engineering tier as mean_coverage's fail_below — not a biological or
+        # clinical claim. There is deliberately NO fail_above: warn_above stays
+        # a SOFT, uncalibrated "absurd-count" tripwire, never a validated
+        # ceiling, because a hypermutator (MSI-high, POLE-mutant) or a WGS
+        # tumor legitimately exceeds it. The band is otherwise coarse because
+        # target type (panel/WES/WGS) varies by orders of magnitude.
         "check": "somatic_variant_count",
         "metric": "somatic_variant_count",
+        "fail_below": 1,
         "warn_below": 10,
         "warn_above": 100000,
         "message": "number of somatic variant records called",
@@ -326,7 +364,15 @@ SOMATIC_PLAUSIBILITY_PACK: list[dict] = [
     {   # Strelka2's own tier1-count VAF (see strelka_vaf.py), NOT the Mutect2
         # AF/AD-DP metric above. Reuses median_vaf's band verbatim: same
         # uncalibrated engineering default, shared across both callers rather
-        # than re-derived, WARN-capped (no fail_*). Evaluated by its own
+        # than re-derived. WARN-capped BY DECISION — do not add a fail band here.
+        # It inherits median_vaf's reason above (a tumor VAF's expected value
+        # depends on unobserved purity/clonality), and adds one of its own: a
+        # fail_above: 1.0 would be DEAD CODE FOR EVERY REAL INPUT, because this
+        # metric is arithmetically bounded to [0,1] given non-negative tier
+        # counts (which the VCF spec guarantees) — strelka_vaf.py:95-98 and
+        # :121-124 reject denom <= 0, and the numerator is one of the two
+        # summands, so a tier1 ratio can never exceed 1.
+        # Evaluated by its own
         # evaluate_strelka_vaf_plausibility() over a by_metric dict containing
         # ONLY this key, so this rule fires without ever re-emitting the two
         # Mutect2 rules above (evaluate() skips any rule whose metric is absent
@@ -373,9 +419,20 @@ ANNOTATION_PLAUSIBILITY_PACK: list[dict] = [
 
 
 # RNA-seq read-composition plausibility (C3). Fractions in [0,1] (NOT the 0-100
-# percent scale of the MultiQC packs), so the bands are fractions too. WARN-capped,
-# uncalibrated engineering defaults; evaluated by the dedicated read_distribution gate
-# in runner._discover_qc and deliberately NOT registered in _RULE_PACKS.
+# percent scale of the MultiQC packs), so the bands are fractions too.
+# WARN-capped BY DECISION, not pending calibration. Do not add a fail band here.
+# Every metric below has a legitimate protocol occupying its extreme: a
+# nuclear/FFPE/3'-biased library is legitimately intron-dominated (so a low
+# exonic_fraction and a high intronic_fraction are both real science), and a
+# non-model or sparse annotation legitimately leaves most tags unassigned.
+# "Extreme" and "unusual protocol" are the same number, and the pack sees no
+# library-prep or annotation-quality signal that could tell them apart.
+# Separately, the one genuinely broken case — unassigned_fraction == 1.0 — is
+# already caught more honestly by RNASEQ_RULE_PACK's assignment_rate
+# fail_below: 40 on the did-it-run tier, so a fail band here would be redundant
+# rather than new signal. Uncalibrated engineering defaults; evaluated by the
+# dedicated read_distribution gate in runner._discover_qc and deliberately NOT
+# registered in _RULE_PACKS.
 RNASEQ_COMPOSITION_PACK: list[dict] = [
     {
         "check": "exonic_fraction",

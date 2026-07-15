@@ -3,8 +3,21 @@
 Somatic (tumor-normal) variant calling ships structural-only verification today.
 This module adds a biological-plausibility axis for the somatic verdict, mirroring
 the germline C3 slice (variant_metrics.py): a pure function of the VCF bytes, a
-WARN-capped rule pack, and an explicit UNVERIFIED branch whenever a metric cannot
-be computed (never a false pass).
+mixed-severity rule pack, and an explicit UNVERIFIED branch whenever a metric
+cannot be computed (never a false pass).
+
+Severity is deliberately split. ``somatic_variant_count`` carries a ``fail_below:
+1`` floor — no biallelic records called (almost always an empty or truncated call
+set, from a truncated or crashed caller) is a broken run, the same engineering
+tier as ``mean_coverage``'s, not a biological or clinical claim. The band's shape
+and rationale mirror the germline ``variant_count`` floor exactly; the counted
+population differs, since this metric counts biallelic records only (a comma in
+ALT is excluded before the counter increments) while germline ``variant_count``
+counts distinct sites including multiallelic ones. The VAF metrics stay
+WARN-capped by decision, not pending calibration: a tumor VAF's expected value is a
+function of purity and clonality, which this module never observes, so a low median
+VAF is legitimate low-purity/subclonal science rather than a defect. See
+SOMATIC_PLAUSIBILITY_PACK's rule comments in rule_pack.py for the full reasoning.
 
 The tumor sample is identified honestly from Mutect2's ``##tumor_sample=<name>``
 header, mapped to that name's column on the ``#CHROM`` line. If the tumor sample
@@ -224,15 +237,33 @@ def _pon_status(header_lines: list[str]) -> tuple[str, str]:
 def evaluate_somatic_plausibility(
     vcf_path: str | os.PathLike, sample: str | None = None
 ) -> list[QCResult]:
-    """Evaluate the somatic plausibility rules over a VCF, capped at WARN.
+    """Evaluate the somatic plausibility rules over a VCF.
 
     Computes median_vaf and somatic_variant_count from the tumor column, then runs
-    the WARN-capped SOMATIC_PLAUSIBILITY_PACK over the COMPUTABLE metrics via the
-    shared evaluate() (band logic and "<check>:<sample>" naming stay single-sourced).
+    SOMATIC_PLAUSIBILITY_PACK over the COMPUTABLE metrics via the shared evaluate()
+    (band logic and "<check>:<sample>" naming stay single-sourced).
+
+    Severity is mixed, by decision. somatic_variant_count can FAIL: its fail_below:
+    1 floor makes a VCF with no biallelic records a FAIL rather than a WARN, since
+    that is almost always a truncated/crashed run yielding an empty call set (though
+    a VCF whose calls are all multiallelic would also read 0). 1-9 records still
+    WARN (warn_below: 10), so the FAIL reaches only the exactly-zero case. median_vaf
+    is WARN-capped by decision (its expected value depends on purity/clonality, which
+    this module never observes) — see rule_pack.py for the reasoning.
+
     A None median_vaf is NOT silently skipped: it gets an explicit "unverified"
     QCResult (no severity, so it can never read as a pass). variant_count is always
-    an int, so it is always computable. It also appends a ``pon_applied`` check
-    decided from the Mutect2 (GATK) command header. Every result is kind "metric".
+    an int, so it is always computable — a real 0 therefore rides the band into the
+    FAIL floor and never routes into the UNVERIFIED branch (an empty call set is not
+    mistaken for "nothing to check").
+
+    It also appends a ``pon_applied`` check decided from the Mutect2 (GATK) command
+    header. That check is deliberately unbandable: it is a 3-state string, not a
+    numeric metric, emitted with value=None and appended alongside the pack's results
+    rather than routed through evaluate(), so no band on it could ever fire. PON
+    absence is also a legitimate configuration that Contig itself does not wire, so
+    it could not honestly FAIL even if it were numeric. Every result is kind
+    "metric".
 
     The sample label is the resolved tumor sample name (from the header), or
     "sample" when the tumor cannot be identified.
