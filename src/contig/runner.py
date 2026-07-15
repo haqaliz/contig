@@ -418,8 +418,10 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
     # multiqc_data.json), so a dedicated gate parses the read_distribution.txt
     # artifact directly and drives RNASEQ_COMPOSITION_PACK -- mirrors the
     # methylseq/ampliseq gates below. rnaseq deliberately stays OUT of
-    # _DEDICATED_METRIC_ASSAYS: the MultiQC pack above still owns
-    # alignment/duplication/rRNA, this gate only owns the composition fractions.
+    # _DEDICATED_METRIC_ASSAYS: the MultiQC pack above owns alignment and,
+    # since its key/unit fix, duplication too; rRNA remains unscored (its
+    # percent_rRNA slug is still an unverified guess, never confirmed against
+    # a real report) — this gate only owns the composition fractions.
     # A located artifact with no usable metric yields one explicit UNVERIFIED
     # (never a silent no-op or a false pass); no artifact at all skips silently
     # (structural QC owns a genuinely missing output; read_distribution is NOT
