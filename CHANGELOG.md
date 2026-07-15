@@ -17,12 +17,17 @@ All notable changes to Contig are recorded here. The format follows
   that exact failure already FAILed (`rule_pack.py:84-90`). This slice closes that asymmetry
   with one band, and — the more durable half — records why every other proposed band will not
   be built.
-  - **What now FAILs:** `somatic_variant_count` gains `fail_below: 1`, the direct mirror of
-    the shipped germline `variant_count` floor. An empty somatic call set is a broken run, and
-    it now drives `record.verdict` → FAIL wherever the verdict is surfaced. The count is
-    always an `int` (initialized to `0` and incremented *before* the tumor-column guard), so a
-    real `0` rides the band into the floor rather than routing to UNVERIFIED — an empty call
-    set is never mistaken for "nothing to check."
+  - **What now FAILs:** `somatic_variant_count` gains `fail_below: 1`. The band's shape and
+    rationale mirror the shipped germline `variant_count` floor exactly, but the counted
+    population differs: `somatic_variant_count` counts biallelic records only (a
+    multiallelic record — a comma in ALT — is skipped before the counter increments),
+    whereas germline `variant_count` counts distinct sites including multiallelic ones. So
+    the floor fires when no biallelic records were called — almost always an empty or
+    truncated call set, though a VCF whose calls are all multiallelic would also read `0`
+    and FAIL. Either way it now drives `record.verdict` → FAIL wherever the verdict is
+    surfaced. The count is always an `int` (initialized to `0` and incremented *before* the
+    tumor-column guard), so a real `0` rides the band into the floor rather than routing to
+    UNVERIFIED — a zero count is never mistaken for "nothing to check."
   - **The escalation is the narrowest possible.** `warn_below: 10` is **unchanged**, so 1–9
     records still WARN exactly as before; only the exactly-zero case moves. There is
     deliberately **no `fail_above`** — mirroring germline's decision, the `warn_above: 100000`
@@ -61,7 +66,7 @@ All notable changes to Contig are recorded here. The format follows
       legitimately intron-dominated, non-model annotation legitimately leaves most tags
       unassigned. "Extreme" and "unusual protocol" are the same number, and the packs see no
       library-prep or annotation-quality signal that separates them. *Engineering:*
-      `percent_duplication`/`percent_rRNA` (`rule_pack.py:288,294`, both already commented
+      `percent_duplication`/`percent_rRNA` (`rule_pack.py:303,309`, both already commented
       "slug unverified") are **absent from the repo's only real-shaped MultiQC report**
       (`demo/sample-run/results/multiqc/multiqc_data.json` carries only
       `uniquely_mapped_percent`, `percent_assigned`, `total_reads`) — FAIL severity on a

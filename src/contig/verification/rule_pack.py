@@ -315,11 +315,12 @@ RNASEQ_PLAUSIBILITY_PACK: list[dict] = [
 
 # Somatic (tumor-normal) biological-plausibility checks (capability C4 follow-on).
 # Mixed severity, deliberately: somatic_variant_count carries a fail_below: 1
-# empty-call-set floor (an empty call set is a broken run — an engineering
-# tripwire, not a biological or clinical claim), while BOTH VAF metrics are
-# WARN-capped BY DECISION, not pending calibration. See each rule's comment for
-# its reason; the short version is that a tumor VAF has no protocol-independent
-# expected value the code can observe, so no fail band on it can be honest.
+# floor that fires when no biallelic records were called (an empty or truncated
+# call set is a broken run — an engineering tripwire, not a biological or
+# clinical claim), while BOTH VAF metrics are WARN-capped BY DECISION, not
+# pending calibration. See each rule's comment for its reason; the short
+# version is that a tumor VAF has no protocol-independent expected value the
+# code can observe, so no fail band on it can be honest.
 # The bands are otherwise illustrative, tunable engineering defaults, NOT
 # biological claims. Computed from the tumor column of the Mutect2 somatic VCF
 # (AF else AD/DP); UNVERIFIED-when-uncomputable absorbs a non-Mutect2 / stripped
@@ -344,14 +345,15 @@ SOMATIC_PLAUSIBILITY_PACK: list[dict] = [
         "warn_above": 0.95,
         "message": "median tumor variant allele fraction",
     },
-    {   # fail_below 1 is a hard floor: an empty call set (0 records) is a broken
-        # run and FAILs, same engineering tier as mean_coverage's fail_below —
-        # not a biological or clinical claim. There is deliberately NO
-        # fail_above: warn_above stays a SOFT, uncalibrated "absurd-count"
-        # tripwire, never a validated ceiling, because a hypermutator
-        # (MSI-high, POLE-mutant) or a WGS tumor legitimately exceeds it. The
-        # band is otherwise coarse because target type (panel/WES/WGS) varies
-        # by orders of magnitude.
+    {   # fail_below 1 is a hard floor: no biallelic records called (an empty or
+        # truncated call set — count is incremented only for biallelic records,
+        # see somatic_plausibility.py) is a broken run and FAILs, same
+        # engineering tier as mean_coverage's fail_below — not a biological or
+        # clinical claim. There is deliberately NO fail_above: warn_above stays
+        # a SOFT, uncalibrated "absurd-count" tripwire, never a validated
+        # ceiling, because a hypermutator (MSI-high, POLE-mutant) or a WGS
+        # tumor legitimately exceeds it. The band is otherwise coarse because
+        # target type (panel/WES/WGS) varies by orders of magnitude.
         "check": "somatic_variant_count",
         "metric": "somatic_variant_count",
         "fail_below": 1,

@@ -717,7 +717,7 @@ def test_somatic_variant_count_has_fail_below_only():
 
 
 def test_somatic_bands_are_well_ordered():
-    # Invariant (PRD R8): for every somatic rule, the bounds that are present must
+    # Invariant (PRD S1): for every somatic rule, the bounds that are present must
     # be ordered fail_below <= warn_below <= warn_above <= fail_above.
     for rule in SOMATIC_PLAUSIBILITY_PACK:
         bounds = [
@@ -734,9 +734,9 @@ def test_somatic_vaf_rules_have_no_fail_keys():
     # separate "broken" from "legitimately low" (a low-purity tumor or a
     # subclonal population is real science, not a failed run). Unlike
     # somatic_variant_count, these two rules must stay WARN-capped forever.
-    # strelka_median_vaf is additionally bounded to [0, 1] by construction, so
-    # a fail_above: 1.0 there would be provably dead code on top of being
-    # scientifically wrong.
+    # strelka_median_vaf is additionally bounded to [0, 1] given non-negative
+    # tier counts, so a fail_above: 1.0 there would be provably dead code on
+    # top of being scientifically wrong.
     by_check = {c["check"]: c for c in SOMATIC_PLAUSIBILITY_PACK}
     for check in ("median_vaf", "strelka_median_vaf"):
         rule = by_check[check]

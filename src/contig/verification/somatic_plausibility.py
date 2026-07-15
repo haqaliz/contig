@@ -7,9 +7,13 @@ mixed-severity rule pack, and an explicit UNVERIFIED branch whenever a metric
 cannot be computed (never a false pass).
 
 Severity is deliberately split. ``somatic_variant_count`` carries a ``fail_below:
-1`` floor — an empty call set is a broken run (a truncated or crashed caller), the
-direct mirror of the germline ``variant_count`` floor and the same engineering tier
-as ``mean_coverage``'s, not a biological or clinical claim. The VAF metrics stay
+1`` floor — no biallelic records called (almost always an empty or truncated call
+set, from a truncated or crashed caller) is a broken run, the same engineering
+tier as ``mean_coverage``'s, not a biological or clinical claim. The band's shape
+and rationale mirror the germline ``variant_count`` floor exactly; the counted
+population differs, since this metric counts biallelic records only (a comma in
+ALT is excluded before the counter increments) while germline ``variant_count``
+counts distinct sites including multiallelic ones. The VAF metrics stay
 WARN-capped by decision, not pending calibration: a tumor VAF's expected value is a
 function of purity and clonality, which this module never observes, so a low median
 VAF is legitimate low-purity/subclonal science rather than a defect. See
@@ -240,8 +244,9 @@ def evaluate_somatic_plausibility(
     (band logic and "<check>:<sample>" naming stay single-sourced).
 
     Severity is mixed, by decision. somatic_variant_count can FAIL: its fail_below:
-    1 floor makes an empty call set (0 records) a FAIL rather than a WARN, since a
-    0-record somatic VCF is a truncated/crashed run, not a result. 1-9 records still
+    1 floor makes a VCF with no biallelic records a FAIL rather than a WARN, since
+    that is almost always a truncated/crashed run yielding an empty call set (though
+    a VCF whose calls are all multiallelic would also read 0). 1-9 records still
     WARN (warn_below: 10), so the FAIL reaches only the exactly-zero case. median_vaf
     is WARN-capped by decision (its expected value depends on purity/clonality, which
     this module never observes) — see rule_pack.py for the reasoning.

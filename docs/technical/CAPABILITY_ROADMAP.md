@@ -498,10 +498,13 @@ design.** The germline slice above left "FAIL severity for the somatic/RNA-seq/c
 packs" open; a dig proved that item was **one line of ship and the rest a will-not-do**, so
 it is settled here rather than deferred a sixth time (it had been re-deferred across the
 germline v0.3.0, RNA-seq v0.6.0, somatic-VAF, composition, and variant-count slices).
-**Shipped:** `somatic_variant_count` gains `fail_below: 1` — an empty somatic call set (0
-records) now FAILs the verdict, the direct mirror of the germline `variant_count` floor and
-the failure `--fail-on-verdict` (v0.36.0) previously could not catch on this assay. The
-escalation is the narrowest possible: `warn_below: 10` is unchanged, so 1–9 records still
+**Shipped:** `somatic_variant_count` gains `fail_below: 1` — a somatic run with no biallelic
+records called (almost always an empty or truncated call set) now FAILs the verdict, the
+failure `--fail-on-verdict` (v0.36.0) previously could not catch on this assay. The band's
+shape and rationale mirror the germline `variant_count` floor; the counted population
+differs, since `somatic_variant_count` counts biallelic records only while germline
+`variant_count` counts distinct sites including multiallelic ones. The escalation is the
+narrowest possible: `warn_below: 10` is unchanged, so 1–9 records still
 WARN and only the exactly-zero case moves. There is deliberately **no `fail_above`** — a
 hypermutator (MSI-high, POLE-mutant) or a WGS tumor legitimately exceeds the soft `100000`
 ceiling. It is an engineering tripwire ("an empty call set is a broken run"), the same tier
@@ -528,7 +531,7 @@ would fix them:**
   legitimately retains rRNA, nuclear/FFPE/3' libraries are legitimately intron-dominated,
   non-model annotation legitimately leaves most tags unassigned. "Extreme" and "unusual
   protocol" are the same number, and the packs see no prep or annotation-quality signal that
-  separates them. *Engineering:* `percent_duplication`/`percent_rRNA` (`rule_pack.py:288,294`,
+  separates them. *Engineering:* `percent_duplication`/`percent_rRNA` (`rule_pack.py:303,309`,
   both already commented "slug unverified") are **absent from the repo's only real-shaped
   MultiQC report** (`demo/sample-run/results/multiqc/multiqc_data.json` carries only
   `uniquely_mapped_percent`, `percent_assigned`, `total_reads`) — FAIL severity on a metric
@@ -651,8 +654,9 @@ tier counts, which the VCF spec guarantees (`strelka_vaf.py:95-98,121-124` rejec
 `denom <= 0`, and the numerator is one of the two summands).)*
 
 **Shipped (empty-call-set FAIL floor slice, Unreleased).** `somatic_variant_count` gains
-`fail_below: 1`, so a somatic run with an **empty call set** (a truncated or crashed Mutect2
-step yielding a 0-record VCF) now FAILs the verdict instead of WARNing — the germline
+`fail_below: 1`, so a somatic run with **no biallelic records called** (almost always a
+truncated or crashed Mutect2 step yielding an empty call set, though a VCF whose calls are
+all multiallelic would also read `0`) now FAILs the verdict instead of WARNing — the germline
 equivalent of that exact failure already FAILed, and under `--fail-on-verdict` (v0.36.0) the
 somatic run previously still exited `0`. `warn_below: 10` is unchanged, so 1–9 records still
 WARN and only the exactly-zero case escalates; there is deliberately **no `fail_above`** (a

@@ -207,7 +207,7 @@ irrelevant to the gate. The germline slice shipped **zero** CLI tests (commit `6
   protocol at the extreme (deep/high-input → 90%+ duplication; total-RNA/ribo-depletion → high
   rRNA; nuclear/FFPE/3' → intron-dominated; non-model annotation → high unassigned) — "extreme" and
   "unusual protocol" are the same number. **Engineering:** `percent_duplication`/`percent_rRNA`
-  (`rule_pack.py:288,294`, both commented "slug unverified") are **absent from the repo's only
+  (`rule_pack.py:303,309`, both commented "slug unverified") are **absent from the repo's only
   real-shaped MultiQC** (`demo/sample-run/results/multiqc/multiqc_data.json` has only
   `uniquely_mapped_percent`, `percent_assigned`, `total_reads`) — FAIL severity on code that has
   never once fired.
