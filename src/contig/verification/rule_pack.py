@@ -326,7 +326,9 @@ RNASEQ_PLAUSIBILITY_PACK: list[dict] = [
     {
         "check": "duplication_rate",
         "metric": "PERCENT_DUPLICATION",   # Picard MarkDuplicates via MultiQC; verified
-        "unit": "fraction",                # raw 0-1 fraction; see header — no x100. Honored only by evaluate_rnaseq_plausibility, not shared evaluate() — a no-op elsewhere.
+        # Honored ONLY by evaluate_rnaseq_plausibility's guard, not by the
+        # shared evaluate() — declaring "unit" on another pack is a no-op.
+        "unit": "fraction",                # raw 0-1 fraction; see header — no x100
         "message": (
             "fraction of alignments flagged as duplicates (0-1; Picard "
             "PERCENT_DUPLICATION via MultiQC)"

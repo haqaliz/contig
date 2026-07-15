@@ -651,6 +651,19 @@ false pass.
   makes both RNA-seq plausibility checks vanish rather than reporting `unverified` — the
   composition gate (`runner.py:428`) correctly gates on assay alone, so this is a real,
   pre-existing honesty gap, deferred rather than fixed here.
+- **Informational checks have no verdict-neutral status** (surfaced by this slice's review;
+  the strongest follow-on candidate here). `duplication_rate` is now the **only band-less
+  rule in the repo**, and its always-`pass` is *unfalsifiable* — it asserts "the number is a
+  number", not "the data is good" — yet it is verdict-eligible through `overall_verdict` like
+  any other pass. A report carrying only `PERCENT_DUPLICATION` therefore reduces to verdict
+  `pass` with nothing biological actually verified. **Not a regression** (that scenario
+  already reduced to `pass` via `min_sample_count`), and the shape is not new
+  (`gene_symbol_concordance` and `x_het_ratio` are informational too) — but `QCStatus` is
+  `pass`/`warn`/`fail`/`unverified` with no verdict-neutral option, and this is the first rule
+  to need one. **Decide before a second band-less rule lands:** either add a verdict-neutral
+  status/kind, or exclude band-less rules from `overall_verdict`. Deliberately *not* folded
+  into this slice: it changes the shared verdict reducer that all seven assays run through,
+  which is a semantics change, not a bug fix.
 
 Deepen the verdict scientifically with **assay-aware sanity checks** that encode
 what a biologically reasonable result looks like, beyond generic QC thresholds.
