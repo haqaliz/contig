@@ -35,6 +35,7 @@ def test_duplication_rate_pass_reports_fraction_verbatim_no_rescale():
     r = matches[0]
     assert r.status == "pass"
     assert r.value == 0.96
+    assert r.kind == "metric"
 
 
 def test_duplication_rate_never_warns_or_fails_across_full_range():

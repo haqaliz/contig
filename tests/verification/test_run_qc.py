@@ -128,7 +128,7 @@ def test_successful_run_with_good_qc_reads_pass(tmp_path):
 # band at all (see rule_pack.py) — it is informational-only and always PASSes
 # when the value sits in [0, 1] — so this fixture uses 0.96 (a legitimately
 # high but real duplication fraction for a deep/high-input library).
-DUP_MQC = '{"report_general_stats_data":[{"S1":{"PERCENT_DUPLICATION":0.96}}]}'
+DUP_MQC = '{"report_general_stats_data":{"picard":{"S1":{"PERCENT_DUPLICATION":0.96}}}}'
 
 
 def test_discover_qc_emits_rnaseq_plausibility_for_rnaseq_assay(tmp_path):

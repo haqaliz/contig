@@ -35,6 +35,9 @@ def _violates_unit_range(rule: dict, value: float) -> bool:
 
     Rules with no "unit" key (e.g. rrna_contamination) are never guarded here.
     """
+    # `not (0.0 <= value <= 1.0)`, not `value > 1.0 or value < 0.0` — the former
+    # correctly catches NaN/±inf (any comparison with NaN is False, so `not
+    # False` -> True); the latter would let NaN silently pass as in-range.
     return rule.get("unit") == "fraction" and not (0.0 <= value <= 1.0)
 
 

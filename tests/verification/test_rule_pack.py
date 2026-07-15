@@ -651,13 +651,6 @@ def test_rnaseq_plausibility_pack_rules_have_no_fail_keys():
         assert "fail_above" not in rule, f"{rule['check']!r} has forbidden fail_above"
 
 
-def test_rnaseq_plausibility_duplication_below_band_is_pass():
-    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK, _status_for
-
-    rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "duplication_rate")
-    assert _status_for(30.0, rule) == "pass"
-
-
 def test_rnaseq_plausibility_duplication_high_value_is_pass_not_warn():
     # duplication_rate has no band (informational only): even a high, in-range
     # fraction like 0.95 passes, it never warns. (The unit-range guard for a
@@ -668,14 +661,6 @@ def test_rnaseq_plausibility_duplication_high_value_is_pass_not_warn():
 
     rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "duplication_rate")
     assert _status_for(0.95, rule) == "pass"
-
-
-def test_rnaseq_plausibility_duplication_never_fails():
-    # Even a value far above the band must not return "fail" (WARN-cap guarantee).
-    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK, _status_for
-
-    rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "duplication_rate")
-    assert _status_for(99999.0, rule) != "fail"
 
 
 def test_rnaseq_plausibility_rrna_below_band_is_pass():
