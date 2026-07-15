@@ -6,6 +6,100 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **A somatic run with an empty call set now FAILs the verdict — and the remaining
+  plausibility FAIL bands are formally *declined by design*, not deferred again** (capability
+  C4 follow-on / C3 follow-on). v0.36.0 gave the verdict teeth via `--fail-on-verdict`, but
+  germline `variant_calling` was the only assay whose *biological* plausibility could bite: a
+  somatic (tumor–normal) run whose Mutect2 step truncated or crashed into a 0-record VCF
+  rendered a **WARN** and exited `0` even with the flag set, while the germline equivalent of
+  that exact failure already FAILed (`rule_pack.py:84-90`). This slice closes that asymmetry
+  with one band, and — the more durable half — records why every other proposed band will not
+  be built.
+  - **What now FAILs:** `somatic_variant_count` gains `fail_below: 1`, the direct mirror of
+    the shipped germline `variant_count` floor. An empty somatic call set is a broken run, and
+    it now drives `record.verdict` → FAIL wherever the verdict is surfaced. The count is
+    always an `int` (initialized to `0` and incremented *before* the tumor-column guard), so a
+    real `0` rides the band into the floor rather than routing to UNVERIFIED — an empty call
+    set is never mistaken for "nothing to check."
+  - **The escalation is the narrowest possible.** `warn_below: 10` is **unchanged**, so 1–9
+    records still WARN exactly as before; only the exactly-zero case moves. There is
+    deliberately **no `fail_above`** — mirroring germline's decision, the `warn_above: 100000`
+    ceiling stays a **soft, uncalibrated "absurd-count" tripwire, never a validated ceiling**,
+    because a hypermutator (MSI-high, POLE-mutant) or a WGS tumor legitimately exceeds it.
+  - **Pure data change.** One key on one rule dict. The scorer (`_status_for`), evaluator
+    (`evaluate_somatic_plausibility`), verdict reducer (`overall_verdict`), report,
+    `contig show --explain`, provenance, and dashboard consume it unchanged. No new model
+    field, `FailureClass`, corpus case, or dashboard card; no CLI or default exit-code change.
+  - **Declined by design — not deferred, not pending calibration.** The "FAIL severity
+    deferred until the bands are calibrated on real data" line has now been re-deferred across
+    five slices (germline v0.3.0, RNA-seq v0.6.0, somatic-VAF, RNA-seq composition, and
+    variant-count). It is retired here: an investigation found these bands are not waiting on
+    data, they are **structurally impossible to do honestly**, and no amount of calibration
+    changes that. The reasons are recorded in the pack comments and
+    `docs/technical/CAPABILITY_ROADMAP.md` so they travel with the code:
+    - **Somatic VAF (`median_vaf`, `strelka_median_vaf`) stays WARN-capped.** Germline Ti/Tv
+      could ship FAIL bands because its expected value is *physically constrained* (~2.0 WGS,
+      ~3.0–3.3 WES) with noise at a *distinguishable* ~0.5. A tumor VAF has no such structure:
+      its expected value is a function of **purity and clonality, which the engine never
+      observes** (no purity estimate, no ploidy, no copy-number, no target type). A low median
+      VAF is legitimate science — a low-purity tumor or a subclonal population — so any
+      `fail_below` would FAIL a real sample. `strelka_median_vaf` adds a second, independent
+      reason: it is arithmetically bounded to [0,1] by construction
+      (`strelka_vaf.py:95-98,121-124` reject `denom <= 0`), so a `fail_above: 1.0` is
+      **provably dead code**.
+    - **`pon_applied` is structurally unbandable.** It is not a numeric metric — a 3-state
+      string from a header search, emitted with `value=None`, that never enters `evaluate()`;
+      a band would `TypeError` in `_status_for`. PON absence is also a legitimate
+      configuration that Contig itself does not wire.
+    - **RNA-seq (`RNASEQ_PLAUSIBILITY_PACK`, `RNASEQ_COMPOSITION_PACK`) stays WARN-capped**,
+      on two independent blockers. *Biology:* every metric has a legitimate protocol occupying
+      its extreme — deep/high-input libraries legitimately exceed 90% duplication,
+      total-RNA/ribo-depletion legitimately retains rRNA, nuclear/FFPE/3' libraries are
+      legitimately intron-dominated, non-model annotation legitimately leaves most tags
+      unassigned. "Extreme" and "unusual protocol" are the same number, and the packs see no
+      library-prep or annotation-quality signal that separates them. *Engineering:*
+      `percent_duplication`/`percent_rRNA` (`rule_pack.py:288,294`, both already commented
+      "slug unverified") are **absent from the repo's only real-shaped MultiQC report**
+      (`demo/sample-run/results/multiqc/multiqc_data.json` carries only
+      `uniquely_mapped_percent`, `percent_assigned`, `total_reads`) — FAIL severity on a
+      metric that has never once arrived is severity on dead code. *Also:* the one genuinely
+      broken case, `unassigned_fraction == 1.0`, is already caught more honestly by
+      `RNASEQ_RULE_PACK`'s `assignment_rate fail_below: 40` on the did-it-run tier, so a
+      second FAIL would be redundant rather than new signal.
+    - **Not covered by this decision:** the annotation plausibility pack (a separate C7 M-track
+      item with its own deferral trail) and the germline sex-check axis (hand-built from scalar
+      constants, not a rule pack — unbandable by a data edit) both remain WARN-only.
+  - **Caveat for signing users: re-verifying an affected *old* bundle can break its
+    signature.** `verdict` is a pydantic `@computed_field` (`models.py:357-369`) and
+    `canonical_record_bytes` is `record.model_dump(mode="json")` (`signing.py:63-64`), so the
+    verdict is **inside the signed canonical payload** (verified: a WARN record canonicalizes
+    to `"verdict":"warn"`). Re-verifying a bundle whose verdict changes under the new band
+    recomputes different canonical bytes, and its Ed25519 signature no longer matches. The
+    blast radius is **only** bundles whose verdict actually flips — i.e. somatic runs with an
+    empty call set, which are broken runs by definition; every other bundle canonicalizes
+    identically. This is a pre-existing property of **any** rule-pack edit, inherited unchanged
+    from v0.35.0, and is disclosed rather than fixed: excluding `verdict` from the canonical
+    payload would be a cross-cutting signature-contract change and its own slice.
+  - **Honest scope.** Research-use. The floor is an **engineering tripwire** ("an empty call
+    set is a broken run" — the same tier as `mean_coverage fail_below`), **not** a biological
+    or clinical claim; this slice actively *refuses* the bands that would have over-claimed.
+    A legitimately mutation-free targeted panel **would** FAIL — accepted with eyes open,
+    because the engine has no target-type signal, the escalation is the narrowest possible,
+    sarek's Mutect2 count is not PASS-filtered (so a genuinely 0-record VCF from a real run is
+    a truncation artifact, not a biological result), and `--fail-on-verdict` is opt-in; the
+    revisit trigger is the first real-world report of one. The failure is **reasoned, not
+    observed**: the somatic assay has never run against real data — **no real nf-core/sarek run
+    in CI**, verification rides injected fixtures — so this ships on the germline sibling as its
+    existence proof, and its success criteria are test assertions, not field signal. UNVERIFIED
+    is untouched and is never converted to FAIL. Test-first (RED→GREEN).
+  - **Surfaced, not fixed (recommended next):** `RNASEQ_PLAUSIBILITY_PACK` is a **silent no-op
+    on every real rnaseq run** — the same defect class as the single-cell pack fixed in the C3
+    ingestion slice — and carries a live unit ambiguity (the pack declares 0–100 while Picard's
+    native `PERCENT_DUPLICATION` is a 0–1 fraction and `qc_ingest.py:5-23` does a bare
+    `float()` with no normalization). Likely higher user value than any FAIL band.
+
 ## [0.36.0] - 2026-07-15
 
 ### Added
