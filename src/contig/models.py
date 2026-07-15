@@ -90,10 +90,18 @@ def overall_verdict(results: list[QCResult]) -> QCStatus:
     An "unverified" check carries no severity (it corroborated nothing); it cannot
     by itself turn into a pass, so a set of only unverified checks reduces to
     "unverified", never "pass".
+
+    An `informational` check likewise carries no severity, whatever its `status`:
+    it asserts nothing, so it can never contribute a pass (or a warn/fail) to the
+    verdict. The empty-list guard above runs on the full, unfiltered list — an
+    all-informational list is not empty and must not raise; it just has no
+    severity-bearing result to reduce over. So: a result set containing only
+    informational and/or unverified checks reduces to "unverified", never "pass".
     """
     if not results:
         raise ValueError("overall_verdict requires at least one QC result; use 'unverified'")
-    statuses = {r.status for r in results}
+    severe = [r for r in results if not r.informational]
+    statuses = {r.status for r in severe}
     if "fail" in statuses:
         return "fail"
     if "warn" in statuses:

@@ -43,6 +43,27 @@ def test_overall_verdict_rejects_empty_list_to_prevent_false_pass():
         overall_verdict([])
 
 
+def test_overall_verdict_all_informational_reduces_to_unverified():
+    informational_pass = QCResult(check="c", status="pass", message="m", informational=True)
+    assert overall_verdict([informational_pass]) == "unverified"
+
+
+def test_overall_verdict_informational_pass_plus_asserting_pass_is_pass():
+    informational_pass = QCResult(check="c", status="pass", message="m", informational=True)
+    assert overall_verdict([informational_pass, _qc("pass")]) == "pass"
+
+
+def test_overall_verdict_informational_pass_plus_unverified_is_unverified():
+    informational_pass = QCResult(check="c", status="pass", message="m", informational=True)
+    assert overall_verdict([informational_pass, _qc("unverified")]) == "unverified"
+
+
+def test_overall_verdict_informational_pass_does_not_mask_fail_or_warn():
+    informational_pass = QCResult(check="c", status="pass", message="m", informational=True)
+    assert overall_verdict([informational_pass, _qc("fail")]) == "fail"
+    assert overall_verdict([informational_pass, _qc("warn")]) == "warn"
+
+
 def test_qc_result_defaults_kind_to_metric():
     assert QCResult(check="alignment_rate", status="pass", message="x").kind == "metric"
 
