@@ -165,6 +165,13 @@ Every run ends in an honest verdict:
 If a step broke and Contig recovered, the report shows the **repair chain**
 (e.g. `attempt 1: oom → resource patch → patched_and_retried`).
 
+By default the verdict is reported but does not change the exit code (only a
+pipeline failure, output drift, or a signature mismatch does). To **gate a script
+or CI step on the verdict**, pass `--fail-on-verdict` to `contig run` or
+`contig verify`: a `FAIL` verdict then exits non-zero (`1`), while `WARN`,
+`UNVERIFIED`, and `PASS` still exit `0`. It is opt-in, so existing invocations are
+unaffected; `--json` output is unchanged.
+
 ---
 
 ## Reproduce / share
