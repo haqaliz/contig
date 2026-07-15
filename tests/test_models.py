@@ -57,6 +57,18 @@ def test_qc_result_rejects_unknown_kind():
         QCResult(check="x", status="pass", message="x", kind="vibes")
 
 
+def test_qc_result_defaults_informational_to_false():
+    assert QCResult(check="c", status="pass", message="m").informational is False
+
+
+def test_qc_result_legacy_dict_without_informational_key_defaults_false():
+    # A pre-field record has no `informational` key at all; it must still
+    # deserialize (never raise) and default to False, exactly like the
+    # QCKind back-compat contract above.
+    result = QCResult.model_validate({"check": "c", "status": "pass", "message": "m"})
+    assert result.informational is False
+
+
 def test_task_event_is_failure_on_failed_status():
     assert TaskEvent(process="STAR_ALIGN", status="FAILED").is_failure is True
 

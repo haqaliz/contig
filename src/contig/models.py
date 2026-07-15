@@ -73,6 +73,13 @@ class QCResult(BaseModel):
     value: float | None = None
     expected_range: str | None = None
     kind: QCKind = "metric"
+    # Whether this check asserts anything at all (has a warn/fail band) vs. is
+    # purely observational (e.g. a metric surfaced with no pass/fail bounds).
+    # Defaults to False so records predating the field deserialize unchanged.
+    # Orthogonal to `kind`: an informational check is still `kind="metric"`;
+    # `kind` says what produced the result, `informational` says whether it
+    # asserts anything.
+    informational: bool = False
 
 
 def overall_verdict(results: list[QCResult]) -> QCStatus:
