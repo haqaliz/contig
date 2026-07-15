@@ -523,7 +523,7 @@ def _status_for(value: float, check: dict) -> str:
     return "pass"
 
 
-def _expected_range(check: dict) -> str:
+def _expected_range(check: dict) -> str | None:
     """Human-readable bound description for the QCResult, honoring whichever bounds exist."""
     warn_below = check.get("warn_below")
     warn_above = check.get("warn_above")
@@ -531,7 +531,9 @@ def _expected_range(check: dict) -> str:
         return f"[{warn_below}, {warn_above}]"
     if warn_above is not None:
         return f"<= {warn_above}"
-    return f">= {warn_below}"
+    if warn_below is not None:
+        return f">= {warn_below}"
+    return None
 
 
 def evaluate(

@@ -56,6 +56,66 @@ def test_result_carries_value_and_expected_range():
     assert results[0].expected_range == ">= 60.0"
 
 
+def test_bandless_check_renders_expected_range_as_none_not_ge_none():
+    """A rule with neither warn_below nor warn_above must not render the
+    literal nonsense string '>= None' — expected_range must be honestly None."""
+    pack = [
+        {
+            "check": "reported_only",
+            "metric": "m",
+            "message": "a metric we report but deliberately never judge",
+        }
+    ]
+    results = evaluate({"S1": {"m": 42.0}}, pack)
+    assert len(results) == 1
+    assert results[0].status == "pass"
+    assert results[0].expected_range is None
+
+
+def test_expected_range_warn_below_only_renders_ge():  # regression lock
+    pack = [
+        {
+            "check": "bin_completeness",
+            "metric": "completeness",
+            "warn_below": 70.0,
+            "fail_below": 50.0,
+            "message": "CheckM bin completeness (percent of expected marker genes)",
+        }
+    ]
+    results = evaluate({"S1": {"completeness": 80.0}}, pack)
+    assert results[0].expected_range == ">= 70.0"
+
+
+def test_expected_range_warn_above_only_renders_le():  # regression lock
+    pack = [
+        {
+            "check": "bin_contamination",
+            "metric": "contamination",
+            "warn_above": 5.0,
+            "fail_above": 10.0,
+            "message": "CheckM bin contamination (percent marker duplication)",
+        }
+    ]
+    results = evaluate({"S1": {"contamination": 2.0}}, pack)
+    assert results[0].expected_range == "<= 5.0"
+
+
+def test_expected_range_both_bounds_renders_bracket_pair():  # regression lock
+    pack = [
+        {
+            "check": "ts_tv_ratio",
+            "metric": "ts_tv",
+            "fail_below": 1.2,
+            "warn_below": 1.8,
+            "warn_above": 2.4,
+            "fail_above": 3.6,
+            "message": "transition/transversion ratio of called variants",
+        }
+    ]
+    results = evaluate({"S1": {"ts_tv": 2.0}}, pack)
+    assert results[0].expected_range == "[1.8, 2.4]"
+
+
 def test_missing_metric_is_skipped():
     pack = [
         {
