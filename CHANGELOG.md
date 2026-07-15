@@ -46,13 +46,14 @@ All notable changes to Contig are recorded here. The format follows
       observes** (no purity estimate, no ploidy, no copy-number, no target type). A low median
       VAF is legitimate science — a low-purity tumor or a subclonal population — so any
       `fail_below` would FAIL a real sample. `strelka_median_vaf` adds a second, independent
-      reason: it is arithmetically bounded to [0,1] by construction
-      (`strelka_vaf.py:95-98,121-124` reject `denom <= 0`), so a `fail_above: 1.0` is
-      **provably dead code**.
+      reason: the tier1 ratio is arithmetically bounded to [0,1] given non-negative tier
+      counts — which the VCF spec guarantees — since `strelka_vaf.py:95-98,121-124` reject
+      `denom <= 0` and the numerator is one of the two summands. So a `fail_above: 1.0` is
+      **dead code for every real input**.
     - **`pon_applied` is structurally unbandable.** It is not a numeric metric — a 3-state
-      string from a header search, emitted with `value=None`, that never enters `evaluate()`;
-      a band would `TypeError` in `_status_for`. PON absence is also a legitimate
-      configuration that Contig itself does not wire.
+      string from a header search, emitted with `value=None`, that never enters `evaluate()`
+      at all (it is appended alongside the pack's results, not through it). PON absence is
+      also a legitimate configuration that Contig itself does not wire.
     - **RNA-seq (`RNASEQ_PLAUSIBILITY_PACK`, `RNASEQ_COMPOSITION_PACK`) stays WARN-capped**,
       on two independent blockers. *Biology:* every metric has a legitimate protocol occupying
       its extreme — deep/high-input libraries legitimately exceed 90% duplication,

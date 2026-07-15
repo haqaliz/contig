@@ -365,9 +365,11 @@ SOMATIC_PLAUSIBILITY_PACK: list[dict] = [
         # than re-derived. WARN-capped BY DECISION — do not add a fail band here.
         # It inherits median_vaf's reason above (a tumor VAF's expected value
         # depends on unobserved purity/clonality), and adds one of its own: a
-        # fail_above: 1.0 would be PROVABLY DEAD CODE, because this metric is
-        # arithmetically bounded to [0,1] by construction — strelka_vaf.py:95-98
-        # and :121-124 reject denom <= 0, so a tier1 ratio can never exceed 1.
+        # fail_above: 1.0 would be DEAD CODE FOR EVERY REAL INPUT, because this
+        # metric is arithmetically bounded to [0,1] given non-negative tier
+        # counts (which the VCF spec guarantees) — strelka_vaf.py:95-98 and
+        # :121-124 reject denom <= 0, and the numerator is one of the two
+        # summands, so a tier1 ratio can never exceed 1.
         # Evaluated by its own
         # evaluate_strelka_vaf_plausibility() over a by_metric dict containing
         # ONLY this key, so this rule fires without ever re-emitting the two

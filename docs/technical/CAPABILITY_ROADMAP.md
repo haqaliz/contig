@@ -385,9 +385,15 @@ metric is absent from the run's ingested MultiQC, wired into `_discover_qc` gate
 `assay == "rnaseq"`. Metric slugs/bands are best-effort and uncalibrated; the
 UNVERIFIED-when-absent guarantee absorbs a wrong/missing slug. **Deferred:**
 gene-body-coverage evenness (needs a new RSeQC compute path), doublet rate
-(single-cell), coverage-from-VCF, multi-sample, and FAIL severity until
-the bands are calibrated on real data. (The **sex-check** and **mapping-composition**
-slices have since shipped — see below.)
+(single-cell), coverage-from-VCF, and multi-sample. **FAIL severity for this pack is
+settled, not deferred: declined by design** — every RNA-seq metric has a legitimate protocol
+occupying its extreme (deep/high-input libraries legitimately exceed 90% duplication;
+total-RNA / ribo-depletion legitimately retains rRNA), so "extreme" and "unusual protocol"
+are the same number, and no amount of calibration separates them; and both of this pack's
+slugs are still `# slug unverified` — they have never once resolved against a real
+`nf-core/rnaseq` MultiQC report, so a band there would be severity on code that has never
+fired. Full reasoning in the somatic empty-call-set FAIL floor slice below. (The
+**sex-check** and **mapping-composition** slices have since shipped — see below.)
 
 **Shipped (RNA-seq mapping-composition slice, Unreleased).** The RNA-seq axis now catches
 where reads fall relative to gene annotation — the gDNA-contamination / failed-enrichment
@@ -407,8 +413,14 @@ intentional denominators; the nested TSS/TES windows never summed) — via a new
 Same contract as every C3 slice: at most WARN, never FAIL, never changes the exit code;
 omit-never-guess on uncomputable metrics; a located-but-unparseable artifact →
 `rnaseq_composition_qc:<sample>` **UNVERIFIED**; no artifact → silent skip. **Deferred:**
-gene-body-coverage evenness (non-default RSeQC module), FAIL severity until calibrated on
-real human RNA-seq, cross-sample aggregation, and a dashboard card.
+gene-body-coverage evenness (non-default RSeQC module), cross-sample aggregation, and a
+dashboard card. **FAIL severity for this pack is settled, not deferred: declined by design** —
+nuclear / FFPE / 3'-biased libraries are legitimately intron-dominated and non-model annotation
+legitimately leaves most tags unassigned, so here too "extreme" and "unusual protocol" are the
+same number; and the one genuinely broken case, `unassigned_fraction == 1.0`, is already caught
+more honestly by `RNASEQ_RULE_PACK`'s `assignment_rate fail_below: 40` on the did-it-run tier —
+a second FAIL would be redundant, not new signal. Full reasoning in the somatic empty-call-set
+FAIL floor slice below.
 
 **Shipped (germline sex-check slice, Unreleased).** The verdict now catches
 sex-chromosome **discordance**. A new `verification/sex_plausibility.py` infers
@@ -502,13 +514,14 @@ would fix them:**
   function of **purity and clonality, which the engine never observes** (no purity estimate,
   no ploidy, no copy-number, no target type). A low median VAF is legitimate science
   (low-purity tumor, subclonal population), so any `fail_below` would FAIL a real sample.
-  `strelka_median_vaf` adds a second, independent reason: it is arithmetically bounded to
-  [0,1] by construction (`strelka_vaf.py:95-98,121-124` reject `denom <= 0`), so a
-  `fail_above: 1.0` is **provably dead code**.
+  `strelka_median_vaf` adds a second, independent reason: the tier1 ratio is arithmetically
+  bounded to [0,1] given non-negative tier counts — which the VCF spec guarantees — since
+  `strelka_vaf.py:95-98,121-124` reject `denom <= 0` and the numerator is one of the two
+  summands. A `fail_above: 1.0` is therefore **dead code for every real input**.
 - **`pon_applied`:** structurally unbandable — a 3-state string from a header search, not a
-  numeric metric, emitted with `value=None` and never entering `evaluate()` (`_status_for`
-  would `TypeError`). PON absence is also a legitimate configuration Contig itself does not
-  wire.
+  numeric metric, emitted with `value=None` and never entering `evaluate()` at all (it is
+  appended alongside the pack's results, not routed through it, so no band on it could ever
+  fire). PON absence is also a legitimate configuration Contig itself does not wire.
 - **RNA-seq (`RNASEQ_PLAUSIBILITY_PACK`, `RNASEQ_COMPOSITION_PACK`):** two independent
   blockers. *Biology:* every metric has a legitimate protocol occupying its extreme —
   deep/high-input libraries legitimately exceed 90% duplication, total-RNA/ribo-depletion
@@ -632,9 +645,10 @@ same WARN-capped `SOMATIC_PLAUSIBILITY_PACK` band and wired via the same `select
 locator the concordance hook uses. **Still deferred:** the cross-column swapped-pair smell
 test, and panel-of-normals / germline-resource reference wiring — unchanged from the slice
 above. *(Update: this metric's WARN cap is now **declined by design**, not deferred. Beyond
-inheriting `median_vaf`'s purity/clonality reason, a `fail_above: 1.0` here would be provably
-dead code — the tier1 ratio is arithmetically bounded to [0,1] by construction
-(`strelka_vaf.py:95-98,121-124` reject `denom <= 0`).)*
+inheriting `median_vaf`'s purity/clonality reason, a `fail_above: 1.0` here would be dead code
+for every real input — the tier1 ratio is arithmetically bounded to [0,1] given non-negative
+tier counts, which the VCF spec guarantees (`strelka_vaf.py:95-98,121-124` reject
+`denom <= 0`, and the numerator is one of the two summands).)*
 
 **Shipped (empty-call-set FAIL floor slice, Unreleased).** `somatic_variant_count` gains
 `fail_below: 1`, so a somatic run with an **empty call set** (a truncated or crashed Mutect2

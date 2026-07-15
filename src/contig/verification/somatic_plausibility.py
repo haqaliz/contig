@@ -254,10 +254,11 @@ def evaluate_somatic_plausibility(
 
     It also appends a ``pon_applied`` check decided from the Mutect2 (GATK) command
     header. That check is deliberately unbandable: it is a 3-state string, not a
-    numeric metric, emitted with value=None and never entering evaluate() — a band on
-    it would TypeError in _status_for. PON absence is also a legitimate configuration
-    that Contig itself does not wire, so it could not honestly FAIL even if it were
-    numeric. Every result is kind "metric".
+    numeric metric, emitted with value=None and appended alongside the pack's results
+    rather than routed through evaluate(), so no band on it could ever fire. PON
+    absence is also a legitimate configuration that Contig itself does not wire, so
+    it could not honestly FAIL even if it were numeric. Every result is kind
+    "metric".
 
     The sample label is the resolved tumor sample name (from the header), or
     "sample" when the tumor cannot be identified.
