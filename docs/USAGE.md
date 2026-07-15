@@ -172,6 +172,33 @@ or CI step on the verdict**, pass `--fail-on-verdict` to `contig run` or
 `UNVERIFIED`, and `PASS` still exit `0`. It is opt-in, so existing invocations are
 unaffected; `--json` output is unchanged.
 
+`UNVERIFIED` deliberately exits `0`: "we could not check this" is not the same
+claim as "this is broken", and Contig will not convert one into the other.
+
+### What can actually FAIL
+
+FAIL bands are **gross-implausibility engineering tripwires** — "this run is
+broken" — never a biological or clinical claim. A check only gets one where a
+grossly-wrong value is distinguishable from unusual-but-real science:
+
+| Check | FAILs when |
+|---|---|
+| Structural / integrity | an expected output is missing, empty, or unreadable |
+| "Did it run" QC (alignment rate, coverage, bisulfite conversion, ASV count, bin contamination, …) | the metric is far outside the range any usable run reaches |
+| Germline `ts_tv_ratio`, `het_hom_ratio` | grossly outside the germline range (e.g. Ti/Tv ≈ 0.5 — the signature of random calls) |
+| Germline `variant_count` | the call set is empty |
+| Somatic `somatic_variant_count` | no biallelic records were called (an empty or truncated call set) |
+
+Everything else is **WARN-capped by design, not pending calibration** — most
+notably tumour VAF and every RNA-seq plausibility metric. Their extremes are
+occupied by legitimate protocols (a low-purity or subclonal tumour really does
+have a low VAF; a deeply-sequenced library really is highly duplicated), so no
+threshold separates "broken" from "unusual but real", and a FAIL there would
+reject good science. See `docs/technical/CAPABILITY_ROADMAP.md` (C3/C4) for the
+full reasoning.
+
+Concordance never affects the exit code: it is corroboration, not ground truth.
+
 ---
 
 ## Reproduce / share
@@ -215,8 +242,9 @@ as they're validated.)
 | Goal | Pipeline | QC |
 |---|---|---|
 | RNA-seq differential expression | `nf-core/rnaseq` | alignment/assignment rate, library-size skew, replicate checks |
-| Single-cell RNA-seq | `nf-core/scrnaseq` | estimated cells, median genes per cell, reads in cells, mito fraction |
-| Germline variant calling (research) | `nf-core/sarek` | Ti/Tv & het/hom ratios, coverage |
+| Single-cell RNA-seq | `nf-core/scrnaseq` | estimated cells, median genes per cell, reads in cells |
+| Germline variant calling (research) | `nf-core/sarek` | Ti/Tv & het/hom ratios, variant count, coverage, sex check |
+| Somatic variant calling, tumour–normal (research) | `nf-core/sarek` | tumour VAF (Mutect2 + Strelka2), somatic variant count, panel-of-normals applied, Mutect2-vs-Strelka2 concordance |
 | Methylation (bisulfite) | `nf-core/methylseq` | bisulfite conversion rate, mapping efficiency, duplication |
 | 16S amplicon (microbiome) | `nf-core/ampliseq` | DADA2 read retention, ASV count, sample read depth |
 | Shotgun metagenomics | `nf-core/mag` | assembly N50, bin completeness, contamination |
