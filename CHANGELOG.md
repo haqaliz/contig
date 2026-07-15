@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-07-15
+
 ### Fixed
 
 - **RNA-seq `duplication_rate` now actually ingests from a real MultiQC report — it never had
@@ -1684,6 +1686,7 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.38.0]: https://github.com/haqaliz/contig/releases/tag/v0.38.0
 [0.37.0]: https://github.com/haqaliz/contig/releases/tag/v0.37.0
 [0.36.0]: https://github.com/haqaliz/contig/releases/tag/v0.36.0
 [0.35.0]: https://github.com/haqaliz/contig/releases/tag/v0.35.0
