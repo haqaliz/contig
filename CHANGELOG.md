@@ -6,6 +6,60 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Informational QC checks are now verdict-neutral: a check that cannot fail no longer
+  counts as evidence for a `pass`** (capability C3 follow-on; the item
+  `CAPABILITY_ROADMAP.md` had flagged as "the strongest follow-on candidate here"). A new
+  additive `QCResult.informational` field (default `False`; old records deserialize
+  unchanged, exactly as `QCKind` does) marks a check that asserts nothing, and
+  `overall_verdict` now reduces over the **non-informational** results only — a result set
+  of only informational and/or `unverified` checks reduces to `unverified`, never `pass`.
+  Four checks are marked, spanning the two mechanisms by which a check could only ever
+  pass: `duplication_rate` (a band-less rule-pack rule, detected by the absence of all four
+  bound keys — *not* by a null expected-range, which a `fail_below`-only rule also has while
+  remaining able to FAIL) and the three hardcoded-always-pass checks `gene_symbol_concordance`,
+  `x_het_ratio`, and `gene_overlap`. A test enumerates the exact informational set, so a
+  fifth such check cannot land silently — the durable form of the roadmap's "decide before a
+  second band-less rule lands", which prose had already failed to hold (three had landed).
+- **`x_het_ratio` now reports `unverified` when the chrX heterozygosity ratio could not be
+  computed** (too few callable X sites), instead of a `pass` for something it never checked.
+  Only a real, computed ratio is an informational `pass`. The pre-existing test named
+  `test_evaluate_indeterminate_is_unverified_with_none_value` had asserted `pass` against its
+  own name; it now asserts what the name always said.
+
+### Fixed
+
+- **The dashboard's verdict card no longer prints "PASS: all N checks passed" for a run the
+  engine called `unverified`.** `dashboard/lib/derive.ts`'s `overallQc` was a second,
+  divergent copy of the reducer with no `unverified` arm and no informational skip: a run
+  whose tasks succeeded but whose QC was entirely `unverified` (or entirely informational)
+  showed an "Unverified" badge beside a literal false-pass reason string. `overallQc` now
+  mirrors `overall_verdict` exactly (skip informational, then `fail > warn > pass >
+  unverified`), and its docstring no longer claims "we never re-derive trust" while
+  re-deriving. This was the one live, user-visible defect in this change.
+
+### Honest scope
+
+- **This slice is defensive, not corrective: it changed essentially no run's verdict.**
+  Marking the four checks required **zero** existing-test rewrites (the suite went 1594 → 1601,
+  all additive), because a real run almost never rests on informational checks alone — the
+  main rule pack, the RNA-seq-only `min_sample_count` cross-sample floor, structural manifest
+  checks, or an asserting concordance sibling are present and hold the verdict. The value is
+  that the invariant is now **true and guarded**, not that a live false-pass class was closed.
+- **The roadmap's own motivating example was wrong, and is corrected here.** A
+  `PERCENT_DUPLICATION`-only RNA-seq report does **not** flip to `unverified`: `min_sample_count`
+  is an asserting check (it can FAIL below two samples) that rides along on every RNA-seq run
+  and floors the verdict at `pass`. The honest headline is "a `pass` is now backed by at least
+  one check that could have failed", not "the duplication-only run stops passing". The one
+  genuinely reachable flip is a count-concordance run over two matrices sharing zero genes
+  (both asserting siblings `unverified`, only the informational `gene_overlap` "passing") when
+  no MultiQC or manifest is also present — narrow, but a real false pass removed.
+- **Named residue (unchanged, not fixed here):** `min_sample_count` can fail but asserts
+  nothing *biological*, so a "asserts something biological" distinction remains a possible
+  follow-on; `runner.py`'s `multiqc is not None` gate still makes both RNA-seq plausibility
+  checks vanish rather than report `unverified`; `rrna_contamination` remains a guessed slug.
+
 ## [0.38.0] - 2026-07-15
 
 ### Fixed
