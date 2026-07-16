@@ -42,8 +42,10 @@ All notable changes to Contig are recorded here. The format follows
 ### Honest scope
 
 - **This slice is defensive, not corrective: it changed essentially no run's verdict.**
-  Marking the four checks required **zero** existing-test rewrites (the suite went 1594 → 1601,
-  all additive), because a real run almost never rests on informational checks alone — the
+  Marking the four checks needed **no verdict-test rewrites** (the suite went 1588 → 1601,
+  +13 tests; the only existing assertions changed were the two `x_het_ratio` "ratio
+  unavailable" cases retargeted from `pass` to `unverified`, disclosed above), because a real
+  run almost never rests on informational checks alone — the
   main rule pack, the RNA-seq-only `min_sample_count` cross-sample floor, structural manifest
   checks, or an asserting concordance sibling are present and hold the verdict. The value is
   that the invariant is now **true and guarded**, not that a live false-pass class was closed.
@@ -58,7 +60,11 @@ All notable changes to Contig are recorded here. The format follows
 - **Named residue (unchanged, not fixed here):** `min_sample_count` can fail but asserts
   nothing *biological*, so a "asserts something biological" distinction remains a possible
   follow-on; `runner.py`'s `multiqc is not None` gate still makes both RNA-seq plausibility
-  checks vanish rather than report `unverified`; `rrna_contamination` remains a guessed slug.
+  checks vanish rather than report `unverified`; `rrna_contamination` remains a guessed slug;
+  and the CLI `contig report --explain` (`report.py::explain_verdict`) still renders a
+  "Decided by" list of the `unverified` checks for an all-unverified completed run — honest
+  (the headline is `UNVERIFIED`, never a false pass) but not harmonized with the dashboard's
+  cleaner "no check could corroborate this run" wording, a cosmetic follow-on.
 
 ## [0.38.0] - 2026-07-15
 
