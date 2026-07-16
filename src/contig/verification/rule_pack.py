@@ -566,6 +566,27 @@ def _expected_range(check: dict) -> str | None:
     return None
 
 
+_BOUND_KEYS = ("fail_below", "fail_above", "warn_below", "warn_above")
+
+
+def _is_band_less(check: dict) -> bool:
+    """True if `check` declares none of the four bound keys.
+
+    A rule with no bounds at all can only ever fall through `_status_for` to
+    "pass" -- it asserts nothing, so `evaluate` marks it `informational=True`
+    (verdict-neutral; see `overall_verdict`).
+
+    Do NOT key this off `_expected_range(check) is None` instead -- that is a
+    trap. `_expected_range` inspects ONLY warn_below/warn_above, so a rule
+    with just `fail_below` (no warn_*) ALSO renders no expected_range, yet it
+    very much CAN fail. Using `_expected_range` here would mark that rule
+    informational too, making a can-fail rule unfalsifiable -- strictly worse
+    than the bug this predicate fixes. Bound presence, checked directly
+    against all four keys, is the only honest signal.
+    """
+    return not any(key in check for key in _BOUND_KEYS)
+
+
 def evaluate(
     metrics: dict[str, dict[str, float]], rule_pack: list[dict]
 ) -> list[QCResult]:
@@ -583,6 +604,7 @@ def evaluate(
                     message=f"{sample}: {check['metric']}={value} ({status})",
                     value=value,
                     expected_range=_expected_range(check),
+                    informational=_is_band_less(check),
                 )
             )
     return results
