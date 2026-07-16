@@ -96,6 +96,35 @@ def test_report_lists_each_qc_result_with_status_and_value() -> None:
     assert "0.42" in report
 
 
+def test_report_marks_informational_qc_result_distinctly() -> None:
+    # An informational check (Task 1's QCResult.informational) supports nothing
+    # about the verdict; the text report must say so on its own line, and must
+    # not say so on a normal check's line.
+    record = RunRecord(
+        run_id="r1",
+        pipeline="rnaseq",
+        pipeline_revision="3.14.0",
+        target=_target(),
+        input_checksums={"reads.fastq": "abc"},
+        events=[TaskEvent(process="ALIGN", status="COMPLETED", exit=0)],
+        qc_results=[
+            QCResult(check="mapping_rate", status="pass", message="ok", value=0.97),
+            QCResult(
+                check="duplication_rate",
+                status="pass",
+                message="fyi",
+                value=0.71,
+                informational=True,
+            ),
+        ],
+    )
+    report = render_run_report(record)
+    mapping_line = next(l for l in report.splitlines() if "mapping_rate" in l)
+    dup_line = next(l for l in report.splitlines() if "duplication_rate" in l)
+    assert "informational" not in mapping_line
+    assert "informational" in dup_line
+
+
 def test_report_states_no_qc_when_empty() -> None:
     # A successful run with no QC coverage is "unverified", and the report must
     # explain why: no QC checks ran.
@@ -267,6 +296,36 @@ def test_html_report_groups_structural_qc_checks() -> None:
     html = render_run_report_html(record)
     assert "output_present:aligned.bam" in html
     assert "structural" in html.lower()
+
+
+def test_html_report_marks_informational_qc_result_distinctly() -> None:
+    # Same discrimination as the text report, in the HTML QC table: the
+    # informational row carries the marker, the normal row does not.
+    record = RunRecord(
+        run_id="r-informational",
+        pipeline="nf-core/rnaseq",
+        pipeline_revision="3.26.0",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="STAR", status="COMPLETED", exit=0)],
+        qc_results=[
+            QCResult(check="mapping_rate", status="pass", message="ok", value=0.97, kind="metric"),
+            QCResult(
+                check="duplication_rate",
+                status="pass",
+                message="fyi",
+                value=0.71,
+                kind="metric",
+                informational=True,
+            ),
+        ],
+    )
+    html = render_run_report_html(record)
+    rows = html.split("<tr>")
+    mapping_row = next(r for r in rows if "mapping_rate" in r)
+    dup_row = next(r for r in rows if "duplication_rate" in r)
+    assert "informational" not in mapping_row
+    assert "informational" in dup_row
 
 
 def test_html_report_groups_concordance() -> None:
