@@ -299,6 +299,29 @@ export interface EvalSnapshot {
   detector?: string;
 }
 
+// One self-heal outcome-match snapshot (src/contig/data/heal_history.jsonl,
+// C6 self-heal regression guard). Mirrors EvalSnapshot's fields but scores the
+// self-heal loop's outcome-match rate against a frozen scenario corpus instead
+// of the detector's accuracy. The engine appends one per line on
+// `heal-guard --snapshot` (and `--update-baseline`); the /eval trend reads them
+// to plot outcome-match rate over time.
+export interface HealClassScore {
+  matched: number;
+  total: number;
+  rate: number;
+}
+
+export interface HealSnapshot {
+  timestamp: string;
+  scenario_count: number;
+  corpus_sha: string;
+  outcome_match_rate: number;
+  recovery_rate: number;
+  per_class: Record<string, HealClassScore>;
+  covered_classes: string[];
+  contig_version: string | null;
+}
+
 // The pre-run estimate from `contig estimate --json` (PRD contract B). The engine
 // scans prior FINISHED runs of the same pipeline to derive a per-sample resource
 // total and scales it to the requested sample count; with no history it falls
