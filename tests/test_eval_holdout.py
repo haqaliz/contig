@@ -248,8 +248,13 @@ def test_worse_detector_scores_lower_than_rules_on_holdout():
 
 def test_guard_update_then_pass(tmp_path):
     baseline_path = tmp_path / "baseline.json"
+    history_path = tmp_path / "history.jsonl"
 
-    freeze = runner.invoke(app, ["eval-guard", "--update-baseline", "--baseline", str(baseline_path)])
+    freeze = runner.invoke(
+        app,
+        ["eval-guard", "--update-baseline", "--baseline", str(baseline_path),
+         "--history-file", str(history_path)],
+    )
     assert freeze.exit_code == 0
     assert "Baseline updated" in freeze.output
     assert baseline_path.exists()
@@ -268,8 +273,10 @@ def test_guard_regression_worse_detector(tmp_path, monkeypatch):
     monkeypatch.setitem(contig.detect.DETECTORS, "worse", _worse)
 
     baseline_path = tmp_path / "baseline.json"
+    history_path = tmp_path / "history.jsonl"
     freeze = runner.invoke(
-        app, ["eval-guard", "--update-baseline", "--detector", "rules", "--baseline", str(baseline_path)]
+        app, ["eval-guard", "--update-baseline", "--detector", "rules", "--baseline", str(baseline_path),
+              "--history-file", str(history_path)]
     )
     assert freeze.exit_code == 0
 
@@ -290,10 +297,12 @@ def test_guard_sha_mismatch_warns(tmp_path):
     holdout_a = tmp_path / "holdout_a.jsonl"
     shutil.copy(default_holdout_path(), holdout_a)
     baseline_path = tmp_path / "baseline.json"
+    history_path = tmp_path / "history.jsonl"
 
     freeze = runner.invoke(
         app,
-        ["eval-guard", "--update-baseline", "--holdout", str(holdout_a), "--baseline", str(baseline_path)],
+        ["eval-guard", "--update-baseline", "--holdout", str(holdout_a), "--baseline", str(baseline_path),
+         "--history-file", str(history_path)],
     )
     assert freeze.exit_code == 0
 
@@ -313,7 +322,12 @@ def test_guard_sha_mismatch_warns(tmp_path):
 
 def test_guard_json(tmp_path):
     baseline_path = tmp_path / "baseline.json"
-    freeze = runner.invoke(app, ["eval-guard", "--update-baseline", "--baseline", str(baseline_path)])
+    history_path = tmp_path / "history.jsonl"
+    freeze = runner.invoke(
+        app,
+        ["eval-guard", "--update-baseline", "--baseline", str(baseline_path),
+         "--history-file", str(history_path)],
+    )
     assert freeze.exit_code == 0
 
     import json

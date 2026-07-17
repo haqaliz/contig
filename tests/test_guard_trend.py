@@ -26,9 +26,12 @@ runner = CliRunner()
 def test_eval_guard_bare_writes_no_history(tmp_path):
     baseline_path = tmp_path / "baseline.json"
     history_path = tmp_path / "holdout_history.jsonl"
+    setup_history_path = tmp_path / "setup_history.jsonl"
 
     freeze = runner.invoke(
-        app, ["eval-guard", "--update-baseline", "--baseline", str(baseline_path)]
+        app,
+        ["eval-guard", "--update-baseline", "--baseline", str(baseline_path),
+         "--history-file", str(setup_history_path)],
     )
     assert freeze.exit_code == 0
 
@@ -47,9 +50,12 @@ def test_eval_guard_bare_writes_no_history(tmp_path):
 def test_eval_guard_snapshot_appends_one(tmp_path):
     baseline_path = tmp_path / "baseline.json"
     history_path = tmp_path / "holdout_history.jsonl"
+    setup_history_path = tmp_path / "setup_history.jsonl"
 
     freeze = runner.invoke(
-        app, ["eval-guard", "--update-baseline", "--baseline", str(baseline_path)]
+        app,
+        ["eval-guard", "--update-baseline", "--baseline", str(baseline_path),
+         "--history-file", str(setup_history_path)],
     )
     assert freeze.exit_code == 0
 
