@@ -654,7 +654,7 @@ class ClaimResult(BaseModel):
     claimed: float
     observed: float | None = None  # None when the metric is uncomputable
     tolerance: float
-    delta: float | None = None  # None when uncomputable; observed - claimed otherwise
+    delta: float | None = None  # None when uncomputable; relative delta otherwise
     message: str
 
 
