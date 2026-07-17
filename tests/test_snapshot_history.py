@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from contig.heal import default_heal_baseline_path, load_heal_baseline
+from contig.holdout import default_baseline_path, load_baseline
 from contig.models import EvalSnapshot, HealSnapshot
 from contig.snapshot_history import append_jsonl, load_jsonl
 
@@ -103,3 +105,27 @@ def test_default_heal_history_path_under_package_data() -> None:
     p = default_heal_history_path()
     assert str(p).endswith("data/heal_history.jsonl")
     assert p.parent.name == "data"
+
+
+def test_holdout_seed_is_one_line_matching_baseline() -> None:
+    from contig.holdout import default_holdout_history_path
+
+    snapshots = load_jsonl(EvalSnapshot, default_holdout_history_path())
+    assert len(snapshots) == 1
+    baseline = load_baseline(default_baseline_path())
+    assert baseline is not None
+    assert snapshots[0].accuracy == baseline.accuracy
+    assert snapshots[0].corpus_sha == baseline.corpus_sha
+    assert snapshots[0].contig_version == baseline.contig_version
+
+
+def test_heal_seed_is_one_line_matching_baseline() -> None:
+    from contig.heal import default_heal_history_path
+
+    snapshots = load_jsonl(HealSnapshot, default_heal_history_path())
+    assert len(snapshots) == 1
+    baseline = load_heal_baseline(default_heal_baseline_path())
+    assert baseline is not None
+    assert snapshots[0].outcome_match_rate == baseline.outcome_match_rate
+    assert snapshots[0].corpus_sha == baseline.corpus_sha
+    assert snapshots[0].contig_version == baseline.contig_version
