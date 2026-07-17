@@ -175,6 +175,22 @@ def test_load_claims_rejects_non_positive_tolerance(tmp_path):
         load_claims(path)
 
 
+def test_load_claims_rejects_non_numeric_string_tolerance(tmp_path):
+    path = _write(
+        tmp_path, "claims.json", json.dumps([{"id": "auc", "value": 0.9, "tolerance": "0.1"}])
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_boolean_tolerance(tmp_path):
+    path = _write(
+        tmp_path, "claims.json", json.dumps([{"id": "auc", "value": 0.9, "tolerance": True}])
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
 # ---------------------------------------------------------------------------
 # run_reproduction()
 # ---------------------------------------------------------------------------

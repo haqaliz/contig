@@ -12,6 +12,7 @@ import dataclasses as _dataclasses
 import hashlib
 import json as _json
 import re as _re
+import shlex
 import shutil
 import tempfile
 import time
@@ -741,10 +742,35 @@ def reproduce(
         typer.echo(f"No such repo directory: {repo}", err=True)
         raise typer.Exit(code=1)
 
+    # --results is repo-relative by contract (no raw-data egress outside the
+    # repo Contig is asked to run in). Reject an absolute path or one that
+    # resolves outside repo_path (e.g. "../secret.json") before anything runs.
+    resolved_results = (repo_path / results).resolve()
+    try:
+        resolved_results.relative_to(repo_path.resolve())
+    except ValueError:
+        typer.echo(f"--results path escapes the repo: {results}", err=True)
+        raise typer.Exit(code=1)
+
     try:
         claims_list = load_claims(claims)
     except (ClaimsError, OSError) as exc:
         typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+    # Validate --run BEFORE running anything: an unbalanced quote makes
+    # shlex.split raise ValueError, and an empty/whitespace-only command
+    # splits to []. Both would otherwise surface as a raw traceback deep in
+    # run_reproduction/subprocess. Pre-validate here and still pass the
+    # original string through -- run_reproduction's own shlex.split is then
+    # guaranteed not to raise on it.
+    try:
+        run_argv = shlex.split(run)
+    except ValueError as exc:
+        typer.echo(f"Malformed --run command: {exc}", err=True)
+        raise typer.Exit(code=1)
+    if not run_argv:
+        typer.echo("--run command must not be empty", err=True)
         raise typer.Exit(code=1)
 
     # load_claims already defaults a claim's tolerance to 0.1 when the claims

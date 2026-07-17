@@ -232,6 +232,110 @@ def test_reproduce_fail_on_diverged_without_flag_exits_zero(tmp_path, monkeypatc
     assert result.exit_code == 0
 
 
+def test_reproduce_malformed_run_command_errors_and_writes_no_record(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor", _fake_executor({"auc": 0.9})
+    )
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python x 'y",  # unbalanced quote -> shlex.split raises ValueError
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+    assert result.exit_code != 0
+    assert result.output
+    assert not any(runs_dir.rglob("reproduce_record.json")) if runs_dir.exists() else True
+
+
+def test_reproduce_empty_run_command_errors_and_writes_no_record(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor", _fake_executor({"auc": 0.9})
+    )
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+    assert result.exit_code != 0
+    assert result.output
+    assert not any(runs_dir.rglob("reproduce_record.json")) if runs_dir.exists() else True
+
+
+def test_reproduce_absolute_results_path_errors_and_writes_no_record(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor", _fake_executor({"auc": 0.9})
+    )
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--results",
+            "/etc/passwd",
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+    assert result.exit_code != 0
+    assert result.output
+    assert not any(runs_dir.rglob("reproduce_record.json")) if runs_dir.exists() else True
+
+
+def test_reproduce_escaping_results_path_errors_and_writes_no_record(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor", _fake_executor({"auc": 0.9})
+    )
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--results",
+            "../secret.json",
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+    assert result.exit_code != 0
+    assert result.output
+    assert not any(runs_dir.rglob("reproduce_record.json")) if runs_dir.exists() else True
+
+
 def test_reproduce_writes_signed_bundle_when_signing_key_set(tmp_path, monkeypatch):
     from contig import signing
 
