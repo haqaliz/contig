@@ -598,6 +598,17 @@ def default_executor(cmd: list[str], trace_path: Path) -> int:
     return proc.returncode
 
 
+def default_command_executor(cmd: list[str], cwd: Path) -> int:
+    """Run argv in cwd and return its exit code (used by `contig reproduce`).
+
+    Unlike `default_executor`, `cwd` IS the working directory to run in (not a
+    trace-file path), and nothing is written into it. Tests inject a fake so no
+    real process runs in CI.
+    """
+    proc = subprocess.run(cmd, cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return proc.returncode
+
+
 def default_index_builder(cmd: list[str], cwd: Path) -> int:
     """Run an auxiliary index-build command (e.g. ``samtools faidx ref``) in cwd.
 

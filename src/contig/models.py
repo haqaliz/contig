@@ -635,3 +635,42 @@ class HealGuardResult(BaseModel):
     sha_mismatch: bool = False
     has_baseline: bool = True
     mismatches: list[HealScenarioResult] = []
+
+
+# --- Reproduce published work (C8 slice 1: pure data models) --------------------
+# A "claim" is one quantitative assertion pulled from a published paper/repo (e.g.
+# "F1 = 0.91"). Reproducing a paper means re-running its pipeline and checking each
+# claim against what Contig actually observed. `unverified` (not a downgraded
+# "pass") is the status when the metric can't be located in our output at all --
+# mirrors QCStatus/Verdict's honesty contract: never silently upgrade a claim.
+ClaimStatus = Literal["reproduced", "within_tolerance", "diverged", "unverified"]
+
+
+class ClaimResult(BaseModel):
+    """One claim's outcome: the paper's number vs. what Contig observed."""
+
+    id: str
+    status: ClaimStatus
+    claimed: float
+    observed: float | None = None  # None when the metric is uncomputable
+    tolerance: float
+    delta: float | None = None  # None when uncomputable; relative delta otherwise
+    message: str
+
+
+class ReproduceRecord(BaseModel):
+    """The complete record of one `contig reproduce` run over a published repo.
+
+    `created_at` is passed in, never computed with wall-clock inside the model:
+    determinism matters for reproduce records the same way it does for RunRecord.
+    """
+
+    reproduce_id: str
+    repo: str
+    run_command: str
+    claims_sha256: str
+    claim_results: list[ClaimResult]
+    exit_code: int
+    created_at: str
+    interpreter: str | None = None
+    tool: str = "contig"

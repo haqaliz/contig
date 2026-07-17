@@ -10,8 +10,9 @@ from html import escape
 
 from pydantic import BaseModel
 
-from contig.models import QCResult, RunRecord, RunSummary, overall_verdict
+from contig.models import QCResult, ReproduceRecord, RunRecord, RunSummary, overall_verdict
 from contig.verification.annotation_surface import corroborated_by_line
+from contig.verification.reproduce import reduce_reproduction
 
 
 class VerdictExplanation(BaseModel):
@@ -80,6 +81,29 @@ def render_explain(record: RunRecord) -> str:
             value = "" if qc.value is None else str(qc.value)
             threshold = f" (expected {qc.expected_range})" if qc.expected_range else ""
             lines.append(f"  - {qc.check}: {qc.status.upper()} {value}{threshold}")
+    return "\n".join(lines)
+
+
+def render_reproduction(record: ReproduceRecord) -> str:
+    """Render a `contig reproduce` result as a terminal-friendly report.
+
+    A per-claim table (id, status, claimed vs observed, delta) followed by the
+    reduce_reproduction summary line. Pure presentation: it never re-derives a
+    claim's status, mirroring render_explain's discipline for QC verdicts.
+    """
+    lines = [f"REPRODUCE: {record.reproduce_id}", f"repo: {record.repo}", f"run: {record.run_command}"]
+    header = f"{'id':<20}{'status':<18}{'claimed':<12}{'observed':<12}{'delta':<10}"
+    lines.append(header)
+    for claim in record.claim_results:
+        observed = "" if claim.observed is None else str(claim.observed)
+        delta = "" if claim.delta is None else f"{claim.delta:.4f}"
+        lines.append(
+            f"{claim.id:<20}{claim.status.upper():<18}{str(claim.claimed):<12}"
+            f"{observed:<12}{delta:<10}"
+        )
+        lines.append(f"  {claim.message}")
+    summary = reduce_reproduction(record.claim_results)["summary"]
+    lines.append(summary)
     return "\n".join(lines)
 
 
