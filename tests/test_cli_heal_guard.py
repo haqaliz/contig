@@ -86,8 +86,13 @@ def test_heal_guard_regression_on_perturbed_scenario(tmp_path):
 
 def test_heal_guard_update_baseline_writes_and_plain_guard_does_not(tmp_path):
     baseline_path = tmp_path / "baseline.json"
+    history_path = tmp_path / "history.jsonl"
 
-    freeze = runner.invoke(app, ["heal-guard", "--update-baseline", "--baseline", str(baseline_path)])
+    freeze = runner.invoke(
+        app,
+        ["heal-guard", "--update-baseline", "--baseline", str(baseline_path),
+         "--history-file", str(history_path)],
+    )
     assert freeze.exit_code == 0
     assert baseline_path.exists()
 
@@ -107,7 +112,12 @@ def test_heal_guard_update_baseline_message():
 
     with tempfile.TemporaryDirectory() as d:
         baseline_path = Path(d) / "baseline.json"
-        freeze = runner.invoke(app, ["heal-guard", "--update-baseline", "--baseline", str(baseline_path)])
+        history_path = Path(d) / "history.jsonl"
+        freeze = runner.invoke(
+            app,
+            ["heal-guard", "--update-baseline", "--baseline", str(baseline_path),
+             "--history-file", str(history_path)],
+        )
         assert freeze.exit_code == 0
         assert "Baseline updated" in freeze.output
         assert "synthetic" in freeze.output

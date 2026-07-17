@@ -2054,6 +2054,9 @@ def heal_guard(
     tolerance: float = typer.Option(1e-9, "--tolerance", help="Float tolerance; outcome-match rate below (baseline - tolerance) is a regression."),
     update_baseline: bool = typer.Option(False, "--update-baseline", help="(Re)freeze the baseline to the current outcome-match rate. Deliberate, reviewed act."),
     json_out: bool = typer.Option(False, "--json", help="Emit the guard result as JSON."),
+    snapshot: bool = typer.Option(False, "--snapshot", help="Append this guard run to the self-heal outcome-match trend (moat #2)."),
+    show_history: bool = typer.Option(False, "--history", help="Print the recorded self-heal outcome-match trend instead of guarding. Ignores --snapshot."),
+    history_file: str = typer.Option(None, "--history-file", help="Self-heal outcome-match history JSONL (defaults to the shipped one)."),
 ) -> None:
     """Guard the self-heal loop's outcome-match rate against a frozen synthetic scenario set (C6 slice 2).
 
@@ -2063,7 +2066,8 @@ def heal_guard(
     regression so a change to the loop, a detector, or a patch never silently
     starts diverging from a scenario's declared outcome. `--update-baseline`
     deliberately (re)freezes the baseline instead of guarding; that always
-    exits 0.
+    exits 0. With --snapshot the result is also appended to the committed
+    self-heal trend; with --history the recorded trend is printed instead.
 
     Honest scope: the number is over **7 SYNTHETIC scenarios**, not a field
     recovery rate. Covered failure classes: bad_param, missing_index, oom,
@@ -2075,6 +2079,25 @@ def heal_guard(
     """
     scenarios_path = Path(scenarios) if scenarios else default_heal_scenarios_path()
     baseline_path = Path(baseline) if baseline else default_heal_baseline_path()
+    history_path = Path(history_file) if history_file else default_heal_history_path()
+
+    if show_history:
+        history = load_jsonl(HealSnapshot, history_path)
+        if json_out:
+            typer.echo("[" + ",".join(s.model_dump_json() for s in history) + "]")
+            return
+        if not history:
+            typer.echo(f"No self-heal outcome-match snapshots recorded yet in {history_path}.")
+            return
+        _print_trend(
+            [(s.timestamp, s.outcome_match_rate,
+              f"outcome-match {s.outcome_match_rate:.0%}  ({s.scenario_count} scenarios)  "
+              f"recovery {round(s.recovery_rate * s.scenario_count)}/{s.scenario_count}",
+              s.contig_version or "unknown") for s in history],
+            title="Self-heal outcome-match over time:",
+            empty_note="",
+        )
+        return
 
     try:
         cases = load_heal_scenarios(scenarios_path)
@@ -2095,12 +2118,25 @@ def heal_guard(
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
         save_heal_baseline(snapshot, baseline_path)
+        append_jsonl(snapshot, history_path)
         typer.echo(
             f"Baseline updated: outcome-match {report.outcome_match_rate:.0%} over "
             f"{report.total} synthetic scenarios; recovery {report.healed}/{report.total}; "
             f"covered: {', '.join(covered_classes)}"
         )
         return
+
+    if snapshot:
+        append_jsonl(
+            snapshot_from_heal_report(
+                report,
+                corpus_sha=corpus_sha,
+                covered_classes=covered_classes,
+                contig_version=_pkg_version("contig"),
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            ),
+            history_path,
+        )
 
     baseline_snapshot = load_heal_baseline(baseline_path)
     result = compare_heal_to_baseline(
