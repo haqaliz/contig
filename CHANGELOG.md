@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-07-17
+
 ### Changed
 
 - **Informational QC checks are now verdict-neutral: a check that cannot fail no longer
@@ -1746,6 +1748,7 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.39.0]: https://github.com/haqaliz/contig/releases/tag/v0.39.0
 [0.38.0]: https://github.com/haqaliz/contig/releases/tag/v0.38.0
 [0.37.0]: https://github.com/haqaliz/contig/releases/tag/v0.37.0
 [0.36.0]: https://github.com/haqaliz/contig/releases/tag/v0.36.0
