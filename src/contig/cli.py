@@ -8,6 +8,8 @@ generating a nextflow.config from the ExecutionTarget (ARCHITECTURE §4.1).
 
 from __future__ import annotations
 
+import dataclasses as _dataclasses
+import hashlib
 import json as _json
 import re as _re
 import shutil
@@ -63,7 +65,7 @@ from contig.heal import (
     snapshot_from_heal_report,
 )
 from contig.snapshot_history import append_jsonl, load_jsonl
-from contig.bundle import compute_output_checksums
+from contig.bundle import compute_output_checksums, write_reproduce_bundle
 from contig.cost import cost_report
 from contig.signing import generate_keypair, signing_available, verify_signature
 from contig.estimate import estimate_run
@@ -86,7 +88,12 @@ from contig.reference import ReferenceError, resolve_reference
 from contig.reference_check import check_reference_consistency, fasta_contigs, gtf_contigs
 from contig.reference_harmonize import harmonize_gtf, plan_harmonization
 from contig.registry import UnknownAssayError, assay_for_pipeline, select_pipeline
-from contig.report import render_explain, render_run_report, render_run_report_html
+from contig.report import (
+    render_explain,
+    render_reproduction,
+    render_run_report,
+    render_run_report_html,
+)
 from contig.verification.concordance import evaluate_concordance
 from contig.verification.count_concordance import (
     _COUNT_MATRIX_GLOB,
@@ -108,8 +115,14 @@ from contig.verification.sc_count_quantifier import (
     SecondScQuantifierError,
     run_starsolo_quantifier,
 )
+from contig.verification.reproduce import ClaimsError, load_claims, run_reproduction
 from contig.verification.structural import manifest_for
-from contig.runner import PipelineExecutionError, default_executor, default_index_builder
+from contig.runner import (
+    PipelineExecutionError,
+    default_command_executor,
+    default_executor,
+    default_index_builder,
+)
 from contig.samplesheet import (
     fastq_paths,
     parse_samplesheet,
@@ -693,6 +706,78 @@ def rerun(
         max_attempts=manifest.max_attempts,
         allow_reference_mismatch=manifest.allow_reference_mismatch,
     )
+
+
+@app.command()
+def reproduce(
+    repo: str = typer.Argument(..., help="Path to the local repo to reproduce"),
+    run: str = typer.Option(..., "--run", help="Command to run inside the repo"),
+    claims: str = typer.Option(..., "--claims", help="Path to the claims JSON file"),
+    results: str = typer.Option(
+        "results.json",
+        "--results",
+        help="Repo-relative JSON the script writes: {claim_id: value}",
+    ),
+    runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+    tolerance: float = typer.Option(
+        0.1,
+        "--tolerance",
+        help="Default relative tolerance when a claim omits one",
+    ),
+    fail_on_diverged: bool = typer.Option(
+        False, "--fail-on-diverged", help="Exit non-zero if any claim diverged"
+    ),
+) -> None:
+    """Reproduce a published paper/repo's claims against a fresh run.
+
+    Loads a claims file (one published numeric claim per id), runs `--run`
+    inside `repo`, classifies each claim against the observed value, and writes
+    a signed, re-runnable bundle under `runs_dir`. Nothing is written when the
+    repo is missing or the claims file is malformed -- validation happens
+    before any run or record.
+    """
+    repo_path = Path(repo)
+    if not repo_path.is_dir():
+        typer.echo(f"No such repo directory: {repo}", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        claims_list = load_claims(claims)
+    except (ClaimsError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+    # load_claims already defaults a claim's tolerance to 0.1 when the claims
+    # file omits it. A claim that explicitly sets a DIFFERENT tolerance always
+    # wins; --tolerance only re-defaults the ones still sitting at 0.1 (an
+    # explicit 0.1 in the file is indistinguishable from an omitted one, and
+    # both are the fallback's to own). --tolerance's own default is 0.1, so a
+    # caller who never passes it sees no change.
+    claims_list = [
+        _dataclasses.replace(claim, tolerance=tolerance) if claim.tolerance == 0.1 else claim
+        for claim in claims_list
+    ]
+
+    claims_sha256 = hashlib.sha256(Path(claims).read_bytes()).hexdigest()
+    reproduce_id = _generate_run_id()
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    record = run_reproduction(
+        repo,
+        run,
+        claims_list,
+        executor=default_command_executor,
+        claims_sha256=claims_sha256,
+        results_path=results,
+        created_at=created_at,
+        reproduce_id=reproduce_id,
+    )
+    write_reproduce_bundle(record, Path(runs_dir) / reproduce_id)
+
+    typer.echo(render_reproduction(record))
+
+    if fail_on_diverged and any(c.status == "diverged" for c in record.claim_results):
+        raise typer.Exit(code=1)
 
 
 @app.command()
