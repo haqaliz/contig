@@ -27,6 +27,11 @@ def default_holdout_path() -> Path:
     return Path(__file__).parent / "data" / "detector_corpus_holdout.jsonl"
 
 
+def default_holdout_history_path() -> Path:
+    """Committed held-out accuracy trend (JSONL, one EvalSnapshot per line)."""
+    return Path(__file__).parent / "data" / "holdout_history.jsonl"
+
+
 def default_baseline_path() -> Path:
     """Path to the committed held-out baseline shipped with the package.
 

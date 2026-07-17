@@ -87,3 +87,19 @@ def test_append_creates_parent_dirs(tmp_path: Path) -> None:
     p = tmp_path / "sub" / "dir" / "history.jsonl"
     append_jsonl(EVAL_SNAPSHOT_A, p)
     assert load_jsonl(EvalSnapshot, p) == [EVAL_SNAPSHOT_A]
+
+
+def test_default_holdout_history_path_under_package_data() -> None:
+    from contig.holdout import default_holdout_history_path
+
+    p = default_holdout_history_path()
+    assert str(p).endswith("data/holdout_history.jsonl")
+    assert p.parent.name == "data"
+
+
+def test_default_heal_history_path_under_package_data() -> None:
+    from contig.heal import default_heal_history_path
+
+    p = default_heal_history_path()
+    assert str(p).endswith("data/heal_history.jsonl")
+    assert p.parent.name == "data"
