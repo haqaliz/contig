@@ -1807,7 +1807,7 @@ def corpus_promote(
     typer.echo(f"Promoted {promoted.case_id} ({promoted.expected_class}) into the golden corpus.")
 
 
-def _print_trend(rows, *, title, empty_note):
+def _print_trend(rows, *, title):
     """Render a metric trend oldest->newest with a per-version delta column.
 
     rows: list of (timestamp, value_float, detail_str, version_str). The delta is
@@ -1933,7 +1933,6 @@ def eval_guard(
               f"accuracy {s.accuracy:.1%}  (held-out {s.corpus_size})",
               s.detector) for s in history],
             title="Held-out detector accuracy over time:",
-            empty_note="",
         )
         return
 
@@ -1953,7 +1952,7 @@ def eval_guard(
     holdout_sha = sha256_file(holdout_path)
 
     if update_baseline:
-        snapshot = snapshot_from_report(
+        snap = snapshot_from_report(
             report,
             timestamp=datetime.now(timezone.utc).isoformat(),
             corpus_size=len(cases),
@@ -1961,8 +1960,8 @@ def eval_guard(
             contig_version=_pkg_version("contig"),
             detector=detector,
         )
-        save_baseline(snapshot, baseline_path)
-        append_jsonl(snapshot, history_path)
+        save_baseline(snap, baseline_path)
+        append_jsonl(snap, history_path)
         typer.echo(
             f"Baseline updated: accuracy {report.accuracy:.1%} over {len(cases)} held-out "
             f"cases (detector={detector}, sha {holdout_sha[:12]}...)"
@@ -2095,7 +2094,6 @@ def heal_guard(
               f"recovery {round(s.recovery_rate * s.scenario_count)}/{s.scenario_count}",
               s.contig_version or "unknown") for s in history],
             title="Self-heal outcome-match over time:",
-            empty_note="",
         )
         return
 
@@ -2110,15 +2108,15 @@ def heal_guard(
     covered_classes = sorted({s.expected_class for s in cases})
 
     if update_baseline:
-        snapshot = snapshot_from_heal_report(
+        snap = snapshot_from_heal_report(
             report,
             corpus_sha=corpus_sha,
             covered_classes=covered_classes,
             contig_version=_pkg_version("contig"),
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
-        save_heal_baseline(snapshot, baseline_path)
-        append_jsonl(snapshot, history_path)
+        save_heal_baseline(snap, baseline_path)
+        append_jsonl(snap, history_path)
         typer.echo(
             f"Baseline updated: outcome-match {report.outcome_match_rate:.0%} over "
             f"{report.total} synthetic scenarios; recovery {report.healed}/{report.total}; "
