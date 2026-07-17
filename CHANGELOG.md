@@ -6,6 +6,55 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`contig reproduce` — the first slice of capability C8 (reproduce & verify *third-party
+  published* work).** The shipped run→verify→reproduce engine is turned around to face *other
+  people's* analyses: `contig reproduce <repo> --run "<cmd>" --claims <file>` runs a repo's script
+  and reports, **per stated numeric claim**, whether the computation regenerates it — ending in a
+  signed, re-runnable bundle. This is a **deliberately narrow walking skeleton** (the durable
+  surface + verdict contract); the hard environment-resurrection piece is slice 2.
+  - **Per-claim verdict, four honest states.** Each claim resolves to `REPRODUCED` /
+    `WITHIN-TOLERANCE` / `DIVERGED` / `UNVERIFIED` via a new `verification/reproduce.py`
+    (`load_claims` / `classify` / `run_reproduction` / `reduce_reproduction`) and two new models
+    (`ClaimResult`, `ReproduceRecord`). Classification **reuses** `benchmark._relative_delta`
+    (the repo's only real tolerance compare): `|Δ| ≤ 1e-9` → REPRODUCED, else `rel_delta ≤
+    tolerance` → WITHIN-TOLERANCE, else → DIVERGED; a DIVERGED/WITHIN-TOLERANCE message names
+    observed-vs-stated and the delta. **`UNVERIFIED` is never rendered as reproduced** — a missing
+    `results.json` key, a non-numeric or non-finite (`NaN`/`inf`) observed value, or a non-zero
+    script exit yields UNVERIFIED, never a false pass.
+  - **Value binding.** The repo's script writes a flat `results.json` `{claim_id: value}`; the
+    comparator joins each claim on its id. A claim absent from `results.json` is UNVERIFIED; extra
+    keys are ignored.
+  - **Signed, re-runnable bundle for free.** A `ReproduceRecord` is written to
+    `<runs-dir>/<reproduce_id>/reproduce_record.json` and **signed by the existing generic
+    `_maybe_write_signature`** (it signs any pydantic record via `model_dump(mode="json")` — no
+    fork, no `RunRecord` pollution) when `CONTIG_SIGNING_KEY` is set, alongside a `reproduce.json`
+    manifest (repo, command, claims sha256) capturing the invocation. A new
+    `runner.default_command_executor(cmd, cwd)` runs the script **in the repo dir** (distinct from
+    `default_executor`, whose second arg is a trace-file path run in its parent).
+  - **Exit codes.** A completed, well-formed invocation exits `0` regardless of claim outcomes;
+    opt-in `--fail-on-diverged` exits non-zero when any claim DIVERGED (default unchanged). A
+    malformed claims file (bad JSON, duplicate id, non-positive tolerance, non-numeric value)
+    aborts non-zero **before any record is written**.
+  - **Honest scope / explicit limits (recorded, not glossed).** Research-use; whether the
+    *computation* reproduces the stated *numbers*, **never** a judgement on the paper's
+    conclusions; no raw-data egress (only hashes + claim diffs). Slice 1 reproduces
+    **cooperative** repos — ones that emit a `results.json` — so an uncooperative repo degrades
+    honestly to UNVERIFIED; the claim-level output-locator (read numbers out of a repo as-is) and
+    **environment-resurrection** (self-heal `ModuleNotFoundError` → install → retry) are slice
+    1.5 / slice 2. **Scalar numeric claims only:** figure/plot and table-cell claims are out of
+    scope — see the roadmap correction below. Test-first (models → engine → bundle → CLI);
+    deterministic; **no real third-party repo or network in CI** (a scripted executor writes a
+    canned `results.json`); `created_at`/`reproduce_id` are passed into the pure core, never
+    wall-clock inside it.
+  - **Corrected `docs/technical/CAPABILITY_ROADMAP.md` C8**, which promised to reuse "existing
+    float-tolerance / **plot-hash** / seed-aware diffing." Verified against the code: the
+    float-tolerance compare is real and reused; **plot-hash does not exist anywhere**, and adding
+    perceptual-image-hashing would break the deliberate stdlib-only dependency contract
+    (`pydantic`/`typer`/`cryptography`); "seed-aware diffing" is not a named mechanism. That is the
+    hard technical reason figures are deferred, now recorded so the reason travels with the code.
+
 ## [0.39.0] - 2026-07-17
 
 ### Changed

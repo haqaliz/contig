@@ -1044,13 +1044,42 @@ ever. See [`../planning/variant-annotation-assay/prd.md`](../planning/variant-an
 
 ---
 
-## C8. Reproduce & verify *existing published* work  ·  proposed  ·  M7+
+## C8. Reproduce & verify *existing published* work  ·  first slice SHIPPED (Unreleased)  ·  M7+
 
 Point the shipped run → self-heal → verify → reproduce engine at a **third-party,
 already-published** bioinformatics repository (a paper + its code/data) and report which of
 the paper's stated numbers, tables, and figures **actually regenerate** — ending in a signed,
 re-runnable verdict, exactly like a first-party run. This is not a new assay; it is the same
 Layer-2 engine turned around to face *other people's* published analyses.
+
+**Shipped (first slice — walking skeleton, Unreleased).** `contig reproduce <repo> --run "<cmd>"
+--claims <file>` runs a repo's script and reports a **per-claim** verdict — `REPRODUCED` /
+`WITHIN-TOLERANCE` / `DIVERGED` / `UNVERIFIED` — over **scalar numeric** claims, ending in a
+signed, re-runnable bundle. A new `verification/reproduce.py` (`load_claims`/`classify`/
+`run_reproduction`/`reduce_reproduction`) + `ClaimResult`/`ReproduceRecord` models drive it;
+classification **reuses `benchmark._relative_delta`** (`|Δ| ≤ 1e-9` → REPRODUCED, else
+`rel_delta ≤ tolerance` → WITHIN-TOLERANCE, else DIVERGED; non-finite / missing / non-zero-exit →
+UNVERIFIED, never a false pass). The regenerated value is bound from a repo-written flat
+`results.json` `{claim_id: value}`. The record is signed by the **existing generic**
+`_maybe_write_signature` (no fork, no `RunRecord` pollution) when `CONTIG_SIGNING_KEY` is set, plus
+a `reproduce.json` invocation manifest; `runner.default_command_executor(cmd, cwd)` runs the script
+in the repo dir. `--fail-on-diverged` is an opt-in exit-code gate. **Honest scope:** research-use,
+computation-vs-numbers only (never the paper's conclusions), no raw-read egress; slice 1
+reproduces **cooperative** repos (those that emit `results.json`) and degrades an uncooperative one
+to UNVERIFIED; test-first, **no real third-party repo or network in CI**. **Deferred:** the
+claim-level output-locator to read numbers out of a repo as-is (slice 1.5); **environment
+resurrection** (`ModuleNotFoundError` → install → retry, reusing C2) (slice 2); paper-parsing to
+extract claims; **figure/plot and table-cell claims** (see the correction below); remote
+`<doi|url>`; a dashboard card; and the C6 eval fold-in.
+
+**Correction to the build surface below (verified against the code, 2026-07-18):** the sentence
+"reuses the existing float-tolerance / plot-hash / seed-aware diffing" was only one-third true.
+The **float-tolerance** compare is real (`benchmark._relative_delta`) and is reused; **plot-hash
+does not exist anywhere in the repo**, and adding perceptual-image-hashing would break the
+deliberate stdlib-only dependency contract (`pydantic`/`typer`/`cryptography` only); **seed-aware
+diffing** is not a named mechanism (the closest thing is a tolerance band absorbing run-to-run
+noise). That is the hard technical reason **figure/plot claims are out of scope** until a
+deliberate dependency decision — not a preference.
 
 **Why it is moat.** Two compounding wins, both already prized by the ROADMAP:
 - **The strongest quantified pain of the whole verification thesis.** Of **27,271**
@@ -1110,7 +1139,7 @@ raw-data egress — runs on the user's / CI compute; only hashes and claim diffs
 | C6 | Eval flywheel as a continuous loop | M6 (detector held-out guard slice 1 SHIPPED, Unreleased — honestly 0.833/10:12, two classes structurally unreachable; repair-loop outcome-match guard slice 2 SHIPPED, Unreleased — honestly 1.0/7:7, 5 classes covered; both wired into CI; folding C1/C3 signals + held-out-accuracy trend pending) | Compounding accuracy from real runs |
 | C7 | Research-use variant annotation & prioritization | M1 + M2 + M3 + M4 + M5 surface+provenance SHIPPED (Unreleased) — germline structural verify + provenance, somatic annotation gate, annotation plausibility (both assays), VEP-vs-SnpEff concordance (both assays: `consequence_concordance` WARN-capped + `gene_symbol_concordance` informational, auto in the verdict, both VCF layouts, annotator-version provenance pair), M5 "corroborated by" line across text/HTML report + `contig methods` + dashboard (reads M4 results, never recomputes) + `AnnotationProvenance.db_version` cache/build token (VEP `cache=` / SnpEff genome) rendered and round-tripped through reproduce with pre-M5 back-compat; **M5 C6 eval fold-in still DEFERRED** (blocked on labeling design) (germline+somatic `annotation_present`/`annotation_complete` structural checks via `VARIANT_ASSAYS`, `AnnotationProvenance` tool+cache/build capture, `--tools …,vep` enablement on both assays, `annotation_real_fraction`/`annotation_consequence_distribution` plausibility checks, all WARN-capped/UNVERIFIED-when-absent; live run may still need a VEP/SnpEff cache Contig does not yet wire — absent annotation degrades to UNVERIFIED, never a false pass; verify-only, prioritization deferred) | Disease-research breadth on-thesis, new corpus; run+verify annotation, never a clinical verdict |
 
-| C8 | Reproduce & verify *existing published* work | proposed · M7+ | Turns the engine on third-party papers (repo+claims → per-claim `REPRODUCED`/`DIVERGED`/`UNVERIFIED`); strongest quantified pain (~3.2% of 27,271 notebooks reproduce), a free viral community-trust channel, and a new publicly-sourced corpus stream. Env-resurrection from a traced execution + claim-to-artifact semantic diff; reuses C2/C5/C6 + reproduce bundle |
+| C8 | Reproduce & verify *existing published* work | first slice SHIPPED (Unreleased) · M7+ | Turns the engine on third-party papers (repo+claims → per-claim `REPRODUCED`/`WITHIN-TOLERANCE`/`DIVERGED`/`UNVERIFIED`); strongest quantified pain (~3.2% of 27,271 notebooks reproduce), a free viral community-trust channel, and a new publicly-sourced corpus stream. **Shipped:** `contig reproduce <repo> --run --claims` walking skeleton — scalar per-claim verdict reusing `benchmark._relative_delta`, values bound from a repo-written `results.json`, signed re-runnable bundle via the generic signer, `--fail-on-diverged`; cooperative-repos-only, UNVERIFIED-when-unresolved, no real repo/network in CI. **Deferred:** output-locator (read repos as-is), env-resurrection from a traced execution (reuses C2), paper-parsing, figure/plot & table-cell claims (**plot-hash does not exist and can't be added without breaking the stdlib-only dep contract**), remote `<doi|url>`, dashboard card, C6 fold-in |
 
 **One-line mantra:** make every verdict harder to fool, recover more failures
 without a human, and let every run make the next verdict smarter.
