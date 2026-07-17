@@ -368,3 +368,14 @@ def test_heal_guard_bare_default_paths_unchanged():
     assert result.exit_code == 0
     assert "outcome-match 100%" in result.output
     assert "synthetic" in result.output
+
+
+# --- RELEASING.md accrual hook (R10) -----------------------------------------
+
+
+def test_releasing_doc_has_snapshot_step():
+    from pathlib import Path
+
+    text = (Path(__file__).parent.parent / "RELEASING.md").read_text()
+    assert "contig eval-guard --snapshot" in text
+    assert "contig heal-guard --snapshot" in text

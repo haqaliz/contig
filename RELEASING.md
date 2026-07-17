@@ -8,15 +8,25 @@ logged into. Do not run `gh release create` by hand; let the workflow do it.
 ## Cut a release
 
 1. Bump the version in `pyproject.toml` and add a section to `CHANGELOG.md`.
-2. Commit and push to `master`. Make sure CI is green.
-3. Tag and push the tag (this is a plain git push, it uses the repo's git identity):
+2. Record this release's eval trend points (moat #2): from the repo root run
+
+   ```bash
+   uv run contig eval-guard --snapshot
+   uv run contig heal-guard --snapshot
+   ```
+
+   and include the updated `src/contig/data/holdout_history.jsonl` and
+   `src/contig/data/heal_history.jsonl` in the release commit. CI stays bare (it never
+   writes history), so this is the deliberate step that grows the held-out/heal trend.
+3. Commit and push to `master`. Make sure CI is green.
+4. Tag and push the tag (this is a plain git push, it uses the repo's git identity):
 
    ```bash
    git tag -a v0.1.0 -m "contig 0.1.0"
    git push origin v0.1.0
    ```
 
-4. The `release` workflow (`.github/workflows/release.yml`) then, in parallel:
+5. The `release` workflow (`.github/workflows/release.yml`) then, in parallel:
    - builds the wheel and sdist,
    - builds standalone binaries for Linux, macOS arm64, and Windows in the `binaries`
      matrix, and the macOS x64 binary in a dedicated `binary-macos-intel` job that
