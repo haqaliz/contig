@@ -46,6 +46,7 @@ from contig.eval_history import (
 from contig.holdout import (
     compare_to_baseline,
     default_baseline_path,
+    default_holdout_history_path,
     default_holdout_path,
     load_baseline,
     save_baseline,
@@ -53,6 +54,7 @@ from contig.holdout import (
 from contig.heal import (
     compare_heal_to_baseline,
     default_heal_baseline_path,
+    default_heal_history_path,
     default_heal_scenarios_path,
     evaluate_heal,
     load_heal_baseline,
@@ -60,13 +62,22 @@ from contig.heal import (
     save_heal_baseline,
     snapshot_from_heal_report,
 )
+from contig.snapshot_history import append_jsonl, load_jsonl
 from contig.bundle import compute_output_checksums
 from contig.cost import cost_report
 from contig.signing import generate_keypair, signing_available, verify_signature
 from contig.estimate import estimate_run
 from contig.methods import render_methods
 from contig.provenance import to_rocrate
-from contig.models import ExecutionTarget, LaunchManifest, RunRecord, RunSummary, sha256_file
+from contig.models import (
+    EvalSnapshot,
+    ExecutionTarget,
+    HealSnapshot,
+    LaunchManifest,
+    RunRecord,
+    RunSummary,
+    sha256_file,
+)
 from contig.nfconfig import ConfigGenerationError, preflight_aws_batch, preflight_slurm
 from contig.planner import PlanningError
 from contig.planner import plan as build_plan
@@ -1794,6 +1805,22 @@ def corpus_promote(
         history_path,
     )
     typer.echo(f"Promoted {promoted.case_id} ({promoted.expected_class}) into the golden corpus.")
+
+
+def _print_trend(rows, *, title, empty_note):
+    """Render a metric trend oldest->newest with a per-version delta column.
+
+    rows: list of (timestamp, value_float, detail_str, version_str). The delta is
+    value vs the previous row's value, in percentage points; the first row shows a
+    dash and the last row is tagged so the current standing is obvious.
+    """
+    typer.echo(title)
+    prev = None
+    for i, (ts, value, detail, version) in enumerate(rows):
+        delta = "   —   " if prev is None else f"{(value - prev) * 100:+.1f}pp"
+        latest = "  ←latest" if i == len(rows) - 1 else ""
+        typer.echo(f"  {ts}  {detail}  Δ {delta}  [{version}]{latest}")
+        prev = value
 
 
 @app.command(name="eval-detector")
