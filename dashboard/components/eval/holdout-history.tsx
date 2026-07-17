@@ -144,7 +144,7 @@ export function HoldoutHistory({ history }: { history: EvalSnapshot[] }) {
           id="holdout-class-delta-heading"
           className="font-heading text-base font-medium"
         >
-          Per-class change, latest snapshot
+          Held-out per-class change, latest snapshot
         </h3>
         <Card>
           <CardContent>
