@@ -1902,6 +1902,9 @@ def eval_guard(
     tolerance: float = typer.Option(1e-9, "--tolerance", help="Float tolerance; accuracy below (baseline - tolerance) is a regression."),
     update_baseline: bool = typer.Option(False, "--update-baseline", help="(Re)freeze the baseline to the current held-out accuracy. Deliberate, reviewed act."),
     json_out: bool = typer.Option(False, "--json", help="Emit the guard result as JSON."),
+    snapshot: bool = typer.Option(False, "--snapshot", help="Append this guard run to the held-out accuracy trend (moat #2)."),
+    show_history: bool = typer.Option(False, "--history", help="Print the recorded held-out accuracy trend instead of guarding. Ignores --snapshot."),
+    history_file: str = typer.Option(None, "--history-file", help="Held-out accuracy history JSONL (defaults to the shipped one)."),
 ) -> None:
     """Guard detector accuracy against a frozen held-out set (moat #2, C6 slice 1).
 
@@ -1909,10 +1912,30 @@ def eval_guard(
     compares the accuracy to a committed baseline, exiting non-zero on a real
     regression so a detector or corpus change never regresses diagnosis
     silently. `--update-baseline` deliberately (re)freezes the baseline instead
-    of guarding; that always exits 0.
+    of guarding; that always exits 0. With --snapshot the result is also
+    appended to the committed held-out trend; with --history the recorded
+    trend is printed instead.
     """
     holdout_path = Path(holdout) if holdout else default_holdout_path()
     baseline_path = Path(baseline) if baseline else default_baseline_path()
+    history_path = Path(history_file) if history_file else default_holdout_history_path()
+
+    if show_history:
+        history = load_jsonl(EvalSnapshot, history_path)
+        if json_out:
+            typer.echo("[" + ",".join(s.model_dump_json() for s in history) + "]")
+            return
+        if not history:
+            typer.echo(f"No held-out accuracy snapshots recorded yet in {history_path}.")
+            return
+        _print_trend(
+            [(s.timestamp, s.accuracy,
+              f"accuracy {s.accuracy:.1%}  (held-out {s.corpus_size})",
+              s.detector) for s in history],
+            title="Held-out detector accuracy over time:",
+            empty_note="",
+        )
+        return
 
     try:
         detector_fn = get_detector(detector)
@@ -1939,11 +1962,25 @@ def eval_guard(
             detector=detector,
         )
         save_baseline(snapshot, baseline_path)
+        append_jsonl(snapshot, history_path)
         typer.echo(
             f"Baseline updated: accuracy {report.accuracy:.1%} over {len(cases)} held-out "
             f"cases (detector={detector}, sha {holdout_sha[:12]}...)"
         )
         return
+
+    if snapshot:
+        append_jsonl(
+            snapshot_from_report(
+                report,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                corpus_size=len(cases),
+                corpus_sha=holdout_sha,
+                contig_version=_pkg_version("contig"),
+                detector=detector,
+            ),
+            history_path,
+        )
 
     baseline_snapshot = load_baseline(baseline_path)
     result = compare_to_baseline(
