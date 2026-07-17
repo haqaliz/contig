@@ -20,6 +20,7 @@ import type {
   EvalSnapshot,
   FailureCase,
   FailureCluster,
+  HealSnapshot,
   LaunchManifest,
   NotificationEvent,
   OutputVerification,
@@ -920,6 +921,80 @@ export async function getEvalHistory(): Promise<EvalSnapshot[]> {
     if (line.trim().length === 0) continue;
     try {
       out.push(JSON.parse(line) as EvalSnapshot);
+    } catch {
+      // Skip a malformed or half-written line; the rest of the history is valid.
+    }
+  }
+  return out;
+}
+
+// --- Holdout-accuracy history (C6 self-heal regression guard) -----------------
+// The engine appends one EvalSnapshot per line to
+// src/contig/data/holdout_history.jsonl on `eval-guard --snapshot` (scoring the
+// detector against the frozen held-out corpus, not the training corpus). The
+// /eval trend reads the whole file to plot held-out accuracy over time.
+
+/** Absolute path to the committed holdout-history file (CONTIG_HOLDOUT_HISTORY override). */
+function holdoutHistoryPath(): string {
+  return process.env.CONTIG_HOLDOUT_HISTORY
+    ? path.resolve(process.env.CONTIG_HOLDOUT_HISTORY)
+    : path.resolve(repoRoot(), "src", "contig", "data", "holdout_history.jsonl");
+}
+
+/**
+ * Every holdout snapshot on disk, in file order (oldest first). Malformed lines
+ * are skipped (a half-written final line never breaks the trend). Returns an
+ * empty array when the history file is absent, so the page degrades gracefully.
+ */
+export async function getHoldoutHistory(): Promise<EvalSnapshot[]> {
+  let txt: string;
+  try {
+    txt = await fs.readFile(holdoutHistoryPath(), "utf8");
+  } catch {
+    return [];
+  }
+  const out: EvalSnapshot[] = [];
+  for (const line of txt.split("\n")) {
+    if (line.trim().length === 0) continue;
+    try {
+      out.push(JSON.parse(line) as EvalSnapshot);
+    } catch {
+      // Skip a malformed or half-written line; the rest of the history is valid.
+    }
+  }
+  return out;
+}
+
+// --- Self-heal outcome-match history (C6 self-heal regression guard) ----------
+// The engine appends one HealSnapshot per line to
+// src/contig/data/heal_history.jsonl on `heal-guard --snapshot` (scoring the
+// self-heal loop's outcome-match rate against a frozen scenario corpus). The
+// /eval trend reads the whole file to plot outcome-match rate over time.
+
+/** Absolute path to the committed heal-history file (CONTIG_HEAL_HISTORY override). */
+function healHistoryPath(): string {
+  return process.env.CONTIG_HEAL_HISTORY
+    ? path.resolve(process.env.CONTIG_HEAL_HISTORY)
+    : path.resolve(repoRoot(), "src", "contig", "data", "heal_history.jsonl");
+}
+
+/**
+ * Every heal snapshot on disk, in file order (oldest first). Malformed lines
+ * are skipped (a half-written final line never breaks the trend). Returns an
+ * empty array when the history file is absent, so the page degrades gracefully.
+ */
+export async function getHealHistory(): Promise<HealSnapshot[]> {
+  let txt: string;
+  try {
+    txt = await fs.readFile(healHistoryPath(), "utf8");
+  } catch {
+    return [];
+  }
+  const out: HealSnapshot[] = [];
+  for (const line of txt.split("\n")) {
+    if (line.trim().length === 0) continue;
+    try {
+      out.push(JSON.parse(line) as HealSnapshot);
     } catch {
       // Skip a malformed or half-written line; the rest of the history is valid.
     }

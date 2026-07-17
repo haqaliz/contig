@@ -216,6 +216,11 @@ def default_heal_scenarios_path() -> Path:
     return Path(__file__).parent / "data" / "heal_scenarios.jsonl"
 
 
+def default_heal_history_path() -> Path:
+    """Committed self-heal outcome-match trend (JSONL, one HealSnapshot per line)."""
+    return Path(__file__).parent / "data" / "heal_history.jsonl"
+
+
 def default_heal_baseline_path() -> Path:
     """Path to the committed self-heal baseline shipped with the package.
 

@@ -46,6 +46,7 @@ from contig.eval_history import (
 from contig.holdout import (
     compare_to_baseline,
     default_baseline_path,
+    default_holdout_history_path,
     default_holdout_path,
     load_baseline,
     save_baseline,
@@ -53,6 +54,7 @@ from contig.holdout import (
 from contig.heal import (
     compare_heal_to_baseline,
     default_heal_baseline_path,
+    default_heal_history_path,
     default_heal_scenarios_path,
     evaluate_heal,
     load_heal_baseline,
@@ -60,13 +62,22 @@ from contig.heal import (
     save_heal_baseline,
     snapshot_from_heal_report,
 )
+from contig.snapshot_history import append_jsonl, load_jsonl
 from contig.bundle import compute_output_checksums
 from contig.cost import cost_report
 from contig.signing import generate_keypair, signing_available, verify_signature
 from contig.estimate import estimate_run
 from contig.methods import render_methods
 from contig.provenance import to_rocrate
-from contig.models import ExecutionTarget, LaunchManifest, RunRecord, RunSummary, sha256_file
+from contig.models import (
+    EvalSnapshot,
+    ExecutionTarget,
+    HealSnapshot,
+    LaunchManifest,
+    RunRecord,
+    RunSummary,
+    sha256_file,
+)
 from contig.nfconfig import ConfigGenerationError, preflight_aws_batch, preflight_slurm
 from contig.planner import PlanningError
 from contig.planner import plan as build_plan
@@ -1796,6 +1807,22 @@ def corpus_promote(
     typer.echo(f"Promoted {promoted.case_id} ({promoted.expected_class}) into the golden corpus.")
 
 
+def _print_trend(rows, *, title):
+    """Render a metric trend oldest->newest with a per-version delta column.
+
+    rows: list of (timestamp, value_float, detail_str, version_str). The delta is
+    value vs the previous row's value, in percentage points; the first row shows a
+    dash and the last row is tagged so the current standing is obvious.
+    """
+    typer.echo(title)
+    prev = None
+    for i, (ts, value, detail, version) in enumerate(rows):
+        delta = "   —   " if prev is None else f"{(value - prev) * 100:+.1f}pp"
+        latest = "  ←latest" if i == len(rows) - 1 else ""
+        typer.echo(f"  {ts}  {detail}  Δ {delta}  [{version}]{latest}")
+        prev = value
+
+
 @app.command(name="eval-detector")
 def eval_detector(
     corpus: str = typer.Option(None, "--corpus", help="Failure-corpus JSONL (defaults to the shipped seed)."),
@@ -1875,6 +1902,9 @@ def eval_guard(
     tolerance: float = typer.Option(1e-9, "--tolerance", help="Float tolerance; accuracy below (baseline - tolerance) is a regression."),
     update_baseline: bool = typer.Option(False, "--update-baseline", help="(Re)freeze the baseline to the current held-out accuracy. Deliberate, reviewed act."),
     json_out: bool = typer.Option(False, "--json", help="Emit the guard result as JSON."),
+    snapshot: bool = typer.Option(False, "--snapshot", help="Append this guard run to the held-out accuracy trend (moat #2)."),
+    show_history: bool = typer.Option(False, "--history", help="Print the recorded held-out accuracy trend instead of guarding. Ignores --snapshot."),
+    history_file: str = typer.Option(None, "--history-file", help="Held-out accuracy history JSONL (defaults to the shipped one)."),
 ) -> None:
     """Guard detector accuracy against a frozen held-out set (moat #2, C6 slice 1).
 
@@ -1882,10 +1912,29 @@ def eval_guard(
     compares the accuracy to a committed baseline, exiting non-zero on a real
     regression so a detector or corpus change never regresses diagnosis
     silently. `--update-baseline` deliberately (re)freezes the baseline instead
-    of guarding; that always exits 0.
+    of guarding; that always exits 0. With --snapshot the result is also
+    appended to the committed held-out trend; with --history the recorded
+    trend is printed instead.
     """
     holdout_path = Path(holdout) if holdout else default_holdout_path()
     baseline_path = Path(baseline) if baseline else default_baseline_path()
+    history_path = Path(history_file) if history_file else default_holdout_history_path()
+
+    if show_history:
+        history = load_jsonl(EvalSnapshot, history_path)
+        if json_out:
+            typer.echo("[" + ",".join(s.model_dump_json() for s in history) + "]")
+            return
+        if not history:
+            typer.echo(f"No held-out accuracy snapshots recorded yet in {history_path}.")
+            return
+        _print_trend(
+            [(s.timestamp, s.accuracy,
+              f"accuracy {s.accuracy:.1%}  (held-out {s.corpus_size})",
+              s.detector) for s in history],
+            title="Held-out detector accuracy over time:",
+        )
+        return
 
     try:
         detector_fn = get_detector(detector)
@@ -1903,7 +1952,7 @@ def eval_guard(
     holdout_sha = sha256_file(holdout_path)
 
     if update_baseline:
-        snapshot = snapshot_from_report(
+        snap = snapshot_from_report(
             report,
             timestamp=datetime.now(timezone.utc).isoformat(),
             corpus_size=len(cases),
@@ -1911,12 +1960,26 @@ def eval_guard(
             contig_version=_pkg_version("contig"),
             detector=detector,
         )
-        save_baseline(snapshot, baseline_path)
+        save_baseline(snap, baseline_path)
+        append_jsonl(snap, history_path)
         typer.echo(
             f"Baseline updated: accuracy {report.accuracy:.1%} over {len(cases)} held-out "
             f"cases (detector={detector}, sha {holdout_sha[:12]}...)"
         )
         return
+
+    if snapshot:
+        append_jsonl(
+            snapshot_from_report(
+                report,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                corpus_size=len(cases),
+                corpus_sha=holdout_sha,
+                contig_version=_pkg_version("contig"),
+                detector=detector,
+            ),
+            history_path,
+        )
 
     baseline_snapshot = load_baseline(baseline_path)
     result = compare_to_baseline(
@@ -1990,6 +2053,9 @@ def heal_guard(
     tolerance: float = typer.Option(1e-9, "--tolerance", help="Float tolerance; outcome-match rate below (baseline - tolerance) is a regression."),
     update_baseline: bool = typer.Option(False, "--update-baseline", help="(Re)freeze the baseline to the current outcome-match rate. Deliberate, reviewed act."),
     json_out: bool = typer.Option(False, "--json", help="Emit the guard result as JSON."),
+    snapshot: bool = typer.Option(False, "--snapshot", help="Append this guard run to the self-heal outcome-match trend (moat #2)."),
+    show_history: bool = typer.Option(False, "--history", help="Print the recorded self-heal outcome-match trend instead of guarding. Ignores --snapshot."),
+    history_file: str = typer.Option(None, "--history-file", help="Self-heal outcome-match history JSONL (defaults to the shipped one)."),
 ) -> None:
     """Guard the self-heal loop's outcome-match rate against a frozen synthetic scenario set (C6 slice 2).
 
@@ -1999,7 +2065,8 @@ def heal_guard(
     regression so a change to the loop, a detector, or a patch never silently
     starts diverging from a scenario's declared outcome. `--update-baseline`
     deliberately (re)freezes the baseline instead of guarding; that always
-    exits 0.
+    exits 0. With --snapshot the result is also appended to the committed
+    self-heal trend; with --history the recorded trend is printed instead.
 
     Honest scope: the number is over **7 SYNTHETIC scenarios**, not a field
     recovery rate. Covered failure classes: bad_param, missing_index, oom,
@@ -2011,6 +2078,24 @@ def heal_guard(
     """
     scenarios_path = Path(scenarios) if scenarios else default_heal_scenarios_path()
     baseline_path = Path(baseline) if baseline else default_heal_baseline_path()
+    history_path = Path(history_file) if history_file else default_heal_history_path()
+
+    if show_history:
+        history = load_jsonl(HealSnapshot, history_path)
+        if json_out:
+            typer.echo("[" + ",".join(s.model_dump_json() for s in history) + "]")
+            return
+        if not history:
+            typer.echo(f"No self-heal outcome-match snapshots recorded yet in {history_path}.")
+            return
+        _print_trend(
+            [(s.timestamp, s.outcome_match_rate,
+              f"outcome-match {s.outcome_match_rate:.0%}  ({s.scenario_count} scenarios)  "
+              f"recovery {round(s.recovery_rate * s.scenario_count)}/{s.scenario_count}",
+              s.contig_version or "unknown") for s in history],
+            title="Self-heal outcome-match over time:",
+        )
+        return
 
     try:
         cases = load_heal_scenarios(scenarios_path)
@@ -2023,20 +2108,33 @@ def heal_guard(
     covered_classes = sorted({s.expected_class for s in cases})
 
     if update_baseline:
-        snapshot = snapshot_from_heal_report(
+        snap = snapshot_from_heal_report(
             report,
             corpus_sha=corpus_sha,
             covered_classes=covered_classes,
             contig_version=_pkg_version("contig"),
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
-        save_heal_baseline(snapshot, baseline_path)
+        save_heal_baseline(snap, baseline_path)
+        append_jsonl(snap, history_path)
         typer.echo(
             f"Baseline updated: outcome-match {report.outcome_match_rate:.0%} over "
             f"{report.total} synthetic scenarios; recovery {report.healed}/{report.total}; "
             f"covered: {', '.join(covered_classes)}"
         )
         return
+
+    if snapshot:
+        append_jsonl(
+            snapshot_from_heal_report(
+                report,
+                corpus_sha=corpus_sha,
+                covered_classes=covered_classes,
+                contig_version=_pkg_version("contig"),
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            ),
+            history_path,
+        )
 
     baseline_snapshot = load_heal_baseline(baseline_path)
     result = compare_heal_to_baseline(

@@ -126,6 +126,53 @@ function evalHistoryFixture(): string {
   return path.join(fixturesDir(), "_eval_history", "eval_history.jsonl");
 }
 
+// The holdout-accuracy history (C6 self-heal regression guard) the /eval trend
+// reads (HoldoutHistory). Mirrors evalHistoryPath() handling above: back up any
+// real file, swap in a fixture with >=2 snapshots so a delta renders, and
+// restore the real file on teardown. Mirrors lib/runs.ts holdoutHistoryPath():
+// CONTIG_HOLDOUT_HISTORY, else <repoRoot>/src/contig/data/holdout_history.jsonl.
+function holdoutHistoryPath(): string {
+  return process.env.CONTIG_HOLDOUT_HISTORY
+    ? path.resolve(process.env.CONTIG_HOLDOUT_HISTORY)
+    : path.resolve(
+        process.cwd(),
+        "..",
+        "src",
+        "contig",
+        "data",
+        "holdout_history.jsonl",
+      );
+}
+function holdoutHistoryBackupPath(): string {
+  return `${holdoutHistoryPath()}.e2e-backup`;
+}
+function holdoutHistoryFixture(): string {
+  return path.join(fixturesDir(), "_holdout_history", "holdout_history.jsonl");
+}
+
+// The self-heal outcome-match history (C6 self-heal regression guard) the
+// /eval trend reads (HealHistory). Same backup->swap->restore handling.
+// Mirrors lib/runs.ts healHistoryPath(): CONTIG_HEAL_HISTORY, else
+// <repoRoot>/src/contig/data/heal_history.jsonl.
+function healHistoryPath(): string {
+  return process.env.CONTIG_HEAL_HISTORY
+    ? path.resolve(process.env.CONTIG_HEAL_HISTORY)
+    : path.resolve(
+        process.cwd(),
+        "..",
+        "src",
+        "contig",
+        "data",
+        "heal_history.jsonl",
+      );
+}
+function healHistoryBackupPath(): string {
+  return `${healHistoryPath()}.e2e-backup`;
+}
+function healHistoryFixture(): string {
+  return path.join(fixturesDir(), "_heal_history", "heal_history.jsonl");
+}
+
 // The notifications feed (PRD contract A) reads a single file at the runs-dir
 // root, not inside a run dir, so it is provisioned separately. We back up any
 // real notifications.jsonl first and restore it on teardown, so a user's own
@@ -163,6 +210,22 @@ export function installFixtures(): void {
   if (existsSync(evalHistoryFixture())) {
     cpSync(evalHistoryFixture(), liveEval);
   }
+
+  // Provision the holdout-accuracy history the same way: back up any real file,
+  // then swap in the fixture so the held-out trend renders.
+  const liveHoldout = holdoutHistoryPath();
+  if (existsSync(liveHoldout)) renameSync(liveHoldout, holdoutHistoryBackupPath());
+  if (existsSync(holdoutHistoryFixture())) {
+    cpSync(holdoutHistoryFixture(), liveHoldout);
+  }
+
+  // Provision the self-heal outcome-match history the same way: back up any
+  // real file, then swap in the fixture so the heal trend renders.
+  const liveHeal = healHistoryPath();
+  if (existsSync(liveHeal)) renameSync(liveHeal, healHistoryBackupPath());
+  if (existsSync(healHistoryFixture())) {
+    cpSync(healHistoryFixture(), liveHeal);
+  }
 }
 
 export function removeFixtures(): void {
@@ -180,4 +243,14 @@ export function removeFixtures(): void {
   rmSync(evalHistoryPath(), { force: true });
   const evalBackup = evalHistoryBackupPath();
   if (existsSync(evalBackup)) renameSync(evalBackup, evalHistoryPath());
+
+  // Remove the fixture holdout history, then restore any real one we moved aside.
+  rmSync(holdoutHistoryPath(), { force: true });
+  const holdoutBackup = holdoutHistoryBackupPath();
+  if (existsSync(holdoutBackup)) renameSync(holdoutBackup, holdoutHistoryPath());
+
+  // Remove the fixture heal history, then restore any real one we moved aside.
+  rmSync(healHistoryPath(), { force: true });
+  const healBackup = healHistoryBackupPath();
+  if (existsSync(healBackup)) renameSync(healBackup, healHistoryPath());
 }
