@@ -12,7 +12,14 @@ import os
 import re
 from pathlib import Path
 
-from contig.models import AnnotationProvenance, ReferenceIdentity, RunRecord, SexInference, sha256_file
+from contig.models import (
+    AnnotationProvenance,
+    ReferenceIdentity,
+    ReproduceRecord,
+    RunRecord,
+    SexInference,
+    sha256_file,
+)
 from contig.verification.annotation_structural import _open_text
 from contig.verification.sex_plausibility import sex_signals
 from contig.verification.structural import manifest_for
@@ -60,6 +67,47 @@ def load_bundle(dest_dir: str | Path) -> RunRecord:
     """Reconstruct the RunRecord from ``dest_dir/run_record.json``."""
     json_path = Path(dest_dir) / "run_record.json"
     return RunRecord.model_validate_json(json_path.read_text())
+
+
+def write_reproduce_bundle(record: ReproduceRecord, dest_dir: str | Path) -> Path:
+    """Serialize ``record`` to ``dest_dir/reproduce_record.json`` and return that path.
+
+    Also writes ``dest_dir/reproduce.json``, the small re-runnable manifest (repo +
+    run_command + claims_sha256, no absolute scratch paths -- mirrors LaunchManifest's
+    discipline of omitting scratch/outdir paths). When ``CONTIG_SIGNING_KEY`` is set,
+    also writes a detached signature sidecar over the record's canonical content, via
+    the same ``_maybe_write_signature`` used for RunRecord -- it only calls
+    ``record.model_dump(mode="json")`` under the hood, so it signs a ReproduceRecord
+    exactly as it signs a RunRecord.
+    """
+    dest = Path(dest_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    json_path = dest / "reproduce_record.json"
+    json_path.write_text(record.model_dump_json(indent=2))
+    _maybe_write_signature(record, dest)
+
+    manifest = {
+        "reproduce_id": record.reproduce_id,
+        "repo": record.repo,
+        "run_command": record.run_command,
+        "claims_sha256": record.claims_sha256,
+        "created_at": record.created_at,
+    }
+    (dest / "reproduce.json").write_text(json.dumps(manifest, indent=2))
+
+    return json_path
+
+
+def load_reproduction(dir: str | Path) -> ReproduceRecord:
+    """Reconstruct the ReproduceRecord from ``dir/reproduce_record.json``.
+
+    Raises ``FileNotFoundError`` with a clear message when the file is absent
+    (mirrors workspace.load_run's discipline of failing clearly on a missing bundle).
+    """
+    json_path = Path(dir) / "reproduce_record.json"
+    if not json_path.is_file():
+        raise FileNotFoundError(f"no reproduce record at {json_path}")
+    return ReproduceRecord.model_validate_json(json_path.read_text())
 
 
 def compute_input_checksums(paths: list[str | Path]) -> dict[str, str]:
