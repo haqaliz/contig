@@ -43,6 +43,27 @@ def test_overall_verdict_rejects_empty_list_to_prevent_false_pass():
         overall_verdict([])
 
 
+def test_overall_verdict_all_informational_reduces_to_unverified():
+    informational_pass = QCResult(check="c", status="pass", message="m", informational=True)
+    assert overall_verdict([informational_pass]) == "unverified"
+
+
+def test_overall_verdict_informational_pass_plus_asserting_pass_is_pass():
+    informational_pass = QCResult(check="c", status="pass", message="m", informational=True)
+    assert overall_verdict([informational_pass, _qc("pass")]) == "pass"
+
+
+def test_overall_verdict_informational_pass_plus_unverified_is_unverified():
+    informational_pass = QCResult(check="c", status="pass", message="m", informational=True)
+    assert overall_verdict([informational_pass, _qc("unverified")]) == "unverified"
+
+
+def test_overall_verdict_informational_pass_does_not_mask_fail_or_warn():
+    informational_pass = QCResult(check="c", status="pass", message="m", informational=True)
+    assert overall_verdict([informational_pass, _qc("fail")]) == "fail"
+    assert overall_verdict([informational_pass, _qc("warn")]) == "warn"
+
+
 def test_qc_result_defaults_kind_to_metric():
     assert QCResult(check="alignment_rate", status="pass", message="x").kind == "metric"
 
@@ -55,6 +76,18 @@ def test_qc_result_accepts_structural_kind():
 def test_qc_result_rejects_unknown_kind():
     with pytest.raises(ValidationError):
         QCResult(check="x", status="pass", message="x", kind="vibes")
+
+
+def test_qc_result_defaults_informational_to_false():
+    assert QCResult(check="c", status="pass", message="m").informational is False
+
+
+def test_qc_result_legacy_dict_without_informational_key_defaults_false():
+    # A pre-field record has no `informational` key at all; it must still
+    # deserialize (never raise) and default to False, exactly like the
+    # QCKind back-compat contract above.
+    result = QCResult.model_validate({"check": "c", "status": "pass", "message": "m"})
+    assert result.informational is False
 
 
 def test_task_event_is_failure_on_failed_status():

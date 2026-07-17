@@ -83,6 +83,14 @@ def render_explain(record: RunRecord) -> str:
     return "\n".join(lines)
 
 
+def _status_text(qc: QCResult) -> str:
+    """The status word for a QC line, tagged `[informational]` when the check
+    asserts nothing about the verdict (Task 1's QCResult.informational) -- so a
+    reader cannot mistake an informational pass for a verified one."""
+    tag = " [informational]" if qc.informational else ""
+    return f"{qc.status.upper()}{tag}"
+
+
 def render_run_report(record: RunRecord) -> str:
     """Render a multi-line, terminal-friendly report of a run."""
     summary = RunSummary.from_events(record.events)
@@ -103,7 +111,7 @@ def render_run_report(record: RunRecord) -> str:
         primary = [qc for qc in record.qc_results if qc.kind != "concordance"]
         lines.append("QC checks:")
         for qc in primary:
-            lines.append(f"  - {qc.check}: {qc.status.upper()} (value {qc.value})")
+            lines.append(f"  - {qc.check}: {_status_text(qc)} (value {qc.value})")
         if concordance:
             lines.append("Concordance (cross-tool corroboration):")
             # Plain-language corroboration line from M4's already-computed
@@ -112,7 +120,7 @@ def render_run_report(record: RunRecord) -> str:
             if corroboration is not None:
                 lines.append(f"  {corroboration}")
             for qc in concordance:
-                lines.append(f"  - {qc.check}: {qc.status.upper()} (value {qc.value})")
+                lines.append(f"  - {qc.check}: {_status_text(qc)} (value {qc.value})")
     else:
         lines.append("QC checks: no QC checks ran (run is unverified).")
     if record.repair_history:
@@ -199,9 +207,12 @@ def _qc_table(rows: list[QCResult]) -> str:
     for qc in rows:
         value = "" if qc.value is None else str(qc.value)
         expected = qc.expected_range or ""
+        # Reuse the existing .status-* colour classes; an informational result
+        # just gets the word appended, no new status vocabulary (R4/task 6).
+        status_text = qc.status.upper() + (" (informational)" if qc.informational else "")
         parts.append(
             f"<tr><td>{escape(qc.check)}</td>"
-            f'<td class="status-{escape(qc.status)}">{escape(qc.status.upper())}</td>'
+            f'<td class="status-{escape(qc.status)}">{escape(status_text)}</td>'
             f'<td class="mono">{escape(value)}</td>'
             f'<td class="mono">{escape(expected)}</td>'
             f"<td>{escape(qc.message)}</td></tr>"

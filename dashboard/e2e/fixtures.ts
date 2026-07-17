@@ -76,6 +76,16 @@ export const FIXTURE_RUN_IDS = [
   // bypass the admin sees it like any run; the cross-user and workspace-shared
   // denial paths are covered by the unit-level ownership-filter spec.
   "workspace-fixture",
+  // A finished run (no failed tasks) whose qc_results are ALL "unverified" (PRD
+  // verdict-neutral-informational-checks): proves overallQc/explainVerdict have a
+  // real unverified arm instead of falling through to a false "PASS: all N checks
+  // passed" (see e2e/unverified-verdict.spec.ts).
+  "unverified-fixture",
+  // A finished run whose qc_results mix one "informational" pass (asserts
+  // nothing, so it must not manufacture a pass) with "unverified" siblings: proves
+  // overallQc skips informational results rather than letting them drive the
+  // reduction to "pass" (see e2e/unverified-verdict.spec.ts).
+  "informational-only-fixture",
 ];
 
 // Mirror lib/runs.ts runsDir(): CONTIG_RUNS_DIR, else ../runs from the dashboard

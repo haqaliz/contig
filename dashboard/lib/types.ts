@@ -34,6 +34,12 @@ export interface QCResult {
   // files themselves (present, non-empty, valid) rather than a content metric.
   // Older records omit it; the QC panel treats an absent value as "metric".
   kind?: QCKind;
+  // Whether this check asserts anything at all (has a warn/fail band) vs. is
+  // purely observational (e.g. a metric surfaced with no pass/fail bounds).
+  // Mirrors QCResult.informational in src/contig/models.py. Orthogonal to
+  // `kind`. Older records predate the field and deserialize with it absent;
+  // treat an absent value as false (not informational).
+  informational?: boolean;
 }
 
 export interface ExecutionTarget {

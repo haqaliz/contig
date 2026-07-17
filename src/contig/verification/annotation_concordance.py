@@ -20,11 +20,14 @@ Phase 3 adds a SECOND, independent metric: gene-symbol agreement between VEP
 and SnpEff. Unlike consequence concordance above (WARN-capable),
 `gene_symbol_concordance` is INFORMATIONAL-ONLY -- it ALWAYS reports "pass"
 when computable (mirrors RNA-seq's always-pass `gene_overlap` in
-`count_concordance.py`). VEP/SnpEff gene-symbol sources diverge enough
+`count_concordance.py`), and that pass carries `informational=True` so it is
+excluded from `overall_verdict`'s severity reduction and can never itself
+manufacture a "pass" verdict. VEP/SnpEff gene-symbol sources diverge enough
 (different transcript sets, different gene models) that a WARN threshold here
 would train users to ignore the signal; the fraction is reported for context,
 never used as a verdict lever. It still degrades to UNVERIFIED (never a false
-pass) when too few symbol pairs are resolvable on both sides.
+pass, and `informational=False` there too -- it is a plain unverified result)
+when too few symbol pairs are resolvable on both sides.
 """
 
 from __future__ import annotations
@@ -61,6 +64,7 @@ def _concordance(
     message: str,
     value: float | None = None,
     expected_range: str | None = None,
+    informational: bool = False,
 ) -> QCResult:
     """Build a QCResult tagged as concordance so the dashboard groups it correctly."""
     return QCResult(
@@ -70,6 +74,7 @@ def _concordance(
         value=value,
         expected_range=expected_range,
         kind="concordance",
+        informational=informational,
     )
 
 
@@ -327,10 +332,12 @@ def evaluate_gene_symbol_concordance(
     """Emit the one gene-symbol-concordance check between VEP and SnpEff.
 
     INFORMATIONAL-ONLY: unlike `evaluate_consequence_concordance`, the status
-    is ALWAYS "pass" when computable -- VEP and SnpEff draw gene symbols from
-    different transcript sets/gene models, so a WARN threshold here would
-    train users to ignore the signal. The fraction is reported for context,
-    never as a verdict lever (`expected_range=None`, no threshold).
+    is ALWAYS "pass" when computable, with `informational=True` -- VEP and
+    SnpEff draw gene symbols from different transcript sets/gene models, so a
+    WARN threshold here would train users to ignore the signal. The fraction
+    is reported for context, never as a verdict lever (`expected_range=None`,
+    no threshold, and `informational=True` excludes it from
+    `overall_verdict`'s severity reduction).
 
     The denominator is the RESOLVABLE pair count -- shared sites where BOTH
     sides normalized to a non-None symbol -- NOT the raw shared-site count;
@@ -371,6 +378,7 @@ def evaluate_gene_symbol_concordance(
             "the verdict",
             value=fraction,
             expected_range=None,
+            informational=True,
         )
     ]
 

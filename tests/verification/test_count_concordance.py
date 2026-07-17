@@ -170,6 +170,7 @@ def test_few_shared_genes_unverified(tmp_path):
     # overlap is still meaningful and reported.
     assert results["gene_overlap"].status == "pass"
     assert results["gene_overlap"].value == 1.0
+    assert results["gene_overlap"].informational is True
 
 
 def test_no_shared_genes_unverified(tmp_path):
@@ -183,6 +184,7 @@ def test_no_shared_genes_unverified(tmp_path):
     assert results["fraction_agreeing"].status == "unverified"
     assert results["gene_overlap"].status == "pass"
     assert results["gene_overlap"].value == 0.0
+    assert results["gene_overlap"].informational is True
 
 
 def test_zero_count_genes_agree_no_crash(tmp_path):
@@ -219,6 +221,7 @@ def test_gene_overlap_informational_never_warns(tmp_path):
 
     assert results["gene_overlap"].value < 0.90  # low overlap
     assert results["gene_overlap"].status == "pass"  # yet never WARN
+    assert results["gene_overlap"].informational is True  # never a verdict lever
     assert results["spearman_concordance"].status == "pass"
 
 

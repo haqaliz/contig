@@ -1,3 +1,4 @@
+import contig.verification.rule_pack as rule_pack_module
 from contig.models import QCResult
 from contig.verification.rule_pack import (
     AMPLISEQ_RULE_PACK,
@@ -7,6 +8,7 @@ from contig.verification.rule_pack import (
     SCRNASEQ_RULE_PACK,
     SOMATIC_PLAUSIBILITY_PACK,
     VARIANT_RULE_PACK,
+    _is_band_less,
     _status_for,
     evaluate,
     rule_pack_for,
@@ -818,3 +820,138 @@ def test_somatic_vaf_rules_have_no_fail_keys():
         rule = by_check[check]
         assert "fail_below" not in rule, f"{check!r} has forbidden fail_below"
         assert "fail_above" not in rule, f"{check!r} has forbidden fail_above"
+
+
+# --- band-less rules are informational (Task 4) --------------------------------
+#
+# A rule with NO warn/fail bounds at all can only ever return "pass" from
+# _status_for -- it asserts nothing, so it must be marked informational=True
+# (verdict-neutral). This is a DIFFERENT mechanism from Task 3's three
+# hardcoded-pass checks (x_het_ratio, gene_overlap, gene_symbol_concordance),
+# which are built directly by Python functions, not by evaluate() over a
+# rule-pack dict.
+#
+# THE TRAP: `_expected_range(check)` also returns None for a band-less rule,
+# which makes it look like a usable "asserts nothing" signal. It is not one --
+# `_expected_range` inspects ONLY warn_below/warn_above, so a rule with just
+# `fail_below` (no warn_*) ALSO renders no expected_range, yet it very much CAN
+# fail. The trap test below pins that a fail_below-only rule stays
+# informational=False and still fails.
+
+
+def test_fail_below_only_rule_is_not_informational_and_still_fails():
+    """THE TRAP, pinned: a rule with ONLY fail_below (no warn_below/warn_above/
+    fail_above) has no `_expected_range` either -- the same as a truly
+    band-less rule. But it CAN fail, so it must never be marked informational.
+    Keying `informational` off `_expected_range(check) is None` would make
+    this rule unfalsifiable, which is strictly worse than the bug Task 4
+    fixes.
+    """
+    pack = [
+        {
+            "check": "variant_count",
+            "metric": "variant_count",
+            "fail_below": 1,
+            "message": "number of distinct germline variant sites",
+        }
+    ]
+    below_floor = evaluate({"S1": {"variant_count": 0}}, pack)
+    assert below_floor[0].status == "fail"
+    assert below_floor[0].informational is False
+
+    above_floor = evaluate({"S1": {"variant_count": 500}}, pack)
+    assert above_floor[0].status == "pass"
+    assert above_floor[0].informational is False
+
+
+def test_band_less_rule_is_informational():
+    # No fail_below/fail_above/warn_below/warn_above at all -> can only ever
+    # return "pass" -> asserts nothing -> must be marked informational.
+    pack = [
+        {
+            "check": "reported_only",
+            "metric": "m",
+            "message": "a metric we report but deliberately never judge",
+        }
+    ]
+    results = evaluate({"S1": {"m": 42.0}}, pack)
+    assert results[0].status == "pass"
+    assert results[0].informational is True
+
+
+def test_rule_with_any_bound_is_not_informational():
+    # A rule that declares at least one bound can actually fail or warn, so it
+    # must not be marked informational -- even when the value in hand happens
+    # to land inside the band.
+    for bound_key, bound_value in (
+        ("fail_below", 1.0),
+        ("fail_above", 100.0),
+        ("warn_below", 1.0),
+        ("warn_above", 100.0),
+    ):
+        pack = [
+            {
+                "check": "some_check",
+                "metric": "m",
+                bound_key: bound_value,
+                "message": "has exactly one bound",
+            }
+        ]
+        results = evaluate({"S1": {"m": 50.0}}, pack)
+        assert results[0].informational is False, (
+            f"a rule with only {bound_key!r} must not be informational"
+        )
+
+
+def _all_rule_pack_lists():
+    """Every rule-pack list[dict] defined at module level in rule_pack.py.
+
+    Scans by name (``*_PACK``, singular) rather than hardcoding the list of
+    packs, so a newly added pack's band-less rules are caught automatically --
+    only the *expected informational set* below needs a deliberate update.
+    """
+    packs = []
+    for name in dir(rule_pack_module):
+        if not name.endswith("_PACK"):
+            continue
+        value = getattr(rule_pack_module, name)
+        if isinstance(value, list) and value and all(isinstance(r, dict) for r in value):
+            packs.append(value)
+    return packs
+
+
+def test_informational_check_set_is_exactly_four():
+    """R7 enumeration guard.
+
+    docs/technical/CAPABILITY_ROADMAP.md:663 said "decide before a second
+    band-less rule lands" -- prose did not enforce that deadline, and three
+    more checks landed informational anyway (Task 3's three hardcoded-pass
+    checks), alongside duplication_rate (Task 4's band-less rule pack entry).
+    This test IS the deadline, in code.
+
+    If this test fails because you added a FIFTH informational check: that
+    can be the right call, but it must be a deliberate act, not a silent
+    side effect. Update the expected set below and say, in the same commit,
+    why the new check can only ever assert nothing (no band is possible, or
+    it is hand-built as always-pass).
+    """
+    bandless_rule_pack_checks = {
+        rule["check"]
+        for pack in _all_rule_pack_lists()
+        for rule in pack
+        if _is_band_less(rule)
+    }
+    # The three hardcoded-pass checks (Task 3): built directly as Python
+    # QCResult(informational=True) calls, not evaluate()-over-a-dict, so a
+    # rule-pack scan cannot see them. Their modules:
+    #   x_het_ratio             -> verification/sex_plausibility.py
+    #   gene_overlap            -> verification/count_concordance.py
+    #   gene_symbol_concordance -> verification/annotation_concordance.py
+    hardcoded_pass_checks = {"x_het_ratio", "gene_overlap", "gene_symbol_concordance"}
+
+    assert bandless_rule_pack_checks | hardcoded_pass_checks == {
+        "duplication_rate",
+        "gene_symbol_concordance",
+        "x_het_ratio",
+        "gene_overlap",
+    }

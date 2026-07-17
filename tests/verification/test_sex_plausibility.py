@@ -393,6 +393,7 @@ def test_evaluate_male_pattern_passes_xy(tmp_path):
     assert xhet.kind == "metric"
     assert xhet.value == sex_signals(vcf).x_het_ratio
     assert "informational" in xhet.message.lower()
+    assert xhet.informational is True
 
 
 def test_evaluate_female_pattern_passes_xx(tmp_path):
@@ -432,8 +433,12 @@ def test_evaluate_indeterminate_is_unverified_with_none_value(tmp_path):
     assert sex.status != "fail"
 
     xhet = by_check["x_het_ratio:s1"]
-    assert xhet.status == "pass"  # informational-always-PASS convention
+    # A check that could not compute a value is unverified, not a pass (A11):
+    # it never claims to have corroborated anything, so it must not be read
+    # as informational-pass either.
+    assert xhet.status == "unverified"
     assert xhet.value is None
+    assert xhet.informational is False
 
 
 def test_evaluate_no_chrx_contig_is_unverified_with_none_value(tmp_path):
@@ -453,8 +458,9 @@ def test_evaluate_no_chrx_contig_is_unverified_with_none_value(tmp_path):
     assert sex.status != "fail"
 
     xhet = by_check["x_het_ratio:s1"]
-    assert xhet.status == "pass"
+    assert xhet.status == "unverified"
     assert xhet.value is None
+    assert xhet.informational is False
 
 
 def test_evaluate_gzip_matches_plain(tmp_path):

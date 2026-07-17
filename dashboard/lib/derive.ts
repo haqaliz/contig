@@ -48,11 +48,16 @@ const QC_RANK: Record<QCStatus, number> = {
   unverified: 3,
 };
 
+// Reduce non-informational results: fail > warn > pass, else "unverified" when
+// no severity-bearing result exists (all results are unverified and/or
+// informational). Mirror of overall_verdict in src/contig/models.py.
 function overallQc(results: QCResult[]): QCStatus {
-  const statuses = new Set(results.map((r) => r.status));
+  const severe = results.filter((r) => !r.informational);
+  const statuses = new Set(severe.map((r) => r.status));
   if (statuses.has("fail")) return "fail";
   if (statuses.has("warn")) return "warn";
-  return "pass";
+  if (statuses.has("pass")) return "pass";
+  return "unverified";
 }
 
 // The "lowest" deciding check is the one with the smallest numeric value (the
@@ -70,9 +75,10 @@ function lowestByValue(checks: QCResult[]): QCResult | null {
 }
 
 /**
- * The result of explaining a recorded verdict. We never re-derive trust: the
- * verdict is computed by the engine and serialized; this only names what drove
- * it (PRD contract E).
+ * The result of explaining a recorded verdict. The trust badge always comes
+ * from the stored `record.verdict` (computed by the engine and serialized);
+ * this only re-derives the reason text that names what drove it, so the
+ * explanation matches the badge instead of contradicting it (PRD contract E).
  */
 export interface VerdictExplanation {
   verdict: Verdict;
@@ -85,8 +91,12 @@ export interface VerdictExplanation {
  * (src/contig/models.py RunRecord.verdict):
  *   1. any failed task event -> "fail" ("Run did not complete: N task(s) failed").
  *   2. else no qc_results    -> "unverified" ("No QC check covered this run").
- *   3. else overall = fail > warn > pass; the deciding checks are those whose
- *      status equals the overall, and the reason names the lowest one by value.
+ *   3. else overall = fail > warn > pass reduced over non-informational
+ *      results, else "unverified" when none is severity-bearing (all results
+ *      are unverified and/or informational); the deciding checks are those
+ *      whose status equals the overall, and the reason names the lowest one
+ *      by value. The "unverified" case has no deciding checks and its reason
+ *      never claims a pass.
  * This presentation never changes the verdict; it only explains it.
  */
 export function explainVerdict(record: RunRecord): VerdictExplanation {
@@ -110,8 +120,23 @@ export function explainVerdict(record: RunRecord): VerdictExplanation {
   }
 
   const overall = overallQc(record.qc_results);
-  const decidingChecks = record.qc_results.filter((q) => q.status === overall);
   const total = record.qc_results.length;
+
+  // No severity-bearing result (every check is unverified and/or
+  // informational): there is nothing that decided this run, so name that
+  // directly instead of falling into the fail/warn branch below (which would
+  // print the misleading "UNVERIFIED: 0 of N checks flagged") or claiming a
+  // pass. No deciding checks either, consistent with the empty-qc_results case
+  // above.
+  if (overall === "unverified") {
+    return {
+      verdict: "unverified",
+      reason: "UNVERIFIED: no check could corroborate this run",
+      decidingChecks: [],
+    };
+  }
+
+  const decidingChecks = record.qc_results.filter((q) => q.status === overall);
 
   if (overall === "pass") {
     return {
