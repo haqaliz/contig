@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-07-18
+
 ### Added
 
 - **`contig reproduce` — the first slice of capability C8 (reproduce & verify *third-party

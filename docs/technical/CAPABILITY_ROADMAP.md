@@ -1044,7 +1044,7 @@ ever. See [`../planning/variant-annotation-assay/prd.md`](../planning/variant-an
 
 ---
 
-## C8. Reproduce & verify *existing published* work  ·  first slice SHIPPED (Unreleased)  ·  M7+
+## C8. Reproduce & verify *existing published* work  ·  first slice SHIPPED v0.40.0  ·  M7+
 
 Point the shipped run → self-heal → verify → reproduce engine at a **third-party,
 already-published** bioinformatics repository (a paper + its code/data) and report which of
@@ -1052,7 +1052,7 @@ the paper's stated numbers, tables, and figures **actually regenerate** — endi
 re-runnable verdict, exactly like a first-party run. This is not a new assay; it is the same
 Layer-2 engine turned around to face *other people's* published analyses.
 
-**Shipped (first slice — walking skeleton, Unreleased).** `contig reproduce <repo> --run "<cmd>"
+**Shipped (first slice — walking skeleton, v0.40.0).** `contig reproduce <repo> --run "<cmd>"
 --claims <file>` runs a repo's script and reports a **per-claim** verdict — `REPRODUCED` /
 `WITHIN-TOLERANCE` / `DIVERGED` / `UNVERIFIED` — over **scalar numeric** claims, ending in a
 signed, re-runnable bundle. A new `verification/reproduce.py` (`load_claims`/`classify`/
@@ -1139,7 +1139,7 @@ raw-data egress — runs on the user's / CI compute; only hashes and claim diffs
 | C6 | Eval flywheel as a continuous loop | M6 (detector held-out guard slice 1 SHIPPED, Unreleased — honestly 0.833/10:12, two classes structurally unreachable; repair-loop outcome-match guard slice 2 SHIPPED, Unreleased — honestly 1.0/7:7, 5 classes covered; both wired into CI; folding C1/C3 signals + held-out-accuracy trend pending) | Compounding accuracy from real runs |
 | C7 | Research-use variant annotation & prioritization | M1 + M2 + M3 + M4 + M5 surface+provenance SHIPPED (Unreleased) — germline structural verify + provenance, somatic annotation gate, annotation plausibility (both assays), VEP-vs-SnpEff concordance (both assays: `consequence_concordance` WARN-capped + `gene_symbol_concordance` informational, auto in the verdict, both VCF layouts, annotator-version provenance pair), M5 "corroborated by" line across text/HTML report + `contig methods` + dashboard (reads M4 results, never recomputes) + `AnnotationProvenance.db_version` cache/build token (VEP `cache=` / SnpEff genome) rendered and round-tripped through reproduce with pre-M5 back-compat; **M5 C6 eval fold-in still DEFERRED** (blocked on labeling design) (germline+somatic `annotation_present`/`annotation_complete` structural checks via `VARIANT_ASSAYS`, `AnnotationProvenance` tool+cache/build capture, `--tools …,vep` enablement on both assays, `annotation_real_fraction`/`annotation_consequence_distribution` plausibility checks, all WARN-capped/UNVERIFIED-when-absent; live run may still need a VEP/SnpEff cache Contig does not yet wire — absent annotation degrades to UNVERIFIED, never a false pass; verify-only, prioritization deferred) | Disease-research breadth on-thesis, new corpus; run+verify annotation, never a clinical verdict |
 
-| C8 | Reproduce & verify *existing published* work | first slice SHIPPED (Unreleased) · M7+ | Turns the engine on third-party papers (repo+claims → per-claim `REPRODUCED`/`WITHIN-TOLERANCE`/`DIVERGED`/`UNVERIFIED`); strongest quantified pain (~3.2% of 27,271 notebooks reproduce), a free viral community-trust channel, and a new publicly-sourced corpus stream. **Shipped:** `contig reproduce <repo> --run --claims` walking skeleton — scalar per-claim verdict reusing `benchmark._relative_delta`, values bound from a repo-written `results.json`, signed re-runnable bundle via the generic signer, `--fail-on-diverged`; cooperative-repos-only, UNVERIFIED-when-unresolved, no real repo/network in CI. **Deferred:** output-locator (read repos as-is), env-resurrection from a traced execution (reuses C2), paper-parsing, figure/plot & table-cell claims (**plot-hash does not exist and can't be added without breaking the stdlib-only dep contract**), remote `<doi|url>`, dashboard card, C6 fold-in |
+| C8 | Reproduce & verify *existing published* work | first slice SHIPPED v0.40.0 · M7+ | Turns the engine on third-party papers (repo+claims → per-claim `REPRODUCED`/`WITHIN-TOLERANCE`/`DIVERGED`/`UNVERIFIED`); strongest quantified pain (~3.2% of 27,271 notebooks reproduce), a free viral community-trust channel, and a new publicly-sourced corpus stream. **Shipped:** `contig reproduce <repo> --run --claims` walking skeleton — scalar per-claim verdict reusing `benchmark._relative_delta`, values bound from a repo-written `results.json`, signed re-runnable bundle via the generic signer, `--fail-on-diverged`; cooperative-repos-only, UNVERIFIED-when-unresolved, no real repo/network in CI. **Deferred:** output-locator (read repos as-is), env-resurrection from a traced execution (reuses C2), paper-parsing, figure/plot & table-cell claims (**plot-hash does not exist and can't be added without breaking the stdlib-only dep contract**), remote `<doi|url>`, dashboard card, C6 fold-in |
 
 **One-line mantra:** make every verdict harder to fool, recover more failures
 without a human, and let every run make the next verdict smarter.
