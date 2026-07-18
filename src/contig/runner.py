@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
@@ -570,6 +571,12 @@ Executor = Callable[[list[str], Path], int]
 # inject a fake that creates the index file, so no real tool runs in CI.
 IndexBuilder = Callable[[list[str], Path], int]
 
+# An installer runs a dependency-install command (e.g. `python -m pip install
+# numpy`) and returns its exit code. The default shells out; tests inject a
+# fake so no real pip runs and no network is touched in CI (mirrors
+# IndexBuilder / default_index_builder).
+Installer = Callable[[list[str], Path], int]
+
 
 class PipelineExecutionError(RuntimeError):
     """Raised when the workflow manager exits nonzero (DETECT, ARCHITECTURE §5.1).
@@ -622,6 +629,21 @@ def default_index_builder(cmd: list[str], cwd: Path) -> int:
     log_path = Path(cwd) / "run.log"
     with open(log_path, "ab") as log:
         proc = subprocess.run(cmd, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, check=False)
+    return proc.returncode
+
+
+def _pip_install_argv(module: str) -> list[str]:
+    """Build the fixed pip-install argv for a single module (no shell, no interpolation)."""
+    return [sys.executable, "-m", "pip", "install", module]
+
+
+def default_installer(cmd: list[str], cwd: Path) -> int:
+    """Run a dependency-install command (e.g. `python -m pip install numpy`) in cwd.
+
+    Returns the process exit code. Tests inject a fake installer so no real pip
+    runs and no network is touched in CI (mirrors default_index_builder).
+    """
+    proc = subprocess.run(cmd, cwd=cwd, check=False)
     return proc.returncode
 
 
