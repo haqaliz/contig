@@ -1,11 +1,15 @@
-"""Reproduce engine for C8 slice 1: claims loader, tolerance classifier, run
-engine, and the pure reduction over claim results.
+"""Reproduce engine for C8: claims loader, tolerance classifier, run engine,
+the missing-module detector for environment resurrection, and the pure
+reduction over claim results.
 
 A "claim" is one published numeric result (e.g. an AUC or accuracy) that a
 paper/repo states. `load_claims` reads a small JSON claims file; `classify`
 decides, for one claim, whether a freshly observed value reproduces it within
-tolerance; `run_reproduction` drives an injected executor over the repo, reads
-its results file, and classifies every claim into a `ReproduceRecord`.
+tolerance; `detect_missing_module` pulls a missing Python package name out of a
+failed run's captured output (slice 2 environment resurrection); and
+`run_reproduction` drives an injected executor over the repo, reads its results
+file, optionally installs a missing dependency and retries once, and classifies
+every claim into a `ReproduceRecord`.
 """
 
 from __future__ import annotations
