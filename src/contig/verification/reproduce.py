@@ -246,7 +246,7 @@ def run_reproduction(
     run_command: str,
     claims: list[Claim],
     *,
-    executor: Callable[[list[str], Path], int],
+    executor: Callable[[list[str], Path], tuple[int, str]],
     claims_sha256: str,
     results_path: str = "results.json",
     created_at: str,
@@ -316,7 +316,7 @@ def run_reproduction(
 
         return float(target), ""
 
-    exit_code = executor(shlex.split(run_command), repo_path)
+    exit_code, run_output = executor(shlex.split(run_command), repo_path)
 
     if exit_code != 0:
         claim_results = [

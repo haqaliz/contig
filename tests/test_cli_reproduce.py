@@ -32,15 +32,15 @@ def _repo(tmp_path):
 def _fake_executor(results=None, exit_code=0):
     """Mirrors _fake_run_executor in test_cli.py: writes a canned results.json
     into cwd (the repo dir, per run_reproduction's executor contract) and
-    returns exit_code. results=None means the script "did nothing" (exit_code
-    should be nonzero in that case for a realistic fixture, but the caller
-    controls both independently).
+    returns (exit_code, ""). results=None means the script "did nothing"
+    (exit_code should be nonzero in that case for a realistic fixture, but the
+    caller controls both independently).
     """
 
     def execute(cmd, cwd):
         if results is not None:
             (cwd / "results.json").write_text(json.dumps(results))
-        return exit_code
+        return exit_code, ""
 
     return execute
 
@@ -402,7 +402,7 @@ def test_reproduce_located_claim_end_to_end_reports_verdict(tmp_path, monkeypatc
     def execute(cmd, cwd):
         (cwd / "out").mkdir(parents=True, exist_ok=True)
         (cwd / "out" / "summary.json").write_text(json.dumps({"model": {"auc": 0.9}}))
-        return 0
+        return 0, ""
 
     monkeypatch.setattr("contig.cli.default_command_executor", execute)
     runs_dir = tmp_path / "runs"

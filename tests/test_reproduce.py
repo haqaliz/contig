@@ -278,16 +278,19 @@ def test_load_claims_rejects_empty_path(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _fake_executor(exit_code: int, results: dict | None, results_path: str = "results.json"):
+def _fake_executor(
+    exit_code: int, results: dict | None, results_path: str = "results.json", output: str = ""
+):
     """Build a fake executor that writes `results` into `repo/results_path`
     (unless `results` is None, in which case no file is written) and returns
-    `exit_code`. Mirrors the injected `Callable[[list[str], Path], int]` seam.
+    `(exit_code, output)`. Mirrors the injected
+    `Callable[[list[str], Path], tuple[int, str]]` seam.
     """
 
-    def executor(argv: list[str], repo: Path) -> int:
+    def executor(argv: list[str], repo: Path) -> tuple[int, str]:
         if results is not None:
             (repo / results_path).write_text(json.dumps(results))
-        return exit_code
+        return exit_code, output
 
     return executor
 
@@ -386,7 +389,7 @@ def test_run_reproduction_unparseable_results_file_marks_all_unverified(tmp_path
 
     def executor(argv, repo):
         (repo / "results.json").write_text("{not json")
-        return 0
+        return 0, ""
 
     record = run_reproduction(
         repo=str(tmp_path),
@@ -464,8 +467,8 @@ def _write_located(tmp_path: Path, rel: str, payload: object) -> None:
 
 
 def _noop_executor(exit_code: int = 0):
-    def executor(argv: list[str], repo: Path) -> int:
-        return exit_code
+    def executor(argv: list[str], repo: Path) -> tuple[int, str]:
+        return exit_code, ""
 
     return executor
 
