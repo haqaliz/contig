@@ -101,16 +101,32 @@ class ClaimsError(ValueError):
 
 
 @dataclass(frozen=True)
+class Locator:
+    """Where to find a located claim's observed value: `source` is the
+    claims file's `"from"` field (a repo-relative JSON file path -- named
+    `source` internally because `from` is a Python keyword), `path` is the
+    dotted+`[n]` pointer into that file's parsed JSON, resolved via
+    `resolve_pointer`.
+    """
+
+    source: str
+    path: str
+
+
+@dataclass(frozen=True)
 class Claim:
     """One published numeric claim to reproduce: `id` names the metric,
     `value` is the claimed reference number, `tolerance` is the relative
     band (see `classify`) within which an observed value still counts as
-    reproducing it.
+    reproducing it. `locator`, when set, means this claim's observed value
+    is bound from its own repo-relative JSON file at a path rather than
+    from the flat `--results` map (slice-1 behavior, `locator=None`).
     """
 
     id: str
     value: float
     tolerance: float = _DEFAULT_TOLERANCE
+    locator: Locator | None = None
 
 
 def load_claims(path: str | Path) -> list[Claim]:
@@ -155,7 +171,28 @@ def load_claims(path: str | Path) -> list[Claim]:
         if tolerance <= 0:
             raise ClaimsError(f"claim {claim_id!r} has a non-positive 'tolerance': {tolerance!r}")
 
-        claims.append(Claim(id=claim_id, value=float(value), tolerance=float(tolerance)))
+        has_from, has_path = "from" in item, "path" in item
+        if has_from != has_path:
+            raise ClaimsError(
+                f"claim {claim_id!r} must set both 'from' and 'path', or neither"
+            )
+        locator: Locator | None = None
+        if has_from:
+            raw_from, raw_path = item["from"], item["path"]
+            if not isinstance(raw_from, str) or not raw_from.strip():
+                raise ClaimsError(f"claim {claim_id!r} has an invalid 'from': {raw_from!r}")
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                raise ClaimsError(f"claim {claim_id!r} has an invalid 'path': {raw_path!r}")
+            locator = Locator(source=raw_from, path=raw_path)
+
+        claims.append(
+            Claim(
+                id=claim_id,
+                value=float(value),
+                tolerance=float(tolerance),
+                locator=locator,
+            )
+        )
 
     return claims
 

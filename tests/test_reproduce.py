@@ -16,6 +16,7 @@ import pytest
 from contig.verification.reproduce import (
     Claim,
     ClaimsError,
+    Locator,
     classify,
     load_claims,
     run_reproduction,
@@ -186,6 +187,87 @@ def test_load_claims_rejects_non_numeric_string_tolerance(tmp_path):
 def test_load_claims_rejects_boolean_tolerance(tmp_path):
     path = _write(
         tmp_path, "claims.json", json.dumps([{"id": "auc", "value": 0.9, "tolerance": True}])
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+# ---------------------------------------------------------------------------
+# load_claims() -- output locator ("from" + "path") [C8 slice 1.5, Phase 2]
+# ---------------------------------------------------------------------------
+
+
+def test_load_claims_with_from_and_path_attaches_locator(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([{"id": "auc", "value": 0.9, "from": "out/x.json", "path": "$.a"}]),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == Locator("out/x.json", "$.a")
+
+
+def test_load_claims_slice1_claim_has_no_locator(tmp_path):
+    path = _write(tmp_path, "claims.json", json.dumps([{"id": "auc", "value": 0.9}]))
+    claims = load_claims(path)
+    assert claims[0].locator is None
+
+
+def test_load_claims_rejects_from_without_path(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([{"id": "auc", "value": 0.9, "from": "out/x.json"}]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_path_without_from(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([{"id": "auc", "value": 0.9, "path": "$.a"}]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_non_string_from(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([{"id": "auc", "value": 0.9, "from": 1, "path": "$.a"}]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_non_string_path(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([{"id": "auc", "value": 0.9, "from": "out/x.json", "path": 1}]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_empty_from(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([{"id": "auc", "value": 0.9, "from": "  ", "path": "$.a"}]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_empty_path(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([{"id": "auc", "value": 0.9, "from": "out/x.json", "path": ""}]),
     )
     with pytest.raises(ClaimsError):
         load_claims(path)
