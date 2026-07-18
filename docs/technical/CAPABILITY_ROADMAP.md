@@ -1044,7 +1044,7 @@ ever. See [`../planning/variant-annotation-assay/prd.md`](../planning/variant-an
 
 ---
 
-## C8. Reproduce & verify *existing published* work  ·  first slice SHIPPED v0.40.0  ·  M7+
+## C8. Reproduce & verify *existing published* work  ·  first slice SHIPPED v0.40.0 + output-locator slice 1.5 SHIPPED v0.41.0  ·  M7+
 
 Point the shipped run → self-heal → verify → reproduce engine at a **third-party,
 already-published** bioinformatics repository (a paper + its code/data) and report which of
@@ -1067,10 +1067,32 @@ in the repo dir. `--fail-on-diverged` is an opt-in exit-code gate. **Honest scop
 computation-vs-numbers only (never the paper's conclusions), no raw-read egress; slice 1
 reproduces **cooperative** repos (those that emit `results.json`) and degrades an uncooperative one
 to UNVERIFIED; test-first, **no real third-party repo or network in CI**. **Deferred:** the
-claim-level output-locator to read numbers out of a repo as-is (slice 1.5); **environment
-resurrection** (`ModuleNotFoundError` → install → retry, reusing C2) (slice 2); paper-parsing to
-extract claims; **figure/plot and table-cell claims** (see the correction below); remote
-`<doi|url>`; a dashboard card; and the C6 eval fold-in.
+claim-level output-locator to read numbers out of a repo as-is (slice 1.5 — now **shipped**, see
+below); **environment resurrection** (`ModuleNotFoundError` → install → retry, reusing C2) (slice
+2); paper-parsing to extract claims; **figure/plot and table-cell claims** (see the correction
+below); remote `<doi|url>`; a dashboard card; and the C6 eval fold-in.
+
+**Shipped (output-locator — slice 1.5, v0.41.0).** A claim may now carry an optional locator
+`{"from": <repo-relative JSON file>, "path": <expression>}` naming where its number already lives
+in the repo's own **structured JSON** output, instead of requiring the repo to hand-write a flat
+Contig-shaped `results.json`. This is the exact slice the slice-1 review gate named as what turns
+`contig reproduce` from a fixtures/cooperative-repo demo into a tool that reads **real, unmodified
+cloned repos** — the "externally-credible" step. A new pure stdlib walker
+(`verification/reproduce.py::resolve_pointer` + `_parse_path`) — dotted segments + `[n]` list
+indices, leading `$.`/`$` tolerated, strict dict/list `isinstance` guards, **never raises** (any
+unresolved/malformed step → `None`) — resolves the value; `run_reproduction` branches so a located
+claim binds from its own file (parsed once, cached per run) and classifies through the **unchanged**
+`classify`, while a locator-less claim keeps the byte-identical slice-1 flat lookup (mixed files
+allowed). Every locator failure — missing/unparseable/non-UTF-8 `from` file, unresolved `path`,
+non-numeric target **including a numeric *string* (strictly UNVERIFIED, never coerced)**, bool, or
+non-finite — is `UNVERIFIED`, never a false pass, never `DIVERGED`. Safety: an escaping/absolute
+`from` is refused at the CLI **before any run** (exit non-zero, no record) reusing the `--results`
+containment guard, and the engine defensively never reads outside the repo. No new dependency
+(stdlib-only holds); no model/verdict/exit-code contract change; `claims_sha256` already covers the
+locators. **JSON only** this slice — stdout/CSV/notebook/figure numbers still degrade to UNVERIFIED
+honestly. **Deferred:** a TSV/CSV locator (the named next step); slice 2 (environment resurrection)
+and everything after it (unchanged from the slice-1 list above). Test-first (walker → `load_claims`
+→ engine → CLI); deterministic; no real repo or network in CI.
 
 **Correction to the build surface below (verified against the code, 2026-07-18):** the sentence
 "reuses the existing float-tolerance / plot-hash / seed-aware diffing" was only one-third true.
@@ -1139,7 +1161,7 @@ raw-data egress — runs on the user's / CI compute; only hashes and claim diffs
 | C6 | Eval flywheel as a continuous loop | M6 (detector held-out guard slice 1 SHIPPED, Unreleased — honestly 0.833/10:12, two classes structurally unreachable; repair-loop outcome-match guard slice 2 SHIPPED, Unreleased — honestly 1.0/7:7, 5 classes covered; both wired into CI; folding C1/C3 signals + held-out-accuracy trend pending) | Compounding accuracy from real runs |
 | C7 | Research-use variant annotation & prioritization | M1 + M2 + M3 + M4 + M5 surface+provenance SHIPPED (Unreleased) — germline structural verify + provenance, somatic annotation gate, annotation plausibility (both assays), VEP-vs-SnpEff concordance (both assays: `consequence_concordance` WARN-capped + `gene_symbol_concordance` informational, auto in the verdict, both VCF layouts, annotator-version provenance pair), M5 "corroborated by" line across text/HTML report + `contig methods` + dashboard (reads M4 results, never recomputes) + `AnnotationProvenance.db_version` cache/build token (VEP `cache=` / SnpEff genome) rendered and round-tripped through reproduce with pre-M5 back-compat; **M5 C6 eval fold-in still DEFERRED** (blocked on labeling design) (germline+somatic `annotation_present`/`annotation_complete` structural checks via `VARIANT_ASSAYS`, `AnnotationProvenance` tool+cache/build capture, `--tools …,vep` enablement on both assays, `annotation_real_fraction`/`annotation_consequence_distribution` plausibility checks, all WARN-capped/UNVERIFIED-when-absent; live run may still need a VEP/SnpEff cache Contig does not yet wire — absent annotation degrades to UNVERIFIED, never a false pass; verify-only, prioritization deferred) | Disease-research breadth on-thesis, new corpus; run+verify annotation, never a clinical verdict |
 
-| C8 | Reproduce & verify *existing published* work | first slice SHIPPED v0.40.0 · M7+ | Turns the engine on third-party papers (repo+claims → per-claim `REPRODUCED`/`WITHIN-TOLERANCE`/`DIVERGED`/`UNVERIFIED`); strongest quantified pain (~3.2% of 27,271 notebooks reproduce), a free viral community-trust channel, and a new publicly-sourced corpus stream. **Shipped:** `contig reproduce <repo> --run --claims` walking skeleton — scalar per-claim verdict reusing `benchmark._relative_delta`, values bound from a repo-written `results.json`, signed re-runnable bundle via the generic signer, `--fail-on-diverged`; cooperative-repos-only, UNVERIFIED-when-unresolved, no real repo/network in CI. **Deferred:** output-locator (read repos as-is), env-resurrection from a traced execution (reuses C2), paper-parsing, figure/plot & table-cell claims (**plot-hash does not exist and can't be added without breaking the stdlib-only dep contract**), remote `<doi|url>`, dashboard card, C6 fold-in |
+| C8 | Reproduce & verify *existing published* work | first slice SHIPPED v0.40.0 + output-locator slice 1.5 SHIPPED v0.41.0 · M7+ | Turns the engine on third-party papers (repo+claims → per-claim `REPRODUCED`/`WITHIN-TOLERANCE`/`DIVERGED`/`UNVERIFIED`); strongest quantified pain (~3.2% of 27,271 notebooks reproduce), a free viral community-trust channel, and a new publicly-sourced corpus stream. **Shipped:** `contig reproduce <repo> --run --claims` walking skeleton — scalar per-claim verdict reusing `benchmark._relative_delta`, values bound from a repo-written `results.json`, signed re-runnable bundle via the generic signer, `--fail-on-diverged`; cooperative-repos-only, UNVERIFIED-when-unresolved, no real repo/network in CI. **+ Output-locator (slice 1.5):** a claim may carry `{"from": <repo JSON>, "path": "$.a.b[0]"}` to read numbers out of a repo's own **structured JSON as-is** (a new stdlib dotted+`[n]` `resolve_pointer` walker that never raises; located claims classify through the unchanged core; numeric-string strictly UNVERIFIED; escaping `from` refused pre-run + engine never reads outside the repo; JSON-only, full back-compat, no new dep). **Deferred:** TSV/CSV locator (next step), env-resurrection from a traced execution (reuses C2), paper-parsing, figure/plot & table-cell claims (**plot-hash does not exist and can't be added without breaking the stdlib-only dep contract**), remote `<doi|url>`, dashboard card, C6 fold-in |
 
 **One-line mantra:** make every verdict harder to fool, recover more failures
 without a human, and let every run make the next verdict smarter.

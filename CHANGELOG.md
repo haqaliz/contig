@@ -6,6 +6,54 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-07-18
+
+### Added
+
+- **`contig reproduce` gains a claim-level output-locator — the C8 slice-1.5 that makes reproduce
+  read *uncooperative* repos as-is.** The v0.40.0 walking skeleton bound every claim's observed
+  value from one flat, Contig-shaped `results.json` (`{claim_id: value}`) the third-party repo had
+  to hand-write — so it only reproduced repos you modify (or synthetic fixtures). A claim may now
+  carry an **optional locator** `{"from": <repo-relative JSON file>, "path": <expression>}` naming
+  where its number already lives in the repo's own structured output — so `contig reproduce` reads
+  numbers out of **real, unmodified cloned repos that emit JSON**. This is exactly the piece the
+  reproduce PRD's review gate named as what makes the tool "externally credible."
+  - **A new pure, stdlib JSON path walker** (`verification/reproduce.py::resolve_pointer`, with
+    `_parse_path`): dotted segments + `[n]` list indices, a leading `$.`/`$` tolerated
+    (`$.model.auc`, `model.auc`, `samples[0].mean_cov`, `[0].name` for a top-level list). It walks
+    nested `dict`/`list` from parsed JSON with strict `isinstance` guards (a key only on a dict, an
+    index only on a list; `bool` never treated as an index) and **never raises** — any unresolved
+    step (missing key, index out of range, wrong container, malformed expression) returns `None`,
+    the repo's omit-never-guess idiom. No JSONPath/regex dependency; the runtime dep set
+    (`pydantic`/`typer`/`cryptography`) is unchanged.
+  - **Value-binding branches on the locator, verdict core untouched.** In `run_reproduction`, a
+    claim **with** a locator is bound from `repo/<from>` at `<path>` (files parsed once and cached
+    per run) and classified by the **unchanged** `classify`/`benchmark._relative_delta`; a claim
+    **without** one keeps the slice-1 flat-`results` id lookup byte-for-byte. A claims file may mix
+    located and flat claims. `ClaimResult`/`ReproduceRecord`, signing, and the `--fail-on-diverged`
+    exit contract are reused as-is (no model change); `claims_sha256` already covers the locators
+    since they are part of the claims-file bytes.
+  - **Honest degradation preserved end-to-end — every locator failure is `UNVERIFIED`, never a
+    false pass, never `DIVERGED`:** a missing `from` file, unparseable/non-UTF-8 JSON, an unresolved
+    `path`, or a target that is non-numeric — **including a numeric *string* like `"0.91"`, which is
+    strictly UNVERIFIED, not coerced** — bool, or non-finite (`NaN`/`inf`). Each carries a specific
+    message. A non-zero script exit still short-circuits every claim to `UNVERIFIED` (unchanged).
+  - **Safety: no read outside the repo.** An escaping or absolute `from` is refused at the CLI
+    **before any run** (exit non-zero, **no** record written), reusing the same
+    `(repo/from).resolve().relative_to(repo.resolve())` containment guard as `--results`; and if such
+    a path reaches the engine directly it degrades to `UNVERIFIED` with the outside file **never
+    opened** (defense-in-depth, `.resolve()` also defeating symlink escapes). No raw-data egress —
+    only hashes + claim diffs leave the box.
+  - **Honest scope / limits (recorded, not glossed).** Research-use, computation-vs-numbers only —
+    never a judgement on the paper's conclusions. **Structured JSON only** this slice: repos that
+    emit numbers only to stdout, CSV/TSV, notebooks, or figures still degrade to `UNVERIFIED` — the
+    win is "reads repos that emit structured JSON," not "reads any repo." **Deferred:** a TSV/CSV
+    locator (the named next step); environment resurrection (slice 2); paper-parsing; figure/plot &
+    table-cell claims (still blocked — no plot-hash exists and adding perceptual-image hashing would
+    break the stdlib-only dep contract); remote `<doi|url>`; a dashboard card; the C6 eval fold-in.
+    Test-first (walker → `load_claims` → engine binding → CLI guard), deterministic, **no real
+    third-party repo or network in CI** (scripted executor + on-disk fixture outputs).
+
 ## [0.40.0] - 2026-07-18
 
 ### Added

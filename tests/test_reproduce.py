@@ -16,6 +16,7 @@ import pytest
 from contig.verification.reproduce import (
     Claim,
     ClaimsError,
+    Locator,
     classify,
     load_claims,
     run_reproduction,
@@ -192,6 +193,87 @@ def test_load_claims_rejects_boolean_tolerance(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# load_claims() -- output locator ("from" + "path") [C8 slice 1.5, Phase 2]
+# ---------------------------------------------------------------------------
+
+
+def test_load_claims_with_from_and_path_attaches_locator(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([{"id": "auc", "value": 0.9, "from": "out/x.json", "path": "$.a"}]),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == Locator("out/x.json", "$.a")
+
+
+def test_load_claims_slice1_claim_has_no_locator(tmp_path):
+    path = _write(tmp_path, "claims.json", json.dumps([{"id": "auc", "value": 0.9}]))
+    claims = load_claims(path)
+    assert claims[0].locator is None
+
+
+def test_load_claims_rejects_from_without_path(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([{"id": "auc", "value": 0.9, "from": "out/x.json"}]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_path_without_from(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([{"id": "auc", "value": 0.9, "path": "$.a"}]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_non_string_from(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([{"id": "auc", "value": 0.9, "from": 1, "path": "$.a"}]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_non_string_path(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([{"id": "auc", "value": 0.9, "from": "out/x.json", "path": 1}]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_empty_from(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([{"id": "auc", "value": 0.9, "from": "  ", "path": "$.a"}]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_empty_path(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([{"id": "auc", "value": 0.9, "from": "out/x.json", "path": ""}]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+# ---------------------------------------------------------------------------
 # run_reproduction()
 # ---------------------------------------------------------------------------
 
@@ -353,3 +435,214 @@ def test_run_reproduction_returns_full_record_metadata(tmp_path):
     assert record.claims_sha256 == "a" * 64
     assert record.created_at == "2026-07-18T00:00:00Z"
     assert record.exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# run_reproduction() -- located claims via the output locator [C8 slice 1.5,
+# Phase 3]
+# ---------------------------------------------------------------------------
+
+
+def _run(tmp_path: Path, claims: list[Claim], executor, **overrides) -> "object":
+    kwargs = dict(
+        repo=str(tmp_path),
+        run_command="echo run",
+        claims=claims,
+        executor=executor,
+        claims_sha256="a" * 64,
+        created_at="2026-07-18T00:00:00Z",
+        reproduce_id="rp_1",
+    )
+    kwargs.update(overrides)
+    return run_reproduction(**kwargs)
+
+
+def _write_located(tmp_path: Path, rel: str, payload: object) -> None:
+    p = tmp_path / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(payload))
+
+
+def _noop_executor(exit_code: int = 0):
+    def executor(argv: list[str], repo: Path) -> int:
+        return exit_code
+
+    return executor
+
+
+def test_run_reproduction_located_claim_matching_is_reproduced(tmp_path):
+    _write_located(tmp_path, "out/summary.json", {"model": {"auc": 0.9}})
+    claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == 0.9
+
+
+def test_run_reproduction_located_claim_drifted_is_diverged_with_message(tmp_path):
+    _write_located(tmp_path, "out/summary.json", {"model": {"auc": 0.5}})
+    claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "diverged"
+    assert result.observed == 0.5
+    assert "0.5" in result.message
+    assert "0.9" in result.message
+    assert result.delta is not None
+
+
+def test_run_reproduction_located_claim_near_value_is_within_tolerance(tmp_path):
+    _write_located(tmp_path, "out/summary.json", {"model": {"auc": 0.92}})
+    claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "within_tolerance"
+    assert result.observed == 0.92
+
+
+def test_run_reproduction_located_claim_missing_file_is_unverified(tmp_path):
+    claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+
+
+def test_run_reproduction_located_claim_unparseable_json_is_unverified(tmp_path):
+    p = tmp_path / "out" / "summary.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("{not json")
+    claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+
+
+def test_run_reproduction_located_claim_non_utf8_file_is_unverified_not_raise(tmp_path):
+    # A non-UTF-8 'from' file makes Path.read_text() raise UnicodeDecodeError,
+    # a ValueError subclass -- must be caught alongside JSONDecodeError/OSError
+    # and mapped to unverified, never propagate and crash the run.
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out" / "summary.json").write_bytes(b"\xff\xfe\x00bad")
+    claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "not valid JSON" in result.message
+
+
+def test_run_reproduction_located_claim_unresolved_path_is_unverified(tmp_path):
+    _write_located(tmp_path, "out/summary.json", {"model": {"acc": 0.9}})
+    claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+
+
+def test_run_reproduction_located_claim_string_target_is_unverified_strict(tmp_path):
+    _write_located(tmp_path, "out/summary.json", {"model": {"auc": "0.9"}})
+    claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+
+
+def test_run_reproduction_located_claim_numeric_string_target_is_unverified_strict(tmp_path):
+    _write_located(tmp_path, "out/summary.json", {"model": {"auc": "0.91"}})
+    claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+
+
+def test_run_reproduction_located_claim_boolean_target_is_unverified(tmp_path):
+    _write_located(tmp_path, "out/summary.json", {"model": {"auc": True}})
+    claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+
+
+def test_run_reproduction_located_claim_nan_target_is_unverified(tmp_path):
+    # JSON has no literal NaN/Infinity by spec, but Python's json module accepts
+    # them by default (json.dumps(float("nan")) -> "NaN"); write raw text.
+    p = tmp_path / "out" / "summary.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('{"model": {"auc": NaN}}')
+    claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+
+
+def test_run_reproduction_located_claim_inf_target_is_unverified(tmp_path):
+    p = tmp_path / "out" / "summary.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('{"model": {"auc": Infinity}}')
+    claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+
+
+def test_run_reproduction_mixed_located_and_flat_claims_resolve_independently(tmp_path):
+    _write_located(tmp_path, "out/summary.json", {"model": {"auc": 0.9}})
+    located = Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))
+    flat = Claim(id="accuracy", value=0.8, tolerance=0.05)
+    executor = _fake_executor(0, {"accuracy": 0.8})
+    record = _run(tmp_path, [located, flat], executor)
+    by_id = {r.id: r for r in record.claim_results}
+    assert by_id["auc"].status == "reproduced"
+    assert by_id["auc"].observed == 0.9
+    assert by_id["accuracy"].status == "reproduced"
+    assert by_id["accuracy"].observed == 0.8
+
+
+def test_run_reproduction_located_claim_escaping_repo_is_unverified_and_not_read(tmp_path):
+    # A real file outside the repo dir, with a value that WOULD reproduce if read.
+    outside_dir = tmp_path.parent / "outside_secret"
+    outside_dir.mkdir(exist_ok=True)
+    secret_file = outside_dir / "secret.json"
+    secret_file.write_text(json.dumps({"model": {"auc": 0.9}}))
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    claims = [
+        Claim(
+            id="auc",
+            value=0.9,
+            tolerance=0.05,
+            locator=Locator("../outside_secret/secret.json", "$.model.auc"),
+        )
+    ]
+    record = run_reproduction(
+        repo=str(repo_dir),
+        run_command="echo run",
+        claims=claims,
+        executor=_noop_executor(),
+        claims_sha256="a" * 64,
+        created_at="2026-07-18T00:00:00Z",
+        reproduce_id="rp_1",
+    )
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "escapes the repo" in result.message
+
+
+def test_run_reproduction_located_claim_nonzero_exit_is_unverified(tmp_path):
+    _write_located(tmp_path, "out/summary.json", {"model": {"auc": 0.9}})
+    claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
+    record = _run(tmp_path, claims, _noop_executor(exit_code=1))
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "exit 1" in result.message

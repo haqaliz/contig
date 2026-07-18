@@ -1,105 +1,135 @@
-# Understanding — feat/reproduce-published-work (C8, first slice)
+# Understanding — feat/reproduce-output-locator (C8 slice 1.5)
 
-Synthesis of the Phase 2 dig (three graphify-first mapping agents). All paths under
-`src/contig/` in the worktree.
+Phase 2 dig. Extends the shipped C8 slice-1 walking skeleton (v0.40.0). All paths under
+`src/contig/` in this worktree.
 
 ## What the work is really asking
 
-Open capability **C8** — point the shipped run→self-heal→verify→reproduce engine at a
-*third-party* repo and report, per stated numeric claim, whether the computation
-reproduces it (`REPRODUCED` / `WITHIN-TOLERANCE` / `DIVERGED` / `UNVERIFIED`), ending in a
-signed, re-runnable bundle. First slice must be **narrow**, test-first, no network.
+Slice 1 (`verification/reproduce.py`, shipped) binds each claim's observed value from **one
+flat, Contig-shaped `results.json`** the repo's script must write: `{claim_id: value}`, looked
+up by `claim.id` (`reproduce.py:181-237`). That only reproduces **cooperative** repos — ones you
+modify to emit that file. The reproduce PRD's own review gate
+(`docs/planning/reproduce-published-work/prd.md:190-215`) names the fix: a **claim-level
+output-locator** so each claim points at where its number already lives in the repo's own output
+files. That is this slice — it makes `contig reproduce` "externally credible" (works on real,
+unmodified cloned repos that emit structured output).
 
-The brief bundles two substantial pieces. The dig confirms they are separable:
+**The whole change is localized to the value-binding step.** `classify` (the tolerance verdict),
+`reduce_reproduction` (the pure reduction), `ClaimResult`/`ReproduceRecord` (models), the signed
+bundle, and the exit-code contract are all **reused unchanged**. Only *how the observed value is
+obtained* generalizes.
 
-1. **The `contig reproduce` surface + per-claim verdict** (walking skeleton): run a repo's
-   script, read an explicit claims file, compare each regenerated scalar to its claim within
-   tolerance, emit a per-claim verdict, write a signed bundle. Fully deterministic/testable.
-2. **Environment resurrection** (the roadmap's "load-bearing" piece): when the script fails
-   with `ModuleNotFoundError`/`ImportError`, self-heal by installing the dep and retry —
-   reusing C2's self-heal seam pattern. This is the *hard, open* piece.
+## The exact seam to generalize
 
-**Recommended first-slice boundary: build (1) end-to-end and defer (2).** A run whose env is
-unresolved degrades **honestly to `UNVERIFIED`** — the honesty contract holds without the hard
-piece. (2) becomes slice 2, converting some UNVERIFIEDs into REPRODUCED. This is the classic
-narrow walking skeleton and matches the contig-next caveat ("keep the first slice narrow;
-env-resurrection is the hard open piece"). To settle with the user in the interview.
+`run_reproduction` (`reproduce.py:133-259`), specifically the per-claim value-binding loop
+(`reproduce.py:181-249`):
 
-## Affected areas (map)
+- **Today:** read `repo/<results_path>` once; for each claim, `results[claim.id]` → numeric →
+  `classify`, else `unverified`.
+- **This slice:** a claim may carry an **optional locator** `{from: <repo-relative file>, path:
+  <expression>}`. When present → open that file (repo-relative, escape-guarded), extract the value
+  at `path`, then the SAME `classify`. When absent → the current flat-`results.json` id lookup
+  (full back-compat: a slice-1 claims file behaves identically).
 
-**CLI / bundle / signing (reuse, low risk):**
-- `cli.py:129` single flat Typer `app`; commands are `@app.command()` functions. Mirror `show`
-  (`cli.py:698`) / `rerun` (`cli.py:640`) — positional `Argument` + `Option`s, load→render→
-  `raise typer.Exit(code=1)` on error. `run`/`rerun` funnel into `_dispatch_run` (`cli.py:340`).
-- `RunRecord` `models.py:316`; bundle dir `runs/<id>/` with `run_record.json` + `launch.json`
-  (`LaunchManifest` `models.py:394`) + optional `signature.json`. `write_bundle` `bundle.py:26`
-  is called at `_finalize` and **auto-signs** when `CONTIG_SIGNING_KEY` is set
-  (`bundle.py:41`, `signing.py`). Verify via `_signature_status` `cli.py:1306`. → *A reproduce
-  run that ends in `write_bundle` gets the "signed, re-runnable bundle" for free.*
-- Tests: `tests/test_cli.py`, `CliRunner`, `_fake_run_executor` + `monkeypatch.setattr(
-  "contig.cli.default_executor", ...)`, mirror `test_rerun_dispatches_identical_run_with_new_id`.
-  No `conftest.py`; use `tmp_path`.
+`Claim` (`reproduce.py:32-42`, a frozen dataclass) gains optional `from`/`path` fields;
+`load_claims` (`reproduce.py:45-89`) parses + validates them; the CLI `reproduce`
+(`cli.py:713-806`) is largely untouched (it already validates + hashes claims and calls
+`run_reproduction`).
 
-**Verdict / claim compare (the new surface):**
-- **Reusable:** `benchmark._relative_delta` (`benchmark.py:195`) — `abs(run-ref)/abs(ref)`,
-  abs-fallback when ref==0; `within = delta <= tolerance`, default rel tol `0.1`
-  (`cli.py:1697`). A genuine scalar tolerance compare, directly reusable for a per-claim compare
-  (claim = `reference_value`, regenerated = `run_value`).
-- **New model needed:** `QCStatus`/`Verdict` = `pass|warn|fail|unverified` (`models.py:55`)
-  does **not** map onto the C8 4-value vocabulary. `QCResult` (`models.py:67`) has no way to
-  distinguish "exact" from "within tolerance." Cleanest path = a small new `ClaimResult` model
-  + `ClaimStatus` enum + a `reduce`-style function mirroring `overall_verdict` (`models.py:85`,
-  whose fail>warn>pass reduction + `informational` exclusion is a good template). No `claim`
-  model exists today — C8 introduces the first.
+## Reuse map (low risk — the skeleton was built for this)
 
-**Self-heal (env-resurrection — slice 2, mapped now so the skeleton doesn't box it out):**
-- `self_heal_run` loop `self_heal.py:925`. Add `missing_python_module` to `FailureClass`
-  (`models.py:262`; `_VALID_FAILURE_CLASSES` `detect.py:424` auto-syncs). Add a detector branch
-  in `diagnose_failure` (`detect.py:39`) *before* the `tool_crash` fallback (`detect.py:341`),
-  matching `no module named`/`modulenotfounderror`/`importerror`. Add a `propose_patches` block
-  (`repair.py:14`). Add a `DepInstaller = Callable[[argv, cwd], int]` seam parallel to
-  `IndexBuilder` (`runner.py:571`), threaded through `self_heal_run` + `_apply_patch_and_maybe_
-  build` (`self_heal.py:822`) via `operation["install_dependency"]`, bounded once-per-package by
-  `built_paths` (`self_heal.py:966`). Test via scripted installer, mirroring `heal.py`'s
-  `_scripted_index_builder` (`heal.py:63`) + `heal_scenarios.jsonl`. No network in CI.
+- **`classify` (`reproduce.py:92-130`)** — unchanged. Same 4-state verdict, same finite/None
+  guards, same tight-epsilon REPRODUCED rule. The locator only feeds it an `observed float | None`.
+- **`ClaimResult` / `ReproduceRecord` (`models.py:646-677`)** — unchanged. `observed=None`
+  already models "uncomputable". A locator that can't resolve → `observed=None` → `unverified`,
+  exactly the existing honesty contract.
+- **`reduce_reproduction` (`reproduce.py:262-282`)** — unchanged (counts what results say; never
+  upgrades).
+- **Path-escape guard already exists** for `--results` (`cli.py:745-753`: resolve repo-relative,
+  reject absolute / `..`-escaping via `relative_to`). The locator's `from` files must reuse this
+  exact guard — no raw-data egress outside the repo.
+- **`write_reproduce_bundle` + signing** — unchanged; the record is still signed for free.
+- **CLI `--results`** — stays as the default flat-map path for **locator-less** claims.
 
-## Contradiction to flag (dig vs roadmap) — IMPORTANT
+## Design shape (to confirm in the interview)
 
-`CAPABILITY_ROADMAP.md` C8 (~line 1077) promises to reuse "the existing **float-tolerance /
-plot-hash / seed-aware** diffing." The dig verified against the code:
-- **float-tolerance: real & reusable** (`benchmark._relative_delta`). ✅
-- **plot-hash: does not exist anywhere.** There is no image/plot hashing in the repo, and the
-  runtime dep set is deliberately minimal — `pydantic`, `typer`, `cryptography` only
-  (`pyproject.toml:30`), stdlib-first everywhere. Adding perceptual-image-hash (Pillow/imagehash)
-  would **break the no-new-dependency contract**. ❌
-- **seed-aware diffing: does not exist** as a named mechanism (closest is the tolerance band
-  absorbing run-to-run noise). ⚠️
+- **Locator = per-claim, optional.** `{"id","value","tolerance"?, "from"?, "path"?}`. `from` and
+  `path` are all-or-nothing (both or neither). A claims file may mix located and flat claims.
+- **`path` expression = a minimal stdlib walker**, not a JSONPath dependency (stdlib-only
+  contract). A small dotted/bracket subset — `$.a.b`, `a.b`, `a[0].c` — walking nested
+  dict/list. Any unresolved step → `unverified` (omit-never-guess), never a guess.
+- **Per-file read caching** within one run (several claims may share one `from` file).
+- **Structured outputs only (JSON this slice).** TSV row/column addressing is a live scope
+  question (see below); stdout-scraping / prose / figures are firmly out (figures need a plot-hash
+  dep that does not exist — `CHANGELOG.md:53-58`).
 
-**Consequence for scope:** the first slice must be **scalar numeric claims only**. Figure/plot
-and table-cell claims are **out of scope** until a deliberate dependency decision is made — this
-is a hard technical constraint, not a preference. Record it in the PRD as a non-goal.
+## Honesty degradations (every one → `unverified`, never a false pass / never `diverged`)
 
-## Guardrail check
+Missing `from` file · `from` file unparseable · `path` resolves to nothing / wrong shape ·
+resolved value non-numeric or non-finite · (safety) `from` escapes the repo. All carry a clear
+per-claim message. Non-zero script exit still short-circuits every claim to `unverified`
+(unchanged).
 
-- **Layer 2 only:** ✅ verify-and-reproduce; run/self-heal/compare, never NL→workflow authoring,
-  never a judgement on the paper's conclusions. Env-resurrection is self-heal (Layer 2), not
-  pipeline authoring. Paper-parsing (a potential Layer-1-adjacent parse) is **deferred** — we take
-  an explicit claims file.
-- **No raw-data egress:** ✅ runs on user/CI compute; only hashes + claim diffs in the bundle.
-- **Founder's edge / stdlib-only:** ✅ pure-Python scalar math, no new deps — *provided we hold
-  the scalar-only line above.*
-- **Test-first:** ✅ synthetic repo fixtures, scripted executor/installer, no network, no real
-  nf-core.
+## Open questions for the interview (things the code can't decide)
 
-## Open questions for the interview
+1. **TSV in scope for slice 1.5, or JSON-only?** Handoff says "JSON/TSV". JSON-only is the tighter
+   walking slice; TSV needs a row/column addressing syntax. *(Recommend: JSON-only now, TSV a
+   named next step.)*
+2. **`path` syntax surface.** `$.a.b[0]` (JSONPath-lite, leading `$` optional) vs plain dotted
+   `a.b.0`. *(Recommend: minimal dotted + `[n]` index, leading `$.`/`$` tolerated.)*
+3. **Locator field names.** `from`/`path` (matches the PRD example
+   `prd.md:196`) vs `file`/`pointer`. *(Recommend: `from`/`path`, per the PRD.)*
+4. **Where a bad `from` path is caught.** A *structurally* malformed locator (wrong types) → reject
+   the whole claims file in `load_claims` (consistent with existing claim validation). A *runtime*
+   miss (file absent / path not found) → per-claim `unverified`. An **escaping/absolute `from`** →
+   reject at load (safety, like `--results`) or per-claim `unverified`? *(Recommend: reject at load
+   — it's a safety refusal, not a verdict.)*
+5. **Does `--results` stay?** Yes — the default for locator-less claims. Confirm no removal.
 
-1. **First-slice boundary:** walking skeleton (surface + scalar claim verdict, env-resurrection
-   deferred to UNVERIFIED) vs env-resurrection-first vs both-thin. *(Recommend: walking skeleton.)*
-2. **Claims file format:** propose a JSON list of `{id, value, tolerance?}` (+ optional
-   `kind:"scalar"`). Confirm.
-3. **How the script is specified & where the regenerated value comes from:** `--run "<cmd>"`
-   explicit command vs a repo convention; regenerated value from script-emitted JSON keyed by
-   claim id, or an output file.
-4. **REPRODUCED vs WITHIN-TOLERANCE threshold:** define "exact" for floats (byte-equal vs a tight
-   epsilon like 1e-9) so the two states are well-defined.
-5. **rerun-ability:** reuse `LaunchManifest` or a parallel `reproduce`-specific manifest?
+## Guardrail check (`CLAUDE.md`)
+
+- **Layer 2 only** ✅ — verify-and-reproduce; a path resolver, not workflow authoring, not a
+  conclusions verdict.
+- **No raw-data egress** ✅ — `from` files are repo-relative + escape-guarded; only hashes + claim
+  diffs leave the box.
+- **Founder's edge / stdlib-only** ✅ — pure-Python nested-structure walk, no new deps —
+  *provided we hold the JSON(/TSV)-structured, no-image line.*
+- **Test-first** ✅ — synthetic repo-output fixtures, scripted executor, no network, no real
+  nf-core in CI.
+
+## Contradiction / scope guard carried from slice 1
+
+Figures/plots and table-cell claims stay out: no plot-hash exists and adding perceptual-image
+hashing breaks the stdlib-only dep contract (`CHANGELOG.md:53-58`,
+`CAPABILITY_ROADMAP.md:1075-1082`). This slice does **not** relax that — it stays on structured
+numeric outputs. This slice does **not** relax that — it stays on structured numeric outputs.
+
+## Interview decisions (locked)
+
+1. **JSON-only** this slice; TSV/CSV is a named next step.
+2. **`path` syntax = dotted + `[n]` index**, leading `$.`/`$` tolerated (`$.model.auc`,
+   `samples[0].mean_cov`). A new pure stdlib walker.
+3. **Escaping/absolute `from` → rejected pre-run** (exit non-zero, no record), reusing the
+   `--results` containment guard; a runtime miss (file/path absent) is per-claim `unverified`.
+
+## Parsing-survey agent confirmations (grounding for the plan)
+
+- **No dotted/JSONPath traversal helper exists** anywhere (grep clean) — this slice introduces the
+  first. `json.loads` used only at `qc_ingest.py:6`, `reproduce.py:55,185`.
+- **`_to_float` omit-never-guess primitive** appears three times (`rnaseq_metrics.py:33`,
+  `mag_metrics.py:47`, `methylseq_metrics.py:40`): `try: float(text.strip()) except (ValueError,
+  AttributeError): return None`. Mirror it — the walker returns `None` on any miss, never guesses.
+- **Containment guard is canonical**: `(base/rel).resolve().relative_to(base.resolve())` in
+  `try/except ValueError` (`cli.py:745-753` for `--results`; no `is_relative_to` in the repo). The
+  `from` field reuses exactly this.
+- **The single branch site** is `run_reproduction` `reproduce.py:181-237` (flat `results[claim.id]`
+  lookup). `classify` (`reproduce.py:92`) + `_relative_delta` (`benchmark.py:195`) are unchanged.
+- **`from` is a Python keyword** — the claims-file JSON key is `"from"`, but the internal
+  `Claim` attribute must be aliased (e.g. a small `Locator(source, path)` on the claim).
+- **Test patterns:** `tests/test_reproduce.py` (`_fake_executor(exit_code, results,
+  results_path)` closure, kwarg-injected), `tests/test_cli_reproduce.py` (monkeypatch
+  `contig.cli.default_command_executor`; `CliRunner`; two path-escape tests at `:285,:312` that
+  must stay green), `tests/test_reproduce_models.py`, `tests/test_reproduce_bundle.py`. No conftest;
+  `tmp_path`.
+- **CLI renders via `render_reproduction` (`cli.py:803`), not `reduce_reproduction`** — note when
+  touching output.

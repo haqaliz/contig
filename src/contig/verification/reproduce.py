@@ -25,8 +25,95 @@ _STATUSES: tuple[ClaimStatus, ...] = ("reproduced", "within_tolerance", "diverge
 _DEFAULT_TOLERANCE = 0.1
 
 
+def _parse_path(expr: str) -> list[str | int] | None:
+    """Tokenize a dotted+[n] path into keys (str) and indices (int).
+
+    Leading '$' and one leading '.' are stripped. Returns None on any
+    malformed expression -- the caller treats None as "unresolved".
+    """
+    s = expr.strip()
+    if s.startswith("$"):
+        s = s[1:]
+    if s.startswith("."):
+        s = s[1:]
+    if not s:
+        return None
+    tokens: list[str | int] = []
+    i, n = 0, len(s)
+    first = True
+    while i < n:
+        c = s[i]
+        if c == "[":
+            j = s.find("]", i)
+            if j == -1:
+                return None
+            inner = s[i + 1 : j]
+            if not inner.isdecimal():  # rejects empty, sign, spaces, non-digit;
+                # isdecimal() (not isdigit()) so every accepted char is one
+                # int() actually parses -- e.g. "²".isdigit() is True but
+                # int("²") raises ValueError
+                return None
+            tokens.append(int(inner))
+            i = j + 1
+        elif c == ".":
+            if first:
+                return None
+            i += 1
+            if i >= n or s[i] in ".[":
+                return None
+            start = i
+            while i < n and s[i] not in ".[":
+                i += 1
+            tokens.append(s[start:i])
+        else:  # a bare key -- only valid as the very first accessor
+            if not first:
+                return None
+            start = i
+            while i < n and s[i] not in ".[":
+                i += 1
+            tokens.append(s[start:i])
+        first = False
+    return tokens or None
+
+
+def resolve_pointer(data: object, expr: str) -> object | None:
+    """Walk `data` (nested dict/list from parsed JSON) by `expr`.
+
+    Any unresolved step -> None. Never raises. Never guesses.
+    """
+    tokens = _parse_path(expr)
+    if tokens is None:
+        return None
+    cur = data
+    for tok in tokens:
+        if isinstance(tok, int):
+            if isinstance(cur, list) and 0 <= tok < len(cur):
+                cur = cur[tok]
+            else:
+                return None
+        else:
+            if isinstance(cur, dict) and tok in cur:
+                cur = cur[tok]
+            else:
+                return None
+    return cur
+
+
 class ClaimsError(ValueError):
     """Raised when a claims file is malformed or one of its claims is invalid."""
+
+
+@dataclass(frozen=True)
+class Locator:
+    """Where to find a located claim's observed value: `source` is the
+    claims file's `"from"` field (a repo-relative JSON file path -- named
+    `source` internally because `from` is a Python keyword), `path` is the
+    dotted+`[n]` pointer into that file's parsed JSON, resolved via
+    `resolve_pointer`.
+    """
+
+    source: str
+    path: str
 
 
 @dataclass(frozen=True)
@@ -34,12 +121,15 @@ class Claim:
     """One published numeric claim to reproduce: `id` names the metric,
     `value` is the claimed reference number, `tolerance` is the relative
     band (see `classify`) within which an observed value still counts as
-    reproducing it.
+    reproducing it. `locator`, when set, means this claim's observed value
+    is bound from its own repo-relative JSON file at a path rather than
+    from the flat `--results` map (slice-1 behavior, `locator=None`).
     """
 
     id: str
     value: float
     tolerance: float = _DEFAULT_TOLERANCE
+    locator: Locator | None = None
 
 
 def load_claims(path: str | Path) -> list[Claim]:
@@ -84,7 +174,28 @@ def load_claims(path: str | Path) -> list[Claim]:
         if tolerance <= 0:
             raise ClaimsError(f"claim {claim_id!r} has a non-positive 'tolerance': {tolerance!r}")
 
-        claims.append(Claim(id=claim_id, value=float(value), tolerance=float(tolerance)))
+        has_from, has_path = "from" in item, "path" in item
+        if has_from != has_path:
+            raise ClaimsError(
+                f"claim {claim_id!r} must set both 'from' and 'path', or neither"
+            )
+        locator: Locator | None = None
+        if has_from:
+            raw_from, raw_path = item["from"], item["path"]
+            if not isinstance(raw_from, str) or not raw_from.strip():
+                raise ClaimsError(f"claim {claim_id!r} has an invalid 'from': {raw_from!r}")
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                raise ClaimsError(f"claim {claim_id!r} has an invalid 'path': {raw_path!r}")
+            locator = Locator(source=raw_from, path=raw_path)
+
+        claims.append(
+            Claim(
+                id=claim_id,
+                value=float(value),
+                tolerance=float(tolerance),
+                locator=locator,
+            )
+        )
 
     return claims
 
@@ -153,6 +264,58 @@ def run_reproduction(
     generated here, so the record stays deterministic.
     """
     repo_path = Path(repo)
+    repo_root = repo_path.resolve()
+    _json_cache: dict[str, object | None] = {}
+
+    def _observe_located(loc: Locator) -> tuple[float | None, str]:
+        """Bind one located claim's observed value from its own repo-relative
+        JSON file at `loc.path`. Never reads outside the repo (containment
+        guard below); every resolution failure returns `(None, message)`
+        rather than raising -- the caller always maps that to `unverified`.
+        """
+        resolved = (repo_path / loc.source).resolve()
+        try:
+            resolved.relative_to(repo_root)  # defense-in-depth: never read outside repo
+        except ValueError:
+            return None, f"locator 'from' {loc.source!r} escapes the repo"
+
+        key = str(resolved)
+        if key not in _json_cache:
+            parsed: object | None = None
+            if resolved.exists():
+                try:
+                    parsed = json.loads(resolved.read_text())
+                except (ValueError, OSError):
+                    # ValueError covers json.JSONDecodeError (already a
+                    # ValueError subclass) and UnicodeDecodeError raised by
+                    # read_text() on a non-UTF-8 file (also a ValueError
+                    # subclass, NOT an OSError) -- both are "unparseable".
+                    parsed = None
+            _json_cache[key] = parsed
+
+        if not resolved.exists():
+            return None, f"locator file {loc.source!r} is missing"
+
+        parsed = _json_cache[key]
+        if parsed is None:
+            return None, f"locator file {loc.source!r} is not valid JSON"
+
+        target = resolve_pointer(parsed, loc.path)
+        if target is None:
+            return None, f"locator path {loc.path!r} did not resolve in {loc.source!r}"
+
+        if isinstance(target, bool) or not isinstance(target, (int, float)):
+            return None, (
+                f"locator value at {loc.path!r} in {loc.source!r} is not a number: {target!r}"
+            )
+
+        if math.isnan(target) or math.isinf(target):
+            return None, (
+                f"locator value at {loc.path!r} in {loc.source!r} is not finite: {target!r}"
+            )
+
+        return float(target), ""
+
     exit_code = executor(shlex.split(run_command), repo_path)
 
     if exit_code != 0:
@@ -190,6 +353,36 @@ def run_reproduction(
 
     claim_results = []
     for claim in claims:
+        if claim.locator is not None:
+            observed, fail_msg = _observe_located(claim.locator)
+            if observed is None:
+                claim_results.append(
+                    ClaimResult(
+                        id=claim.id,
+                        status="unverified",
+                        claimed=claim.value,
+                        observed=None,
+                        tolerance=claim.tolerance,
+                        delta=None,
+                        message=fail_msg,
+                    )
+                )
+                continue
+
+            status, delta, message = classify(claim.value, observed, claim.tolerance)
+            claim_results.append(
+                ClaimResult(
+                    id=claim.id,
+                    status=status,
+                    claimed=claim.value,
+                    observed=observed,
+                    tolerance=claim.tolerance,
+                    delta=delta,
+                    message=message,
+                )
+            )
+            continue
+
         if results is None:
             claim_results.append(
                 ClaimResult(

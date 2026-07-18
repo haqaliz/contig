@@ -717,7 +717,10 @@ def reproduce(
     results: str = typer.Option(
         "results.json",
         "--results",
-        help="Repo-relative JSON the script writes: {claim_id: value}",
+        help=(
+            "Repo-relative JSON the script writes: {claim_id: value}; the "
+            "fallback for claims without a 'from'/'path' locator"
+        ),
     ),
     runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
     tolerance: float = typer.Option(
@@ -783,6 +786,24 @@ def reproduce(
         _dataclasses.replace(claim, tolerance=tolerance) if claim.tolerance == 0.1 else claim
         for claim in claims_list
     ]
+
+    # A located claim's 'from' is repo-relative by the same contract as
+    # --results: no raw-data egress outside the repo Contig is asked to run
+    # in. Reject an absolute path or one that resolves outside repo_path
+    # (e.g. "../secret.json") before anything runs -- the engine also
+    # defends against this, but refusing here means no run and no record.
+    repo_root = repo_path.resolve()
+    for claim in claims_list:
+        if claim.locator is None:
+            continue
+        resolved_locator = (repo_path / claim.locator.source).resolve()
+        try:
+            resolved_locator.relative_to(repo_root)
+        except ValueError:
+            typer.echo(
+                f"locator 'from' path escapes the repo: {claim.locator.source}", err=True
+            )
+            raise typer.Exit(code=1)
 
     claims_sha256 = hashlib.sha256(Path(claims).read_bytes()).hexdigest()
     reproduce_id = _generate_run_id()
