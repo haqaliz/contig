@@ -6,6 +6,47 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`contig reproduce` gains opt-in environment resurrection — the C8 slice 2 that lets it reproduce
+  repos that don't run yet.** Slices 1 (v0.40.0) and 1.5 (v0.41.0) could only issue a verdict on a
+  repo whose script already ran; an uncooperative repo that exits non-zero on a missing Python
+  dependency just degraded every claim to `UNVERIFIED`. `ModuleNotFoundError` / `ImportError` +
+  dependency installs are the dominant reproduction-failure class (~76%), and the roadmap named
+  environment resurrection the "load-bearing" piece of C8. It now ships as a bounded, opt-in
+  self-heal that reuses the C2 machinery.
+  - **New `--allow-install` flag on `contig reproduce` (off by default).** When set, a first run that
+    exits non-zero with a `No module named 'X'` message triggers **detect → install → retry once**:
+    a new pure `verification/reproduce.py::detect_missing_module` extracts the missing top-level
+    package (case-insensitive, `sklearn.utils` → `sklearn`, charset-validated `^[A-Za-z0-9._-]+$`);
+    a new injected installer seam (`runner.Installer` + `runner.default_installer` +
+    `_pip_install_argv`, mirroring the `IndexBuilder` seam) runs a **fixed** argv
+    `[sys.executable, "-m", "pip", "install", <module>]` (no shell, no interpolation); the run is
+    retried exactly once and the claims re-classify against the retried run's fresh output. **Off by
+    default the behavior is byte-identical to before** — the flag gates all network + environment
+    mutation, and its help text says so.
+  - **Honest on every unresolved path.** Flag off, no module detected, install fails, or the retry
+    still fails → all claims `UNVERIFIED`, **never a false reproduce**. Bounded to exactly one
+    install + one retry (provable termination — even a *second* missing module on the retried output
+    is not chased). Import-name ≠ package-name mismatches (`cv2` → `opencv-python`) simply fail the
+    install and degrade to `UNVERIFIED` (a curated alias map is a deferred follow-on).
+  - **The resurrection is recorded and reproducible.** `ReproduceRecord` gains an additive
+    `repair_history: list[RepairStep]` (default `[]`, so pre-slice-2 bundles load unchanged); a
+    successful or attempted heal appends one `RepairStep` (`Diagnosis(failure_class="missing_dependency")`
+    — a new literal kept **reproduce-local**, deliberately *not* wired into the shared
+    `diagnose_failure` detector so the C6 eval-guard held-out baseline is unaffected — plus
+    `Patch(kind="env", operation={"install": <module>})`), surfaced as a one-line `env-repair` note
+    in `contig show`/the rendered report and round-tripped through the signed bundle. The record's
+    `exit_code` reflects the final (retried) run.
+  - **To surface the error text, the reproduce command-executor seam widened from `int` to
+    `(exit_code, combined_output)`** (`runner.default_command_executor` now captures combined
+    stdout+stderr); the Nextflow `Executor`/`IndexBuilder` seams are untouched. No new runtime
+    dependency (the installer is an injected seam); research-use, computation-vs-numbers only, no
+    raw-read egress; test-first with a scripted executor + scripted installer — **no real repo,
+    network, or pip in CI**. **Deferred:** import→package alias map, iterative multi-module
+    resolution, version pinning from a traced execution, venv isolation, and the TSV/CSV locator
+    (the named next step).
+
 ## [0.41.0] - 2026-07-18
 
 ### Added

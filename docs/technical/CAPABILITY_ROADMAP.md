@@ -1044,7 +1044,7 @@ ever. See [`../planning/variant-annotation-assay/prd.md`](../planning/variant-an
 
 ---
 
-## C8. Reproduce & verify *existing published* work  ·  first slice SHIPPED v0.40.0 + output-locator slice 1.5 SHIPPED v0.41.0  ·  M7+
+## C8. Reproduce & verify *existing published* work  ·  first slice SHIPPED v0.40.0 + output-locator slice 1.5 SHIPPED v0.41.0 + environment-resurrection slice 2 SHIPPED (Unreleased)  ·  M7+
 
 Point the shipped run → self-heal → verify → reproduce engine at a **third-party,
 already-published** bioinformatics repository (a paper + its code/data) and report which of
@@ -1093,6 +1093,35 @@ locators. **JSON only** this slice — stdout/CSV/notebook/figure numbers still 
 honestly. **Deferred:** a TSV/CSV locator (the named next step); slice 2 (environment resurrection)
 and everything after it (unchanged from the slice-1 list above). Test-first (walker → `load_claims`
 → engine → CLI); deterministic; no real repo or network in CI.
+
+**Shipped (environment resurrection — slice 2, Unreleased).** The load-bearing piece: `contig
+reproduce` can now recover a repo that *doesn't run yet* because it's missing a Python dependency —
+the dominant reproduction-failure class (`ModuleNotFoundError` / `ImportError` + installs are ~76%
+of failures). A new **opt-in `--allow-install` flag** (off by default) turns a first run that exits
+non-zero with a `No module named 'X'` message into a bounded **detect → install → retry-once**
+self-heal that reuses the C2 machinery. A new pure `detect_missing_module` extracts the missing
+top-level package (case-insensitive, `sklearn.utils` → `sklearn`, charset-validated
+`^[A-Za-z0-9._-]+$`); a new injected installer seam (`runner.Installer` + `default_installer` +
+`_pip_install_argv`, mirroring `IndexBuilder`) runs a **fixed** argv `[sys.executable, "-m", "pip",
+"install", <module>]` (no shell, no interpolation); the run retries exactly once and the claims
+re-classify against the retried run's fresh output. **Bounded** (one install + one retry, no loop, no
+second-module chase → provable termination) and **honest on every unresolved path** (flag off, no
+module, install fails, retry fails → all `UNVERIFIED`, never a false reproduce; import-name ≠
+package-name mismatches like `cv2` → `opencv-python` fail the install and degrade honestly). Off by
+default the behavior is byte-identical to slice 1.5; the flag gates all network + environment
+mutation. The heal is recorded on an additive `ReproduceRecord.repair_history: list[RepairStep]`
+(default `[]`, pre-slice-2 bundles load unchanged) — `Diagnosis(failure_class="missing_dependency")`,
+a new literal kept **reproduce-local** (deliberately *not* wired into the shared `diagnose_failure`,
+so the C6 eval-guard held-out baseline is unmoved, confirmed at 84.6%), plus `Patch(kind="env",
+operation={"install": <module>})` — surfaced as a one-line `env-repair` note and round-tripped
+through the signed bundle; `exit_code` reflects the final (retried) run. To see the error text, the
+reproduce command-executor seam widened from `int` to `(exit_code, combined_output)`
+(`default_command_executor` now captures combined stdout+stderr); the Nextflow `Executor`/`IndexBuilder`
+seams are untouched. No new runtime dependency (injected installer). Test-first with a scripted
+executor + scripted installer — **no real repo, network, or pip in CI**. **Deferred:** import→package
+alias map, iterative multi-module resolution, version pinning from a traced execution, venv
+isolation, and the TSV/CSV locator (the named next step). Plan/PRD under
+`docs/planning/reproduce-env-resurrection/`.
 
 **Correction to the build surface below (verified against the code, 2026-07-18):** the sentence
 "reuses the existing float-tolerance / plot-hash / seed-aware diffing" was only one-third true.
@@ -1161,7 +1190,7 @@ raw-data egress — runs on the user's / CI compute; only hashes and claim diffs
 | C6 | Eval flywheel as a continuous loop | M6 (detector held-out guard slice 1 SHIPPED, Unreleased — honestly 0.833/10:12, two classes structurally unreachable; repair-loop outcome-match guard slice 2 SHIPPED, Unreleased — honestly 1.0/7:7, 5 classes covered; both wired into CI; folding C1/C3 signals + held-out-accuracy trend pending) | Compounding accuracy from real runs |
 | C7 | Research-use variant annotation & prioritization | M1 + M2 + M3 + M4 + M5 surface+provenance SHIPPED (Unreleased) — germline structural verify + provenance, somatic annotation gate, annotation plausibility (both assays), VEP-vs-SnpEff concordance (both assays: `consequence_concordance` WARN-capped + `gene_symbol_concordance` informational, auto in the verdict, both VCF layouts, annotator-version provenance pair), M5 "corroborated by" line across text/HTML report + `contig methods` + dashboard (reads M4 results, never recomputes) + `AnnotationProvenance.db_version` cache/build token (VEP `cache=` / SnpEff genome) rendered and round-tripped through reproduce with pre-M5 back-compat; **M5 C6 eval fold-in still DEFERRED** (blocked on labeling design) (germline+somatic `annotation_present`/`annotation_complete` structural checks via `VARIANT_ASSAYS`, `AnnotationProvenance` tool+cache/build capture, `--tools …,vep` enablement on both assays, `annotation_real_fraction`/`annotation_consequence_distribution` plausibility checks, all WARN-capped/UNVERIFIED-when-absent; live run may still need a VEP/SnpEff cache Contig does not yet wire — absent annotation degrades to UNVERIFIED, never a false pass; verify-only, prioritization deferred) | Disease-research breadth on-thesis, new corpus; run+verify annotation, never a clinical verdict |
 
-| C8 | Reproduce & verify *existing published* work | first slice SHIPPED v0.40.0 + output-locator slice 1.5 SHIPPED v0.41.0 · M7+ | Turns the engine on third-party papers (repo+claims → per-claim `REPRODUCED`/`WITHIN-TOLERANCE`/`DIVERGED`/`UNVERIFIED`); strongest quantified pain (~3.2% of 27,271 notebooks reproduce), a free viral community-trust channel, and a new publicly-sourced corpus stream. **Shipped:** `contig reproduce <repo> --run --claims` walking skeleton — scalar per-claim verdict reusing `benchmark._relative_delta`, values bound from a repo-written `results.json`, signed re-runnable bundle via the generic signer, `--fail-on-diverged`; cooperative-repos-only, UNVERIFIED-when-unresolved, no real repo/network in CI. **+ Output-locator (slice 1.5):** a claim may carry `{"from": <repo JSON>, "path": "$.a.b[0]"}` to read numbers out of a repo's own **structured JSON as-is** (a new stdlib dotted+`[n]` `resolve_pointer` walker that never raises; located claims classify through the unchanged core; numeric-string strictly UNVERIFIED; escaping `from` refused pre-run + engine never reads outside the repo; JSON-only, full back-compat, no new dep). **Deferred:** TSV/CSV locator (next step), env-resurrection from a traced execution (reuses C2), paper-parsing, figure/plot & table-cell claims (**plot-hash does not exist and can't be added without breaking the stdlib-only dep contract**), remote `<doi|url>`, dashboard card, C6 fold-in |
+| C8 | Reproduce & verify *existing published* work | first slice SHIPPED v0.40.0 + output-locator slice 1.5 SHIPPED v0.41.0 + env-resurrection slice 2 SHIPPED (Unreleased) · M7+ | Turns the engine on third-party papers (repo+claims → per-claim `REPRODUCED`/`WITHIN-TOLERANCE`/`DIVERGED`/`UNVERIFIED`); strongest quantified pain (~3.2% of 27,271 notebooks reproduce), a free viral community-trust channel, and a new publicly-sourced corpus stream. **Shipped:** `contig reproduce <repo> --run --claims` walking skeleton — scalar per-claim verdict reusing `benchmark._relative_delta`, values bound from a repo-written `results.json`, signed re-runnable bundle via the generic signer, `--fail-on-diverged`; cooperative-repos-only, UNVERIFIED-when-unresolved, no real repo/network in CI. **+ Output-locator (slice 1.5):** a claim may carry `{"from": <repo JSON>, "path": "$.a.b[0]"}` to read numbers out of a repo's own **structured JSON as-is** (a new stdlib dotted+`[n]` `resolve_pointer` walker that never raises; located claims classify through the unchanged core; numeric-string strictly UNVERIFIED; escaping `from` refused pre-run + engine never reads outside the repo; JSON-only, full back-compat, no new dep). **+ Environment resurrection (slice 2):** opt-in `--allow-install` (off by default) turns a first run failing on `No module named 'X'` into a bounded detect→install→retry-once self-heal reusing C2 — pure `detect_missing_module` (charset-guarded top-level pkg) + injected `Installer` seam (fixed `pip install` argv, no shell), one install + one retry (provable termination), every unresolved path UNVERIFIED (never a false reproduce), heal recorded on additive `ReproduceRecord.repair_history` (`missing_dependency` literal kept reproduce-local so the C6 eval-guard baseline is unmoved), executor seam widened `int`→`(exit_code, output)`, no new dep, no real pip/network in CI. **Deferred:** import→package alias map, iterative multi-module, version pinning from a traced execution, venv isolation, TSV/CSV locator (next step), paper-parsing, figure/plot & table-cell claims (**plot-hash does not exist and can't be added without breaking the stdlib-only dep contract**), remote `<doi|url>`, dashboard card, C6 fold-in |
 
 **One-line mantra:** make every verdict harder to fool, recover more failures
 without a human, and let every run make the next verdict smarter.
