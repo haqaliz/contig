@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-07-19
+
 ### Added
 
 - **`contig reproduce` gains opt-in environment resurrection — the C8 slice 2 that lets it reproduce
