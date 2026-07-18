@@ -74,6 +74,18 @@ def test_resolve_pointer_non_digit_index_returns_none():
     assert resolve_pointer({"a": [1, 2]}, "a[x]") is None
 
 
+def test_resolve_pointer_unicode_digit_index_returns_none_not_raise():
+    # "²" (superscript two, U+00B2) is str.isdigit() == True but int("²")
+    # raises ValueError -- resolve_pointer must degrade to None, never raise.
+    assert resolve_pointer({"a": [1]}, "a[²]") is None
+
+
+def test_resolve_pointer_arabic_indic_decimal_index_works():
+    # "٠" (Arabic-Indic zero, U+0660) is a true decimal digit -- int() accepts
+    # it, so it should resolve like index 0.
+    assert resolve_pointer({"a": [1, 2]}, "a[٠]") == 1
+
+
 def test_resolve_pointer_unclosed_bracket_returns_none():
     assert resolve_pointer({"a": [1, 2]}, "a[") is None
 

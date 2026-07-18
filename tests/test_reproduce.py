@@ -519,6 +519,20 @@ def test_run_reproduction_located_claim_unparseable_json_is_unverified(tmp_path)
     assert result.observed is None
 
 
+def test_run_reproduction_located_claim_non_utf8_file_is_unverified_not_raise(tmp_path):
+    # A non-UTF-8 'from' file makes Path.read_text() raise UnicodeDecodeError,
+    # a ValueError subclass -- must be caught alongside JSONDecodeError/OSError
+    # and mapped to unverified, never propagate and crash the run.
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out" / "summary.json").write_bytes(b"\xff\xfe\x00bad")
+    claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "not valid JSON" in result.message
+
+
 def test_run_reproduction_located_claim_unresolved_path_is_unverified(tmp_path):
     _write_located(tmp_path, "out/summary.json", {"model": {"acc": 0.9}})
     claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]

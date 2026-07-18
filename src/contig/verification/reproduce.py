@@ -48,7 +48,10 @@ def _parse_path(expr: str) -> list[str | int] | None:
             if j == -1:
                 return None
             inner = s[i + 1 : j]
-            if not inner.isdigit():  # rejects empty, sign, spaces, non-digit
+            if not inner.isdecimal():  # rejects empty, sign, spaces, non-digit;
+                # isdecimal() (not isdigit()) so every accepted char is one
+                # int() actually parses -- e.g. "²".isdigit() is True but
+                # int("²") raises ValueError
                 return None
             tokens.append(int(inner))
             i = j + 1
@@ -282,7 +285,11 @@ def run_reproduction(
             if resolved.exists():
                 try:
                     parsed = json.loads(resolved.read_text())
-                except (json.JSONDecodeError, OSError):
+                except (ValueError, OSError):
+                    # ValueError covers json.JSONDecodeError (already a
+                    # ValueError subclass) and UnicodeDecodeError raised by
+                    # read_text() on a non-UTF-8 file (also a ValueError
+                    # subclass, NOT an OSError) -- both are "unparseable".
                     parsed = None
             _json_cache[key] = parsed
 
