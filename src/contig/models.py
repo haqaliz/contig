@@ -675,3 +675,4 @@ class ReproduceRecord(BaseModel):
     created_at: str
     interpreter: str | None = None
     tool: str = "contig"
+    repair_history: list[RepairStep] = []

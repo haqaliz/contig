@@ -19,7 +19,15 @@ from pathlib import Path
 from typing import Callable
 
 from contig.benchmark import _relative_delta
-from contig.models import ClaimResult, ClaimStatus, ReproduceRecord
+from contig.models import (
+    ClaimResult,
+    ClaimStatus,
+    Diagnosis,
+    Patch,
+    RepairStep,
+    ReproduceRecord,
+)
+from contig.runner import Installer, _pip_install_argv, default_installer
 
 _STATUSES: tuple[ClaimStatus, ...] = ("reproduced", "within_tolerance", "diverged", "unverified")
 
@@ -272,6 +280,8 @@ def run_reproduction(
     results_path: str = "results.json",
     created_at: str,
     reproduce_id: str,
+    allow_install: bool = False,
+    installer: Installer = default_installer,
 ) -> ReproduceRecord:
     """Drive `executor` over `repo`, then classify every claim.
 
@@ -283,6 +293,16 @@ def run_reproduction(
     goes through `classify`). Extra keys in the results map that no claim
     names are ignored. `created_at`/`reproduce_id` are passed in, never
     generated here, so the record stays deterministic.
+
+    When the first run fails (nonzero exit) and `allow_install` is True, this
+    makes one bounded env-resurrection attempt: detect a missing Python
+    module in the run's output (`detect_missing_module`), install it via
+    `installer`, and retry the run exactly once. There is no loop -- at most
+    one install and one retry, ever, even if the retried run names a
+    different missing module. `repair_history` records what happened (empty
+    when `allow_install` is False, or when no installable module was
+    detected). The final `exit_code` on the record is always the LAST run's
+    exit code (the retried one, if a retry happened).
     """
     repo_path = Path(repo)
     repo_root = repo_path.resolve()
@@ -338,6 +358,62 @@ def run_reproduction(
         return float(target), ""
 
     exit_code, run_output = executor(shlex.split(run_command), repo_path)
+    repair_history: list[RepairStep] = []
+
+    if exit_code != 0 and allow_install:
+        module = detect_missing_module(run_output)
+        if module is not None:
+            diagnosis = Diagnosis(
+                failure_class="missing_dependency",
+                root_cause=f"missing Python module {module!r}",
+                evidence=[run_output[:500]],
+                confidence=0.8,
+            )
+            patch = Patch(
+                kind="env",
+                operation={"install": module},
+                rationale=f"install {module} and retry",
+                risk="needs_confirmation",
+                expected_signal="run exits 0 after install",
+            )
+            install_rc = installer(_pip_install_argv(module), repo_path)
+            if install_rc != 0:
+                repair_history.append(
+                    RepairStep(
+                        attempt=1,
+                        diagnosis=diagnosis,
+                        patch=patch,
+                        outcome="install_failed",
+                        detail=f"pip install {module} exited {install_rc}",
+                    )
+                )
+            else:
+                # Bounded: exactly one retry, no re-detection afterwards -- even
+                # if the retried output names a different missing module, we do
+                # not install again.
+                exit_code, run_output = executor(shlex.split(run_command), repo_path)
+                if exit_code != 0:
+                    repair_history.append(
+                        RepairStep(
+                            attempt=1,
+                            diagnosis=diagnosis,
+                            patch=patch,
+                            outcome="retry_failed",
+                            detail=f"installed {module}; retry exited {exit_code}",
+                        )
+                    )
+                else:
+                    repair_history.append(
+                        RepairStep(
+                            attempt=1,
+                            diagnosis=diagnosis,
+                            patch=patch,
+                            outcome="installed_and_retried",
+                            detail=f"installed {module}; retry exited 0",
+                        )
+                    )
+        # module is None: no installable module detected -- nothing to record,
+        # honest UNVERIFIED via the short-circuit below.
 
     if exit_code != 0:
         claim_results = [
@@ -360,6 +436,7 @@ def run_reproduction(
             claim_results=claim_results,
             exit_code=exit_code,
             created_at=created_at,
+            repair_history=repair_history,
         )
 
     results_file = repo_path / results_path
@@ -470,6 +547,7 @@ def run_reproduction(
         claim_results=claim_results,
         exit_code=exit_code,
         created_at=created_at,
+        repair_history=repair_history,
     )
 
 
