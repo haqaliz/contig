@@ -425,13 +425,17 @@ def test_reproduce_located_claim_end_to_end_reports_verdict(tmp_path, monkeypatc
     assert any(runs_dir.rglob("reproduce_record.json"))
 
 
-def test_reproduce_help_shows_allow_install_flag():
-    # Force a wide terminal: with no TTY (as in CI) Rich renders help at its
-    # 80-col default and wraps the long `--allow-install/--no-allow-install`
-    # option, so a bare substring check flakes. COLUMNS keeps it on one line.
-    result = runner.invoke(app, ["reproduce", "--help"], env={"COLUMNS": "200"})
-    assert result.exit_code == 0
-    assert "--allow-install" in result.output
+def test_reproduce_registers_allow_install_flag():
+    # Assert the flag is a real registered option, not by scraping the Rich-
+    # rendered `--help` text: with no TTY (as in CI) Rich wraps/reflows the long
+    # `--allow-install/--no-allow-install` option and a substring check flakes.
+    # Introspecting the Click command is deterministic across environments.
+    import typer
+
+    reproduce_cmd = typer.main.get_command(app).commands["reproduce"]
+    opts = [o for p in reproduce_cmd.params for o in (list(p.opts) + list(p.secondary_opts))]
+    assert "--allow-install" in opts
+    assert "--no-allow-install" in opts
 
 
 def test_reproduce_without_allow_install_flag_stays_unverified_on_failure(tmp_path, monkeypatch):
