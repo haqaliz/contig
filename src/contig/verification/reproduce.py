@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,26 @@ from contig.models import ClaimResult, ClaimStatus, ReproduceRecord
 _STATUSES: tuple[ClaimStatus, ...] = ("reproduced", "within_tolerance", "diverged", "unverified")
 
 _DEFAULT_TOLERANCE = 0.1
+
+_MISSING_MODULE_RE = re.compile(r"No module named ['\"]([^'\"]+)['\"]", re.IGNORECASE)
+_SAFE_PACKAGE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def detect_missing_module(output: str) -> str | None:
+    """Extract the missing top-level package from a run's captured error text.
+
+    Scans for a `No module named 'X'` message (as emitted by ModuleNotFoundError /
+    ImportError) and returns X's top-level package (`sklearn.utils` -> `sklearn`).
+    Returns None when nothing matches or the token is not a safe package name.
+    Pure, no I/O.
+    """
+    match = _MISSING_MODULE_RE.search(output)
+    if match is None:
+        return None
+    module = match.group(1).split(".")[0]
+    if not _SAFE_PACKAGE_TOKEN_RE.match(module):
+        return None
+    return module
 
 
 def _parse_path(expr: str) -> list[str | int] | None:

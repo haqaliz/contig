@@ -269,6 +269,7 @@ FailureClass = Literal[
     "container_pull_failed",
     "container_unavailable",
     "conda_solve_failed",
+    "missing_dependency",
     "platform_unsupported",
     "disk_full",
     "download_failed",
