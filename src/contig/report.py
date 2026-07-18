@@ -92,6 +92,9 @@ def render_reproduction(record: ReproduceRecord) -> str:
     claim's status, mirroring render_explain's discipline for QC verdicts.
     """
     lines = [f"REPRODUCE: {record.reproduce_id}", f"repo: {record.repo}", f"run: {record.run_command}"]
+    for step in record.repair_history:
+        op = step.patch.operation.get("install") if step.patch else None
+        lines.append(f"env-repair: {step.outcome} ({op}) — {step.detail}")
     header = f"{'id':<20}{'status':<18}{'claimed':<12}{'observed':<12}{'delta':<10}"
     lines.append(header)
     for claim in record.claim_results:

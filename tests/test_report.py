@@ -4,16 +4,18 @@ from __future__ import annotations
 
 from contig.models import (
     AnnotationProvenance,
+    ClaimResult,
     Diagnosis,
     ExecutionTarget,
     Patch,
     QCResult,
     ReferenceIdentity,
     RepairStep,
+    ReproduceRecord,
     RunRecord,
     TaskEvent,
 )
-from contig.report import render_run_report, render_run_report_html
+from contig.report import render_reproduction, render_run_report, render_run_report_html
 
 
 def _target() -> ExecutionTarget:
@@ -938,3 +940,67 @@ def test_render_explain_includes_verdict_reason_and_deciding_checks():
     assert "salmon_mapping_rate" in text
     assert "58.1" in text
     assert ">= 60.0" in text
+
+
+# --- render_reproduction surfaces env-repair (C8 slice 2, Task 4) ---------------
+
+
+def _claim_result(id_="auc", status="reproduced", claimed=0.9, observed=0.9,
+                   tolerance=0.05, delta=0.0):
+    return ClaimResult(
+        id=id_,
+        status=status,
+        claimed=claimed,
+        observed=observed,
+        tolerance=tolerance,
+        delta=delta,
+        message="ok",
+    )
+
+
+def _reproduce_record(repair_history=None):
+    return ReproduceRecord(
+        reproduce_id="rp_1",
+        repo="https://github.com/example/paper",
+        run_command="python eval.py",
+        claims_sha256="a" * 64,
+        claim_results=[_claim_result()],
+        exit_code=0,
+        created_at="2026-07-18T00:00:00Z",
+        repair_history=repair_history or [],
+    )
+
+
+def test_render_reproduction_shows_repair_note_when_repair_history_present():
+    record = _reproduce_record(
+        repair_history=[
+            RepairStep(
+                attempt=1,
+                diagnosis=Diagnosis(
+                    failure_class="missing_dependency",
+                    root_cause="missing Python module 'numpy'",
+                    evidence=["ModuleNotFoundError: No module named 'numpy'"],
+                    confidence=0.8,
+                ),
+                patch=Patch(
+                    kind="env",
+                    operation={"install": "numpy"},
+                    rationale="install numpy and retry",
+                    risk="needs_confirmation",
+                    expected_signal="run exits 0 after install",
+                ),
+                outcome="installed_and_retried",
+                detail="installed numpy; retry exited 0",
+            )
+        ]
+    )
+    text = render_reproduction(record)
+    assert "env-repair" in text
+    assert "numpy" in text
+    assert "installed_and_retried" in text
+
+
+def test_render_reproduction_omits_repair_note_when_repair_history_empty():
+    record = _reproduce_record(repair_history=[])
+    text = render_reproduction(record)
+    assert "env-repair" not in text

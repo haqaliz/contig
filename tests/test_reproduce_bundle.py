@@ -12,7 +12,7 @@ import json
 import pytest
 
 from contig.bundle import _maybe_write_signature, load_reproduction, write_reproduce_bundle
-from contig.models import ClaimResult, ReproduceRecord
+from contig.models import ClaimResult, Diagnosis, Patch, RepairStep, ReproduceRecord
 from contig.signing import canonical_sha256, generate_keypair, signing_available, verify_signature
 
 requires_signing = pytest.mark.skipif(
@@ -152,3 +152,79 @@ def test_load_reproduction_round_trips_a_written_record(tmp_path, monkeypatch):
 def test_load_reproduction_missing_file_raises_clear_error(tmp_path):
     with pytest.raises(FileNotFoundError):
         load_reproduction(tmp_path)
+
+
+# --- repair_history survives the bundle round-trip (C8 slice 2, Task 4) --------
+
+
+def _healed_record() -> ReproduceRecord:
+    record = _record()
+    return record.model_copy(
+        update={
+            "repair_history": [
+                RepairStep(
+                    attempt=1,
+                    diagnosis=Diagnosis(
+                        failure_class="missing_dependency",
+                        root_cause="missing Python module 'numpy'",
+                        evidence=["ModuleNotFoundError: No module named 'numpy'"],
+                        confidence=0.8,
+                    ),
+                    patch=Patch(
+                        kind="env",
+                        operation={"install": "numpy"},
+                        rationale="install numpy and retry",
+                        risk="needs_confirmation",
+                        expected_signal="run exits 0 after install",
+                    ),
+                    outcome="installed_and_retried",
+                    detail="installed numpy; retry exited 0",
+                )
+            ]
+        }
+    )
+
+
+def test_healed_record_repair_history_round_trips_through_the_bundle(tmp_path, monkeypatch):
+    monkeypatch.delenv("CONTIG_SIGNING_KEY", raising=False)
+    original = _healed_record()
+
+    json_path = write_reproduce_bundle(original, tmp_path)
+
+    loaded = load_reproduction(json_path.parent)
+    assert loaded == original
+    assert len(loaded.repair_history) == 1
+    assert loaded.repair_history[0].outcome == "installed_and_retried"
+    assert loaded.repair_history[0].patch.operation == {"install": "numpy"}
+
+
+@requires_signing
+def test_healed_record_signature_verifies(tmp_path, monkeypatch):
+    private_key, public_key = generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+    record = _healed_record()
+
+    write_reproduce_bundle(record, tmp_path)
+
+    sidecar = json.loads((tmp_path / "signature.json").read_text())
+    assert sidecar["public_key"] == public_key
+    assert verify_signature(record, sidecar["signature"], sidecar["public_key"]) is True
+
+
+def test_bundle_json_without_repair_history_still_loads_as_empty_list(tmp_path):
+    # Legacy bundle written before repair_history existed: no key in the JSON.
+    legacy_json = {
+        "reproduce_id": "rp_legacy",
+        "repo": "https://github.com/example/paper",
+        "run_command": "python train.py --seed 0",
+        "claims_sha256": "a" * 64,
+        "claim_results": [],
+        "exit_code": 0,
+        "created_at": "2026-07-18T00:00:00Z",
+        "interpreter": "cpython-3.12",
+        "tool": "contig",
+    }
+    (tmp_path / "reproduce_record.json").write_text(json.dumps(legacy_json))
+
+    loaded = load_reproduction(tmp_path)
+    assert loaded.repair_history == []
