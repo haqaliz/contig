@@ -25,6 +25,77 @@ _STATUSES: tuple[ClaimStatus, ...] = ("reproduced", "within_tolerance", "diverge
 _DEFAULT_TOLERANCE = 0.1
 
 
+def _parse_path(expr: str) -> list[str | int] | None:
+    """Tokenize a dotted+[n] path into keys (str) and indices (int).
+
+    Leading '$' and one leading '.' are stripped. Returns None on any
+    malformed expression -- the caller treats None as "unresolved".
+    """
+    s = expr.strip()
+    if s.startswith("$"):
+        s = s[1:]
+    if s.startswith("."):
+        s = s[1:]
+    if not s:
+        return None
+    tokens: list[str | int] = []
+    i, n = 0, len(s)
+    first = True
+    while i < n:
+        c = s[i]
+        if c == "[":
+            j = s.find("]", i)
+            if j == -1:
+                return None
+            inner = s[i + 1 : j]
+            if not inner.isdigit():  # rejects empty, sign, spaces, non-digit
+                return None
+            tokens.append(int(inner))
+            i = j + 1
+        elif c == ".":
+            if first:
+                return None
+            i += 1
+            if i >= n or s[i] in ".[":
+                return None
+            start = i
+            while i < n and s[i] not in ".[":
+                i += 1
+            tokens.append(s[start:i])
+        else:  # a bare key -- only valid as the very first accessor
+            if not first:
+                return None
+            start = i
+            while i < n and s[i] not in ".[":
+                i += 1
+            tokens.append(s[start:i])
+        first = False
+    return tokens or None
+
+
+def resolve_pointer(data: object, expr: str) -> object | None:
+    """Walk `data` (nested dict/list from parsed JSON) by `expr`.
+
+    Any unresolved step -> None. Never raises. Never guesses.
+    """
+    tokens = _parse_path(expr)
+    if tokens is None:
+        return None
+    cur = data
+    for tok in tokens:
+        if isinstance(tok, int):
+            if isinstance(cur, list) and 0 <= tok < len(cur):
+                cur = cur[tok]
+            else:
+                return None
+        else:
+            if isinstance(cur, dict) and tok in cur:
+                cur = cur[tok]
+            else:
+                return None
+    return cur
+
+
 class ClaimsError(ValueError):
     """Raised when a claims file is malformed or one of its claims is invalid."""
 
