@@ -336,6 +336,95 @@ def test_reproduce_escaping_results_path_errors_and_writes_no_record(tmp_path, m
     assert not any(runs_dir.rglob("reproduce_record.json")) if runs_dir.exists() else True
 
 
+def test_reproduce_escaping_locator_from_errors_and_writes_no_record(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    claims = _claims_file(
+        tmp_path,
+        [{"id": "auc", "value": 0.9, "from": "../secret.json", "path": "$.model.auc"}],
+    )
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor", _fake_executor({"auc": 0.9})
+    )
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+    assert result.exit_code != 0
+    assert result.output
+    assert not any(runs_dir.rglob("reproduce_record.json")) if runs_dir.exists() else True
+
+
+def test_reproduce_absolute_locator_from_errors_and_writes_no_record(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    claims = _claims_file(
+        tmp_path,
+        [{"id": "auc", "value": 0.9, "from": "/etc/passwd", "path": "$.model.auc"}],
+    )
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor", _fake_executor({"auc": 0.9})
+    )
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+    assert result.exit_code != 0
+    assert result.output
+    assert not any(runs_dir.rglob("reproduce_record.json")) if runs_dir.exists() else True
+
+
+def test_reproduce_located_claim_end_to_end_reports_verdict(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    claims = _claims_file(
+        tmp_path,
+        [{"id": "auc", "value": 0.9, "from": "out/summary.json", "path": "$.model.auc"}],
+    )
+
+    def execute(cmd, cwd):
+        (cwd / "out").mkdir(parents=True, exist_ok=True)
+        (cwd / "out" / "summary.json").write_text(json.dumps({"model": {"auc": 0.9}}))
+        return 0
+
+    monkeypatch.setattr("contig.cli.default_command_executor", execute)
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "REPRODUCED" in result.output.upper()
+    assert "auc" in result.output
+    assert any(runs_dir.rglob("reproduce_record.json"))
+
+
 def test_reproduce_writes_signed_bundle_when_signing_key_set(tmp_path, monkeypatch):
     from contig import signing
 
