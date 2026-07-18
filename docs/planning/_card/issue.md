@@ -1,78 +1,66 @@
-# Card: feat/reproduce-output-locator (C8 slice 1.5)
+# Card: feat reproduce-env-resurrection
 
-**Type:** feat · **Slug/id:** reproduce-output-locator · **Owner:** aliz
-**Branch:** feat/reproduce-output-locator/aliz
-**Source:** no GitHub issue — inline brief from the `/contig-next` handoff (2026-07-18).
-Capability **C8** in `docs/technical/CAPABILITY_ROADMAP.md:1047-1082`; explicitly the
-**slice 1.5** deferred by the v0.40.0 walking skeleton.
+**Type:** feat · **Owner:** aliz · **Branch:** `feat/reproduce-env-resurrection/aliz`
 
----
+No GitHub issue — this unit of work came from `/contig-next`. The recommendation below is the source brief.
 
 ## Brief
 
-Build **C8 slice 1.5 — a claim-level output-locator for `contig reproduce`**, the next slice
-after the v0.40.0 walking skeleton (shipped today). It is the piece the reproduce PRD
-(`docs/planning/reproduce-published-work/prd.md:190-215`) names as what makes reproduce
-**"externally credible."**
+**C8 slice 2 — environment resurrection for `contig reproduce`** (walking skeleton).
 
-Generalize the skeleton's value-binding (slice-1 M4) so each claim can point at **where its
-number lives in the repo's own outputs** — e.g.
-`{"from": "out/summary.json", "path": "$.coverage.mean"}` — instead of requiring the repo to
-hand-write a Contig-shaped flat `results.json` keyed by claim id. This turns `contig reproduce`
-from a fixtures-only / cooperative-repo demo into something that reads numbers out of **real,
-unmodified cloned repos**.
+Slices 1 (v0.40.0) and 1.5 (v0.41.0) made `contig reproduce` *read* real repos: it runs a
+repo's script and reports a per-claim verdict (`REPRODUCED` / `WITHIN-TOLERANCE` / `DIVERGED`
+/ `UNVERIFIED`) over scalar numeric claims, binding values from a repo-written `results.json`
+or from a JSON output-locator. But it can only reproduce repos that already **run** — an
+uncooperative repo whose environment is missing a dependency just exits non-zero and degrades
+to UNVERIFIED.
 
-Reuse the shipped core in `src/contig/verification/reproduce.py` unchanged: `classify` /
-`reduce_reproduction` / `ClaimResult` / `ReproduceRecord`. Only the **value-binding** step
-generalizes.
+This slice attacks the **dominant reproduction-failure class**: `ModuleNotFoundError` /
+`ImportError` + dependency installs are ~76% of reproduction failures
+(`CAPABILITY_ROADMAP.md:1121-1124`; `docs/planning/reproduce-published-work/prd.md:117`).
+The roadmap names environment resurrection as "the load-bearing piece" and scopes it as
+**slice 2 (ImportError → install → retry)**.
 
-## Per-claim verdict vocabulary (unchanged from slice 1)
+### What to build (walking skeleton)
 
-`REPRODUCED` / `WITHIN-TOLERANCE` / `DIVERGED` / `UNVERIFIED`.
+When a reproduced repo's run exits non-zero and its captured output shows a
+`ModuleNotFoundError` / `ImportError` naming a missing module:
+1. Detect the missing module name from the captured error text.
+2. Install it through an **injected installer seam** (never a real network install in CI —
+   mirror C2's injectable `IndexBuilder` / scripted-executor pattern).
+3. Retry the run once, under a bounded budget.
+4. Re-classify the claims against the retried run's output.
 
-## Honesty contract (non-negotiable)
+Reuse C2's self-heal pattern and the existing injected `executor` seam in
+`src/contig/verification/reproduce.py:244` (`run_reproduction`).
 
-- An unresolvable locator, a missing file, or a non-numeric / non-finite (`NaN`/`inf`) value
-  is `UNVERIFIED` — never a false pass, never `DIVERGED`.
-- Reports whether the *computation* reproduces the stated numbers — never a judgement on the
-  paper's *conclusions*.
-- No raw-data egress — only hashes + claim diffs leave the box.
-- **Stdlib-only** — JSON/TSV path expressions; no image/plot hashing, no new runtime deps
-  (`pydantic`/`typer`/`cryptography` only, `pyproject.toml`).
-- **Deterministic CI** — no real repo, no network; canned fixture outputs exactly like slice 1.
+### Scope / honesty contract (unchanged)
 
-## Known caveat (dig into this first)
+- An unresolvable environment degrades to **`UNVERIFIED`**, never a false reproduce.
+- Test-first, with a scripted executor + scripted installer — **no real repo, no network, no
+  real installs in CI** (standing determinism contract, `prd.md:140`).
+- Bounded retries so the loop provably terminates (C2 discipline).
+- Layer-2 only (run/self-heal/verify/reproduce). No Layer-1 workflow authoring. No raw-read
+  egress. Stdlib-only runtime dep contract (`pydantic`/`typer`/`cryptography`) preserved —
+  the installer is an injected seam, not a new dependency.
 
-An output-locator makes reproduce work on repos that emit **structured** outputs (JSON/TSV).
-Many real repos still print numbers to stdout, bury them in CSVs/plots, or only produce them
-inside a notebook — those keep degrading to `UNVERIFIED` until slice 2 (env-resurrection) and
-paper-parsing land. So: scope the locator to structured-file path expressions in this slice;
-do not scrape stdout or parse prose. Figures stay hard-blocked (no plot-hash, stdlib-only).
+### Known caveat (must resolve early)
 
-## Why this was picked (from `/contig-next`)
+The current `executor` seam is typed `Callable[[list[str], Path], int]` — it returns **only
+an exit code**, not stderr/stdout. So an `ImportError` cannot be detected today. The first
+real step is to **widen the executor contract to surface captured output** (or add a
+captured-output seam) before detection is possible. Small, real contract extension — not a
+blocker.
 
-- **Freshest capability, depth-first, unblocked.** Slice 1 shipped today (v0.40.0,
-  `CHANGELOG.md:9-58`). The locator reuses the shipped `classify`/`reduce_reproduction`/
-  `ClaimResult` core untouched; only value-binding generalizes. No new dependency.
-- **The PRD's own greenlight question hangs on it.** `reproduce-published-work/prd.md:190-215`
-  flags that slice 1 only reproduces *cooperative* repos (those that emit a Contig-shaped
-  `results.json`), so most real uncooperative repos degrade to `UNVERIFIED`; the output-locator
-  is the "read numbers out of repos as they already are" answer, "interview option C".
-- **On-moat.** Widens what we can verify + feeds the corpus; serves C8's viral-GTM thesis
-  (`CAPABILITY_ROADMAP.md:1084-1096`). Inside every guardrail (`CLAUDE.md` #1-4).
+The one genuine go/no-go the PRD flags (`prd.md:201`): does running an uncooperative repo
+actually surface the `ModuleNotFoundError` in a catchable form? The scripted-executor walking
+skeleton is exactly what pins that down in CI.
 
-## Guardrails (must hold) — `CLAUDE.md`, `CAPABILITY_ROADMAP.md:1149-1160`
+### Explicitly deferred (later slices)
 
-- **Layer 2 only.** Verify-and-reproduce; never NL→workflow authoring; never a conclusions verdict.
-- **Founder's edge / stdlib-only.** Pure-Python path resolution + scalar math, no new deps.
-- **No raw-data egress.** Only hashes + claim diffs leave the machine.
-- **Test-first.** Synthetic repo-output fixtures, no network, no real nf-core in CI.
-
-## Relationship to prior/next slices
-
-- Slice 1 (walking skeleton) = v0.40.0 (`CHANGELOG.md:9-58`,
-  `CAPABILITY_ROADMAP.md:1047-1082`). Parent PRD: `docs/planning/reproduce-published-work/prd.md`.
-- **This = slice 1.5** — the output-locator, explicitly deferred there.
-- Slice 2 = environment resurrection (`ModuleNotFoundError` → install → retry, reusing C2),
-  mapped in the slice-1 `understanding.md`. Remains the next-next slice; keep this slice from
-  boxing it out but do not build it here.
+- Trace-based version pinning / observed-version resolution (install the *right* version, not
+  just the module).
+- Multi-module / iterative resolution (install one, hit the next missing import, repeat) —
+  keep the first slice to a single install + single retry; generalize later.
+- Paper-parsing, figure/plot & table-cell claims, TSV/CSV locator, remote `<doi|url>`,
+  dashboard card, C6 eval fold-in (unchanged from the slice-1/1.5 deferral lists).

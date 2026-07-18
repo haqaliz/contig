@@ -29,18 +29,18 @@ def _repo(tmp_path):
     return repo
 
 
-def _fake_executor(results=None, exit_code=0):
+def _fake_executor(results=None, exit_code=0, output=""):
     """Mirrors _fake_run_executor in test_cli.py: writes a canned results.json
     into cwd (the repo dir, per run_reproduction's executor contract) and
-    returns exit_code. results=None means the script "did nothing" (exit_code
-    should be nonzero in that case for a realistic fixture, but the caller
-    controls both independently).
+    returns (exit_code, output). results=None means the script "did nothing"
+    (exit_code should be nonzero in that case for a realistic fixture, but the
+    caller controls both independently).
     """
 
     def execute(cmd, cwd):
         if results is not None:
             (cwd / "results.json").write_text(json.dumps(results))
-        return exit_code
+        return exit_code, output
 
     return execute
 
@@ -402,7 +402,7 @@ def test_reproduce_located_claim_end_to_end_reports_verdict(tmp_path, monkeypatc
     def execute(cmd, cwd):
         (cwd / "out").mkdir(parents=True, exist_ok=True)
         (cwd / "out" / "summary.json").write_text(json.dumps({"model": {"auc": 0.9}}))
-        return 0
+        return 0, ""
 
     monkeypatch.setattr("contig.cli.default_command_executor", execute)
     runs_dir = tmp_path / "runs"
@@ -423,6 +423,89 @@ def test_reproduce_located_claim_end_to_end_reports_verdict(tmp_path, monkeypatc
     assert "REPRODUCED" in result.output.upper()
     assert "auc" in result.output
     assert any(runs_dir.rglob("reproduce_record.json"))
+
+
+def test_reproduce_help_shows_allow_install_flag():
+    result = runner.invoke(app, ["reproduce", "--help"])
+    assert result.exit_code == 0
+    assert "--allow-install" in result.output
+
+
+def test_reproduce_without_allow_install_flag_stays_unverified_on_failure(tmp_path, monkeypatch):
+    # Default is off: a failing run with a detectable missing module still
+    # yields all-unverified, and the installer seam is never touched.
+    repo = _repo(tmp_path)
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    installer_calls = []
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor",
+        _fake_executor(results=None, exit_code=1, output="No module named 'numpy'"),
+    )
+    monkeypatch.setattr(
+        "contig.cli.default_installer",
+        lambda cmd, cwd: installer_calls.append((cmd, cwd)) or 0,
+    )
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "UNVERIFIED" in result.output.upper()
+    assert installer_calls == []
+    assert "env-repair" not in result.output
+
+
+def test_reproduce_allow_install_heals_and_bundle_records_repair(tmp_path, monkeypatch):
+    calls = {"n": 0}
+
+    def execute(cmd, cwd):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return 1, "ModuleNotFoundError: No module named 'numpy'"
+        (cwd / "results.json").write_text(json.dumps({"auc": 0.9}))
+        return 0, ""
+
+    monkeypatch.setattr("contig.cli.default_command_executor", execute)
+    monkeypatch.setattr("contig.cli.default_installer", lambda cmd, cwd: 0)
+
+    repo = _repo(tmp_path)
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+            "--allow-install",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "REPRODUCED" in result.output.upper()
+    assert "env-repair" in result.output
+    assert "numpy" in result.output
+
+    from contig.bundle import load_reproduction
+
+    bundle_dir = next(p.parent for p in runs_dir.rglob("reproduce_record.json"))
+    loaded = load_reproduction(bundle_dir)
+    assert len(loaded.repair_history) == 1
+    assert loaded.repair_history[0].outcome == "installed_and_retried"
+    assert loaded.repair_history[0].patch.operation["install"] == "numpy"
 
 
 def test_reproduce_writes_signed_bundle_when_signing_key_set(tmp_path, monkeypatch):

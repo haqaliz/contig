@@ -123,6 +123,7 @@ from contig.runner import (
     default_command_executor,
     default_executor,
     default_index_builder,
+    default_installer,
 )
 from contig.samplesheet import (
     fastq_paths,
@@ -731,6 +732,15 @@ def reproduce(
     fail_on_diverged: bool = typer.Option(
         False, "--fail-on-diverged", help="Exit non-zero if any claim diverged"
     ),
+    allow_install: bool = typer.Option(
+        False,
+        "--allow-install/--no-allow-install",
+        help=(
+            "Install a missing Python dependency and retry the run once when the "
+            "first run fails on ModuleNotFoundError. Reaches the network and mutates "
+            "the environment; off by default (a missing module stays UNVERIFIED)."
+        ),
+    ),
 ) -> None:
     """Reproduce a published paper/repo's claims against a fresh run.
 
@@ -818,6 +828,8 @@ def reproduce(
         results_path=results,
         created_at=created_at,
         reproduce_id=reproduce_id,
+        allow_install=allow_install,
+        installer=default_installer,
     )
     write_reproduce_bundle(record, Path(runs_dir) / reproduce_id)
 
