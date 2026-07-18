@@ -426,7 +426,10 @@ def test_reproduce_located_claim_end_to_end_reports_verdict(tmp_path, monkeypatc
 
 
 def test_reproduce_help_shows_allow_install_flag():
-    result = runner.invoke(app, ["reproduce", "--help"])
+    # Force a wide terminal: with no TTY (as in CI) Rich renders help at its
+    # 80-col default and wraps the long `--allow-install/--no-allow-install`
+    # option, so a bare substring check flakes. COLUMNS keeps it on one line.
+    result = runner.invoke(app, ["reproduce", "--help"], env={"COLUMNS": "200"})
     assert result.exit_code == 0
     assert "--allow-install" in result.output
 
