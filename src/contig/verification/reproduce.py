@@ -261,6 +261,54 @@ def run_reproduction(
     generated here, so the record stays deterministic.
     """
     repo_path = Path(repo)
+    repo_root = repo_path.resolve()
+    _json_cache: dict[str, object | None] = {}
+
+    def _observe_located(loc: Locator) -> tuple[float | None, str]:
+        """Bind one located claim's observed value from its own repo-relative
+        JSON file at `loc.path`. Never reads outside the repo (containment
+        guard below); every resolution failure returns `(None, message)`
+        rather than raising -- the caller always maps that to `unverified`.
+        """
+        resolved = (repo_path / loc.source).resolve()
+        try:
+            resolved.relative_to(repo_root)  # defense-in-depth: never read outside repo
+        except ValueError:
+            return None, f"locator 'from' {loc.source!r} escapes the repo"
+
+        key = str(resolved)
+        if key not in _json_cache:
+            parsed: object | None = None
+            if resolved.exists():
+                try:
+                    parsed = json.loads(resolved.read_text())
+                except (json.JSONDecodeError, OSError):
+                    parsed = None
+            _json_cache[key] = parsed
+
+        if not resolved.exists():
+            return None, f"locator file {loc.source!r} is missing"
+
+        parsed = _json_cache[key]
+        if parsed is None:
+            return None, f"locator file {loc.source!r} is not valid JSON"
+
+        target = resolve_pointer(parsed, loc.path)
+        if target is None:
+            return None, f"locator path {loc.path!r} did not resolve in {loc.source!r}"
+
+        if isinstance(target, bool) or not isinstance(target, (int, float)):
+            return None, (
+                f"locator value at {loc.path!r} in {loc.source!r} is not a number: {target!r}"
+            )
+
+        if math.isnan(target) or math.isinf(target):
+            return None, (
+                f"locator value at {loc.path!r} in {loc.source!r} is not finite: {target!r}"
+            )
+
+        return float(target), ""
+
     exit_code = executor(shlex.split(run_command), repo_path)
 
     if exit_code != 0:
@@ -298,6 +346,36 @@ def run_reproduction(
 
     claim_results = []
     for claim in claims:
+        if claim.locator is not None:
+            observed, fail_msg = _observe_located(claim.locator)
+            if observed is None:
+                claim_results.append(
+                    ClaimResult(
+                        id=claim.id,
+                        status="unverified",
+                        claimed=claim.value,
+                        observed=None,
+                        tolerance=claim.tolerance,
+                        delta=None,
+                        message=fail_msg,
+                    )
+                )
+                continue
+
+            status, delta, message = classify(claim.value, observed, claim.tolerance)
+            claim_results.append(
+                ClaimResult(
+                    id=claim.id,
+                    status=status,
+                    claimed=claim.value,
+                    observed=observed,
+                    tolerance=claim.tolerance,
+                    delta=delta,
+                    message=message,
+                )
+            )
+            continue
+
         if results is None:
             claim_results.append(
                 ClaimResult(
