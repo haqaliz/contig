@@ -193,6 +193,25 @@ class PatternLocator:
     pattern: str
 
 
+@dataclass(frozen=True)
+class NotebookLocator:
+    """Where to find a located claim's observed value inside a Jupyter
+    notebook: `source` is the claims file's `"from"` field (a repo-relative
+    `.ipynb` path -- named `source` internally for the same reason as
+    `Locator.source`, and always a real string, never `None`); `cell`
+    addresses the target cell, either an `int` index into the notebook's
+    `cells` array or a single-key `{"contains": <source substring>}` object
+    that selects the unique cell whose source contains that substring;
+    `pattern` is a Python regex whose capture is the observed value (group 1
+    when the pattern has capturing groups, otherwise the whole match), applied
+    to that cell's extracted textual output.
+    """
+
+    source: str
+    cell: int | dict[str, str]
+    pattern: str
+
+
 def _resolve_delimiter(source: str, explicit: str | None) -> str | None:
     """Resolve the field delimiter for a table locator's `source` path.
 
@@ -506,7 +525,7 @@ class Claim:
     id: str
     value: float
     tolerance: float = _DEFAULT_TOLERANCE
-    locator: Locator | TableLocator | PatternLocator | None = None
+    locator: Locator | TableLocator | PatternLocator | NotebookLocator | None = None
 
 
 def load_claims(path: str | Path) -> list[Claim]:
@@ -554,16 +573,17 @@ def load_claims(path: str | Path) -> list[Claim]:
         has_from = "from" in item
         has_path = "path" in item
         has_pattern = "pattern" in item
+        has_cell = "cell" in item
         has_column = "column" in item
         has_row = "row" in item
         has_delimiter = "delimiter" in item
         has_header = "header" in item
         has_table_field = has_column or has_row or has_delimiter or has_header
 
-        if not has_from and not has_pattern and (has_path or has_table_field):
+        if not has_from and not has_pattern and (has_path or has_table_field or has_cell):
             raise ClaimsError(
                 f"claim {claim_id!r} must set 'from' together with 'path', or with "
-                "'column'+'row', or neither"
+                "'column'+'row', or with 'cell'+'pattern', or neither"
             )
 
         source: str | None = None
@@ -573,8 +593,70 @@ def load_claims(path: str | Path) -> list[Claim]:
                 raise ClaimsError(f"claim {claim_id!r} has an invalid 'from': {raw_from!r}")
             source = raw_from
 
-        locator: Locator | TableLocator | PatternLocator | None = None
-        if has_pattern:
+        locator: Locator | TableLocator | PatternLocator | NotebookLocator | None = None
+        if has_cell:
+            # Notebook locator (slice 5): `cell` is only meaningful together
+            # with a `from` notebook and a `pattern`, and never alongside a
+            # JSON `path` or any table field -- the four locator families are
+            # mutually exclusive.
+            if not has_from:
+                raise ClaimsError(
+                    f"claim {claim_id!r} 'cell' requires 'from' (a notebook path)"
+                )
+            if not has_pattern:
+                raise ClaimsError(
+                    f"claim {claim_id!r} 'cell' requires 'pattern'"
+                )
+            if has_path:
+                raise ClaimsError(
+                    f"claim {claim_id!r} must set 'cell'+'pattern' or 'path', not both"
+                )
+            if has_table_field:
+                raise ClaimsError(
+                    f"claim {claim_id!r} must set 'cell'+'pattern' or 'column'+'row', "
+                    "not both (a table field has no meaning for a notebook locator)"
+                )
+
+            raw_cell = item["cell"]
+            cell: int | dict[str, str]
+            if isinstance(raw_cell, bool):
+                raise ClaimsError(f"claim {claim_id!r} has an invalid 'cell': {raw_cell!r}")
+            if isinstance(raw_cell, int):
+                if raw_cell < 0:
+                    raise ClaimsError(
+                        f"claim {claim_id!r} has a negative 'cell' index: {raw_cell!r}"
+                    )
+                cell = raw_cell
+            elif isinstance(raw_cell, dict):
+                if list(raw_cell.keys()) != ["contains"]:
+                    raise ClaimsError(
+                        f"claim {claim_id!r} has an invalid 'cell' object (expected a "
+                        f"single 'contains' key): {raw_cell!r}"
+                    )
+                raw_contains = raw_cell["contains"]
+                if not isinstance(raw_contains, str) or not raw_contains.strip():
+                    raise ClaimsError(
+                        f"claim {claim_id!r} has an invalid 'cell' 'contains' value: "
+                        f"{raw_contains!r}"
+                    )
+                cell = raw_cell
+            else:
+                raise ClaimsError(f"claim {claim_id!r} has an invalid 'cell': {raw_cell!r}")
+
+            raw_pattern = item["pattern"]
+            if not isinstance(raw_pattern, str) or not raw_pattern.strip():
+                raise ClaimsError(
+                    f"claim {claim_id!r} has an invalid 'pattern': {raw_pattern!r}"
+                )
+            try:
+                re.compile(raw_pattern)
+            except re.error as exc:
+                raise ClaimsError(
+                    f"claim {claim_id!r} has an uncompilable 'pattern': {exc}"
+                ) from exc
+
+            locator = NotebookLocator(source=raw_from, cell=cell, pattern=raw_pattern)
+        elif has_pattern:
             if has_path:
                 raise ClaimsError(
                     f"claim {claim_id!r} must set 'path' or 'pattern', not both"

@@ -19,6 +19,7 @@ from contig.verification.reproduce import (
     Claim,
     ClaimsError,
     Locator,
+    NotebookLocator,
     PatternLocator,
     TableLocator,
     classify,
@@ -792,6 +793,289 @@ def test_load_claims_still_rejects_table_field_without_from(tmp_path, field, val
     )
     with pytest.raises(ClaimsError):
         load_claims(path)
+
+
+# ---------------------------------------------------------------------------
+# load_claims() -- notebook locator (slice 5)
+# ---------------------------------------------------------------------------
+
+
+def test_load_claims_notebook_int_cell_attaches_notebook_locator(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [_claim(**{"from": "x.ipynb", "cell": 7, "pattern": "AUC: ([0-9.]+)"})]
+        ),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == NotebookLocator(
+        source="x.ipynb", cell=7, pattern="AUC: ([0-9.]+)"
+    )
+
+
+def test_load_claims_notebook_contains_cell_attaches_notebook_locator(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "x.ipynb",
+                        "cell": {"contains": "print(auc)"},
+                        "pattern": "AUC: ([0-9.]+)",
+                    }
+                )
+            ]
+        ),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == NotebookLocator(
+        source="x.ipynb", cell={"contains": "print(auc)"}, pattern="AUC: ([0-9.]+)"
+    )
+
+
+def test_load_claims_notebook_rejects_cell_without_from(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"cell": 7, "pattern": "AUC: ([0-9.]+)"})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_notebook_rejects_cell_without_pattern(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "x.ipynb", "cell": 7})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_notebook_rejects_cell_with_path(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "x.ipynb",
+                        "cell": 7,
+                        "path": "$.auc",
+                        "pattern": "AUC: ([0-9.]+)",
+                    }
+                )
+            ]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("column", 0), ("row", 0), ("header", False), ("delimiter", ",")],
+)
+def test_load_claims_notebook_rejects_cell_with_table_field(tmp_path, field, value):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "x.ipynb",
+                        "cell": 7,
+                        "pattern": "AUC: ([0-9.]+)",
+                        field: value,
+                    }
+                )
+            ]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_notebook_rejects_negative_int_cell(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [_claim(**{"from": "x.ipynb", "cell": -1, "pattern": "AUC: ([0-9.]+)"})]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_notebook_rejects_bool_cell(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [_claim(**{"from": "x.ipynb", "cell": True, "pattern": "AUC: ([0-9.]+)"})]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_notebook_rejects_float_cell(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [_claim(**{"from": "x.ipynb", "cell": 1.5, "pattern": "AUC: ([0-9.]+)"})]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_notebook_rejects_cell_dict_without_contains(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "x.ipynb",
+                        "cell": {"startswith": "print"},
+                        "pattern": "AUC: ([0-9.]+)",
+                    }
+                )
+            ]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_notebook_rejects_cell_contains_empty(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "x.ipynb",
+                        "cell": {"contains": ""},
+                        "pattern": "AUC: ([0-9.]+)",
+                    }
+                )
+            ]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_notebook_rejects_cell_contains_non_string(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "x.ipynb",
+                        "cell": {"contains": 5},
+                        "pattern": "AUC: ([0-9.]+)",
+                    }
+                )
+            ]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_notebook_rejects_cell_dict_with_extra_key(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "x.ipynb",
+                        "cell": {"contains": "print(auc)", "nth": 2},
+                        "pattern": "AUC: ([0-9.]+)",
+                    }
+                )
+            ]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+@pytest.mark.parametrize("bad", ["([0-9", "*", "(?P<>x)"])
+def test_load_claims_notebook_rejects_uncompilable_pattern_with_cell(tmp_path, bad):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "x.ipynb", "cell": 7, "pattern": bad})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_notebook_rejects_empty_pattern_with_cell(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "x.ipynb", "cell": 7, "pattern": ""})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+# --- back-compat: a claim with no `cell` is byte-identical to slices 1.5/3/4 ---
+
+
+def test_load_claims_pattern_no_cell_still_pattern_locator(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "log.txt", "pattern": "AUC: ([0-9.]+)"})]),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == PatternLocator(
+        source="log.txt", pattern="AUC: ([0-9.]+)"
+    )
+
+
+def test_load_claims_path_no_cell_still_json_locator(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "x.json", "path": "$.a"})]),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == Locator(source="x.json", path="$.a")
+
+
+def test_load_claims_table_no_cell_still_table_locator(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [_claim(**{"from": "t.tsv", "column": 0, "row": 0, "header": False})]
+        ),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == TableLocator(
+        source="t.tsv", column=0, row=0, delimiter="\t", header=False
+    )
 
 
 # ---------------------------------------------------------------------------
