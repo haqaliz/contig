@@ -692,6 +692,7 @@ def run_reproduction(
     repo_root = repo_path.resolve()
     _json_cache: dict[str, object | None] = {}
     _table_cache: dict[str, list[list[str]] | None] = {}
+    _text_cache: dict[str, str | None] = {}
 
     def _observe_located(loc: Locator) -> tuple[float | None, str]:
         """Bind one located claim's observed value from its own repo-relative
@@ -783,6 +784,90 @@ def run_reproduction(
         if math.isnan(value) or math.isinf(value):
             return None, (
                 f"locator cell {cell!r} in {loc.source!r} is not finite: {value!r}"
+            )
+
+        return value, ""
+
+    def _observe_pattern_located(loc: PatternLocator) -> tuple[float | None, str]:
+        """Bind one located claim's observed value by matching a user-authored
+        regex against free text. Sibling of `_observe_table_located`: same
+        containment guard for the file case (never reads outside the repo),
+        same "read once, cache by resolved absolute path" shape (`_text_cache`
+        in place of `_table_cache`), same "any resolution failure ->
+        (None, message)" contract the caller always maps to `unverified`.
+
+        Two addressing modes. With `loc.source is None` the text is the run's
+        own captured combined stdout+stderr -- `run_output` from the enclosing
+        scope, with NO path join and no filesystem access at all. Because this
+        is a closure over the *variable* and it is only ever CALLED from the
+        dispatch loop below -- after the env-resurrection retry rebinds
+        `run_output` -- a stdout claim automatically observes the RETRIED run's
+        output under `--allow-install`, never the failed first run's. With
+        `loc.source` set the text is that repo-relative file, whose size is
+        checked via `stat()` BEFORE any read, so an oversized log is never
+        pulled into memory.
+
+        Like the table reader and unlike the JSON reader, a numeric-looking
+        capture STRING is the normal, valid case -- a regex capture is a
+        string by construction -- so it is stripped, float-parsed and, if
+        finite, returned as the observed value rather than rejected.
+        """
+        if loc.source is None:
+            text: str | None = run_output
+            where = "the run output"
+        else:
+            resolved = (repo_path / loc.source).resolve()
+            try:
+                resolved.relative_to(repo_root)  # defense-in-depth: never read outside repo
+            except ValueError:
+                return None, f"locator 'from' {loc.source!r} escapes the repo"
+
+            key = str(resolved)
+            if key not in _text_cache:
+                try:
+                    size = resolved.stat().st_size
+                except OSError:
+                    size = None
+                if size is not None and size > _MAX_MATCH_BYTES:
+                    # Deliberately NOT cached: caching would have to store a
+                    # None text, which reads back as "missing or unreadable"
+                    # and would lose the size in the message. A repeat stat()
+                    # is cheap and still never reads the file.
+                    return None, (
+                        f"locator file {loc.source!r} is {size} bytes, "
+                        f"over the {_MAX_MATCH_BYTES} limit"
+                    )
+                loaded: str | None = None
+                try:
+                    loaded = resolved.read_text()
+                except (OSError, ValueError):
+                    # ValueError covers UnicodeDecodeError on a non-UTF-8 file
+                    # (a ValueError subclass, NOT an OSError -- see the comment
+                    # in _observe_located); OSError covers missing files and a
+                    # directory given as `from`.
+                    loaded = None
+                _text_cache[key] = loaded
+
+            text = _text_cache[key]
+            where = repr(loc.source)
+
+        if text is None:
+            return None, f"locator file {loc.source!r} is missing or unreadable"
+
+        captured, reason = resolve_match(text, loc.pattern)
+        if captured is None:
+            return None, f"locator pattern in {where} did not resolve: {reason}"
+
+        try:
+            value = float(captured.strip())
+        except ValueError:
+            return None, (
+                f"locator capture {captured!r} in {where} is not a finite number"
+            )
+
+        if math.isnan(value) or math.isinf(value):
+            return None, (
+                f"locator capture {captured!r} in {where} is not finite: {value!r}"
             )
 
         return value, ""
@@ -882,8 +967,13 @@ def run_reproduction(
     claim_results = []
     for claim in claims:
         if claim.locator is not None:
+            # Explicit isinstance chain, never an unguarded fallback: a
+            # PatternLocator dropping into the JSON reader would raise
+            # AttributeError on the missing `.path`.
             if isinstance(claim.locator, TableLocator):
                 observed, fail_msg = _observe_table_located(claim.locator)
+            elif isinstance(claim.locator, PatternLocator):
+                observed, fail_msg = _observe_pattern_located(claim.locator)
             else:
                 observed, fail_msg = _observe_located(claim.locator)
             if observed is None:

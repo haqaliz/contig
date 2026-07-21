@@ -114,11 +114,15 @@ cleverness but honesty: a non-matching pattern is `UNVERIFIED` naming the match 
   - **0 matches → `(None, "pattern … matched 0 times")`; >1 matches → `(None, "pattern … matched
     N times")`** — the shipped `resolve_cell` wording shape (`:290-292`). Never an arbitrary pick.
   - Exactly 1 match → returns the raw captured **string** (group 1 or whole match per M3).
-  - **A capture group that did not participate in the match** (e.g. `(old)?|AUC=([\d.]+)`, where
-    `match.group(1)` is `None`) → `(None, "pattern … capture group did not participate in the
-    match")` ⇒ UNVERIFIED. This is the one input shape that could otherwise **crash** the
-    resolver — `float(None)` raises `TypeError` — so it breaches the never-raises contract if
-    unhandled. Requires its own test.
+  - **A capture group that did not participate in the match** (e.g. `AUC=(?:(old)|([\d.]+))`
+    against `"AUC=0.9"`, or `(?:x)?(y)?z` against `"z"` — `match.group(1)` is `None`) →
+    `(None, "pattern … capture group did not participate in the match")` ⇒ UNVERIFIED. This is the
+    one input shape that could otherwise **crash** the resolver — `float(None)` raises
+    `TypeError` — so it breaches the never-raises contract if unhandled. Requires its own test.
+    *(Corrected during Phase 2: the originally-drafted example `(old)?|AUC=([\d.]+)` does **not**
+    reach this branch — `(old)?` matches the empty string at several positions, so `finditer`
+    returns 3 matches and the input degrades through the **ambiguity** branch instead. Both
+    behaviours are now pinned by tests.)*
   - Compiles defensively inside a `try/except re.error` so it holds the never-raises contract even
     if called directly with an uncompilable pattern (belt-and-braces; `load_claims` already gates).
 - **M5 — Observation (new nested `_observe_pattern_located`, sibling of `_observe_table_located`).**

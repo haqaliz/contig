@@ -1536,3 +1536,489 @@ def test_run_reproduction_table_claim_nonzero_exit_is_unverified(tmp_path):
     assert result.status == "unverified"
     assert result.observed is None
     assert "exit 1" in result.message
+
+
+# ---------------------------------------------------------------------------
+# run_reproduction() -- located claims via the stdout/log pattern locator
+# [C8 slice 4, Phase 3]
+# ---------------------------------------------------------------------------
+
+
+def _write_log(tmp_path: Path, rel: str, text: str) -> None:
+    p = tmp_path / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+
+
+def _spy_read_text(monkeypatch) -> list[Path]:
+    """Record every `Path.read_text()` call. Used to prove the engine never
+    touches the filesystem for a stdout-mode pattern claim, never reads a
+    file that escapes the repo or is oversized, and reads a shared log once.
+    """
+    calls: list[Path] = []
+    original = Path.read_text
+
+    def spy(self, *args, **kwargs):
+        calls.append(Path(self))
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", spy)
+    return calls
+
+
+class _ScriptedExecutor:
+    """Returns scripted `(exit_code, output)` tuples in call order (copied
+    from tests/test_reproduce_env_resurrection.py -- the local `_fake_executor`
+    only ever scripts a single call, and the retried-output binding needs two).
+    """
+
+    def __init__(self, script, results_by_call=None, results_path="results.json"):
+        self.script = list(script)
+        self.results_by_call = results_by_call or {}
+        self.results_path = results_path
+        self.calls = 0
+
+    def __call__(self, argv: list[str], repo: Path) -> tuple[int, str]:
+        self.calls += 1
+        if self.calls in self.results_by_call:
+            (Path(repo) / self.results_path).write_text(
+                json.dumps(self.results_by_call[self.calls])
+            )
+        return self.script[self.calls - 1]
+
+
+class _ScriptedInstaller:
+    """Records every `(argv, cwd)` it was called with and always returns the
+    same scripted exit code."""
+
+    def __init__(self, return_code: int):
+        self.return_code = return_code
+        self.calls: list[tuple[list[str], Path]] = []
+
+    def __call__(self, cmd: list[str], cwd: Path) -> int:
+        self.calls.append((list(cmd), cwd))
+        return self.return_code
+
+
+def test_run_reproduction_pattern_claim_stdout_matching_is_reproduced(tmp_path):
+    # No results file is ever written: the observed value comes purely from
+    # the run's captured output.
+    executor = _fake_executor(0, results=None, output="Final AUC: 0.91\n")
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator(None, r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, executor)
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == 0.91
+
+
+def test_run_reproduction_pattern_claim_stdout_drifted_is_diverged_with_message(tmp_path):
+    executor = _fake_executor(0, results=None, output="Final AUC: 0.5\n")
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator(None, r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, executor)
+    result = record.claim_results[0]
+    assert result.status == "diverged"
+    assert result.observed == 0.5
+    assert "0.5" in result.message
+    assert "0.91" in result.message
+    assert result.delta is not None
+
+
+def test_run_reproduction_pattern_claim_stdout_near_value_is_within_tolerance(tmp_path):
+    executor = _fake_executor(0, results=None, output="Final AUC: 0.9\n")
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator(None, r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, executor)
+    result = record.claim_results[0]
+    assert result.status == "within_tolerance"
+    assert result.observed == 0.9
+
+
+def test_run_reproduction_pattern_claim_file_matching_is_reproduced(tmp_path):
+    _write_log(tmp_path, "logs/train.log", "epoch 1\nFinal AUC: 0.91\ndone\n")
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator("logs/train.log", r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == 0.91
+
+
+def test_run_reproduction_pattern_claim_missing_file_is_unverified(tmp_path):
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator("logs/train.log", r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "logs/train.log" in result.message
+
+
+def test_run_reproduction_pattern_claim_directory_from_is_unverified(tmp_path):
+    (tmp_path / "logs").mkdir()
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator("logs", r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+
+
+def test_run_reproduction_pattern_claim_non_utf8_file_is_unverified(tmp_path):
+    p = tmp_path / "logs" / "train.log"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"\xff\xfe\x00Final AUC: 0.91\n")
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator("logs/train.log", r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+
+
+def test_run_reproduction_pattern_claim_zero_matches_is_unverified(tmp_path):
+    executor = _fake_executor(0, results=None, output="nothing to see here\n")
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator(None, r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, executor)
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "0" in result.message
+
+
+def test_run_reproduction_pattern_claim_many_matches_is_unverified(tmp_path):
+    executor = _fake_executor(
+        0,
+        results=None,
+        output="Final AUC: 0.11\nFinal AUC: 0.22\nFinal AUC: 0.33\n",
+    )
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator(None, r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, executor)
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "3" in result.message
+
+
+def test_run_reproduction_pattern_claim_unparseable_capture_is_unverified(tmp_path):
+    executor = _fake_executor(0, results=None, output="Final AUC: NA\n")
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator(None, r"Final AUC: (\S+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, executor)
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "NA" in result.message
+
+
+def test_run_reproduction_pattern_claim_non_finite_capture_is_unverified(tmp_path):
+    executor = _fake_executor(0, results=None, output="Final AUC: inf\n")
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator(None, r"Final AUC: (\S+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, executor)
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+
+
+def test_run_reproduction_pattern_claim_numeric_string_capture_is_the_observed_value(tmp_path):
+    # Deliberate divergence from the JSON locator rule (and identical to the
+    # table rule): a regex capture is a string by construction, so a
+    # numeric-looking string is the NORMAL valid case and must classify.
+    _write_log(tmp_path, "logs/train.log", "count = 30.4\n")
+    claims = [
+        Claim(
+            id="count",
+            value=30.4,
+            tolerance=0.05,
+            locator=PatternLocator("logs/train.log", r"count = (\S+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == 30.4
+
+
+def test_run_reproduction_pattern_claim_stdout_reads_the_retried_run_output(tmp_path):
+    # PRD M5: the observers are closures over `run_output`, and they are only
+    # CALLED after the retry rebinds it -- so a stdout pattern claim binds the
+    # SECOND run's output, not the failed first one.
+    executor = _ScriptedExecutor(
+        [(1, "No module named 'numpy'"), (0, "Final AUC: 0.91\n")]
+    )
+    installer = _ScriptedInstaller(0)
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator(None, r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(
+        tmp_path, claims, executor, allow_install=True, installer=installer
+    )
+    assert executor.calls == 2
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == 0.91
+
+
+def test_run_reproduction_pattern_claim_escaping_repo_is_unverified_and_not_read(
+    tmp_path, monkeypatch
+):
+    outside_dir = tmp_path.parent / "outside_pattern_secret"
+    outside_dir.mkdir(exist_ok=True)
+    secret_file = outside_dir / "secret.log"
+    secret_file.write_text("Final AUC: 0.91\n")
+
+    calls = _spy_read_text(monkeypatch)
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator(
+                "../outside_pattern_secret/secret.log", r"Final AUC: ([0-9.]+)"
+            ),
+        )
+    ]
+    record = run_reproduction(
+        repo=str(repo_dir),
+        run_command="echo run",
+        claims=claims,
+        executor=_noop_executor(),
+        claims_sha256="a" * 64,
+        created_at="2026-07-18T00:00:00Z",
+        reproduce_id="rp_1",
+    )
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "escapes the repo" in result.message
+    assert secret_file.resolve() not in [c.resolve() for c in calls]
+
+
+def test_run_reproduction_pattern_claim_stdout_never_touches_the_filesystem(
+    tmp_path, monkeypatch
+):
+    calls = _spy_read_text(monkeypatch)
+    executor = _fake_executor(0, results=None, output="Final AUC: 0.91\n")
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator(None, r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, executor)
+    assert record.claim_results[0].status == "reproduced"
+    assert calls == []
+
+
+def test_run_reproduction_pattern_claim_same_file_read_once(tmp_path, monkeypatch):
+    _write_log(tmp_path, "logs/train.log", "Final AUC: 0.91\nFinal ACC: 0.8\n")
+    calls = _spy_read_text(monkeypatch)
+    log_path = (tmp_path / "logs" / "train.log").resolve()
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator("logs/train.log", r"Final AUC: ([0-9.]+)"),
+        ),
+        Claim(
+            id="acc",
+            value=0.8,
+            tolerance=0.05,
+            locator=PatternLocator("logs/train.log", r"Final ACC: ([0-9.]+)"),
+        ),
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    by_id = {r.id: r for r in record.claim_results}
+    assert by_id["auc"].status == "reproduced"
+    assert by_id["acc"].status == "reproduced"
+    assert [c.resolve() for c in calls].count(log_path) == 1
+
+
+def test_run_reproduction_pattern_claim_oversized_file_is_unverified_and_not_read(
+    tmp_path, monkeypatch
+):
+    # The cap is shrunk rather than writing a real 8 MiB fixture; the guard
+    # reads the module global at call time, so this exercises the real branch.
+    _write_log(tmp_path, "logs/train.log", "Final AUC: 0.91\n" * 20)
+    monkeypatch.setattr(reproduce_module, "_MAX_MATCH_BYTES", 16)
+    calls = _spy_read_text(monkeypatch)
+    log_path = (tmp_path / "logs" / "train.log").resolve()
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator("logs/train.log", r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "16" in result.message
+    assert log_path not in [c.resolve() for c in calls]
+
+
+def test_run_reproduction_pattern_claim_nonzero_exit_is_unverified(tmp_path):
+    _write_log(tmp_path, "logs/train.log", "Final AUC: 0.91\n")
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator("logs/train.log", r"Final AUC: ([0-9.]+)"),
+        ),
+        Claim(
+            id="auc_stdout",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator(None, r"Final AUC: ([0-9.]+)"),
+        ),
+    ]
+    record = _run(tmp_path, claims, _noop_executor(exit_code=1))
+    assert all(r.status == "unverified" for r in record.claim_results)
+    assert all(r.observed is None for r in record.claim_results)
+    assert "exit 1" in record.claim_results[0].message
+
+
+def test_run_reproduction_pattern_claim_never_reaches_the_json_observer(tmp_path):
+    # PRD R6: the dispatch head must be an explicit isinstance chain. A
+    # PatternLocator routed into the JSON reader would raise AttributeError on
+    # the missing `.path`; the failure must be the pattern-shaped message.
+    _write_log(tmp_path, "logs/train.log", "no metric here\n")
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator("logs/train.log", r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert "locator pattern" in result.message
+    assert "not valid JSON" not in result.message
+
+
+def test_run_reproduction_mixed_pattern_table_json_and_flat_claims_resolve_independently(
+    tmp_path,
+):
+    _write_located(tmp_path, "out/summary.json", {"model": {"auc": 0.9}})
+    _write_tsv(tmp_path, "out/de.tsv", [_DE_HEADER, ["ENSG1", "-2.31", "0.001"]])
+    _write_log(tmp_path, "logs/train.log", "Final F1: 0.77\n")
+    pattern_file_claim = Claim(
+        id="f1",
+        value=0.77,
+        tolerance=0.05,
+        locator=PatternLocator("logs/train.log", r"Final F1: ([0-9.]+)"),
+    )
+    pattern_stdout_claim = Claim(
+        id="loss",
+        value=0.25,
+        tolerance=0.05,
+        locator=PatternLocator(None, r"Final loss: ([0-9.]+)"),
+    )
+    table_claim = Claim(
+        id="log2fc",
+        value=-2.31,
+        tolerance=0.05,
+        locator=TableLocator("out/de.tsv", "log2FoldChange", 0, "\t", True),
+    )
+    json_claim = Claim(
+        id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc")
+    )
+    flat_claim = Claim(id="accuracy", value=0.8, tolerance=0.05)
+    executor = _fake_executor(0, {"accuracy": 0.8}, output="Final loss: 0.25\n")
+    record = _run(
+        tmp_path,
+        [pattern_file_claim, pattern_stdout_claim, table_claim, json_claim, flat_claim],
+        executor,
+    )
+    by_id = {r.id: r for r in record.claim_results}
+    assert by_id["f1"].status == "reproduced"
+    assert by_id["loss"].status == "reproduced"
+    assert by_id["log2fc"].status == "reproduced"
+    assert by_id["auc"].status == "reproduced"
+    assert by_id["accuracy"].status == "reproduced"
