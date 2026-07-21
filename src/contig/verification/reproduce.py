@@ -43,6 +43,13 @@ _DEFAULT_TOLERANCE = 0.1
 _MISSING_MODULE_RE = re.compile(r"No module named ['\"]([^'\"]+)['\"]", re.IGNORECASE)
 _SAFE_PACKAGE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
+# Upper bound on how much text a user-authored pattern is ever run over (a
+# ReDoS input bound, not a memory guard -- run output is already fully
+# buffered upstream by `subprocess.PIPE`). Text over the cap is UNVERIFIED
+# rather than silently truncated, which could report "0 matches" for a
+# pattern that does match past the cut.
+_MAX_MATCH_BYTES = 8 * 1024 * 1024
+
 
 def detect_missing_module(output: str) -> str | None:
     """Extract the missing top-level package from a run's captured error text.
@@ -330,6 +337,58 @@ def resolve_cell(
         )
 
     return target_row[col_idx], ""
+
+
+def resolve_match(text: str, pattern: str) -> tuple[str | None, str]:
+    """Resolve one captured string out of `text` with a user-authored regex.
+
+    Pure, never raises -- any oversized text, uncompilable pattern, ambiguous
+    match count, or non-participating capture group returns `(None, reason)`
+    rather than raising (mirrors `resolve_cell`'s "never raises" contract). On
+    success returns `(captured_string, "")`; the capture is always a raw
+    string -- parsing it to a float is the caller's job, not this function's.
+
+    The text size is bounded FIRST, before the pattern is compiled or scanned:
+    text over `_MAX_MATCH_BYTES` is unresolved, naming the size and the limit.
+    Truncating instead would be dishonest -- it could report "0 matches" for a
+    pattern that does match past the cut.
+
+    Matching is STRICT: all non-overlapping matches are found, and exactly one
+    is required. 0 matches or N>1 matches -> unresolved, naming the count
+    (`resolve_cell`'s "matched N rows" wording shape). Never an arbitrary pick.
+
+    Capture selection: if the compiled pattern has capturing groups, group 1
+    is the value (a named group is group 1 too); with no groups, the whole
+    match is. A group 1 that did NOT participate in the match yields `None`
+    from `match.group(1)` -- the one input shape that would otherwise crash a
+    caller on `float(None)` -- so it is unresolved as well.
+
+    Flags are supplied inline in the pattern (`(?i)`, `(?m)`, `(?s)`); there
+    is no separate flags argument. The compile is wrapped defensively so the
+    contract holds even when called directly with an uncompilable pattern
+    (`load_claims` already gates this pre-run).
+    """
+    if len(text) > _MAX_MATCH_BYTES:
+        return None, (
+            f"text is {len(text)} chars, over the {_MAX_MATCH_BYTES} limit"
+        )
+
+    try:
+        compiled = re.compile(pattern)
+    except re.error as exc:
+        return None, f"pattern {pattern!r} is not a valid regex: {exc}"
+
+    matches = list(compiled.finditer(text))
+    if len(matches) != 1:
+        return None, f"pattern {pattern!r} matched {len(matches)} times"
+
+    match = matches[0]
+    captured = match.group(1) if compiled.groups else match.group(0)
+    if captured is None:
+        return None, (
+            f"pattern {pattern!r} capture group did not participate in the match"
+        )
+    return captured, ""
 
 
 @dataclass(frozen=True)
