@@ -370,7 +370,7 @@ def resolve_match(text: str, pattern: str) -> tuple[str | None, str]:
     """
     if len(text) > _MAX_MATCH_BYTES:
         return None, (
-            f"text is {len(text)} chars, over the {_MAX_MATCH_BYTES} limit"
+            f"text is {len(text)} chars, over the {_MAX_MATCH_BYTES}-char match limit"
         )
 
     try:
@@ -481,9 +481,10 @@ def load_claims(path: str | Path) -> list[Claim]:
                 raise ClaimsError(
                     f"claim {claim_id!r} must set 'path' or 'pattern', not both"
                 )
-            if has_column or has_row:
+            if has_table_field:
                 raise ClaimsError(
-                    f"claim {claim_id!r} must set 'column'+'row' or 'pattern', not both"
+                    f"claim {claim_id!r} must set 'column'+'row' or 'pattern', not both "
+                    "(a table field has no meaning for a pattern locator)"
                 )
 
             raw_pattern = item["pattern"]
@@ -835,7 +836,7 @@ def run_reproduction(
                     # is cheap and still never reads the file.
                     return None, (
                         f"locator file {loc.source!r} is {size} bytes, "
-                        f"over the {_MAX_MATCH_BYTES} limit"
+                        f"over the {_MAX_MATCH_BYTES}-byte match limit"
                     )
                 loaded: str | None = None
                 try:

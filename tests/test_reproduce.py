@@ -702,6 +702,33 @@ def test_load_claims_rejects_pattern_with_row_only(tmp_path):
         load_claims(path)
 
 
+@pytest.mark.parametrize("field,value", [("header", False), ("delimiter", ";")])
+def test_load_claims_rejects_pattern_with_table_only_field_with_from(tmp_path, field, value):
+    """`pattern` + `header`/`delimiter` is a contradiction, not a silent ignore.
+
+    The table keys have no meaning for a regex locator; accepting them would be
+    a silent misread of the claim's intent.
+    """
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "logs/train.log", "pattern": "a([0-9])", field: value})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+@pytest.mark.parametrize("field,value", [("header", False), ("delimiter", ";")])
+def test_load_claims_rejects_pattern_with_table_only_field_without_from(tmp_path, field, value):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"pattern": "a([0-9])", field: value})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
 def test_load_claims_rejects_non_string_pattern(tmp_path):
     path = _write(
         tmp_path,
