@@ -6,6 +6,87 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`contig reproduce` gains a Jupyter notebook (`.ipynb`) claim locator — the C8 slice 5
+  named as deferred-but-unblocked in the slice-3 and slice-4 deferral lists ("notebook
+  (`.ipynb`) numeric extraction").** Slices 1.5 (JSON), 3 (TSV/CSV) and 4 (stdout/log regex)
+  read a repo's structured or free-text output; none could read a **notebook**, the medium
+  the C8 problem statement is built on (of 27,271 biomedical-paper notebooks only ~3.2%
+  reproduced the original result — Samuel & Mietchen 2024; `docs/planning/reproduce-published-work/prd.md`).
+  Against a `.ipynb` every claim previously degraded to `UNVERIFIED`. A claim may now carry
+  `{"from": <repo-relative .ipynb>, "cell": <int | {"contains": <source substring>}>,
+  "pattern": <Python regex>}`, and `contig reproduce` binds the observed value out of the
+  addressed cell's output.
+  - **Cell addressing mirrors the shipped `TableLocator.row` duality exactly.** An **int**
+    indexes the notebook's full `cells` array (0-based, JSON-faithful — all cells, not
+    code-cells-only; out of range → `UNVERIFIED` naming the cell count). A
+    **`{"contains": <substring>}`** selects the one cell whose `source` contains that
+    substring — surviving cell reordering and needing **no repo modification** (unlike a
+    `metadata.tags` scheme, which would re-introduce the "cooperative repo" requirement
+    slice 1.5 existed to escape). **0 or >1 matching cells → `UNVERIFIED` with the count
+    named**, never an arbitrary pick (the shipped `resolve_cell` row-key and `resolve_match`
+    rules).
+  - **Output-text extraction: stdout streams + `text/plain`, in output order.** A new pure,
+    stdlib `resolve_notebook_cell_text` (sibling of `resolve_pointer`/`resolve_cell`/
+    `resolve_match`) concatenates, in `outputs` order, each `stream` output named `stdout`
+    and each `execute_result`/`display_data` `text/plain`. **`stderr` streams and `error`
+    tracebacks are excluded** — a progress bar or a traceback must never become the match
+    surface a headline number is read from. `source`/`text` are `str` **or** `list[str]` per
+    nbformat; both are handled (list joined with no separator). It **never raises** — a
+    non-dict document, a missing/non-list `cells`, a non-dict cell, a `text` that is neither
+    str nor list all degrade to `(None, reason)`.
+  - **`pattern` is required; capture reuses the shipped `resolve_match`.** The extracted cell
+    text is fed to slice-4's unchanged resolver, which supplies the capture rule (group 1 if
+    the pattern has groups, else the whole match) and the strict 0-or-many ambiguity guard.
+    One binding path, no new ambiguity rules. A numeric-string capture is the normal case
+    (the slice-3/4 rule, not slice-1.5's strict JSON rule): it is `.strip()`ed, `float()`-parsed,
+    and if finite feeds the unchanged `classify`; unparseable or non-finite → `UNVERIFIED`.
+  - **The load-bearing piece — an mtime freshness guard, so a committed notebook can never be
+    read as a false `REPRODUCED`.** A committed `.ipynb` already holds the *authors'* stored
+    outputs; reading those would verify what was *committed*, not what *regenerated* — the
+    exact false-pass the verdict contract exists to prevent, and one a committed notebook
+    *always* presents. The undecidable question ("executed vs committed" — `execution_count`
+    is non-null in any committed notebook) is replaced by the decidable one Contig actually
+    needs: **was this file rewritten by *this* run?** A notebook locator resolves only when
+    the file's **mtime is at or after the run's start**; otherwise `UNVERIFIED` naming the
+    staleness, checked **before** the file is even parsed. The run-start wall-clock is
+    captured **once, before the first run** (`time.time()` in the CLI, `run_started_at` on
+    `run_reproduction`), and is **not** re-stamped on an `--allow-install` retry, so a
+    notebook written by either the first or the retried run passes. Comparison is
+    `mtime >= run_start` with **no fudge tolerance** (a tolerance is exactly the size of the
+    hole it opens). The guard is **non-bypassable**: a notebook claim dispatched with no
+    run-start raises `ValueError` (a programming error, never a silent `UNVERIFIED`).
+    **Honest limit, stated not hidden:** the guard proves the notebook was *rewritten*, not
+    that its numbers were *recomputed* — a `--run` of `cp committed.ipynb out.ipynb` passes
+    it while computing nothing. It closes the dominant, honest hole (binding to the committed
+    notebook), not an adversarial user deceiving themselves — the same honesty boundary
+    slice 1's "re-runnable" drew.
+  - **`load_claims` validates the notebook shape structurally, pre-run.** The three-way
+    mutual exclusion (`path` xor `column`+`row` xor `pattern`) became **four-way**: a claim
+    with `cell` requires both `from` and `pattern`, and rejects `path` or **any** table field
+    (`column`/`row`/`header`/`delimiter`) — a contradiction is a load-time `ClaimsError`
+    (exit non-zero, **nothing written**: no run, no record, no bundle), never a silent
+    misread. `cell` must be a non-negative int (a `bool` is rejected) or a single-key
+    `{"contains": <non-empty string>}`. A `pattern`+`from` claim **without** `cell` stays a
+    byte-identical slice-4 `PatternLocator`; JSON and table locators are unchanged.
+  - **Reuse, honestly bounded.** Containment (the CLI pre-run `from` refusal + the engine's
+    `relative_to(repo_root)` guard), the 8 MiB `_MAX_MATCH_BYTES` size bound (`stat()`ed
+    before any read), a per-run parse cache (`_notebook_cache`), `classify`, `ClaimResult`,
+    `ReproduceRecord`, the signed bundle and `--fail-on-diverged` are all reused as-is — **no
+    `models.py` change**, stdlib-only (`json`/`re`/`os`/`time`), **no `nbformat` or `jupyter`
+    dependency**. **Deferred/known limits:** the 8 MiB bound is the shipped constant, tight
+    for a notebook carrying embedded base64 figures (a notebook-specific bound is a named
+    follow-on); the freshness guard is notebook-only (the JSON/table locators keep the same
+    stale-artifact hole, a separate slice); non-text outputs (images, HTML, widgets) and
+    figure/plot claims stay **hard-blocked** (no plot-hash, stdlib-only); notebook *execution*
+    is never done by Contig (the user's `--run` command does it); paper-parsing, remote
+    `<doi|url>`, a dashboard card, and the C6 eval fold-in are unchanged from the standing
+    C8 deferral list. Test-first (pure extractor → schema → engine dispatch + guard → CLI
+    e2e); deterministic (on-disk fixture `.ipynb`, `os.utime`-set mtimes, injected
+    `run_started_at`, scripted executors); **no real repo, notebook execution, network, or
+    pip in CI**. Plan/PRD under `docs/planning/reproduce-notebook-locator/`.
+
 ## [0.44.0] - 2026-07-21
 
 ### Added

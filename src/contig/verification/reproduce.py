@@ -193,6 +193,25 @@ class PatternLocator:
     pattern: str
 
 
+@dataclass(frozen=True)
+class NotebookLocator:
+    """Where to find a located claim's observed value inside a Jupyter
+    notebook: `source` is the claims file's `"from"` field (a repo-relative
+    `.ipynb` path -- named `source` internally for the same reason as
+    `Locator.source`, and always a real string, never `None`); `cell`
+    addresses the target cell, either an `int` index into the notebook's
+    `cells` array or a single-key `{"contains": <source substring>}` object
+    that selects the unique cell whose source contains that substring;
+    `pattern` is a Python regex whose capture is the observed value (group 1
+    when the pattern has capturing groups, otherwise the whole match), applied
+    to that cell's extracted textual output.
+    """
+
+    source: str
+    cell: int | dict[str, str]
+    pattern: str
+
+
 def _resolve_delimiter(source: str, explicit: str | None) -> str | None:
     """Resolve the field delimiter for a table locator's `source` path.
 
@@ -391,6 +410,104 @@ def resolve_match(text: str, pattern: str) -> tuple[str | None, str]:
     return captured, ""
 
 
+def _join_source_or_text(v: object) -> str:
+    """Join a notebook `source`/`text` field into a single string.
+
+    Jupyter stores these as either a plain `str` or a `list[str]` of line
+    fragments (joined with `""` -- the fragments already carry their own
+    newlines). A `str` is returned as-is; a `list` is joined over only its
+    `str` items (non-string items are skipped, never coerced); anything else
+    (None, int, dict, ...) yields `""`. Pure, never raises.
+    """
+    if isinstance(v, str):
+        return v
+    if isinstance(v, list):
+        return "".join(item for item in v if isinstance(item, str))
+    return ""
+
+
+def resolve_notebook_cell_text(
+    doc: object, cell: int | dict[str, str]
+) -> tuple[str | None, str]:
+    """Resolve one cell's textual output out of an already-parsed notebook.
+
+    Pure, index-safe, never raises -- any malformed document, out-of-range or
+    ambiguous cell address, or output-less cell returns `(None, reason)`
+    rather than raising (mirrors `resolve_cell`/`resolve_match`'s "never
+    raises" contract). On success returns `(text, "")`; the returned text is
+    the RAW concatenated cell output -- capturing a number out of it is the
+    caller's job, not this function's.
+
+    `doc` is the parsed `.ipynb` JSON (expected a dict with a `cells` list).
+    `cell` addresses the target: an `int` indexes the full `cells` array
+    (bool is rejected -- it is an int subclass but never a valid address; a
+    negative or out-of-range index is unresolved, naming the cell count); a
+    `{"contains": s}` object selects the UNIQUE cell whose joined `source`
+    contains `s` (0 or >1 matches -> unresolved, naming the match count --
+    never an arbitrary pick).
+
+    Output text is the concatenation, in `outputs` order, of: `stream`
+    outputs named `stdout` (their `text` field) and `execute_result` /
+    `display_data` outputs' `data["text/plain"]`. Each field is a `str` or a
+    `list[str]`, joined with `""` (see `_join_source_or_text`). `stderr`
+    streams and `error` outputs are excluded, as is anything else. A cell that
+    contributes no such piece is unresolved ("no textual output").
+    """
+    if not isinstance(doc, dict):
+        return None, "notebook is not a JSON object"
+    cells = doc.get("cells")
+    if not isinstance(cells, list):
+        return None, "notebook has no cells array"
+
+    if isinstance(cell, bool):
+        return None, f"invalid cell address: {cell!r}"
+    if isinstance(cell, int):
+        if not (0 <= cell < len(cells)):
+            return None, f"cell index {cell} out of range ({len(cells)} cells)"
+        idx = cell
+    elif isinstance(cell, dict):
+        if list(cell.keys()) != ["contains"] or not isinstance(
+            cell.get("contains"), str
+        ):
+            return None, f"invalid cell address: {cell!r}"
+        needle = cell["contains"]
+        matches = [
+            i
+            for i, c in enumerate(cells)
+            if needle in _join_source_or_text(c.get("source") if isinstance(c, dict) else None)
+        ]
+        if len(matches) != 1:
+            return None, (
+                f"cell selector {{'contains': {needle!r}}} matched {len(matches)} cells"
+            )
+        idx = matches[0]
+    else:
+        return None, f"invalid cell address: {cell!r}"
+
+    target = cells[idx]
+    if not isinstance(target, dict):
+        return None, f"cell {idx} is not a cell object"
+
+    outputs = target.get("outputs")
+    pieces: list[str] = []
+    if isinstance(outputs, list):
+        for out in outputs:
+            if not isinstance(out, dict):
+                continue
+            kind = out.get("output_type")
+            if kind == "stream":
+                if out.get("name") == "stdout":
+                    pieces.append(_join_source_or_text(out.get("text")))
+            elif kind in ("execute_result", "display_data"):
+                data = out.get("data")
+                if isinstance(data, dict):
+                    pieces.append(_join_source_or_text(data.get("text/plain")))
+
+    if not pieces:
+        return None, f"cell {idx} has no textual output"
+    return "".join(pieces), ""
+
+
 @dataclass(frozen=True)
 class Claim:
     """One published numeric claim to reproduce: `id` names the metric,
@@ -408,7 +525,7 @@ class Claim:
     id: str
     value: float
     tolerance: float = _DEFAULT_TOLERANCE
-    locator: Locator | TableLocator | PatternLocator | None = None
+    locator: Locator | TableLocator | PatternLocator | NotebookLocator | None = None
 
 
 def load_claims(path: str | Path) -> list[Claim]:
@@ -456,16 +573,17 @@ def load_claims(path: str | Path) -> list[Claim]:
         has_from = "from" in item
         has_path = "path" in item
         has_pattern = "pattern" in item
+        has_cell = "cell" in item
         has_column = "column" in item
         has_row = "row" in item
         has_delimiter = "delimiter" in item
         has_header = "header" in item
         has_table_field = has_column or has_row or has_delimiter or has_header
 
-        if not has_from and not has_pattern and (has_path or has_table_field):
+        if not has_from and not has_pattern and (has_path or has_table_field or has_cell):
             raise ClaimsError(
                 f"claim {claim_id!r} must set 'from' together with 'path', or with "
-                "'column'+'row', or neither"
+                "'column'+'row', or with 'cell'+'pattern', or neither"
             )
 
         source: str | None = None
@@ -475,8 +593,70 @@ def load_claims(path: str | Path) -> list[Claim]:
                 raise ClaimsError(f"claim {claim_id!r} has an invalid 'from': {raw_from!r}")
             source = raw_from
 
-        locator: Locator | TableLocator | PatternLocator | None = None
-        if has_pattern:
+        locator: Locator | TableLocator | PatternLocator | NotebookLocator | None = None
+        if has_cell:
+            # Notebook locator (slice 5): `cell` is only meaningful together
+            # with a `from` notebook and a `pattern`, and never alongside a
+            # JSON `path` or any table field -- the four locator families are
+            # mutually exclusive.
+            if not has_from:
+                raise ClaimsError(
+                    f"claim {claim_id!r} 'cell' requires 'from' (a notebook path)"
+                )
+            if not has_pattern:
+                raise ClaimsError(
+                    f"claim {claim_id!r} 'cell' requires 'pattern'"
+                )
+            if has_path:
+                raise ClaimsError(
+                    f"claim {claim_id!r} must set 'cell'+'pattern' or 'path', not both"
+                )
+            if has_table_field:
+                raise ClaimsError(
+                    f"claim {claim_id!r} must set 'cell'+'pattern' or 'column'+'row', "
+                    "not both (a table field has no meaning for a notebook locator)"
+                )
+
+            raw_cell = item["cell"]
+            cell: int | dict[str, str]
+            if isinstance(raw_cell, bool):
+                raise ClaimsError(f"claim {claim_id!r} has an invalid 'cell': {raw_cell!r}")
+            if isinstance(raw_cell, int):
+                if raw_cell < 0:
+                    raise ClaimsError(
+                        f"claim {claim_id!r} has a negative 'cell' index: {raw_cell!r}"
+                    )
+                cell = raw_cell
+            elif isinstance(raw_cell, dict):
+                if list(raw_cell.keys()) != ["contains"]:
+                    raise ClaimsError(
+                        f"claim {claim_id!r} has an invalid 'cell' object (expected a "
+                        f"single 'contains' key): {raw_cell!r}"
+                    )
+                raw_contains = raw_cell["contains"]
+                if not isinstance(raw_contains, str) or not raw_contains.strip():
+                    raise ClaimsError(
+                        f"claim {claim_id!r} has an invalid 'cell' 'contains' value: "
+                        f"{raw_contains!r}"
+                    )
+                cell = raw_cell
+            else:
+                raise ClaimsError(f"claim {claim_id!r} has an invalid 'cell': {raw_cell!r}")
+
+            raw_pattern = item["pattern"]
+            if not isinstance(raw_pattern, str) or not raw_pattern.strip():
+                raise ClaimsError(
+                    f"claim {claim_id!r} has an invalid 'pattern': {raw_pattern!r}"
+                )
+            try:
+                re.compile(raw_pattern)
+            except re.error as exc:
+                raise ClaimsError(
+                    f"claim {claim_id!r} has an uncompilable 'pattern': {exc}"
+                ) from exc
+
+            locator = NotebookLocator(source=raw_from, cell=cell, pattern=raw_pattern)
+        elif has_pattern:
             if has_path:
                 raise ClaimsError(
                     f"claim {claim_id!r} must set 'path' or 'pattern', not both"
@@ -664,6 +844,7 @@ def run_reproduction(
     claims_sha256: str,
     results_path: str = "results.json",
     created_at: str,
+    run_started_at: float | None = None,
     reproduce_id: str,
     allow_install: bool = False,
     installer: Installer = default_installer,
@@ -694,6 +875,7 @@ def run_reproduction(
     _json_cache: dict[str, object | None] = {}
     _table_cache: dict[str, list[list[str]] | None] = {}
     _text_cache: dict[str, str | None] = {}
+    _notebook_cache: dict[str, object | None] = {}
 
     def _observe_located(loc: Locator) -> tuple[float | None, str]:
         """Bind one located claim's observed value from its own repo-relative
@@ -873,6 +1055,92 @@ def run_reproduction(
 
         return value, ""
 
+    def _observe_notebook_located(loc: NotebookLocator) -> tuple[float | None, str]:
+        """Bind one located claim's observed value out of a Jupyter notebook
+        the run itself rewrote. Sibling of `_observe_pattern_located`, with one
+        extra, load-bearing gate: a **freshness guard**. A notebook whose mtime
+        predates `run_started_at` was NOT produced by this run -- it is an
+        author's committed artifact -- so it is UNVERIFIED even when its stored
+        output matches the claim exactly. This is the whole point of the
+        locator: a bound value must come from what THIS run computed, never
+        from a checked-in cell output. The guard fires BEFORE the file is ever
+        parsed, so a stale notebook is never even read for content.
+
+        `run_started_at is None` here is a programming error, not an
+        UNVERIFIED: this observer must never be reached without a stamped run
+        start, so it raises loudly rather than silently degrading.
+
+        Same containment guard, same "parse once, cache by resolved absolute
+        path" shape (`_notebook_cache`), and same "any resolution failure ->
+        (None, message)" contract the caller maps to `unverified` as the other
+        observers. Like the table/pattern readers, a numeric-looking capture
+        STRING is the normal valid case, so it is stripped, float-parsed and,
+        if finite, returned.
+        """
+        if run_started_at is None:
+            raise ValueError("run_started_at is required to verify a notebook locator")
+
+        resolved = (repo_path / loc.source).resolve()
+        try:
+            resolved.relative_to(repo_root)  # defense-in-depth: never read outside repo
+        except ValueError:
+            return None, f"locator 'from' {loc.source!r} escapes the repo"
+
+        try:
+            stat = resolved.stat()  # one stat() gives both size and mtime
+        except OSError:
+            return None, f"notebook {loc.source!r} is missing or unreadable"
+
+        if stat.st_size > _MAX_MATCH_BYTES:
+            return None, (
+                f"notebook {loc.source!r} is {stat.st_size} bytes, "
+                f"over the {_MAX_MATCH_BYTES}-byte match limit"
+            )
+
+        if stat.st_mtime < run_started_at:
+            return None, (
+                f"notebook {loc.source!r} was not rewritten by this run "
+                "(mtime predates run start)"
+            )
+
+        key = str(resolved)
+        if key not in _notebook_cache:
+            doc: object | None = None
+            try:
+                doc = json.loads(resolved.read_text())
+            except (ValueError, OSError):
+                # ValueError covers json.JSONDecodeError and UnicodeDecodeError
+                # on a non-UTF-8 file (both ValueError subclasses); OSError
+                # covers a file that vanished between the stat() and the read.
+                doc = None
+            _notebook_cache[key] = doc
+
+        doc = _notebook_cache[key]
+        if doc is None:
+            return None, f"notebook {loc.source!r} is not valid JSON"
+
+        text, reason = resolve_notebook_cell_text(doc, loc.cell)
+        if text is None:
+            return None, f"notebook cell in {loc.source!r} did not resolve: {reason}"
+
+        captured, reason = resolve_match(text, loc.pattern)
+        if captured is None:
+            return None, f"notebook pattern in {loc.source!r} did not resolve: {reason}"
+
+        try:
+            value = float(captured.strip())
+        except ValueError:
+            return None, (
+                f"notebook capture {captured!r} in {loc.source!r} is not a finite number"
+            )
+
+        if math.isnan(value) or math.isinf(value):
+            return None, (
+                f"notebook capture {captured!r} in {loc.source!r} is not finite: {value!r}"
+            )
+
+        return value, ""
+
     exit_code, run_output = executor(shlex.split(run_command), repo_path)
     repair_history: list[RepairStep] = []
 
@@ -971,7 +1239,9 @@ def run_reproduction(
             # Explicit isinstance chain, never an unguarded fallback: a
             # PatternLocator dropping into the JSON reader would raise
             # AttributeError on the missing `.path`.
-            if isinstance(claim.locator, TableLocator):
+            if isinstance(claim.locator, NotebookLocator):
+                observed, fail_msg = _observe_notebook_located(claim.locator)
+            elif isinstance(claim.locator, TableLocator):
                 observed, fail_msg = _observe_table_located(claim.locator)
             elif isinstance(claim.locator, PatternLocator):
                 observed, fail_msg = _observe_pattern_located(claim.locator)

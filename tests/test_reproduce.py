@@ -10,6 +10,7 @@ from __future__ import annotations
 import gzip
 import json
 import math
+import os
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from contig.verification.reproduce import (
     Claim,
     ClaimsError,
     Locator,
+    NotebookLocator,
     PatternLocator,
     TableLocator,
     classify,
@@ -792,6 +794,289 @@ def test_load_claims_still_rejects_table_field_without_from(tmp_path, field, val
     )
     with pytest.raises(ClaimsError):
         load_claims(path)
+
+
+# ---------------------------------------------------------------------------
+# load_claims() -- notebook locator (slice 5)
+# ---------------------------------------------------------------------------
+
+
+def test_load_claims_notebook_int_cell_attaches_notebook_locator(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [_claim(**{"from": "x.ipynb", "cell": 7, "pattern": "AUC: ([0-9.]+)"})]
+        ),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == NotebookLocator(
+        source="x.ipynb", cell=7, pattern="AUC: ([0-9.]+)"
+    )
+
+
+def test_load_claims_notebook_contains_cell_attaches_notebook_locator(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "x.ipynb",
+                        "cell": {"contains": "print(auc)"},
+                        "pattern": "AUC: ([0-9.]+)",
+                    }
+                )
+            ]
+        ),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == NotebookLocator(
+        source="x.ipynb", cell={"contains": "print(auc)"}, pattern="AUC: ([0-9.]+)"
+    )
+
+
+def test_load_claims_notebook_rejects_cell_without_from(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"cell": 7, "pattern": "AUC: ([0-9.]+)"})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_notebook_rejects_cell_without_pattern(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "x.ipynb", "cell": 7})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_notebook_rejects_cell_with_path(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "x.ipynb",
+                        "cell": 7,
+                        "path": "$.auc",
+                        "pattern": "AUC: ([0-9.]+)",
+                    }
+                )
+            ]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("column", 0), ("row", 0), ("header", False), ("delimiter", ",")],
+)
+def test_load_claims_notebook_rejects_cell_with_table_field(tmp_path, field, value):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "x.ipynb",
+                        "cell": 7,
+                        "pattern": "AUC: ([0-9.]+)",
+                        field: value,
+                    }
+                )
+            ]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_notebook_rejects_negative_int_cell(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [_claim(**{"from": "x.ipynb", "cell": -1, "pattern": "AUC: ([0-9.]+)"})]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_notebook_rejects_bool_cell(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [_claim(**{"from": "x.ipynb", "cell": True, "pattern": "AUC: ([0-9.]+)"})]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_notebook_rejects_float_cell(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [_claim(**{"from": "x.ipynb", "cell": 1.5, "pattern": "AUC: ([0-9.]+)"})]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_notebook_rejects_cell_dict_without_contains(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "x.ipynb",
+                        "cell": {"startswith": "print"},
+                        "pattern": "AUC: ([0-9.]+)",
+                    }
+                )
+            ]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_notebook_rejects_cell_contains_empty(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "x.ipynb",
+                        "cell": {"contains": ""},
+                        "pattern": "AUC: ([0-9.]+)",
+                    }
+                )
+            ]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_notebook_rejects_cell_contains_non_string(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "x.ipynb",
+                        "cell": {"contains": 5},
+                        "pattern": "AUC: ([0-9.]+)",
+                    }
+                )
+            ]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_notebook_rejects_cell_dict_with_extra_key(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "x.ipynb",
+                        "cell": {"contains": "print(auc)", "nth": 2},
+                        "pattern": "AUC: ([0-9.]+)",
+                    }
+                )
+            ]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+@pytest.mark.parametrize("bad", ["([0-9", "*", "(?P<>x)"])
+def test_load_claims_notebook_rejects_uncompilable_pattern_with_cell(tmp_path, bad):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "x.ipynb", "cell": 7, "pattern": bad})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_notebook_rejects_empty_pattern_with_cell(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "x.ipynb", "cell": 7, "pattern": ""})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+# --- back-compat: a claim with no `cell` is byte-identical to slices 1.5/3/4 ---
+
+
+def test_load_claims_pattern_no_cell_still_pattern_locator(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "log.txt", "pattern": "AUC: ([0-9.]+)"})]),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == PatternLocator(
+        source="log.txt", pattern="AUC: ([0-9.]+)"
+    )
+
+
+def test_load_claims_path_no_cell_still_json_locator(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "x.json", "path": "$.a"})]),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == Locator(source="x.json", path="$.a")
+
+
+def test_load_claims_table_no_cell_still_table_locator(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [_claim(**{"from": "t.tsv", "column": 0, "row": 0, "header": False})]
+        ),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == TableLocator(
+        source="t.tsv", column=0, row=0, delimiter="\t", header=False
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2049,3 +2334,198 @@ def test_run_reproduction_mixed_pattern_table_json_and_flat_claims_resolve_indep
     assert by_id["log2fc"].status == "reproduced"
     assert by_id["auc"].status == "reproduced"
     assert by_id["accuracy"].status == "reproduced"
+
+
+# ---------------------------------------------------------------------------
+# run_reproduction() -- NotebookLocator (slice 5)
+# ---------------------------------------------------------------------------
+
+# A fixed synthetic run-start so freshness is decided purely by the mtimes we
+# set with os.utime, never by wall-clock time.
+_RUN_START = 1_000_000.0
+
+
+def _notebook_doc(output_text: str, source: str = "print(auc)\n") -> dict:
+    """A one-code-cell notebook whose single stdout stream prints
+    `output_text`; the cell `source` is `source`."""
+    return {
+        "cells": [
+            {
+                "cell_type": "code",
+                "source": [source],
+                "outputs": [
+                    {"output_type": "stream", "name": "stdout", "text": [output_text]}
+                ],
+            }
+        ]
+    }
+
+
+def _write_notebook(tmp_path: Path, rel: str, doc: object, mtime: float) -> Path:
+    """Write `doc` (dict -> JSON, str -> verbatim) to `repo/rel` and stamp its
+    mtime to `mtime` so the freshness guard is deterministic."""
+    p = tmp_path / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(doc if isinstance(doc, str) else json.dumps(doc))
+    os.utime(p, (mtime, mtime))
+    return p
+
+
+def _nb_claim(value: float, cell, source: str = "out.ipynb", pattern: str = r"AUC: ([0-9.]+)"):
+    return Claim(
+        id="auc",
+        value=value,
+        tolerance=0.05,
+        locator=NotebookLocator(source=source, cell=cell, pattern=pattern),
+    )
+
+
+def test_run_reproduction_notebook_fresh_matching_is_reproduced(tmp_path):
+    _write_notebook(tmp_path, "out.ipynb", _notebook_doc("AUC: 0.91\n"), _RUN_START)
+    record = _run(
+        tmp_path, [_nb_claim(0.91, 0)], _noop_executor(), run_started_at=_RUN_START
+    )
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == 0.91
+
+
+def test_run_reproduction_notebook_fresh_near_value_is_within_tolerance(tmp_path):
+    _write_notebook(tmp_path, "out.ipynb", _notebook_doc("AUC: 0.9\n"), _RUN_START + 5)
+    record = _run(
+        tmp_path, [_nb_claim(0.91, 0)], _noop_executor(), run_started_at=_RUN_START
+    )
+    result = record.claim_results[0]
+    assert result.status == "within_tolerance"
+    assert result.observed == 0.9
+
+
+def test_run_reproduction_notebook_fresh_drifted_is_diverged_with_message(tmp_path):
+    _write_notebook(tmp_path, "out.ipynb", _notebook_doc("AUC: 0.5\n"), _RUN_START)
+    record = _run(
+        tmp_path, [_nb_claim(0.91, 0)], _noop_executor(), run_started_at=_RUN_START
+    )
+    result = record.claim_results[0]
+    assert result.status == "diverged"
+    assert result.observed == 0.5
+    assert "0.5" in result.message
+    assert "0.91" in result.message
+
+
+def test_run_reproduction_notebook_stale_exact_match_is_unverified(tmp_path):
+    # THE headline test of the whole slice: a notebook the run did NOT rewrite
+    # (mtime predates run start) is UNVERIFIED even when its stored output
+    # matches the claim exactly -- an author's committed notebook must never
+    # produce a false REPRODUCED.
+    _write_notebook(tmp_path, "out.ipynb", _notebook_doc("AUC: 0.91\n"), _RUN_START - 10)
+    record = _run(
+        tmp_path, [_nb_claim(0.91, 0)], _noop_executor(), run_started_at=_RUN_START
+    )
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "rewritten" in result.message
+    assert "run start" in result.message
+
+
+def test_run_reproduction_notebook_missing_is_unverified(tmp_path):
+    record = _run(
+        tmp_path, [_nb_claim(0.91, 0)], _noop_executor(), run_started_at=_RUN_START
+    )
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "out.ipynb" in result.message
+
+
+def test_run_reproduction_notebook_oversized_is_unverified_naming_size(tmp_path, monkeypatch):
+    monkeypatch.setattr(reproduce_module, "_MAX_MATCH_BYTES", 10)
+    p = _write_notebook(tmp_path, "out.ipynb", _notebook_doc("AUC: 0.91\n"), _RUN_START)
+    size = p.stat().st_size
+    assert size > 10
+    record = _run(
+        tmp_path, [_nb_claim(0.91, 0)], _noop_executor(), run_started_at=_RUN_START
+    )
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert str(size) in result.message
+
+
+def test_run_reproduction_notebook_non_json_is_unverified(tmp_path):
+    _write_notebook(tmp_path, "out.ipynb", "{not json", _RUN_START)
+    record = _run(
+        tmp_path, [_nb_claim(0.91, 0)], _noop_executor(), run_started_at=_RUN_START
+    )
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "not valid JSON" in result.message
+
+
+def test_run_reproduction_notebook_unresolvable_cell_is_unverified(tmp_path):
+    _write_notebook(tmp_path, "out.ipynb", _notebook_doc("AUC: 0.91\n"), _RUN_START)
+    # cell index 5 is out of range for the single-cell notebook.
+    record = _run(
+        tmp_path, [_nb_claim(0.91, 5)], _noop_executor(), run_started_at=_RUN_START
+    )
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "did not resolve" in result.message
+    assert "out of range" in result.message
+
+
+def test_run_reproduction_notebook_unresolvable_pattern_is_unverified(tmp_path):
+    _write_notebook(tmp_path, "out.ipynb", _notebook_doc("AUC: 0.91\n"), _RUN_START)
+    claim = _nb_claim(0.91, 0, pattern=r"F1: ([0-9.]+)")  # never matches
+    record = _run(tmp_path, [claim], _noop_executor(), run_started_at=_RUN_START)
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "did not resolve" in result.message
+
+
+def test_run_reproduction_notebook_claim_without_run_started_at_raises(tmp_path):
+    # Programming error, NOT a silent UNVERIFIED: dispatching a notebook claim
+    # with run_started_at=None is a non-bypassable guard that raises loudly.
+    _write_notebook(tmp_path, "out.ipynb", _notebook_doc("AUC: 0.91\n"), _RUN_START)
+    with pytest.raises(ValueError):
+        _run(tmp_path, [_nb_claim(0.91, 0)], _noop_executor())  # no run_started_at
+
+
+def test_run_reproduction_notebook_allow_install_uses_retry_written_notebook(tmp_path):
+    # M6a: run_started_at is stamped ONCE (here, before the first run) and not
+    # re-stamped on the --allow-install retry. The retry writes a fresh
+    # notebook, whose mtime is well after our injected run start, so it
+    # resolves.
+    run_started = 1.0  # any real file written now has a far-later mtime
+
+    def executor(argv, repo):
+        if executor.calls == 0:
+            executor.calls += 1
+            return 1, "No module named 'numpy'"
+        executor.calls += 1
+        _write_notebook(Path(repo), "out.ipynb", _notebook_doc("AUC: 0.91\n"), _now_mtime())
+        return 0, ""
+
+    executor.calls = 0
+    installer = _ScriptedInstaller(0)
+    record = _run(
+        tmp_path,
+        [_nb_claim(0.91, 0)],
+        executor,
+        allow_install=True,
+        installer=installer,
+        run_started_at=run_started,
+    )
+    assert executor.calls == 2
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == 0.91
+
+
+def _now_mtime() -> float:
+    import time
+
+    return time.time()

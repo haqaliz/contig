@@ -1,121 +1,151 @@
-# Phase-2 dig — reproduce-stdout-log-locator (C8 slice 4)
+# Understanding — feat/reproduce-notebook-locator (C8 slice 5)
 
-Verified against code at `feat/reproduce-stdout-log-locator/aliz` (branched from `origin/master`,
-v0.43.0). Baseline suite: **1829 passed, 1 skipped** (`uv run pytest`).
+Phase-2 dig note. Read after `issue.md`. Everything below is verified against the code in
+this worktree (branched from `origin/master` @ v0.44.0), not from memory.
 
-## What the work is really asking
+---
 
-Add a **third claim-locator addressing mode** to `contig reproduce`: bind a claim's observed value
-by **regex capture** over (a) the run's captured combined stdout+stderr, and/or (b) a repo-relative
-log/text file. Sibling of the shipped JSON `path` locator (slice 1.5) and TSV/CSV `column/row`
-locator (slice 3).
+## 1. What the work is really asking
 
-## Affected areas (exact)
+Add a **fifth claim-locator** to `contig reproduce` that binds a claim's observed value out
+of a Jupyter notebook's **cell output**, so a published `.ipynb` analysis can be reproduced
+instead of degrading every claim to `UNVERIFIED`.
 
-`src/contig/verification/reproduce.py` (905 lines) is where ~all the change lands, plus a small
-`cli.py` edit and tests. Nothing in `models.py`.
+The four shipped locators and where they live in
+`src/contig/verification/reproduce.py`:
 
-| Site | Lines | What changes |
-|---|---|---|
-| Module regex constants | 39-44 | a new compiled constant may sit alongside `_MISSING_MODULE_RE` |
-| `Locator` (frozen dc) | 142-152 | untouched |
-| `TableLocator` (frozen dc) | 155-171 | untouched |
-| `Claim.locator` union | 320-335 | widen `Locator \| TableLocator \| None` → `+ PatternLocator` |
-| `load_claims` presence probes | 380-386 | add `has_pattern` (+ any siblings) |
-| `load_claims` orphan guard | 388-392 | **must be relaxed** — a stdout locator has *no* `from` |
-| `load_claims` xor check | 400-404 | becomes a **three-way** mutual exclusion |
-| `load_claims` dispatch chain | 406-499 | new `elif has_pattern:` arm building the locator |
-| `run_reproduction` setup | 588-591 | possibly a third cache (`_text_cache`) for file-backed mode |
-| nested `_observe_located` | 593-640 | untouched (JSON) |
-| nested `_observe_table_located` | 642-685 | untouched (table) |
-| **new** nested `_observe_pattern_located` | after 685 | sibling observer |
-| per-claim dispatch head | 780-785 | add an explicit `elif isinstance(...)` arm |
-| `cli.py` containment loop | 805-821 | must skip a `source`-less (stdout) locator |
-| `cli.py` reproduce docstring | 753-757 | help note (S2-style) |
+| Slice | Claim keys | Locator type | Pure resolver | Observer |
+|---|---|---|---|---|
+| 1 | (none) | `None` | — | flat `--results` map lookup (`run_reproduction:1008-1064`) |
+| 1.5 | `from` + `path` | `Locator` (`:149-159`) | `resolve_pointer` (`:122`) | `_observe_located` (`:698`) |
+| 3 | `from` + `column` + `row` (+`header`/`delimiter`) | `TableLocator` (`:162-178`) | `resolve_cell` (`:237`) | `_observe_table_located` (`:747`) |
+| 4 | `pattern` (+ optional `from`) | `PatternLocator` (`:181-193`) | `resolve_match` (`:342`) | `_observe_pattern_located` (`:792`) |
 
-## Load-bearing facts found in the code
+The extension points are all obvious and already shaped for a fifth sibling:
 
-1. **The input is already there and unused.** The executor seam is
-   `Callable[[list[str], Path], tuple[int, str]]` (`reproduce.py:559`). `run_output` is bound at
-   `:687`, rebound by the retry at `:721`, and read in exactly two places — `detect_missing_module`
-   (`:691`) and `Diagnosis.evidence=[run_output[:500]]` (`:696`). Nothing else consumes it.
-2. **Closures make "which run's output" free.** Both observers are **nested functions** inside
-   `run_reproduction` (not top-level). Python closures capture the *variable*, not the value, and
-   every observer call happens at `:783/:785` — well after the retry rebind at `:721`. So a nested
-   pattern observer referencing `run_output` automatically sees the **retried** run's output. No
-   restructuring needed; caveat #3 from the card is answered by the code's existing shape. It must
-   still be stated in the docstring, since it is the one observable asymmetry vs file locators
-   (which are also read after the last run, so both agree).
-3. **A failed run never reaches any locator.** `:745-767` short-circuits every claim to
-   `unverified` (`"run did not complete (exit N)"`) and returns before the dispatch loop. So a
-   stdout locator can only ever read the output of a **successful** run. A real scope limit worth
-   naming honestly: this does *not* scrape numbers out of a crashed run.
-4. **`.source` is the internal name for the claims-file key `from`** (`from` is a Python keyword).
-   Both existing locators declare `source: str` first. The CLI containment loop (`cli.py:811-821`)
-   and both engine guards do `(repo_path / loc.source).resolve()` **unconditionally**.
-   ⇒ **A stdout locator has no file, so `source` must be optional, and all three call sites must
-   short-circuit before the path join.** This is the single most likely place to introduce a crash
-   or a containment hole. `cli.py:812` currently reads `if claim.locator is None: continue` — it
-   needs `or claim.locator.source is None`.
-5. **The dispatch `else` is an unguarded fallback**, not an isinstance test:
-   ```python
-   if isinstance(claim.locator, TableLocator): ... else: _observe_located(claim.locator)
-   ```
-   Adding a third type **without** touching `:780-785` would silently route it into the JSON reader
-   and raise `AttributeError` on the missing `.path`. Must become explicit.
-6. **The observers' contract** is `tuple[float | None, str]` — `(value, "")` on success,
-   `(None, reason)` on failure; the reason is passed through *unwrapped* into
-   `ClaimResult.message` (`:795`), so each message must be self-describing (all existing ones begin
-   `locator ...` and name the source).
-7. **The pure-resolver idiom** to mirror: a top-level, never-raising
-   `resolve_pointer(data, expr) -> object | None` /
-   `resolve_cell(rows, column, row, header) -> tuple[str | None, str]`. A pattern sibling would be
-   `resolve_match(text, pattern, ...) -> tuple[str | None, str]` returning the raw captured
-   **string**.
-8. **The numeric-string rule follows slice 3, not slice 1.5.** A regex capture is a string by
-   construction, exactly like a table cell — so it is `float()`-parsed after `.strip()`, then
-   finite-guarded. The JSON locator's "a numeric string is strictly UNVERIFIED" rule does **not**
-   transfer. (Precedent + rationale: the `_observe_table_located` docstring, `:650-654`.)
-9. **Output is never persisted.** `ReproduceRecord` (`models.py:662-678`) has no stdout/log field;
-   the only surviving text is `run_output[:500]` in `Diagnosis.evidence`, and only when the
-   install/retry branch fired. Making the matched output auditable would be a `models.py` change —
-   out of scope unless deliberately chosen.
-10. **Ambiguity precedent already exists.** `resolve_cell` returns `f"row {row!r} matched 0 rows"` /
-    `matched {n} rows` (`:290-292`) and `column {c!r} is ambiguous: {n} header matches`
-    (`:257-259`). The 0-or-many rule for regex matches should reuse that exact wording shape.
-11. **Doc surfaces for a shipped slice** (from `git show --stat` on the slice-3 commits): only
-    `CHANGELOG.md`, `docs/technical/CAPABILITY_ROADMAP.md` (C8), and `docs/planning/**`. Slice 3
-    touched **no** README/FEATURES/USAGE — the reproduce surface is documented in the CLI docstring
-    (`cli.py:745-757`).
+- **Schema:** `load_claims` (`:414-614`) — the mutual-exclusion block is `:456-503`.
+- **Type union:** `Claim.locator` (`:411`) and the same union in `load_claims` (`:478`).
+- **Dispatch:** the explicit `isinstance` chain in `run_reproduction` (`:970-979`) — its
+  comment already records *why* it is explicit ("a `PatternLocator` dropping into the JSON
+  reader would raise `AttributeError` on the missing `.path`").
+- **Caches:** `_json_cache` / `_table_cache` / `_text_cache` (`:694-696`), all keyed by
+  resolved absolute path, parse-at-most-once-per-run.
+- **Containment:** CLI pre-run refusal (`cli.py:821-832`) + engine defense-in-depth
+  (`relative_to(repo_root)`, once per observer). Both already key off `.source`, so a new
+  locator that names its file field `source` needs **no CLI change** — unlike slice 4,
+  which had to add the `locator.source is None` skip at `cli.py:823`.
 
-## Ambiguities / open questions for the interview
+## 2. Affected areas (complete)
 
-- **Q1 — How is "the run's output" addressed vs a log file?** Options: `from` absent ⇒ stdout
-  (implicit), or an explicit `"stream": "stdout"` / `"from": "-"` sentinel. Affects the
-  `load_claims` orphan guard (fact #4) and readability.
-- **Q2 — Which capture is the value?** Group 1 by default when the pattern has groups, whole match
-  otherwise? Or require an explicit `group` (int or name)? Named groups (`(?P<v>…)`) are a
-  self-documenting third option.
-- **Q3 — Multiple matches.** Strict 0-or-many ⇒ UNVERIFIED (the shipped precedent, fact #10), or
-  an `occurrence: first|last` selector? Progress logs legitimately print the same line many times,
-  so strictness may reject common real cases — but a selector is a guess-shaped foot-gun.
-- **Q4 — Regex safety framing.** A user-supplied pattern is a ReDoS surface, but `--run` already
-  executes an **arbitrary command** from the same trust domain (`cli.py:716`), so a regex is
-  strictly *less* dangerous than what the same invocation already authorizes. Proposal:
-  compile-validate in `load_claims` (bad pattern ⇒ `ClaimsError`, pre-run, nothing written) + cap
-  the matched text length; do **not** attempt a regex timeout (impossible stdlib-only).
-- **Q5 — Multiline/flags.** Are `re.MULTILINE`/`re.IGNORECASE` exposed as claim fields, or is the
-  pattern trusted to carry inline flags (`(?im)`)? Inline flags need no schema surface at all.
+- `src/contig/verification/reproduce.py` — new dataclass, new pure resolver(s), new
+  observer, `load_claims` validation, dispatch chain. **The only production file that must
+  change**, plus the CLI docstring.
+- `src/contig/cli.py:714-765` — the `reproduce` command docstring documents the locator
+  schema for users; the containment loop (`:821-832`) is expected to need **no** change.
+- `tests/` — new `tests/test_reproduce_notebook_locator.py` (pure resolver, mirroring
+  `test_reproduce_pattern_locator.py`), plus additions to `tests/test_reproduce.py`
+  (`load_claims` validation + engine dispatch) and `tests/test_cli_reproduce.py` (e2e).
+- Docs at ship time: `CHANGELOG.md`, `docs/technical/CAPABILITY_ROADMAP.md` (C8),
+  `FEATURES.md`, `README.md` if it carries the claims schema.
+- **No `models.py` change** (`ClaimResult`/`ReproduceRecord`/`ClaimStatus` untouched), no
+  `classify` change, no new runtime dependency (`json` is stdlib; **no `nbformat`**).
 
-## Guardrail check (`CLAUDE.md`)
+## 3. The notebook format, and what it implies
 
-Layer 2 only (a resolver over verify output; never NL→workflow, never a conclusions verdict) ✅ ·
-Moat = verification/reproducibility infra + corpus ✅ · Stdlib-only holds (`re` already imported)
-✅ · No raw-data egress (a file-backed pattern reuses the containment guard; the stdout variant
-reads only in-memory output Contig itself produced) ✅ · Test-first ✅.
+An `.ipynb` is a JSON document: `{"cells": [...], "nbformat": 4, "metadata": {...}}`. Each
+cell is `{"cell_type": "code"|"markdown"|"raw", "source": str | list[str],
+"execution_count": int|null, "metadata": {"tags": [...]}, "outputs": [...]}`. Only code
+cells carry `outputs`. Each output is one of:
 
-## Contradictions with the card brief
+- `{"output_type": "stream", "name": "stdout"|"stderr", "text": str | list[str]}` — what
+  `print()` produces (**the dominant case for a headline number**).
+- `{"output_type": "execute_result" | "display_data", "data": {"text/plain": str|list[str],
+  ...}}` — a bare expression on the last line of a cell.
+- `{"output_type": "error", ...}` — a traceback.
 
-None material. One correction: the card's caveat #3 ("under `--allow-install` the bound output must
-be the RETRIED run's") is **already satisfied by the closure shape** (fact #2) rather than needing
-new work — it becomes a test + a docstring sentence, not a mechanism.
+Two facts drive the design: `source` and `text` are **`str` or `list[str]`** (both legal;
+nbformat joins the list with no separator), and every value is **a string by
+construction** — so the numeric-string rule here is the **slice-3/4 rule** (strip +
+`float()`), never the slice-1.5 strict-JSON rule.
+
+## 4. The load-bearing risk, and a way to actually solve it
+
+**The risk (from the card):** a committed `.ipynb` already contains the original authors'
+stored outputs. Naively reading them would report `REPRODUCED` for numbers that were never
+recomputed — a false pass, the exact failure the whole verdict contract exists to prevent.
+It is strictly worse than the other locators' failure modes because a committed notebook
+*always* looks like a successful result.
+
+**The framing that dissolves it:** we do not need to detect "executed vs committed" (which
+is genuinely undecidable — `execution_count` is trivially non-null in any committed
+notebook). We need to detect **"regenerated by *this* run"**, and that is decidable: the
+engine knows when the run started, and the filesystem knows when the notebook was last
+written. A notebook whose mtime predates the run start was demonstrably not rewritten by
+the run.
+
+So the proposal to pressure-test in the PRD is a **freshness guard**: a notebook locator
+resolves only against a file modified at/after the run's start; otherwise `UNVERIFIED`
+naming the staleness. Open questions this raises (for the interview, not to settle here):
+
+- **Clock/granularity.** mtime resolution and same-second writes could mark a genuinely
+  fresh notebook stale. Which direction does the tie break, and is a small tolerance
+  honest or a hole?
+- **Determinism in CI.** The run-start timestamp must be injected/derived, and fixture
+  mtimes set explicitly via `os.utime` — no wall-clock flake.
+- **Scope.** Slices 1.5/3 have the *same* stale-artifact hole (a committed `results.json`
+  or `de.tsv` reproduces just as falsely). Widening the guard to them would change shipped
+  behavior; keeping it notebook-only is defensible but must be **stated**, not silently
+  inconsistent.
+- **Opt-out.** Does a user ever legitimately point at a notebook the run didn't write?
+
+## 5. Design questions to settle in the PRD (not decided here)
+
+1. **Cell addressing.** The natural symmetry with the shipped `TableLocator.row`
+   (`int | {key: val}`) is `cell: int | {"contains": "<source substring>"}` — an index, or
+   the cell whose **source code** contains a string. A source match survives cell
+   reordering and needs **no repo modification** (unlike `metadata.tags`, which would be a
+   "cooperative repo" requirement — exactly what slice 1.5 existed to escape).
+   0-or-many matches must degrade with the **count named**, mirroring `resolve_cell`'s
+   `"row {row!r} matched {n} rows"` and `resolve_match`'s `"matched {n} times"`.
+2. **Index over which list** — all cells (JSON-faithful) or code cells only (what a reader
+   counts)? Whichever is chosen must be stated in the message text.
+3. **Which output(s).** A cell can have several. Candidate rule: concatenate `stream` text
+   and `execute_result`/`display_data` `text/plain` **in output order** into one string,
+   then let the claim's `pattern` do the disambiguation (its 1-match strictness is already
+   the ambiguity guard). Whether `stderr` streams and `error` outputs are included needs an
+   explicit call.
+4. **Value binding.** Reuse `resolve_match` over the cell text (`pattern` required), or
+   also allow a bare cell address whose whole stripped output is float-parsed (nice for a
+   cell that prints exactly one number)? Prefer the smallest surface that is still useful.
+5. **Schema exclusivity.** `load_claims`'s exclusion is currently three-way
+   (`path` xor `column`+`row` xor `pattern`, `:465-508`). A notebook claim reuses `from`
+   **and probably `pattern`**, so the new key (`cell`) makes `pattern` legal in two modes —
+   the exclusion logic needs care, and a `cell` combined with a table field must be a
+   **pre-run `ClaimsError`**, never silently ignored.
+6. **Size bound.** `_MAX_MATCH_BYTES` (8 MiB) is checked via `stat()` before reading in
+   slice 4's file mode. A notebook with embedded base64 images is easily larger than its
+   text, so the bound should be applied to the **file** before `json.loads`, and the
+   message must name the size (the slice-4 precedent).
+
+## 6. Contradictions / things the brief got slightly wrong
+
+- The brief says "reusing the shipped `resolve_match` … over the cell's `text/plain` or
+  stream output". That is right, but incomplete: `resolve_match` operates on a `str`, so
+  the genuinely new pure code is a **notebook→cell→text extractor**, and `resolve_match` is
+  composed on top. Two responsibilities, and TDD should keep them separate — the extractor
+  is where all the never-raise surface lives.
+- The brief frames the caveat as "cannot be reliably detected → degrade to UNVERIFIED".
+  Section 4 above **sharpens** that: the undecidable question (executed vs committed) is
+  the wrong question; the decidable one (rewritten by this run) is answerable. The PRD
+  should adopt the sharper framing.
+
+## 7. Guardrail check (`CLAUDE.md`)
+
+Layer 2 only — verify/reproduce infrastructure, no NL→workflow generation, no judgement on
+any paper's conclusions. ✅
+Moat — deepens the reproduce guarantee and grows the C8 corpus; gets better as base models
+improve (a model authoring claims files benefits; it is not replaced). ✅
+Founder's edge — pure engineering, stdlib-only, no wet-lab/clinical/proprietary
+precondition. ✅
+No raw-read egress — containment guard reused unchanged; only claim diffs leave. ✅
+Test-first, deterministic, no network or notebook execution in CI. ✅

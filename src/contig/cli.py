@@ -762,6 +762,14 @@ def reproduce(
     pattern has capturing groups, otherwise the whole match. Matching is
     strict: a pattern that matches 0 times or more than 1 time leaves the
     claim UNVERIFIED rather than guessing which number was meant.
+
+    A locator may target a Jupyter notebook cell's output (`from` + `cell` +
+    `pattern`), where `cell` is a code-cell index (or `{"contains": <source
+    substring>}`) and `pattern` is applied to that cell's captured stdout/
+    result text -- e.g. `{"id": "auc", "value": 0.91, "from": "out.ipynb",
+    "cell": 7, "pattern": "AUC: ([0-9.]+)"}`. A notebook locator resolves only
+    against a notebook the run rewrote (checked by file mtime); a notebook the
+    run did not write stays UNVERIFIED.
     """
     repo_path = Path(repo)
     if not repo_path.is_dir():
@@ -835,6 +843,12 @@ def reproduce(
     reproduce_id = _generate_run_id()
     created_at = datetime.now(timezone.utc).isoformat()
 
+    # Stamp run-start once, AFTER all pre-run validation and BEFORE the executor
+    # runs. A notebook locator resolves only against a notebook whose mtime is
+    # >= this instant (i.e. one this run rewrote); an older notebook stays
+    # UNVERIFIED. Captured here so an --allow-install retry does not re-stamp it.
+    run_started_at = time.time()
+
     record = run_reproduction(
         repo,
         run,
@@ -846,6 +860,7 @@ def reproduce(
         reproduce_id=reproduce_id,
         allow_install=allow_install,
         installer=default_installer,
+        run_started_at=run_started_at,
     )
     write_reproduce_bundle(record, Path(runs_dir) / reproduce_id)
 

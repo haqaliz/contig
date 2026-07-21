@@ -1044,7 +1044,7 @@ ever. See [`../planning/variant-annotation-assay/prd.md`](../planning/variant-an
 
 ---
 
-## C8. Reproduce & verify *existing published* work  ·  first slice SHIPPED v0.40.0 + output-locator slice 1.5 SHIPPED v0.41.0 + environment-resurrection slice 2 SHIPPED (Unreleased) + TSV/CSV table-locator slice 3 SHIPPED (Unreleased) + stdout/log pattern-locator slice 4 SHIPPED (Unreleased)  ·  M7+
+## C8. Reproduce & verify *existing published* work  ·  first slice SHIPPED v0.40.0 + output-locator slice 1.5 SHIPPED v0.41.0 + environment-resurrection slice 2 SHIPPED (Unreleased) + TSV/CSV table-locator slice 3 SHIPPED (Unreleased) + stdout/log pattern-locator slice 4 SHIPPED (Unreleased) + notebook (`.ipynb`) locator slice 5 SHIPPED (Unreleased)  ·  M7+
 
 Point the shipped run → self-heal → verify → reproduce engine at a **third-party,
 already-published** bioinformatics repository (a paper + its code/data) and report which of
@@ -1215,6 +1215,43 @@ figure/plot & table-image claims stay hard-blocked (no plot-hash, stdlib-only). 
 pure resolver → engine dispatch → CLI containment/e2e); deterministic; **no real repo, network, or
 pip in CI** (scripted executors + on-disk fixture logs). Plan/PRD under
 `docs/planning/reproduce-stdout-log-locator/`.
+
+**Shipped (notebook `.ipynb` locator — slice 5, Unreleased).** Slices 1.5/3/4 read a repo's JSON,
+TSV/CSV, or free-text output; none could read a **Jupyter notebook** — the very medium the C8
+problem statement is built on (of 27,271 biomedical-paper notebooks only ~3.2% reproduced;
+Samuel & Mietchen 2024). Against a `.ipynb` every claim degraded to `UNVERIFIED`. A claim may now
+carry `{"from": <.ipynb>, "cell": <int | {"contains": <source substring>}>, "pattern": <regex>}`.
+**Cell addressing mirrors `TableLocator.row`:** an int indexes the full `cells` array
+(JSON-faithful, out of range → UNVERIFIED naming the count), or `{"contains": s}` selects the one
+cell whose `source` contains `s` (survives reordering, needs no repo edit — unlike a tags scheme);
+**0-or->1 → UNVERIFIED with the count named**, never a pick. **Output text = stdout streams +
+`text/plain`, in output order** (a new pure stdlib `resolve_notebook_cell_text`, sibling of the JSON
+walker / table reader / regex resolver, never-raising); **`stderr` and `error` tracebacks are
+excluded** so a progress bar or traceback can't be the match surface. `pattern` is **required** and
+the capture reuses slice-4's unchanged `resolve_match`; a numeric-string capture is the normal case
+(slice-3/4 rule). **The load-bearing piece is an mtime freshness guard:** a committed notebook holds
+the *authors'* stored outputs, so reading them would report a false `REPRODUCED` — the exact failure
+the verdict contract prevents, and one a committed notebook *always* presents. The undecidable
+"executed vs committed" question is replaced by the decidable one Contig needs — *was this file
+rewritten by **this** run?* A notebook resolves only when its **mtime ≥ the run start** (stamped
+once before the first run, not re-stamped on an `--allow-install` retry; no fudge tolerance),
+checked **before** any parse; otherwise UNVERIFIED naming the staleness. The guard is
+**non-bypassable** — a notebook claim with no run-start raises rather than silently passing.
+**Honest limit:** it proves *rewritten*, not *recomputed* (a `--run` of `cp committed.ipynb out.ipynb`
+passes while computing nothing) — it closes the dominant honest hole, not an adversarial self-deceit,
+the same boundary slice 1's "re-runnable" drew. `load_claims` went **four-way** (`path` xor
+`column`+`row` xor `pattern` xor `cell`+`pattern`), rejecting a `cell` with `path`/table fields
+pre-run (exit non-zero, nothing written); a `pattern`+`from` claim without `cell` stays a
+byte-identical slice-4 `PatternLocator`. Containment, the 8 MiB size bound, a per-run
+`_notebook_cache`, `classify`/`ClaimResult`/`ReproduceRecord`/bundle/signing/`--fail-on-diverged`
+all reused — **no `models.py` change**, stdlib-only, **no `nbformat`/`jupyter` dependency**.
+**Deferred:** notebook-specific size bound (8 MiB is tight for embedded figures), extending the
+freshness guard to the JSON/table locators, `metadata.tags`/multi-key/regex cell matching, non-text
+outputs, plus the standing C8 list (paper-parsing, remote `<doi|url>`, dashboard card, C6 fold-in);
+figures stay hard-blocked. Test-first (pure extractor → schema → engine + guard → CLI e2e);
+deterministic (fixture `.ipynb`, `os.utime` mtimes, injected `run_started_at`, scripted executors);
+**no real repo, notebook execution, network, or pip in CI**. Plan/PRD under
+`docs/planning/reproduce-notebook-locator/`.
 
 **Correction to the build surface below (verified against the code, 2026-07-18):** the sentence
 "reuses the existing float-tolerance / plot-hash / seed-aware diffing" was only one-third true.

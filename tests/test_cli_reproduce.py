@@ -8,6 +8,7 @@ fake executor injected via monkeypatch so no real process runs in CI.
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 from typer.testing import CliRunner
@@ -962,6 +963,217 @@ def test_reproduce_fail_on_diverged_exits_nonzero_for_pattern_claim(tmp_path, mo
     assert result.exit_code != 0
     assert "DIVERGED" in result.output.upper()
     assert any(runs_dir.rglob("reproduce_record.json"))
+
+
+# ---------------------------------------------------------------------------
+# notebook cell-output locator -- CLI containment + end-to-end [C8 slice 5, Phase 4]
+# ---------------------------------------------------------------------------
+
+
+def _notebook_doc(printed: str):
+    """A minimal nbformat-4-ish notebook whose single code cell (index 0) has a
+    stdout stream output printing `printed`.
+    """
+    return {
+        "cells": [
+            {
+                "cell_type": "code",
+                "source": ["print(auc)\n"],
+                "outputs": [
+                    {"output_type": "stream", "name": "stdout", "text": [printed]}
+                ],
+            }
+        ],
+        "metadata": {},
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
+
+
+def _write_notebook_executor(printed: str, name: str = "out.ipynb"):
+    """Fake executor that WRITES a fresh notebook into the repo dir during the
+    run. Because it runs inside run_reproduction (after run_started_at is
+    captured), the file's mtime is naturally >= run_started_at -- i.e. fresh.
+    """
+
+    def execute(cmd, cwd):
+        (cwd / name).write_text(json.dumps(_notebook_doc(printed)))
+        return 0, ""
+
+    return execute
+
+
+def test_reproduce_notebook_locator_fresh_end_to_end_reproduced(tmp_path, monkeypatch):
+    # FRESH: the run rewrites out.ipynb, whose stdout cell prints the claimed
+    # number -> the mtime is >= run_started_at, so the notebook resolves and the
+    # claim reproduces.
+    repo = _repo(tmp_path)
+    claims = _claims_file(
+        tmp_path,
+        [
+            {
+                "id": "auc",
+                "value": 0.91,
+                "tolerance": 0.02,
+                "from": "out.ipynb",
+                "cell": 0,
+                "pattern": "([0-9.]+)",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor", _write_notebook_executor("0.91")
+    )
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "REPRODUCED" in result.output.upper()
+    assert "auc" in result.output
+    assert any(runs_dir.rglob("reproduce_record.json"))
+
+
+def test_reproduce_notebook_locator_stale_stays_unverified(tmp_path, monkeypatch):
+    # STALE: out.ipynb is pre-created with an OLD mtime and the run does NOT
+    # rewrite it. Even though the content matches the claim exactly, the mtime
+    # predates run start, so the notebook is treated as not produced by this run
+    # -> UNVERIFIED. Exit 0 (no --fail-on-diverged).
+    repo = _repo(tmp_path)
+    nb = repo / "out.ipynb"
+    nb.write_text(json.dumps(_notebook_doc("0.91")))
+    old = 1_000_000.0  # well before any run_started_at captured by the CLI
+    os.utime(nb, (old, old))
+    claims = _claims_file(
+        tmp_path,
+        [
+            {
+                "id": "auc",
+                "value": 0.91,
+                "tolerance": 0.02,
+                "from": "out.ipynb",
+                "cell": 0,
+                "pattern": "([0-9.]+)",
+            }
+        ],
+    )
+    # Executor deliberately does NOT touch out.ipynb.
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor",
+        _fake_executor(results=None, exit_code=0, output=""),
+    )
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "UNVERIFIED" in result.output.upper()
+    # The one claim is UNVERIFIED, not reproduced: the summary shows 0 reproduced.
+    assert "0/1 REPRODUCED" in result.output.upper()
+    assert "1 UNVERIFIED" in result.output.upper()
+    assert any(runs_dir.rglob("reproduce_record.json"))
+
+
+def test_reproduce_notebook_locator_missing_pattern_errors_and_writes_no_record(
+    tmp_path, monkeypatch
+):
+    # MALFORMED: a notebook claim (has `cell`) missing `pattern` is rejected by
+    # load_claims pre-run -> exit 1, nothing written, mirroring the other
+    # malformed-claims tests.
+    repo = _repo(tmp_path)
+    claims = _claims_file(
+        tmp_path,
+        [{"id": "auc", "value": 0.91, "from": "out.ipynb", "cell": 0}],
+    )
+    monkeypatch.setattr("contig.cli.default_command_executor", _fake_executor({}))
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+    assert result.exit_code != 0
+    assert result.output
+    assert not any(runs_dir.rglob("reproduce_record.json")) if runs_dir.exists() else True
+
+
+def test_reproduce_escaping_notebook_locator_from_errors_and_writes_no_record(
+    tmp_path, monkeypatch
+):
+    # ESCAPING: a notebook claim whose `from` escapes the repo is refused pre-run
+    # by the containment loop (NotebookLocator.source is a real string, never
+    # None, so the source-is-None skip does not apply) -> exit 1, no bundle.
+    repo = _repo(tmp_path)
+    claims = _claims_file(
+        tmp_path,
+        [
+            {
+                "id": "auc",
+                "value": 0.91,
+                "from": "../secret.ipynb",
+                "cell": 0,
+                "pattern": "([0-9.]+)",
+            }
+        ],
+    )
+    monkeypatch.setattr("contig.cli.default_command_executor", _fake_executor({}))
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "../secret.ipynb" in result.output
+    assert not any(runs_dir.rglob("reproduce_record.json")) if runs_dir.exists() else True
+
+
+def test_reproduce_docstring_notes_notebook_locator_support():
+    # S2: the locator sentence must also document the notebook form. Assert on
+    # the raw docstring, never the Rich-rendered `--help`.
+    from contig.cli import reproduce
+
+    doc = (reproduce.__doc__ or "").lower()
+    assert "notebook" in doc
+    assert "cell" in doc
+    assert "mtime" in doc
+    assert "unverified" in doc
 
 
 def test_reproduce_docstring_notes_pattern_locator_support():
