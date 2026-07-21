@@ -6,6 +6,75 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`contig reproduce` gains a TSV/CSV table cell locator — the C8 slice 3 named as "the next
+  step" by both prior locator slices.** Slice 1.5 (v0.41.0) could only bind a claim's observed
+  value from a repo's **structured JSON** output; but in bioinformatics the numbers a paper
+  reports overwhelmingly live in **tabular** output — DESeq2 results tables, count matrices,
+  feature/stat tables — as `.tsv`/`.csv` (often gzipped). Against those repos every claim
+  degraded to `UNVERIFIED`. A claim's locator may now also carry `{"from": <repo-relative
+  .tsv/.csv[.gz] file>, "column": <name|int>, "row": <int|{key:val}>, "header"?: bool,
+  "delimiter"?: str}` — naming a cell the same way the JSON locator names a `path` — so
+  `contig reproduce` reads numbers straight out of real, unmodified tabular output.
+  - **Two addressing modes.** Named: a header column name + a `{key: value}` row match
+    (`row: {"gene_id": "ENSG…"}`, `column: "log2FoldChange"`). Positional: an integer column
+    index + integer row index with `header: false`. Indices are 0-based, matching the JSON
+    locator's `[n]` list indices.
+  - **A new pure, stdlib table reader** (`verification/reproduce.py::_read_table` +
+    `resolve_cell`, siblings of the JSON walker): `_read_table` reads `.tsv`/`.csv` via
+    `csv.reader` and is gzip-transparent (`.tsv.gz`/`.csv.gz` via stdlib `gzip`, text mode,
+    utf-8); `resolve_cell` resolves column-then-row against parsed rows and is index-safe on any
+    shape — ragged rows, empty files, header-only tables, directory paths, non-UTF-8 files — and
+    **never raises**. `_resolve_delimiter` infers `\t` for `.tsv`/`.tab` and `,` for `.csv`
+    (stripping one trailing `.gz` first); an explicit `delimiter` always overrides the extension.
+  - **`load_claims` validates the table shape structurally, pre-run.** `from` must carry
+    exactly one of `{path}` (JSON) or `{column, row}` (table) — mixing them, or a table field
+    without `from`, is a `ClaimsError` (exit non-zero, nothing written). `column` must be a
+    non-empty string or non-negative int; `row` a non-negative int or a single-key
+    `{str: str}` object; `delimiter` a single character; `header` a bool. A `row`-object or a
+    string `column` **requires** `header: true` (a header names the key column) — the
+    combination with `header: false` is rejected at load, not silently misread. An
+    unrecognized extension (`.txt`) with no explicit `delimiter` is also a load-time
+    `ClaimsError`, never a silent wrong-delimiter parse.
+  - **`run_reproduction` dispatches on the locator's type** (`isinstance(claim.locator,
+    TableLocator)`) to a new `_observe_table_located`, a sibling of the JSON `_observe_located`
+    reusing the exact same containment guard, per-run parse cache (`_table_cache`, keyed by
+    resolved path — a table `from` is parsed **at most once per run** even when several claims
+    address different cells of it), and UNVERIFIED plumbing. The resolved cell string is
+    `float()`-parsed after `.strip()`; the finite float feeds the **unchanged** `classify` →
+    `REPRODUCED`/`WITHIN-TOLERANCE`/`DIVERGED`.
+  - **The deliberate divergence from the JSON rule: a numeric-string cell is the normal, valid
+    case.** Every table cell is a string by construction, so `"30.4"` classifies as the observed
+    value here — unlike the JSON locator, where a numeric string is strictly `UNVERIFIED`. A
+    cell that doesn't `float()`-parse (empty, `"NA"`, `"1,024"`, `"1.5%"`) or parses to a
+    non-finite value (`nan`/`inf`) is `UNVERIFIED`, never coerced, never guessed.
+  - **No false reproduce, ever.** Every unresolved/ambiguous address is `UNVERIFIED`, never
+    `DIVERGED`: a missing/dir/non-UTF-8/unparseable `from`; an absent or duplicate header
+    column name; a column/row index out of range; a ragged row shorter than the addressed
+    column; a `row`-key match with **0 or more than 1** hits (0-or-many-matches is treated as
+    ambiguous, never an arbitrary pick — the count is named in the message). Key-column compare
+    is exact on the `.strip()`ed cell string.
+  - **Safety and reuse, unchanged.** A table claim's `from` flows through the same `.source`
+    field the CLI containment loop and the engine's defense-in-depth guard already check
+    (`cli.py`'s pre-run escape/absolute-path rejection, and the engine's own
+    `resolved.relative_to(repo_root)` guard) — no new code was needed there; an escaping/
+    absolute `from` is refused **before any run**, and a path that reaches the engine directly
+    degrades to `UNVERIFIED` with the file **never read**. `classify`, `ClaimResult`,
+    `ReproduceRecord`, bundle writing, signing, `--fail-on-diverged` are all reused as-is — **no
+    `models.py` change**; `claims_sha256` already covers the new claim fields since they're part
+    of the claims-file bytes. Stdlib-only (`csv` + `gzip`, both already stdlib) — no new
+    dependency.
+  - **Honest scope / limits (recorded, not glossed).** Single key-column equality only this
+    slice — no multi-key/predicate row match, no column ranges, no regex. No stdout/log
+    scraping, no notebook (`.ipynb`) numeric extraction. Figure/plot and table-image claims
+    remain hard-blocked (no plot-hash exists; adding perceptual-image-hashing would break the
+    stdlib-only dependency contract). No paper-parsing, no remote `<doi|url>`, no dashboard
+    card, no C6 eval fold-in — all deferred to later slices. Test-first (pure reader → engine
+    dispatch → CLI containment/e2e), deterministic, **no real repo or network in CI** — tests use
+    on-disk fixture `.tsv`/`.csv`/`.tsv.gz` tables written to `tmp_path`, mirroring the JSON
+    locator's test discipline.
+
 ## [0.42.0] - 2026-07-19
 
 ### Added

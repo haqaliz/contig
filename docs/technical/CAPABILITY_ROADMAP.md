@@ -1044,7 +1044,7 @@ ever. See [`../planning/variant-annotation-assay/prd.md`](../planning/variant-an
 
 ---
 
-## C8. Reproduce & verify *existing published* work  ·  first slice SHIPPED v0.40.0 + output-locator slice 1.5 SHIPPED v0.41.0 + environment-resurrection slice 2 SHIPPED (Unreleased)  ·  M7+
+## C8. Reproduce & verify *existing published* work  ·  first slice SHIPPED v0.40.0 + output-locator slice 1.5 SHIPPED v0.41.0 + environment-resurrection slice 2 SHIPPED (Unreleased) + TSV/CSV table-locator slice 3 SHIPPED (Unreleased)  ·  M7+
 
 Point the shipped run → self-heal → verify → reproduce engine at a **third-party,
 already-published** bioinformatics repository (a paper + its code/data) and report which of
@@ -1090,9 +1090,9 @@ non-finite — is `UNVERIFIED`, never a false pass, never `DIVERGED`. Safety: an
 containment guard, and the engine defensively never reads outside the repo. No new dependency
 (stdlib-only holds); no model/verdict/exit-code contract change; `claims_sha256` already covers the
 locators. **JSON only** this slice — stdout/CSV/notebook/figure numbers still degrade to UNVERIFIED
-honestly. **Deferred:** a TSV/CSV locator (the named next step); slice 2 (environment resurrection)
-and everything after it (unchanged from the slice-1 list above). Test-first (walker → `load_claims`
-→ engine → CLI); deterministic; no real repo or network in CI.
+honestly. **Deferred:** slice 2 (environment resurrection) and everything after it (unchanged from
+the slice-1 list above). Test-first (walker → `load_claims` → engine → CLI); deterministic; no real
+repo or network in CI.
 
 **Shipped (environment resurrection — slice 2, Unreleased).** The load-bearing piece: `contig
 reproduce` can now recover a repo that *doesn't run yet* because it's missing a Python dependency —
@@ -1120,8 +1120,46 @@ reproduce command-executor seam widened from `int` to `(exit_code, combined_outp
 seams are untouched. No new runtime dependency (injected installer). Test-first with a scripted
 executor + scripted installer — **no real repo, network, or pip in CI**. **Deferred:** import→package
 alias map, iterative multi-module resolution, version pinning from a traced execution, venv
-isolation, and the TSV/CSV locator (the named next step). Plan/PRD under
-`docs/planning/reproduce-env-resurrection/`.
+isolation. Plan/PRD under `docs/planning/reproduce-env-resurrection/`.
+
+**Shipped (TSV/CSV output-locator — slice 3, Unreleased).** Slice 1.5 could only bind a claim's
+observed value from a repo's **structured JSON** output; but in bioinformatics the numbers a paper
+reports overwhelmingly live in **tabular** output — DESeq2 results tables, count matrices,
+feature/stat tables — as `.tsv`/`.csv` (often gzipped), against which every claim degraded to
+`UNVERIFIED`. A claim's locator may now also carry `{"from": <repo-relative .tsv/.csv[.gz] file>,
+"column": <name|int>, "row": <int|{key:val}>, "header"?: bool, "delimiter"?: str}`, naming a cell
+the same way the JSON locator names a `path`. Two addressing modes: named (header column name +
+a `{key: value}` row match) and positional (integer column + integer row, `header: false`), 0-based
+like the JSON locator's `[n]`. A new pure stdlib table reader
+(`verification/reproduce.py::_read_table` + `resolve_cell`, siblings of the JSON walker) reads
+`.tsv`/`.csv` via `csv.reader`, is gzip-transparent (`.tsv.gz`/`.csv.gz`), and is index-safe on any
+shape — ragged rows, empty files, header-only tables, directory paths, non-UTF-8 files — **never
+raising**; `_resolve_delimiter` infers the delimiter from the extension (an explicit `delimiter`
+always overrides). `load_claims` validates the table shape structurally, pre-run: exactly one of
+`{path}` xor `{column, row}`, `column`/`row`/`delimiter`/`header` type/shape rules, and a
+`row`-object or string `column` **requires** `header: true` — every contradiction is a load-time
+`ClaimsError` (exit non-zero, nothing written), never a silent misread. `run_reproduction`
+dispatches on the locator's type to a new `_observe_table_located` (sibling of `_observe_located`)
+reusing the same containment guard and a per-run parse cache (`_table_cache` — a table `from` is
+parsed **at most once per run** even across several claims on the same file); the resolved cell is
+`float()`-parsed after `.strip()` and feeds the **unchanged** `classify`. **The deliberate
+divergence from the JSON rule: a numeric-string cell is the normal, valid case** (every table cell
+is a string by construction) — `"30.4"` classifies here, unlike the JSON locator's
+strict-UNVERIFIED numeric string. Every unresolved/ambiguous address is `UNVERIFIED`, never
+`DIVERGED`: missing/dir/non-UTF-8/unparseable `from`; absent or duplicate header column name;
+column/row index out of range; a ragged row shorter than the addressed column; a `row`-key match
+with **0 or more than 1** hits (never an arbitrary pick, the count is named in the message); an
+unparseable or non-finite cell. Safety and reuse are unchanged: a table claim's `from` flows
+through the same `.source` field the CLI containment loop and the engine's defense-in-depth guard
+already check — **no new code was needed there**; `classify`/`ClaimResult`/`ReproduceRecord`/
+bundle/signing/`--fail-on-diverged` all reused as-is, **no `models.py` change**, `claims_sha256`
+already covers the new claim fields. Stdlib-only (`csv`+`gzip`, both already stdlib) — no new
+dependency. **Deferred:** multi-key/predicate row match, column ranges, regex; stdout/log
+scraping, notebook (`.ipynb`) numeric extraction; paper-parsing; figure/plot & table-image claims
+(still hard-blocked — no plot-hash, stdlib-only); remote `<doi|url>`; dashboard card; C6 eval
+fold-in. Test-first (pure reader → engine dispatch → CLI containment/e2e); deterministic; **no
+real repo or network in CI** (on-disk fixture `.tsv`/`.csv`/`.tsv.gz` tables). Plan/PRD under
+`docs/planning/reproduce-tsv-csv-locator/`.
 
 **Correction to the build surface below (verified against the code, 2026-07-18):** the sentence
 "reuses the existing float-tolerance / plot-hash / seed-aware diffing" was only one-third true.
@@ -1190,7 +1228,7 @@ raw-data egress — runs on the user's / CI compute; only hashes and claim diffs
 | C6 | Eval flywheel as a continuous loop | M6 (detector held-out guard slice 1 SHIPPED, Unreleased — honestly 0.833/10:12, two classes structurally unreachable; repair-loop outcome-match guard slice 2 SHIPPED, Unreleased — honestly 1.0/7:7, 5 classes covered; both wired into CI; folding C1/C3 signals + held-out-accuracy trend pending) | Compounding accuracy from real runs |
 | C7 | Research-use variant annotation & prioritization | M1 + M2 + M3 + M4 + M5 surface+provenance SHIPPED (Unreleased) — germline structural verify + provenance, somatic annotation gate, annotation plausibility (both assays), VEP-vs-SnpEff concordance (both assays: `consequence_concordance` WARN-capped + `gene_symbol_concordance` informational, auto in the verdict, both VCF layouts, annotator-version provenance pair), M5 "corroborated by" line across text/HTML report + `contig methods` + dashboard (reads M4 results, never recomputes) + `AnnotationProvenance.db_version` cache/build token (VEP `cache=` / SnpEff genome) rendered and round-tripped through reproduce with pre-M5 back-compat; **M5 C6 eval fold-in still DEFERRED** (blocked on labeling design) (germline+somatic `annotation_present`/`annotation_complete` structural checks via `VARIANT_ASSAYS`, `AnnotationProvenance` tool+cache/build capture, `--tools …,vep` enablement on both assays, `annotation_real_fraction`/`annotation_consequence_distribution` plausibility checks, all WARN-capped/UNVERIFIED-when-absent; live run may still need a VEP/SnpEff cache Contig does not yet wire — absent annotation degrades to UNVERIFIED, never a false pass; verify-only, prioritization deferred) | Disease-research breadth on-thesis, new corpus; run+verify annotation, never a clinical verdict |
 
-| C8 | Reproduce & verify *existing published* work | first slice SHIPPED v0.40.0 + output-locator slice 1.5 SHIPPED v0.41.0 + env-resurrection slice 2 SHIPPED (Unreleased) · M7+ | Turns the engine on third-party papers (repo+claims → per-claim `REPRODUCED`/`WITHIN-TOLERANCE`/`DIVERGED`/`UNVERIFIED`); strongest quantified pain (~3.2% of 27,271 notebooks reproduce), a free viral community-trust channel, and a new publicly-sourced corpus stream. **Shipped:** `contig reproduce <repo> --run --claims` walking skeleton — scalar per-claim verdict reusing `benchmark._relative_delta`, values bound from a repo-written `results.json`, signed re-runnable bundle via the generic signer, `--fail-on-diverged`; cooperative-repos-only, UNVERIFIED-when-unresolved, no real repo/network in CI. **+ Output-locator (slice 1.5):** a claim may carry `{"from": <repo JSON>, "path": "$.a.b[0]"}` to read numbers out of a repo's own **structured JSON as-is** (a new stdlib dotted+`[n]` `resolve_pointer` walker that never raises; located claims classify through the unchanged core; numeric-string strictly UNVERIFIED; escaping `from` refused pre-run + engine never reads outside the repo; JSON-only, full back-compat, no new dep). **+ Environment resurrection (slice 2):** opt-in `--allow-install` (off by default) turns a first run failing on `No module named 'X'` into a bounded detect→install→retry-once self-heal reusing C2 — pure `detect_missing_module` (charset-guarded top-level pkg) + injected `Installer` seam (fixed `pip install` argv, no shell), one install + one retry (provable termination), every unresolved path UNVERIFIED (never a false reproduce), heal recorded on additive `ReproduceRecord.repair_history` (`missing_dependency` literal kept reproduce-local so the C6 eval-guard baseline is unmoved), executor seam widened `int`→`(exit_code, output)`, no new dep, no real pip/network in CI. **Deferred:** import→package alias map, iterative multi-module, version pinning from a traced execution, venv isolation, TSV/CSV locator (next step), paper-parsing, figure/plot & table-cell claims (**plot-hash does not exist and can't be added without breaking the stdlib-only dep contract**), remote `<doi|url>`, dashboard card, C6 fold-in |
+| C8 | Reproduce & verify *existing published* work | first slice SHIPPED v0.40.0 + output-locator slice 1.5 SHIPPED v0.41.0 + env-resurrection slice 2 SHIPPED (Unreleased) + TSV/CSV table-locator slice 3 SHIPPED (Unreleased) · M7+ | Turns the engine on third-party papers (repo+claims → per-claim `REPRODUCED`/`WITHIN-TOLERANCE`/`DIVERGED`/`UNVERIFIED`); strongest quantified pain (~3.2% of 27,271 notebooks reproduce), a free viral community-trust channel, and a new publicly-sourced corpus stream. **Shipped:** `contig reproduce <repo> --run --claims` walking skeleton — scalar per-claim verdict reusing `benchmark._relative_delta`, values bound from a repo-written `results.json`, signed re-runnable bundle via the generic signer, `--fail-on-diverged`; cooperative-repos-only, UNVERIFIED-when-unresolved, no real repo/network in CI. **+ Output-locator (slice 1.5):** a claim may carry `{"from": <repo JSON>, "path": "$.a.b[0]"}` to read numbers out of a repo's own **structured JSON as-is** (a new stdlib dotted+`[n]` `resolve_pointer` walker that never raises; located claims classify through the unchanged core; numeric-string strictly UNVERIFIED; escaping `from` refused pre-run + engine never reads outside the repo; JSON-only, full back-compat, no new dep). **+ Environment resurrection (slice 2):** opt-in `--allow-install` (off by default) turns a first run failing on `No module named 'X'` into a bounded detect→install→retry-once self-heal reusing C2 — pure `detect_missing_module` (charset-guarded top-level pkg) + injected `Installer` seam (fixed `pip install` argv, no shell), one install + one retry (provable termination), every unresolved path UNVERIFIED (never a false reproduce), heal recorded on additive `ReproduceRecord.repair_history` (`missing_dependency` literal kept reproduce-local so the C6 eval-guard baseline is unmoved), executor seam widened `int`→`(exit_code, output)`, no new dep, no real pip/network in CI. **+ TSV/CSV table locator (slice 3):** a claim may also carry `{"from": <repo .tsv/.csv[.gz]>, "column": <name|int>, "row": <int|{key:val}>, "header"?, "delimiter"?}` to read a **tabular** cell — DESeq2/count-matrix/feature-table output — via a new stdlib `_read_table`+`resolve_cell` reader (gzip-transparent, index-safe, never raises) and a per-run parse cache; a numeric-string cell is the normal, valid case here (unlike the JSON rule) and classifies through the unchanged core; row-key 0-or-many matches, ragged rows, duplicate/absent header names, and unparseable/non-finite cells all degrade to UNVERIFIED, never DIVERGED; reuses the JSON locator's containment guard, signer, bundle, and exit contract as-is, no `models.py` change, no new dep. **Deferred:** multi-key/predicate row match, stdout/log scraping, notebook (`.ipynb`) extraction, paper-parsing, figure/plot & table-cell(-image) claims (**plot-hash does not exist and can't be added without breaking the stdlib-only dep contract**), remote `<doi|url>`, dashboard card, C6 fold-in |
 
 **One-line mantra:** make every verdict harder to fool, recover more failures
 without a human, and let every run make the next verdict smarter.
