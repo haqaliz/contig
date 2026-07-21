@@ -391,6 +391,104 @@ def resolve_match(text: str, pattern: str) -> tuple[str | None, str]:
     return captured, ""
 
 
+def _join_source_or_text(v: object) -> str:
+    """Join a notebook `source`/`text` field into a single string.
+
+    Jupyter stores these as either a plain `str` or a `list[str]` of line
+    fragments (joined with `""` -- the fragments already carry their own
+    newlines). A `str` is returned as-is; a `list` is joined over only its
+    `str` items (non-string items are skipped, never coerced); anything else
+    (None, int, dict, ...) yields `""`. Pure, never raises.
+    """
+    if isinstance(v, str):
+        return v
+    if isinstance(v, list):
+        return "".join(item for item in v if isinstance(item, str))
+    return ""
+
+
+def resolve_notebook_cell_text(
+    doc: object, cell: int | dict[str, str]
+) -> tuple[str | None, str]:
+    """Resolve one cell's textual output out of an already-parsed notebook.
+
+    Pure, index-safe, never raises -- any malformed document, out-of-range or
+    ambiguous cell address, or output-less cell returns `(None, reason)`
+    rather than raising (mirrors `resolve_cell`/`resolve_match`'s "never
+    raises" contract). On success returns `(text, "")`; the returned text is
+    the RAW concatenated cell output -- capturing a number out of it is the
+    caller's job, not this function's.
+
+    `doc` is the parsed `.ipynb` JSON (expected a dict with a `cells` list).
+    `cell` addresses the target: an `int` indexes the full `cells` array
+    (bool is rejected -- it is an int subclass but never a valid address; a
+    negative or out-of-range index is unresolved, naming the cell count); a
+    `{"contains": s}` object selects the UNIQUE cell whose joined `source`
+    contains `s` (0 or >1 matches -> unresolved, naming the match count --
+    never an arbitrary pick).
+
+    Output text is the concatenation, in `outputs` order, of: `stream`
+    outputs named `stdout` (their `text` field) and `execute_result` /
+    `display_data` outputs' `data["text/plain"]`. Each field is a `str` or a
+    `list[str]`, joined with `""` (see `_join_source_or_text`). `stderr`
+    streams and `error` outputs are excluded, as is anything else. A cell that
+    contributes no such piece is unresolved ("no textual output").
+    """
+    if not isinstance(doc, dict):
+        return None, "notebook is not a JSON object"
+    cells = doc.get("cells")
+    if not isinstance(cells, list):
+        return None, "notebook has no cells array"
+
+    if isinstance(cell, bool):
+        return None, f"invalid cell address: {cell!r}"
+    if isinstance(cell, int):
+        if not (0 <= cell < len(cells)):
+            return None, f"cell index {cell} out of range ({len(cells)} cells)"
+        idx = cell
+    elif isinstance(cell, dict):
+        if list(cell.keys()) != ["contains"] or not isinstance(
+            cell.get("contains"), str
+        ):
+            return None, f"invalid cell address: {cell!r}"
+        needle = cell["contains"]
+        matches = [
+            i
+            for i, c in enumerate(cells)
+            if needle in _join_source_or_text(c.get("source") if isinstance(c, dict) else None)
+        ]
+        if len(matches) != 1:
+            return None, (
+                f"cell selector {{'contains': {needle!r}}} matched {len(matches)} cells"
+            )
+        idx = matches[0]
+    else:
+        return None, f"invalid cell address: {cell!r}"
+
+    target = cells[idx]
+    if not isinstance(target, dict):
+        return None, f"cell {idx} is not a cell object"
+
+    outputs = target.get("outputs")
+    pieces: list[str] = []
+    if isinstance(outputs, list):
+        for out in outputs:
+            if not isinstance(out, dict):
+                continue
+            kind = out.get("output_type")
+            if kind == "stream":
+                if out.get("name") == "stdout":
+                    pieces.append(_join_source_or_text(out.get("text")))
+            elif kind in ("execute_result", "display_data"):
+                data = out.get("data")
+                if isinstance(data, dict):
+                    pieces.append(_join_source_or_text(data.get("text/plain")))
+
+    if not pieces:
+        return None, f"cell {idx} has no textual output"
+    return "".join(pieces), ""
+
+
 @dataclass(frozen=True)
 class Claim:
     """One published numeric claim to reproduce: `id` names the metric,
