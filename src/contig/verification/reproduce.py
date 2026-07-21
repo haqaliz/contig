@@ -150,19 +150,61 @@ class Locator:
 
 
 @dataclass(frozen=True)
+class TableLocator:
+    """Where to find a located claim's observed value inside a delimited
+    text table: `source` is the claims file's `"from"` field (a
+    repo-relative TSV/CSV file path -- named `source` internally for the
+    same reason as `Locator.source`); `column` is a header name (str) or a
+    0-based field index (int); `row` is a 0-based data-row index (int) or a
+    single-key `{column_name: value}` match (dict[str, str]); `delimiter`
+    is the resolved, single-character field separator; `header` says
+    whether row 0 of the file is a header row.
+    """
+
+    source: str
+    column: str | int
+    row: int | dict[str, str]
+    delimiter: str
+    header: bool
+
+
+def _resolve_delimiter(source: str, explicit: str | None) -> str | None:
+    """Resolve the field delimiter for a table locator's `source` path.
+
+    An explicit delimiter (already shape-validated by the caller) always
+    wins. Otherwise infer from the extension: lower-case `source`, strip one
+    trailing `.gz`, then map `.tsv`/`.tab` -> tab, `.csv` -> comma. An
+    unrecognized extension with no explicit delimiter returns None, which
+    signals a `ClaimsError` to the caller. Pure, no I/O.
+    """
+    if explicit is not None:
+        return explicit
+    s = source.lower()
+    if s.endswith(".gz"):
+        s = s[: -len(".gz")]
+    if s.endswith(".tsv") or s.endswith(".tab"):
+        return "\t"
+    if s.endswith(".csv"):
+        return ","
+    return None
+
+
+@dataclass(frozen=True)
 class Claim:
     """One published numeric claim to reproduce: `id` names the metric,
     `value` is the claimed reference number, `tolerance` is the relative
     band (see `classify`) within which an observed value still counts as
     reproducing it. `locator`, when set, means this claim's observed value
-    is bound from its own repo-relative JSON file at a path rather than
-    from the flat `--results` map (slice-1 behavior, `locator=None`).
+    is bound from its own repo-relative file rather than from the flat
+    `--results` map (slice-1 behavior, `locator=None`): a `Locator` reads a
+    dotted+`[n]` pointer into a JSON file (slice 1.5), a `TableLocator`
+    reads one cell out of a TSV/CSV table (slice 3).
     """
 
     id: str
     value: float
     tolerance: float = _DEFAULT_TOLERANCE
-    locator: Locator | None = None
+    locator: Locator | TableLocator | None = None
 
 
 def load_claims(path: str | Path) -> list[Claim]:
@@ -207,19 +249,126 @@ def load_claims(path: str | Path) -> list[Claim]:
         if tolerance <= 0:
             raise ClaimsError(f"claim {claim_id!r} has a non-positive 'tolerance': {tolerance!r}")
 
-        has_from, has_path = "from" in item, "path" in item
-        if has_from != has_path:
+        has_from = "from" in item
+        has_path = "path" in item
+        has_column = "column" in item
+        has_row = "row" in item
+        has_delimiter = "delimiter" in item
+        has_header = "header" in item
+        has_table_field = has_column or has_row or has_delimiter or has_header
+
+        if not has_from and (has_path or has_table_field):
             raise ClaimsError(
-                f"claim {claim_id!r} must set both 'from' and 'path', or neither"
+                f"claim {claim_id!r} must set 'from' together with 'path', or with "
+                "'column'+'row', or neither"
             )
-        locator: Locator | None = None
+
+        locator: Locator | TableLocator | None = None
         if has_from:
-            raw_from, raw_path = item["from"], item["path"]
+            raw_from = item["from"]
             if not isinstance(raw_from, str) or not raw_from.strip():
                 raise ClaimsError(f"claim {claim_id!r} has an invalid 'from': {raw_from!r}")
-            if not isinstance(raw_path, str) or not raw_path.strip():
-                raise ClaimsError(f"claim {claim_id!r} has an invalid 'path': {raw_path!r}")
-            locator = Locator(source=raw_from, path=raw_path)
+
+            is_table_mode = has_column or has_row
+            if has_path and is_table_mode:
+                raise ClaimsError(
+                    f"claim {claim_id!r} must set 'path' or 'column'+'row', not both"
+                )
+
+            if has_path:
+                raw_path = item["path"]
+                if not isinstance(raw_path, str) or not raw_path.strip():
+                    raise ClaimsError(f"claim {claim_id!r} has an invalid 'path': {raw_path!r}")
+                locator = Locator(source=raw_from, path=raw_path)
+            elif is_table_mode:
+                if has_column != has_row:
+                    raise ClaimsError(
+                        f"claim {claim_id!r} must set both 'column' and 'row', or neither"
+                    )
+
+                raw_header = item.get("header", True)
+                if not isinstance(raw_header, bool):
+                    raise ClaimsError(
+                        f"claim {claim_id!r} has a non-boolean 'header': {raw_header!r}"
+                    )
+                header = raw_header
+
+                raw_column = item["column"]
+                if isinstance(raw_column, bool) or not isinstance(raw_column, (str, int)):
+                    raise ClaimsError(
+                        f"claim {claim_id!r} has an invalid 'column': {raw_column!r}"
+                    )
+                if isinstance(raw_column, str):
+                    if not raw_column.strip():
+                        raise ClaimsError(
+                            f"claim {claim_id!r} has an invalid 'column': {raw_column!r}"
+                        )
+                    if header is False:
+                        raise ClaimsError(
+                            f"claim {claim_id!r} 'column' names a header field but "
+                            "'header' is false"
+                        )
+                    column: str | int = raw_column
+                else:
+                    if raw_column < 0:
+                        raise ClaimsError(
+                            f"claim {claim_id!r} has a negative 'column' index: {raw_column!r}"
+                        )
+                    column = raw_column
+
+                raw_row = item["row"]
+                if isinstance(raw_row, bool) or not isinstance(raw_row, (int, dict)):
+                    raise ClaimsError(f"claim {claim_id!r} has an invalid 'row': {raw_row!r}")
+                row: int | dict[str, str]
+                if isinstance(raw_row, dict):
+                    if header is False:
+                        raise ClaimsError(
+                            f"claim {claim_id!r} 'row' is a key-match object but "
+                            "'header' is false"
+                        )
+                    if len(raw_row) != 1:
+                        raise ClaimsError(
+                            f"claim {claim_id!r} has an invalid 'row' object (expected "
+                            f"exactly one key): {raw_row!r}"
+                        )
+                    ((row_key, row_val),) = raw_row.items()
+                    if not isinstance(row_key, str) or not row_key.strip():
+                        raise ClaimsError(
+                            f"claim {claim_id!r} has an invalid 'row' key: {row_key!r}"
+                        )
+                    if isinstance(row_val, bool) or not isinstance(row_val, str):
+                        raise ClaimsError(
+                            f"claim {claim_id!r} has an invalid 'row' value: {row_val!r}"
+                        )
+                    row = raw_row
+                else:
+                    if raw_row < 0:
+                        raise ClaimsError(
+                            f"claim {claim_id!r} has a negative 'row' index: {raw_row!r}"
+                        )
+                    row = raw_row
+
+                raw_delimiter = item.get("delimiter")
+                if has_delimiter and (
+                    not isinstance(raw_delimiter, str) or len(raw_delimiter) != 1
+                ):
+                    raise ClaimsError(
+                        f"claim {claim_id!r} has an invalid 'delimiter': {raw_delimiter!r}"
+                    )
+                delimiter = _resolve_delimiter(raw_from, raw_delimiter if has_delimiter else None)
+                if delimiter is None:
+                    raise ClaimsError(
+                        f"claim {claim_id!r} 'from' has an unrecognized extension and no "
+                        f"'delimiter' was given: {raw_from!r}"
+                    )
+
+                locator = TableLocator(
+                    source=raw_from, column=column, row=row, delimiter=delimiter, header=header
+                )
+            else:
+                raise ClaimsError(
+                    f"claim {claim_id!r} must set 'path' or 'column'+'row' when 'from' is set"
+                )
 
         claims.append(
             Claim(

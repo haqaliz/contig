@@ -17,6 +17,7 @@ from contig.verification.reproduce import (
     Claim,
     ClaimsError,
     Locator,
+    TableLocator,
     classify,
     load_claims,
     run_reproduction,
@@ -268,6 +269,336 @@ def test_load_claims_rejects_empty_path(tmp_path):
         tmp_path,
         "claims.json",
         json.dumps([{"id": "auc", "value": 0.9, "from": "out/x.json", "path": ""}]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+# ---------------------------------------------------------------------------
+# load_claims() -- table locator ("from" + "column"+"row") [C8 slice 3, Phase 1]
+# ---------------------------------------------------------------------------
+
+
+def _claim(**overrides) -> dict:
+    base = {"id": "x", "value": 1.0}
+    base.update(overrides)
+    return base
+
+
+def test_load_claims_table_locator_named_tsv_defaults_header_and_delimiter(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "results/de.tsv",
+                        "column": "log2FoldChange",
+                        "row": {"gene_id": "ENSG00000012048"},
+                    }
+                )
+            ]
+        ),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == TableLocator(
+        "results/de.tsv", "log2FoldChange", {"gene_id": "ENSG00000012048"}, "\t", True
+    )
+
+
+def test_load_claims_table_locator_named_csv_defaults_header_and_delimiter(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "results/de.csv",
+                        "column": "log2FoldChange",
+                        "row": {"gene_id": "ENSG00000012048"},
+                    }
+                )
+            ]
+        ),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == TableLocator(
+        "results/de.csv", "log2FoldChange", {"gene_id": "ENSG00000012048"}, ",", True
+    )
+
+
+def test_load_claims_table_locator_positional_headerless(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [_claim(**{"from": "out/counts.csv", "column": 2, "row": 41, "header": False})]
+        ),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == TableLocator("out/counts.csv", 2, 41, ",", False)
+
+
+def test_load_claims_table_locator_infers_delimiter_from_tsv_gz(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "out/x.tsv.gz", "column": 2, "row": 0, "header": False})]),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator.delimiter == "\t"
+
+
+def test_load_claims_table_locator_infers_delimiter_from_csv_gz(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "out/x.csv.gz", "column": 2, "row": 0, "header": False})]),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator.delimiter == ","
+
+
+def test_load_claims_table_locator_explicit_delimiter_overrides_extension(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "results/de.tsv",
+                        "column": "log2FoldChange",
+                        "row": {"gene_id": "X"},
+                        "delimiter": ";",
+                    }
+                )
+            ]
+        ),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator.delimiter == ";"
+
+
+def test_load_claims_rejects_path_and_table_fields_together(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "out/x.tsv",
+                        "path": "$.a",
+                        "column": 0,
+                        "row": 0,
+                        "header": False,
+                    }
+                )
+            ]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_column_without_row(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "out/x.tsv", "column": 0})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_row_without_column(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "out/x.tsv", "row": 0})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_column_float(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "out/x.tsv", "column": 1.5, "row": 0})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_column_empty_string(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "out/x.tsv", "column": "", "row": 0})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_column_negative_int(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "out/x.tsv", "column": -1, "row": 0})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_row_negative_int(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "out/x.tsv", "column": "gene_id", "row": -1})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_row_empty_object(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "out/x.tsv", "column": "gene_id", "row": {}})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_row_multi_key_object(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "out/x.tsv",
+                        "column": "gene_id",
+                        "row": {"a": "1", "b": "2"},
+                    }
+                )
+            ]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_row_object_empty_key(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "out/x.tsv", "column": "gene_id", "row": {"": "X"}})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_row_object_non_string_value(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [_claim(**{"from": "out/x.tsv", "column": "gene_id", "row": {"gene_id": 5}})]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_delimiter_not_single_char(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "out/x.tsv",
+                        "column": "gene_id",
+                        "row": 0,
+                        "delimiter": ";;",
+                    }
+                )
+            ]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_header_not_bool(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [_claim(**{"from": "out/x.tsv", "column": "gene_id", "row": 0, "header": "true"})]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_table_fields_without_from(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"column": 0, "row": 0})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_row_object_with_header_false(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "out/x.tsv",
+                        "column": 0,
+                        "row": {"gene_id": "X"},
+                        "header": False,
+                    }
+                )
+            ]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_column_str_with_header_false(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [_claim(**{"from": "out/x.tsv", "column": "gene_id", "row": 0, "header": False})]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_unknown_extension_without_delimiter(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [_claim(**{"from": "results/out.txt", "column": 0, "row": 0, "header": False})]
+        ),
     )
     with pytest.raises(ClaimsError):
         load_claims(path)
