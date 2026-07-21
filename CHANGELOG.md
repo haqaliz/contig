@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-07-21
+
 ### Added
 
 - **`contig reproduce` gains a stdout/log regex locator — the C8 slice 4 named as the next
@@ -2062,6 +2064,7 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.44.0]: https://github.com/haqaliz/contig/releases/tag/v0.44.0
 [0.43.0]: https://github.com/haqaliz/contig/releases/tag/v0.43.0
 [0.42.0]: https://github.com/haqaliz/contig/releases/tag/v0.42.0
 [0.41.0]: https://github.com/haqaliz/contig/releases/tag/v0.41.0

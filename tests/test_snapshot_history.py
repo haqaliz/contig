@@ -110,8 +110,14 @@ def test_default_heal_history_path_under_package_data() -> None:
 def test_holdout_seed_is_one_line_matching_baseline() -> None:
     from contig.holdout import default_holdout_history_path
 
+    # The FIRST line is the seed and must still match the committed baseline.
+    # Later lines are the per-release trend points RELEASING.md step 2 appends
+    # (`contig eval-guard --snapshot`) -- growing that trend is the whole point
+    # of the C6 trend feature, so assert >= 1, not == 1. Pinning it to exactly
+    # one line made following RELEASING.md put master red, and the snapshot
+    # step got skipped for four releases running.
     snapshots = load_jsonl(EvalSnapshot, default_holdout_history_path())
-    assert len(snapshots) == 1
+    assert len(snapshots) >= 1
     baseline = load_baseline(default_baseline_path())
     assert baseline is not None
     assert snapshots[0].accuracy == baseline.accuracy
@@ -122,8 +128,9 @@ def test_holdout_seed_is_one_line_matching_baseline() -> None:
 def test_heal_seed_is_one_line_matching_baseline() -> None:
     from contig.heal import default_heal_history_path
 
+    # Seed line pinned, trend allowed to grow -- see the holdout sibling above.
     snapshots = load_jsonl(HealSnapshot, default_heal_history_path())
-    assert len(snapshots) == 1
+    assert len(snapshots) >= 1
     baseline = load_heal_baseline(default_heal_baseline_path())
     assert baseline is not None
     assert snapshots[0].outcome_match_rate == baseline.outcome_match_rate
