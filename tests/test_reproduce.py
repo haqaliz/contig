@@ -19,6 +19,7 @@ from contig.verification.reproduce import (
     Claim,
     ClaimsError,
     Locator,
+    PatternLocator,
     TableLocator,
     classify,
     load_claims,
@@ -601,6 +602,166 @@ def test_load_claims_rejects_unknown_extension_without_delimiter(tmp_path):
         json.dumps(
             [_claim(**{"from": "results/out.txt", "column": 0, "row": 0, "header": False})]
         ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+# ---------------------------------------------------------------------------
+# load_claims() -- pattern locator ("pattern", with or without "from") [C8 slice 4, Phase 1]
+# ---------------------------------------------------------------------------
+
+
+def test_load_claims_pattern_without_from_is_stdout_mode(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"pattern": "Final AUC: ([0-9.]+)"})]),
+    )
+    claims = load_claims(path)
+    assert isinstance(claims[0].locator, PatternLocator)
+    assert claims[0].locator.source is None
+    assert claims[0].locator.pattern == "Final AUC: ([0-9.]+)"
+
+
+def test_load_claims_pattern_with_from_is_file_mode(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [_claim(**{"from": "logs/train.log", "pattern": "Final AUC: ([0-9.]+)"})]
+        ),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == PatternLocator(
+        source="logs/train.log", pattern="Final AUC: ([0-9.]+)"
+    )
+
+
+def test_load_claims_pattern_keeps_inline_flags_verbatim(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"pattern": "(?im)^auc = ([0-9.]+)$"})]),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == PatternLocator(source=None, pattern="(?im)^auc = ([0-9.]+)$")
+
+
+def test_load_claims_rejects_pattern_with_path(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [_claim(**{"from": "out/x.json", "path": "$.auc", "pattern": "auc=([0-9.]+)"})]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_pattern_with_column_and_row(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "out/x.tsv",
+                        "column": 0,
+                        "row": 0,
+                        "header": False,
+                        "pattern": "auc=([0-9.]+)",
+                    }
+                )
+            ]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_pattern_with_column_only(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "out/x.tsv", "column": 0, "pattern": "a([0-9])"})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_pattern_with_row_only(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"from": "out/x.tsv", "row": 0, "pattern": "a([0-9])"})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_non_string_pattern(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"pattern": 7})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_empty_pattern(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"pattern": ""})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_rejects_blank_pattern(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"pattern": "   "})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+@pytest.mark.parametrize("bad", ["([0-9", "*", "(?P<>x)"])
+def test_load_claims_rejects_uncompilable_pattern(tmp_path, bad):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"pattern": bad})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_load_claims_still_rejects_path_without_from(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"path": "$.auc"})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("column", 0), ("row", 0), ("header", False), ("delimiter", ",")],
+)
+def test_load_claims_still_rejects_table_field_without_from(tmp_path, field, value):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{field: value})]),
     )
     with pytest.raises(ClaimsError):
         load_claims(path)

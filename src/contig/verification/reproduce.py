@@ -171,6 +171,21 @@ class TableLocator:
     header: bool
 
 
+@dataclass(frozen=True)
+class PatternLocator:
+    """Where to find a located claim's observed value inside free text:
+    `pattern` is a Python regex whose capture is the observed value (group 1
+    when the pattern has capturing groups, otherwise the whole match);
+    `source` is the claims file's `"from"` field (a repo-relative text/log
+    file path -- named `source` internally for the same reason as
+    `Locator.source`), or `None`, which means the run's own captured
+    combined stdout+stderr rather than any file on disk.
+    """
+
+    source: str | None
+    pattern: str
+
+
 def _resolve_delimiter(source: str, explicit: str | None) -> str | None:
     """Resolve the field delimiter for a table locator's `source` path.
 
@@ -326,13 +341,15 @@ class Claim:
     is bound from its own repo-relative file rather than from the flat
     `--results` map (slice-1 behavior, `locator=None`): a `Locator` reads a
     dotted+`[n]` pointer into a JSON file (slice 1.5), a `TableLocator`
-    reads one cell out of a TSV/CSV table (slice 3).
+    reads one cell out of a TSV/CSV table (slice 3), and a `PatternLocator`
+    captures it with a regex over a repo-relative text/log file or -- when
+    its `source` is `None` -- over the run's own captured output (slice 4).
     """
 
     id: str
     value: float
     tolerance: float = _DEFAULT_TOLERANCE
-    locator: Locator | TableLocator | None = None
+    locator: Locator | TableLocator | PatternLocator | None = None
 
 
 def load_claims(path: str | Path) -> list[Claim]:
@@ -379,24 +396,51 @@ def load_claims(path: str | Path) -> list[Claim]:
 
         has_from = "from" in item
         has_path = "path" in item
+        has_pattern = "pattern" in item
         has_column = "column" in item
         has_row = "row" in item
         has_delimiter = "delimiter" in item
         has_header = "header" in item
         has_table_field = has_column or has_row or has_delimiter or has_header
 
-        if not has_from and (has_path or has_table_field):
+        if not has_from and not has_pattern and (has_path or has_table_field):
             raise ClaimsError(
                 f"claim {claim_id!r} must set 'from' together with 'path', or with "
                 "'column'+'row', or neither"
             )
 
-        locator: Locator | TableLocator | None = None
+        source: str | None = None
         if has_from:
             raw_from = item["from"]
             if not isinstance(raw_from, str) or not raw_from.strip():
                 raise ClaimsError(f"claim {claim_id!r} has an invalid 'from': {raw_from!r}")
+            source = raw_from
 
+        locator: Locator | TableLocator | PatternLocator | None = None
+        if has_pattern:
+            if has_path:
+                raise ClaimsError(
+                    f"claim {claim_id!r} must set 'path' or 'pattern', not both"
+                )
+            if has_column or has_row:
+                raise ClaimsError(
+                    f"claim {claim_id!r} must set 'column'+'row' or 'pattern', not both"
+                )
+
+            raw_pattern = item["pattern"]
+            if not isinstance(raw_pattern, str) or not raw_pattern.strip():
+                raise ClaimsError(
+                    f"claim {claim_id!r} has an invalid 'pattern': {raw_pattern!r}"
+                )
+            try:
+                re.compile(raw_pattern)
+            except re.error as exc:
+                raise ClaimsError(
+                    f"claim {claim_id!r} has an uncompilable 'pattern': {exc}"
+                ) from exc
+
+            locator = PatternLocator(source=source, pattern=raw_pattern)
+        elif has_from:
             is_table_mode = has_column or has_row
             if has_path and is_table_mode:
                 raise ClaimsError(
