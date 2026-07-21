@@ -7,6 +7,7 @@ exist in src/contig/verification/reproduce.py.
 
 from __future__ import annotations
 
+import gzip
 import json
 import math
 from pathlib import Path
@@ -1088,6 +1089,32 @@ def test_run_reproduction_table_claim_missing_file_is_unverified(tmp_path):
             tolerance=0.05,
             locator=TableLocator(
                 "out/de.tsv", "log2FoldChange", {"gene_id": "ENSG1"}, "\t", True
+            ),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+
+
+def test_run_reproduction_table_claim_truncated_gzip_is_unverified(tmp_path):
+    # A truncated .tsv.gz raises EOFError from stdlib gzip (not OSError) --
+    # the engine must degrade the claim to unverified, never raise or
+    # diverge. Regression for the C8 slice 3 review finding.
+    p = tmp_path / "out" / "de.tsv.gz"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(p, "wt", encoding="utf-8", newline="") as f:
+        f.write("gene_id\tlog2FoldChange\tpadj\nENSG1\t-2.31\t0.001\n")
+    full_bytes = p.read_bytes()
+    p.write_bytes(full_bytes[: len(full_bytes) // 2])
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator(
+                "out/de.tsv.gz", "log2FoldChange", {"gene_id": "ENSG1"}, "\t", True
             ),
         )
     ]

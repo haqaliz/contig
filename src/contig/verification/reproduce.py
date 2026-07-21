@@ -20,6 +20,7 @@ import json
 import math
 import re
 import shlex
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -207,7 +208,7 @@ def _read_table(path: Path, delimiter: str) -> list[list[str]] | None:
                 return list(csv.reader(f, delimiter=delimiter))
         with open(path, encoding="utf-8", newline="") as f:
             return list(csv.reader(f, delimiter=delimiter))
-    except (OSError, UnicodeDecodeError, csv.Error):
+    except (OSError, UnicodeDecodeError, csv.Error, EOFError, zlib.error):
         return None
 
 

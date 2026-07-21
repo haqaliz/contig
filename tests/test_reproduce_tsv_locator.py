@@ -266,3 +266,22 @@ def test_read_table_non_utf8_returns_none(tmp_path):
 def test_read_table_missing_file_returns_none(tmp_path):
     path = tmp_path / "does_not_exist.tsv"
     assert _read_table(path, "\t") is None
+
+
+def test_read_table_truncated_gzip_returns_none(tmp_path):
+    # A real gzip stream truncated mid-body raises EOFError from stdlib
+    # gzip, not OSError -- must still degrade to None, never raise.
+    path = tmp_path / "truncated.tsv.gz"
+    with gzip.open(path, "wt", encoding="utf-8", newline="") as f:
+        f.write("gene_id\tval\nENSG1\t-2.31\nENSG2\t0.5\nENSG3\t1.2\n")
+    full_bytes = path.read_bytes()
+    path.write_bytes(full_bytes[: len(full_bytes) // 2])
+    assert _read_table(path, "\t") is None
+
+
+def test_read_table_corrupt_gzip_body_returns_none(tmp_path):
+    # A valid gzip header followed by garbage raises zlib.error, not
+    # OSError -- must still degrade to None, never raise.
+    path = tmp_path / "corrupt.tsv.gz"
+    path.write_bytes(b"\x1f\x8b\x08\x00" + b"\x00" * 20)
+    assert _read_table(path, "\t") is None

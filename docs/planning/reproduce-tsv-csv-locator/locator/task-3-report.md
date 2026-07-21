@@ -91,3 +91,70 @@ run_reproduction (C8 slice 3)`
 
 None. Phase 4 (CLI containment loop widening + end-to-end tests) is next,
 per the plan — not touched here.
+
+---
+
+## Fix: corrupt/truncated gzip tables crashed instead of degrading (C8 slice 3, post-review)
+
+**Finding (final review):** `_read_table` caught only
+`(OSError, UnicodeDecodeError, csv.Error)`. Neither `EOFError` (raised by
+stdlib `gzip` on a truncated `.gz` stream) nor `zlib.error` (raised on a
+corrupt gzip body) subclasses `OSError`, so both escaped the guard and
+crashed `contig reproduce` with an uncaught traceback instead of degrading
+that claim to `unverified` — violating the PRD's "unreadable/unparseable
+file → UNVERIFIED, never raises" contract (M3/R6) on the flagship gzip path.
+
+**Fix (one line of production code):** in
+`src/contig/verification/reproduce.py`, added `import zlib` (alphabetical,
+after `shlex`) and widened `_read_table`'s except clause from
+`except (OSError, UnicodeDecodeError, csv.Error):` to
+`except (OSError, UnicodeDecodeError, csv.Error, EOFError, zlib.error):`.
+No other line changed.
+
+**Tests added (3, strict TDD — RED confirmed before the fix):**
+
+- `tests/test_reproduce_tsv_locator.py::test_read_table_truncated_gzip_returns_none`
+  — a real gzip stream written then truncated to half its bytes; asserts
+  `_read_table` returns `None`. Pre-fix this raised `zlib.error: Error -3
+  while decompressing data: invalid stored block lengths` (not the
+  `EOFError` originally guessed — stdlib gzip's failure mode on a truncated
+  stream depends on exactly where the cut lands, which is why the except
+  clause needs both exception types, not just one).
+- `tests/test_reproduce_tsv_locator.py::test_read_table_corrupt_gzip_body_returns_none`
+  — a valid 4-byte gzip magic header followed by 20 zero bytes; asserts
+  `_read_table` returns `None`. Pre-fix this raised `EOFError: Compressed
+  file ended before the end-of-stream marker was reached`.
+- `tests/test_reproduce.py::test_run_reproduction_table_claim_truncated_gzip_is_unverified`
+  — engine-level: a `Claim` with a `TableLocator` pointing at a truncated
+  `out/de.tsv.gz`, run through `run_reproduction`. Pre-fix this raised
+  `EOFError` out of `run_reproduction` itself (no bundle written); post-fix
+  the claim resolves to `status == "unverified"`, `observed is None`, never
+  raises, never `diverged`.
+
+Both new stdlib exceptions surfaced across the two unit tests (one hit
+`zlib.error`, the other hit `EOFError`), confirming the except clause needed
+to widen by both types, not just the one named in the original finding.
+
+**Covering-test command and result:**
+
+```
+uv run pytest tests/test_reproduce_tsv_locator.py::test_read_table_truncated_gzip_returns_none tests/test_reproduce_tsv_locator.py::test_read_table_corrupt_gzip_body_returns_none tests/test_reproduce.py::test_run_reproduction_table_claim_truncated_gzip_is_unverified -v
+```
+```
+3 passed in 0.07s
+```
+
+**Full-suite verification:**
+
+```
+uv run pytest
+```
+```
+1829 passed, 1 skipped in 12.68s
+```
+
+(baseline 1826 passed, 1 skipped + 3 new tests = 1829, exact match, 0
+failures.)
+
+**Commit:** `fix(reproduce): degrade corrupt/truncated gzip tables to
+UNVERIFIED, not crash (C8 slice 3)`.
