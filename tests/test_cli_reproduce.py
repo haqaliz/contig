@@ -425,6 +425,19 @@ def test_reproduce_located_claim_end_to_end_reports_verdict(tmp_path, monkeypatc
     assert any(runs_dir.rglob("reproduce_record.json"))
 
 
+def test_reproduce_docstring_notes_table_locator_support():
+    # S2: a one-line note that a claim locator may target a JSON path OR a
+    # TSV/CSV cell. Assert on the raw docstring (what Click's `help` is built
+    # from), not the Rich-rendered `--help` output -- see
+    # test_reproduce_registers_allow_install_flag's comment on why CLI help
+    # text assertions must introspect rather than scrape rendered output.
+    from contig.cli import reproduce
+
+    doc = reproduce.__doc__ or ""
+    assert "tsv" in doc.lower() or "csv" in doc.lower()
+    assert "row" in doc.lower() and "column" in doc.lower()
+
+
 def test_reproduce_registers_allow_install_flag():
     # Assert the flag is a real registered option, not by scraping the Rich-
     # rendered `--help` text: with no TTY (as in CI) Rich wraps/reflows the long
@@ -544,3 +557,174 @@ def test_reproduce_writes_signed_bundle_when_signing_key_set(tmp_path, monkeypat
     assert result.exit_code == 0
     signature_files = list(runs_dir.rglob("signature.json"))
     assert len(signature_files) == 1
+
+
+# ---------------------------------------------------------------------------
+# TSV/CSV table locator -- CLI containment + end-to-end [C8 slice 3, Phase 4]
+# ---------------------------------------------------------------------------
+
+
+def test_reproduce_escaping_table_locator_from_errors_and_writes_no_record(
+    tmp_path, monkeypatch
+):
+    repo = _repo(tmp_path)
+    claims = _claims_file(
+        tmp_path,
+        [
+            {
+                "id": "log2fc",
+                "value": -2.31,
+                "from": "../secret.tsv",
+                "column": "log2FoldChange",
+                "row": {"gene_id": "ENSG1"},
+            }
+        ],
+    )
+    monkeypatch.setattr("contig.cli.default_command_executor", _fake_executor({}))
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "../secret.tsv" in result.output
+    assert not any(runs_dir.rglob("reproduce_record.json")) if runs_dir.exists() else True
+
+
+def test_reproduce_absolute_table_locator_from_errors_and_writes_no_record(
+    tmp_path, monkeypatch
+):
+    repo = _repo(tmp_path)
+    claims = _claims_file(
+        tmp_path,
+        [
+            {
+                "id": "log2fc",
+                "value": -2.31,
+                "from": "/etc/de.tsv",
+                "column": "log2FoldChange",
+                "row": {"gene_id": "ENSG1"},
+            }
+        ],
+    )
+    monkeypatch.setattr("contig.cli.default_command_executor", _fake_executor({}))
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "/etc/de.tsv" in result.output
+    assert not any(runs_dir.rglob("reproduce_record.json")) if runs_dir.exists() else True
+
+
+_DE_HEADER = ["gene_id", "log2FoldChange", "padj"]
+
+
+def _write_de_tsv_executor(observed: str):
+    """Fake executor that emits a two-column-of-interest TSV under out/de.tsv,
+    mirroring test_reproduce.py's run_reproduction table-locator fixtures.
+    """
+
+    def execute(cmd, cwd):
+        out_dir = cwd / "out"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        rows = [_DE_HEADER, ["ENSG1", observed, "0.001"]]
+        (out_dir / "de.tsv").write_text("\n".join("\t".join(r) for r in rows) + "\n")
+        return 0, ""
+
+    return execute
+
+
+def test_reproduce_located_table_claim_end_to_end_reports_verdict(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    claims = _claims_file(
+        tmp_path,
+        [
+            {
+                "id": "log2fc",
+                "value": -2.31,
+                "tolerance": 0.05,
+                "from": "out/de.tsv",
+                "column": "log2FoldChange",
+                "row": {"gene_id": "ENSG1"},
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor", _write_de_tsv_executor("-2.31")
+    )
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "REPRODUCED" in result.output.upper()
+    assert "log2fc" in result.output
+    assert any(runs_dir.rglob("reproduce_record.json"))
+
+
+def test_reproduce_fail_on_diverged_exits_nonzero_for_table_claim(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    claims = _claims_file(
+        tmp_path,
+        [
+            {
+                "id": "log2fc",
+                "value": -2.31,
+                "tolerance": 0.05,
+                "from": "out/de.tsv",
+                "column": "log2FoldChange",
+                "row": {"gene_id": "ENSG1"},
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor", _write_de_tsv_executor("-1.0")
+    )
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+            "--fail-on-diverged",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "DIVERGED" in result.output.upper()
+    assert any(runs_dir.rglob("reproduce_record.json"))

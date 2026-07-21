@@ -749,6 +749,11 @@ def reproduce(
     a signed, re-runnable bundle under `runs_dir`. Nothing is written when the
     repo is missing or the claims file is malformed -- validation happens
     before any run or record.
+
+    A claim's locator may target a JSON value (`from` + `path`, a JSONPath-lite
+    into a JSON file) or a TSV/CSV cell (`from` + `column` + `row`, optionally
+    `header`/`delimiter`) -- e.g. `{"id": "log2fc", "value": -2.31, "from":
+    "out/de.tsv", "column": "log2FoldChange", "row": {"gene_id": "ENSG1"}}`.
     """
     repo_path = Path(repo)
     if not repo_path.is_dir():
