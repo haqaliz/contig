@@ -14,6 +14,8 @@ every claim into a `ReproduceRecord`.
 
 from __future__ import annotations
 
+import csv
+import gzip
 import json
 import math
 import re
@@ -187,6 +189,131 @@ def _resolve_delimiter(source: str, explicit: str | None) -> str | None:
     if s.endswith(".csv"):
         return ","
     return None
+
+
+def _read_table(path: Path, delimiter: str) -> list[list[str]] | None:
+    """Read a delimited text table at `path`, gzip-transparent.
+
+    A `.gz`-suffixed name is decompressed via stdlib `gzip` (text mode,
+    utf-8); anything else is opened directly (also utf-8). Parses with
+    stdlib `csv.reader(f, delimiter=delimiter)` and returns every row as
+    `list[list[str]]`. Never raises: a missing file, a directory path, a
+    non-UTF-8 file, or an unparseable CSV all degrade to `None` (the caller
+    treats `None` as "unresolved").
+    """
+    try:
+        if path.name.endswith(".gz"):
+            with gzip.open(path, "rt", encoding="utf-8", newline="") as f:
+                return list(csv.reader(f, delimiter=delimiter))
+        with open(path, encoding="utf-8", newline="") as f:
+            return list(csv.reader(f, delimiter=delimiter))
+    except (OSError, UnicodeDecodeError, csv.Error):
+        return None
+
+
+def resolve_cell(
+    rows: list[list[str]],
+    column: str | int,
+    row: int | dict[str, str],
+    header: bool,
+) -> tuple[str | None, str]:
+    """Resolve one cell out of already-parsed table `rows`.
+
+    Pure, index-safe, never raises -- any unresolved, ambiguous, or
+    malformed address returns `(None, reason)` rather than raising (mirrors
+    `resolve_pointer`'s "never raises" contract). On success returns
+    `(cell_string, "")`; the cell is always a raw string -- parsing it to a
+    float is the caller's job, not this function's.
+
+    Header mode (`header=True`): row 0 is the header, the rest are data
+    rows. `column` is either a header-name string (a duplicate or absent
+    name -> unresolved) or a 0-based field index (out of range ->
+    unresolved). `row` is either a 0-based index over the DATA rows (out of
+    range -> unresolved, naming the data-row count) or a single-key
+    `{col: val}` object selecting the data row whose `col` cell equals
+    `val` after `.strip()` (an exact compare, no case-fold/quote-strip) --
+    0 or >1 matches -> unresolved, naming the match count.
+
+    Headerless mode (`header=False`): `column` and `row` must both be
+    ints, `row` indexing over ALL rows.
+
+    A row shorter than the resolved column index (a ragged table) ->
+    unresolved rather than an `IndexError`. An empty table, or a
+    header-only table with 0 data rows, likewise -> unresolved.
+    """
+    if not rows:
+        return None, "table has no rows"
+
+    if header:
+        header_row = rows[0]
+        data_rows = rows[1:]
+
+        if isinstance(column, str):
+            matches = [i for i, name in enumerate(header_row) if name == column]
+            if not matches:
+                return None, f"column {column!r} not found in header"
+            if len(matches) > 1:
+                return None, (
+                    f"column {column!r} is ambiguous: {len(matches)} header matches"
+                )
+            col_idx = matches[0]
+        elif isinstance(column, int) and not isinstance(column, bool):
+            if not (0 <= column < len(header_row)):
+                return None, (
+                    f"column index {column} out of range ({len(header_row)} header columns)"
+                )
+            col_idx = column
+        else:
+            return None, f"invalid column address: {column!r}"
+
+        if isinstance(row, dict):
+            if len(row) != 1:
+                return None, f"invalid row key-match: {row!r}"
+            ((key_col, key_val),) = row.items()
+            if not isinstance(key_col, str) or not isinstance(key_val, str):
+                return None, f"invalid row key-match: {row!r}"
+            key_matches = [i for i, name in enumerate(header_row) if name == key_col]
+            if not key_matches:
+                return None, f"row key column {key_col!r} not found in header"
+            if len(key_matches) > 1:
+                return None, (
+                    f"row key column {key_col!r} is ambiguous: "
+                    f"{len(key_matches)} header matches"
+                )
+            key_idx = key_matches[0]
+            wanted = key_val.strip()
+            matched = [
+                r for r in data_rows if key_idx < len(r) and r[key_idx].strip() == wanted
+            ]
+            if not matched:
+                return None, f"row {row!r} matched 0 rows"
+            if len(matched) > 1:
+                return None, f"row {row!r} matched {len(matched)} rows"
+            target_row = matched[0]
+        elif isinstance(row, int) and not isinstance(row, bool):
+            if not (0 <= row < len(data_rows)):
+                return None, (
+                    f"row index {row} out of range ({len(data_rows)} data rows)"
+                )
+            target_row = data_rows[row]
+        else:
+            return None, f"invalid row address: {row!r}"
+    else:
+        if not (isinstance(column, int) and not isinstance(column, bool)):
+            return None, f"headerless table requires an integer column, got {column!r}"
+        if not (isinstance(row, int) and not isinstance(row, bool)):
+            return None, f"headerless table requires an integer row, got {row!r}"
+        if not (0 <= row < len(rows)):
+            return None, f"row index {row} out of range ({len(rows)} rows)"
+        target_row = rows[row]
+        col_idx = column
+
+    if col_idx < 0 or col_idx >= len(target_row):
+        return None, (
+            f"row has {len(target_row)} cells, short of column index {col_idx}"
+        )
+
+    return target_row[col_idx], ""
 
 
 @dataclass(frozen=True)
