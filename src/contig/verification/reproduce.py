@@ -587,6 +587,7 @@ def run_reproduction(
     repo_path = Path(repo)
     repo_root = repo_path.resolve()
     _json_cache: dict[str, object | None] = {}
+    _table_cache: dict[str, list[list[str]] | None] = {}
 
     def _observe_located(loc: Locator) -> tuple[float | None, str]:
         """Bind one located claim's observed value from its own repo-relative
@@ -636,6 +637,51 @@ def run_reproduction(
             )
 
         return float(target), ""
+
+    def _observe_table_located(loc: TableLocator) -> tuple[float | None, str]:
+        """Bind one located claim's observed value from a cell in its own
+        repo-relative TSV/CSV file. Sibling of `_observe_located`: same
+        containment guard (never reads outside the repo), same "parse once,
+        cache by resolved absolute path" shape (`_table_cache` in place of
+        `_json_cache`), same "any resolution failure -> (None, message)"
+        contract the caller always maps to `unverified`.
+
+        Unlike the JSON reader, a numeric-looking cell STRING (e.g. "30.4")
+        is the normal, valid case here -- every table cell is a string, so
+        it is float-parsed and, if finite, returned as the observed value
+        rather than rejected the way a JSON numeric string is.
+        """
+        resolved = (repo_path / loc.source).resolve()
+        try:
+            resolved.relative_to(repo_root)  # defense-in-depth: never read outside repo
+        except ValueError:
+            return None, f"locator 'from' {loc.source!r} escapes the repo"
+
+        key = str(resolved)
+        if key not in _table_cache:
+            _table_cache[key] = _read_table(resolved, loc.delimiter)
+
+        rows = _table_cache[key]
+        if rows is None:
+            return None, f"locator file {loc.source!r} is missing or unreadable"
+
+        cell, reason = resolve_cell(rows, loc.column, loc.row, loc.header)
+        if cell is None:
+            return None, f"locator cell in {loc.source!r} did not resolve: {reason}"
+
+        try:
+            value = float(cell)
+        except ValueError:
+            return None, (
+                f"locator cell {cell!r} in {loc.source!r} is not a finite number"
+            )
+
+        if math.isnan(value) or math.isinf(value):
+            return None, (
+                f"locator cell {cell!r} in {loc.source!r} is not finite: {value!r}"
+            )
+
+        return value, ""
 
     exit_code, run_output = executor(shlex.split(run_command), repo_path)
     repair_history: list[RepairStep] = []
@@ -732,7 +778,10 @@ def run_reproduction(
     claim_results = []
     for claim in claims:
         if claim.locator is not None:
-            observed, fail_msg = _observe_located(claim.locator)
+            if isinstance(claim.locator, TableLocator):
+                observed, fail_msg = _observe_table_located(claim.locator)
+            else:
+                observed, fail_msg = _observe_located(claim.locator)
             if observed is None:
                 claim_results.append(
                     ClaimResult(

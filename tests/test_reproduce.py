@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from contig.verification import reproduce as reproduce_module
 from contig.verification.reproduce import (
     Claim,
     ClaimsError,
@@ -975,6 +976,373 @@ def test_run_reproduction_located_claim_escaping_repo_is_unverified_and_not_read
 def test_run_reproduction_located_claim_nonzero_exit_is_unverified(tmp_path):
     _write_located(tmp_path, "out/summary.json", {"model": {"auc": 0.9}})
     claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
+    record = _run(tmp_path, claims, _noop_executor(exit_code=1))
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "exit 1" in result.message
+
+
+# ---------------------------------------------------------------------------
+# run_reproduction() -- located claims via the TSV/CSV table locator
+# [C8 slice 3, Phase 3]
+# ---------------------------------------------------------------------------
+
+_DE_HEADER = ["gene_id", "log2FoldChange", "padj"]
+
+
+def _write_tsv(tmp_path: Path, rel: str, rows: list[list[str]]) -> None:
+    p = tmp_path / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("\n".join("\t".join(row) for row in rows) + "\n")
+
+
+def _write_csv(tmp_path: Path, rel: str, rows: list[list[str]]) -> None:
+    p = tmp_path / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("\n".join(",".join(row) for row in rows) + "\n")
+
+
+def test_run_reproduction_table_claim_named_matching_is_reproduced(tmp_path):
+    _write_tsv(
+        tmp_path,
+        "out/de.tsv",
+        [_DE_HEADER, ["ENSG1", "-2.31", "0.001"], ["ENSG2", "0.5", "0.2"]],
+    )
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator(
+                "out/de.tsv", "log2FoldChange", {"gene_id": "ENSG1"}, "\t", True
+            ),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == -2.31
+
+
+def test_run_reproduction_table_claim_drifted_is_diverged_with_message(tmp_path):
+    _write_tsv(tmp_path, "out/de.tsv", [_DE_HEADER, ["ENSG1", "-1.0", "0.001"]])
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator(
+                "out/de.tsv", "log2FoldChange", {"gene_id": "ENSG1"}, "\t", True
+            ),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "diverged"
+    assert result.observed == -1.0
+    assert "-1.0" in result.message
+    assert "-2.31" in result.message
+    assert result.delta is not None
+
+
+def test_run_reproduction_table_claim_near_value_is_within_tolerance(tmp_path):
+    _write_tsv(tmp_path, "out/de.tsv", [_DE_HEADER, ["ENSG1", "-2.3", "0.001"]])
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator(
+                "out/de.tsv", "log2FoldChange", {"gene_id": "ENSG1"}, "\t", True
+            ),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "within_tolerance"
+    assert result.observed == -2.3
+
+
+def test_run_reproduction_table_claim_positional_headerless_resolves(tmp_path):
+    _write_csv(tmp_path, "out/counts.csv", [["ENSG1", "10", "20"], ["ENSG2", "30.4", "40"]])
+    claims = [
+        Claim(
+            id="count",
+            value=30.4,
+            tolerance=0.05,
+            locator=TableLocator("out/counts.csv", 1, 1, ",", False),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == 30.4
+
+
+def test_run_reproduction_table_claim_missing_file_is_unverified(tmp_path):
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator(
+                "out/de.tsv", "log2FoldChange", {"gene_id": "ENSG1"}, "\t", True
+            ),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+
+
+def test_run_reproduction_table_claim_unresolved_column_is_unverified(tmp_path):
+    _write_tsv(tmp_path, "out/de.tsv", [_DE_HEADER, ["ENSG1", "-2.31", "0.001"]])
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator("out/de.tsv", "nonexistent_col", 0, "\t", True),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "nonexistent_col" in result.message
+
+
+def test_run_reproduction_table_claim_row_key_zero_matches_is_unverified(tmp_path):
+    _write_tsv(tmp_path, "out/de.tsv", [_DE_HEADER, ["ENSG1", "-2.31", "0.001"]])
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator("out/de.tsv", "log2FoldChange", {"gene_id": "NOPE"}, "\t", True),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "0 rows" in result.message
+
+
+def test_run_reproduction_table_claim_row_key_many_matches_is_unverified(tmp_path):
+    _write_tsv(
+        tmp_path,
+        "out/de.tsv",
+        [_DE_HEADER, ["ENSG1", "-2.31", "0.001"], ["ENSG1", "-5.0", "0.02"]],
+    )
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator(
+                "out/de.tsv", "log2FoldChange", {"gene_id": "ENSG1"}, "\t", True
+            ),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "2 rows" in result.message
+
+
+def test_run_reproduction_table_claim_ragged_row_is_unverified(tmp_path):
+    p = tmp_path / "out" / "de.tsv"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("gene_id\tlog2FoldChange\tpadj\nENSG1\n")
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator("out/de.tsv", "log2FoldChange", 0, "\t", True),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+
+
+def test_run_reproduction_table_claim_unparseable_cell_is_unverified(tmp_path):
+    _write_tsv(tmp_path, "out/de.tsv", [_DE_HEADER, ["ENSG1", "NA", "0.001"]])
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator("out/de.tsv", "log2FoldChange", 0, "\t", True),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+
+
+def test_run_reproduction_table_claim_non_finite_cell_is_unverified(tmp_path):
+    _write_tsv(tmp_path, "out/de.tsv", [_DE_HEADER, ["ENSG1", "inf", "0.001"]])
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator("out/de.tsv", "log2FoldChange", 0, "\t", True),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+
+
+def test_run_reproduction_table_claim_numeric_string_cell_is_the_observed_value(tmp_path):
+    # Deliberate divergence from the JSON locator rule: every table cell is a
+    # string, so a numeric-looking string like "30.4" is the NORMAL valid
+    # case and must classify -- not go unverified.
+    _write_tsv(tmp_path, "out/counts.tsv", [["gene_id", "count"], ["ENSG1", "30.4"]])
+    claims = [
+        Claim(
+            id="count",
+            value=30.4,
+            tolerance=0.05,
+            locator=TableLocator("out/counts.tsv", "count", 0, "\t", True),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == 30.4
+
+
+def test_run_reproduction_table_claim_same_file_parsed_once(tmp_path, monkeypatch):
+    _write_tsv(
+        tmp_path,
+        "out/de.tsv",
+        [_DE_HEADER, ["ENSG1", "-2.31", "0.001"], ["ENSG2", "0.5", "0.2"]],
+    )
+    calls: list[Path] = []
+    original_read_table = reproduce_module._read_table
+
+    def counting_read_table(path, delimiter):
+        calls.append(path)
+        return original_read_table(path, delimiter)
+
+    monkeypatch.setattr(reproduce_module, "_read_table", counting_read_table)
+
+    claims = [
+        Claim(
+            id="log2fc_1",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator(
+                "out/de.tsv", "log2FoldChange", {"gene_id": "ENSG1"}, "\t", True
+            ),
+        ),
+        Claim(
+            id="log2fc_2",
+            value=0.5,
+            tolerance=0.05,
+            locator=TableLocator(
+                "out/de.tsv", "log2FoldChange", {"gene_id": "ENSG2"}, "\t", True
+            ),
+        ),
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    by_id = {r.id: r for r in record.claim_results}
+    assert by_id["log2fc_1"].status == "reproduced"
+    assert by_id["log2fc_2"].status == "reproduced"
+    assert len(calls) == 1
+
+
+def test_run_reproduction_mixed_table_and_json_and_flat_claims_resolve_independently(tmp_path):
+    _write_located(tmp_path, "out/summary.json", {"model": {"auc": 0.9}})
+    _write_tsv(tmp_path, "out/de.tsv", [_DE_HEADER, ["ENSG1", "-2.31", "0.001"]])
+    table_claim = Claim(
+        id="log2fc",
+        value=-2.31,
+        tolerance=0.05,
+        locator=TableLocator("out/de.tsv", "log2FoldChange", 0, "\t", True),
+    )
+    json_claim = Claim(
+        id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc")
+    )
+    flat_claim = Claim(id="accuracy", value=0.8, tolerance=0.05)
+    executor = _fake_executor(0, {"accuracy": 0.8})
+    record = _run(tmp_path, [table_claim, json_claim, flat_claim], executor)
+    by_id = {r.id: r for r in record.claim_results}
+    assert by_id["log2fc"].status == "reproduced"
+    assert by_id["auc"].status == "reproduced"
+    assert by_id["accuracy"].status == "reproduced"
+
+
+def test_run_reproduction_table_claim_escaping_repo_is_unverified_and_not_read(
+    tmp_path, monkeypatch
+):
+    outside_dir = tmp_path.parent / "outside_table_secret"
+    outside_dir.mkdir(exist_ok=True)
+    secret_file = outside_dir / "secret.tsv"
+    secret_file.write_text("gene_id\tlog2FoldChange\nENSG1\t-2.31\n")
+
+    calls: list[Path] = []
+    original_read_table = reproduce_module._read_table
+
+    def counting_read_table(path, delimiter):
+        calls.append(path)
+        return original_read_table(path, delimiter)
+
+    monkeypatch.setattr(reproduce_module, "_read_table", counting_read_table)
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator(
+                "../outside_table_secret/secret.tsv",
+                "log2FoldChange",
+                {"gene_id": "ENSG1"},
+                "\t",
+                True,
+            ),
+        )
+    ]
+    record = run_reproduction(
+        repo=str(repo_dir),
+        run_command="echo run",
+        claims=claims,
+        executor=_noop_executor(),
+        claims_sha256="a" * 64,
+        created_at="2026-07-18T00:00:00Z",
+        reproduce_id="rp_1",
+    )
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "escapes the repo" in result.message
+    assert calls == []
+
+
+def test_run_reproduction_table_claim_nonzero_exit_is_unverified(tmp_path):
+    _write_tsv(tmp_path, "out/de.tsv", [_DE_HEADER, ["ENSG1", "-2.31", "0.001"]])
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator("out/de.tsv", "log2FoldChange", 0, "\t", True),
+        )
+    ]
     record = _run(tmp_path, claims, _noop_executor(exit_code=1))
     result = record.claim_results[0]
     assert result.status == "unverified"
