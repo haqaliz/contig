@@ -844,6 +844,7 @@ def run_reproduction(
     claims_sha256: str,
     results_path: str = "results.json",
     created_at: str,
+    run_started_at: float | None = None,
     reproduce_id: str,
     allow_install: bool = False,
     installer: Installer = default_installer,
@@ -874,6 +875,7 @@ def run_reproduction(
     _json_cache: dict[str, object | None] = {}
     _table_cache: dict[str, list[list[str]] | None] = {}
     _text_cache: dict[str, str | None] = {}
+    _notebook_cache: dict[str, object | None] = {}
 
     def _observe_located(loc: Locator) -> tuple[float | None, str]:
         """Bind one located claim's observed value from its own repo-relative
@@ -1053,6 +1055,92 @@ def run_reproduction(
 
         return value, ""
 
+    def _observe_notebook_located(loc: NotebookLocator) -> tuple[float | None, str]:
+        """Bind one located claim's observed value out of a Jupyter notebook
+        the run itself rewrote. Sibling of `_observe_pattern_located`, with one
+        extra, load-bearing gate: a **freshness guard**. A notebook whose mtime
+        predates `run_started_at` was NOT produced by this run -- it is an
+        author's committed artifact -- so it is UNVERIFIED even when its stored
+        output matches the claim exactly. This is the whole point of the
+        locator: a bound value must come from what THIS run computed, never
+        from a checked-in cell output. The guard fires BEFORE the file is ever
+        parsed, so a stale notebook is never even read for content.
+
+        `run_started_at is None` here is a programming error, not an
+        UNVERIFIED: this observer must never be reached without a stamped run
+        start, so it raises loudly rather than silently degrading.
+
+        Same containment guard, same "parse once, cache by resolved absolute
+        path" shape (`_notebook_cache`), and same "any resolution failure ->
+        (None, message)" contract the caller maps to `unverified` as the other
+        observers. Like the table/pattern readers, a numeric-looking capture
+        STRING is the normal valid case, so it is stripped, float-parsed and,
+        if finite, returned.
+        """
+        if run_started_at is None:
+            raise ValueError("run_started_at is required to verify a notebook locator")
+
+        resolved = (repo_path / loc.source).resolve()
+        try:
+            resolved.relative_to(repo_root)  # defense-in-depth: never read outside repo
+        except ValueError:
+            return None, f"locator 'from' {loc.source!r} escapes the repo"
+
+        try:
+            stat = resolved.stat()  # one stat() gives both size and mtime
+        except OSError:
+            return None, f"notebook {loc.source!r} is missing or unreadable"
+
+        if stat.st_size > _MAX_MATCH_BYTES:
+            return None, (
+                f"notebook {loc.source!r} is {stat.st_size} bytes, "
+                f"over the {_MAX_MATCH_BYTES}-byte match limit"
+            )
+
+        if stat.st_mtime < run_started_at:
+            return None, (
+                f"notebook {loc.source!r} was not rewritten by this run "
+                "(mtime predates run start)"
+            )
+
+        key = str(resolved)
+        if key not in _notebook_cache:
+            doc: object | None = None
+            try:
+                doc = json.loads(resolved.read_text())
+            except (ValueError, OSError):
+                # ValueError covers json.JSONDecodeError and UnicodeDecodeError
+                # on a non-UTF-8 file (both ValueError subclasses); OSError
+                # covers a file that vanished between the stat() and the read.
+                doc = None
+            _notebook_cache[key] = doc
+
+        doc = _notebook_cache[key]
+        if doc is None:
+            return None, f"notebook {loc.source!r} is not valid JSON"
+
+        text, reason = resolve_notebook_cell_text(doc, loc.cell)
+        if text is None:
+            return None, f"notebook cell in {loc.source!r} did not resolve: {reason}"
+
+        captured, reason = resolve_match(text, loc.pattern)
+        if captured is None:
+            return None, f"notebook pattern in {loc.source!r} did not resolve: {reason}"
+
+        try:
+            value = float(captured.strip())
+        except ValueError:
+            return None, (
+                f"notebook capture {captured!r} in {loc.source!r} is not a finite number"
+            )
+
+        if math.isnan(value) or math.isinf(value):
+            return None, (
+                f"notebook capture {captured!r} in {loc.source!r} is not finite: {value!r}"
+            )
+
+        return value, ""
+
     exit_code, run_output = executor(shlex.split(run_command), repo_path)
     repair_history: list[RepairStep] = []
 
@@ -1151,7 +1239,9 @@ def run_reproduction(
             # Explicit isinstance chain, never an unguarded fallback: a
             # PatternLocator dropping into the JSON reader would raise
             # AttributeError on the missing `.path`.
-            if isinstance(claim.locator, TableLocator):
+            if isinstance(claim.locator, NotebookLocator):
+                observed, fail_msg = _observe_notebook_located(claim.locator)
+            elif isinstance(claim.locator, TableLocator):
                 observed, fail_msg = _observe_table_located(claim.locator)
             elif isinstance(claim.locator, PatternLocator):
                 observed, fail_msg = _observe_pattern_located(claim.locator)
