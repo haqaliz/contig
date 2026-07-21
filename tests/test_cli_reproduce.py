@@ -728,3 +728,251 @@ def test_reproduce_fail_on_diverged_exits_nonzero_for_table_claim(tmp_path, monk
     assert result.exit_code != 0
     assert "DIVERGED" in result.output.upper()
     assert any(runs_dir.rglob("reproduce_record.json"))
+
+
+# ---------------------------------------------------------------------------
+# stdout/log pattern locator -- CLI containment + end-to-end [C8 slice 4, Phase 4]
+# ---------------------------------------------------------------------------
+
+
+def test_reproduce_stdout_pattern_claim_end_to_end_reports_verdict(tmp_path, monkeypatch):
+    # M8/R5: a `from`-less pattern claim has locator.source is None. The pre-run
+    # containment loop must SKIP it (there is no file to contain) rather than
+    # joining repo_path / None -- which raises TypeError before any run.
+    repo = _repo(tmp_path)
+    claims = _claims_file(
+        tmp_path,
+        [
+            {
+                "id": "auc",
+                "value": 0.91,
+                "tolerance": 0.02,
+                "pattern": "Final AUC: ([0-9.]+)",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor",
+        _fake_executor(results=None, exit_code=0, output="Final AUC: 0.91\n"),
+    )
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "REPRODUCED" in result.output.upper()
+    assert "auc" in result.output
+    assert any(runs_dir.rglob("reproduce_record.json"))
+
+
+def _write_train_log_executor(line: str):
+    """Fake executor that emits a log file under logs/train.log, so a file-mode
+    pattern claim (`from` + `pattern`) has something to read.
+    """
+
+    def execute(cmd, cwd):
+        log_dir = cwd / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        (log_dir / "train.log").write_text(f"epoch 1 done\n{line}\n")
+        return 0, ""
+
+    return execute
+
+
+def test_reproduce_file_pattern_claim_end_to_end_reports_verdict(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    claims = _claims_file(
+        tmp_path,
+        [
+            {
+                "id": "auc",
+                "value": 0.91,
+                "tolerance": 0.02,
+                "from": "logs/train.log",
+                "pattern": "Final AUC: ([0-9.]+)",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor",
+        _write_train_log_executor("Final AUC: 0.91"),
+    )
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python train.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "REPRODUCED" in result.output.upper()
+    assert "auc" in result.output
+    assert any(runs_dir.rglob("reproduce_record.json"))
+
+
+def test_reproduce_escaping_pattern_locator_from_errors_and_writes_no_record(
+    tmp_path, monkeypatch
+):
+    # A FILE-mode pattern claim keeps the existing pre-run refusal: its 'from'
+    # is repo-relative like every other locator's.
+    repo = _repo(tmp_path)
+    claims = _claims_file(
+        tmp_path,
+        [
+            {
+                "id": "auc",
+                "value": 0.91,
+                "from": "../secret.log",
+                "pattern": "Final AUC: ([0-9.]+)",
+            }
+        ],
+    )
+    monkeypatch.setattr("contig.cli.default_command_executor", _fake_executor({}))
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "../secret.log" in result.output
+    assert not any(runs_dir.rglob("reproduce_record.json")) if runs_dir.exists() else True
+
+
+def test_reproduce_absolute_pattern_locator_from_errors_and_writes_no_record(
+    tmp_path, monkeypatch
+):
+    repo = _repo(tmp_path)
+    claims = _claims_file(
+        tmp_path,
+        [
+            {
+                "id": "auc",
+                "value": 0.91,
+                "from": "/etc/passwd",
+                "pattern": "root:x:([0-9]+)",
+            }
+        ],
+    )
+    monkeypatch.setattr("contig.cli.default_command_executor", _fake_executor({}))
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "/etc/passwd" in result.output
+    assert not any(runs_dir.rglob("reproduce_record.json")) if runs_dir.exists() else True
+
+
+def test_reproduce_uncompilable_pattern_errors_and_writes_no_record(tmp_path, monkeypatch):
+    # G5 (CLI half): load_claims raises ClaimsError pre-run, so nothing runs and
+    # no record is written.
+    repo = _repo(tmp_path)
+    claims = _claims_file(
+        tmp_path,
+        [{"id": "auc", "value": 0.91, "pattern": "([0-9"}],
+    )
+    monkeypatch.setattr("contig.cli.default_command_executor", _fake_executor({}))
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "auc" in result.output
+    assert not any(runs_dir.rglob("reproduce_record.json")) if runs_dir.exists() else True
+
+
+def test_reproduce_fail_on_diverged_exits_nonzero_for_pattern_claim(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    claims = _claims_file(
+        tmp_path,
+        [
+            {
+                "id": "auc",
+                "value": 0.91,
+                "tolerance": 0.02,
+                "pattern": "Final AUC: ([0-9.]+)",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor",
+        _fake_executor(results=None, exit_code=0, output="Final AUC: 0.42\n"),
+    )
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+            "--fail-on-diverged",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "DIVERGED" in result.output.upper()
+    assert any(runs_dir.rglob("reproduce_record.json"))
+
+
+def test_reproduce_docstring_notes_pattern_locator_support():
+    # S2: the locator sentence must also document the pattern form. Assert on
+    # the raw docstring (what Click's `help` is built from), never on the
+    # Rich-rendered `--help` output -- see
+    # test_reproduce_registers_allow_install_flag's comment on why.
+    from contig.cli import reproduce
+
+    doc = (reproduce.__doc__ or "").lower()
+    assert "pattern" in doc
+    assert "stdout" in doc
+    assert "group 1" in doc
+    assert "unverified" in doc

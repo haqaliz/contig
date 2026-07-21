@@ -43,6 +43,13 @@ _DEFAULT_TOLERANCE = 0.1
 _MISSING_MODULE_RE = re.compile(r"No module named ['\"]([^'\"]+)['\"]", re.IGNORECASE)
 _SAFE_PACKAGE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
+# Upper bound on how much text a user-authored pattern is ever run over (a
+# ReDoS input bound, not a memory guard -- run output is already fully
+# buffered upstream by `subprocess.PIPE`). Text over the cap is UNVERIFIED
+# rather than silently truncated, which could report "0 matches" for a
+# pattern that does match past the cut.
+_MAX_MATCH_BYTES = 8 * 1024 * 1024
+
 
 def detect_missing_module(output: str) -> str | None:
     """Extract the missing top-level package from a run's captured error text.
@@ -169,6 +176,21 @@ class TableLocator:
     row: int | dict[str, str]
     delimiter: str
     header: bool
+
+
+@dataclass(frozen=True)
+class PatternLocator:
+    """Where to find a located claim's observed value inside free text:
+    `pattern` is a Python regex whose capture is the observed value (group 1
+    when the pattern has capturing groups, otherwise the whole match);
+    `source` is the claims file's `"from"` field (a repo-relative text/log
+    file path -- named `source` internally for the same reason as
+    `Locator.source`), or `None`, which means the run's own captured
+    combined stdout+stderr rather than any file on disk.
+    """
+
+    source: str | None
+    pattern: str
 
 
 def _resolve_delimiter(source: str, explicit: str | None) -> str | None:
@@ -317,6 +339,58 @@ def resolve_cell(
     return target_row[col_idx], ""
 
 
+def resolve_match(text: str, pattern: str) -> tuple[str | None, str]:
+    """Resolve one captured string out of `text` with a user-authored regex.
+
+    Pure, never raises -- any oversized text, uncompilable pattern, ambiguous
+    match count, or non-participating capture group returns `(None, reason)`
+    rather than raising (mirrors `resolve_cell`'s "never raises" contract). On
+    success returns `(captured_string, "")`; the capture is always a raw
+    string -- parsing it to a float is the caller's job, not this function's.
+
+    The text size is bounded FIRST, before the pattern is compiled or scanned:
+    text over `_MAX_MATCH_BYTES` is unresolved, naming the size and the limit.
+    Truncating instead would be dishonest -- it could report "0 matches" for a
+    pattern that does match past the cut.
+
+    Matching is STRICT: all non-overlapping matches are found, and exactly one
+    is required. 0 matches or N>1 matches -> unresolved, naming the count
+    (`resolve_cell`'s "matched N rows" wording shape). Never an arbitrary pick.
+
+    Capture selection: if the compiled pattern has capturing groups, group 1
+    is the value (a named group is group 1 too); with no groups, the whole
+    match is. A group 1 that did NOT participate in the match yields `None`
+    from `match.group(1)` -- the one input shape that would otherwise crash a
+    caller on `float(None)` -- so it is unresolved as well.
+
+    Flags are supplied inline in the pattern (`(?i)`, `(?m)`, `(?s)`); there
+    is no separate flags argument. The compile is wrapped defensively so the
+    contract holds even when called directly with an uncompilable pattern
+    (`load_claims` already gates this pre-run).
+    """
+    if len(text) > _MAX_MATCH_BYTES:
+        return None, (
+            f"text is {len(text)} chars, over the {_MAX_MATCH_BYTES}-char match limit"
+        )
+
+    try:
+        compiled = re.compile(pattern)
+    except re.error as exc:
+        return None, f"pattern {pattern!r} is not a valid regex: {exc}"
+
+    matches = list(compiled.finditer(text))
+    if len(matches) != 1:
+        return None, f"pattern {pattern!r} matched {len(matches)} times"
+
+    match = matches[0]
+    captured = match.group(1) if compiled.groups else match.group(0)
+    if captured is None:
+        return None, (
+            f"pattern {pattern!r} capture group did not participate in the match"
+        )
+    return captured, ""
+
+
 @dataclass(frozen=True)
 class Claim:
     """One published numeric claim to reproduce: `id` names the metric,
@@ -326,13 +400,15 @@ class Claim:
     is bound from its own repo-relative file rather than from the flat
     `--results` map (slice-1 behavior, `locator=None`): a `Locator` reads a
     dotted+`[n]` pointer into a JSON file (slice 1.5), a `TableLocator`
-    reads one cell out of a TSV/CSV table (slice 3).
+    reads one cell out of a TSV/CSV table (slice 3), and a `PatternLocator`
+    captures it with a regex over a repo-relative text/log file or -- when
+    its `source` is `None` -- over the run's own captured output (slice 4).
     """
 
     id: str
     value: float
     tolerance: float = _DEFAULT_TOLERANCE
-    locator: Locator | TableLocator | None = None
+    locator: Locator | TableLocator | PatternLocator | None = None
 
 
 def load_claims(path: str | Path) -> list[Claim]:
@@ -379,24 +455,52 @@ def load_claims(path: str | Path) -> list[Claim]:
 
         has_from = "from" in item
         has_path = "path" in item
+        has_pattern = "pattern" in item
         has_column = "column" in item
         has_row = "row" in item
         has_delimiter = "delimiter" in item
         has_header = "header" in item
         has_table_field = has_column or has_row or has_delimiter or has_header
 
-        if not has_from and (has_path or has_table_field):
+        if not has_from and not has_pattern and (has_path or has_table_field):
             raise ClaimsError(
                 f"claim {claim_id!r} must set 'from' together with 'path', or with "
                 "'column'+'row', or neither"
             )
 
-        locator: Locator | TableLocator | None = None
+        source: str | None = None
         if has_from:
             raw_from = item["from"]
             if not isinstance(raw_from, str) or not raw_from.strip():
                 raise ClaimsError(f"claim {claim_id!r} has an invalid 'from': {raw_from!r}")
+            source = raw_from
 
+        locator: Locator | TableLocator | PatternLocator | None = None
+        if has_pattern:
+            if has_path:
+                raise ClaimsError(
+                    f"claim {claim_id!r} must set 'path' or 'pattern', not both"
+                )
+            if has_table_field:
+                raise ClaimsError(
+                    f"claim {claim_id!r} must set 'column'+'row' or 'pattern', not both "
+                    "(a table field has no meaning for a pattern locator)"
+                )
+
+            raw_pattern = item["pattern"]
+            if not isinstance(raw_pattern, str) or not raw_pattern.strip():
+                raise ClaimsError(
+                    f"claim {claim_id!r} has an invalid 'pattern': {raw_pattern!r}"
+                )
+            try:
+                re.compile(raw_pattern)
+            except re.error as exc:
+                raise ClaimsError(
+                    f"claim {claim_id!r} has an uncompilable 'pattern': {exc}"
+                ) from exc
+
+            locator = PatternLocator(source=source, pattern=raw_pattern)
+        elif has_from:
             is_table_mode = has_column or has_row
             if has_path and is_table_mode:
                 raise ClaimsError(
@@ -589,6 +693,7 @@ def run_reproduction(
     repo_root = repo_path.resolve()
     _json_cache: dict[str, object | None] = {}
     _table_cache: dict[str, list[list[str]] | None] = {}
+    _text_cache: dict[str, str | None] = {}
 
     def _observe_located(loc: Locator) -> tuple[float | None, str]:
         """Bind one located claim's observed value from its own repo-relative
@@ -680,6 +785,90 @@ def run_reproduction(
         if math.isnan(value) or math.isinf(value):
             return None, (
                 f"locator cell {cell!r} in {loc.source!r} is not finite: {value!r}"
+            )
+
+        return value, ""
+
+    def _observe_pattern_located(loc: PatternLocator) -> tuple[float | None, str]:
+        """Bind one located claim's observed value by matching a user-authored
+        regex against free text. Sibling of `_observe_table_located`: same
+        containment guard for the file case (never reads outside the repo),
+        same "read once, cache by resolved absolute path" shape (`_text_cache`
+        in place of `_table_cache`), same "any resolution failure ->
+        (None, message)" contract the caller always maps to `unverified`.
+
+        Two addressing modes. With `loc.source is None` the text is the run's
+        own captured combined stdout+stderr -- `run_output` from the enclosing
+        scope, with NO path join and no filesystem access at all. Because this
+        is a closure over the *variable* and it is only ever CALLED from the
+        dispatch loop below -- after the env-resurrection retry rebinds
+        `run_output` -- a stdout claim automatically observes the RETRIED run's
+        output under `--allow-install`, never the failed first run's. With
+        `loc.source` set the text is that repo-relative file, whose size is
+        checked via `stat()` BEFORE any read, so an oversized log is never
+        pulled into memory.
+
+        Like the table reader and unlike the JSON reader, a numeric-looking
+        capture STRING is the normal, valid case -- a regex capture is a
+        string by construction -- so it is stripped, float-parsed and, if
+        finite, returned as the observed value rather than rejected.
+        """
+        if loc.source is None:
+            text: str | None = run_output
+            where = "the run output"
+        else:
+            resolved = (repo_path / loc.source).resolve()
+            try:
+                resolved.relative_to(repo_root)  # defense-in-depth: never read outside repo
+            except ValueError:
+                return None, f"locator 'from' {loc.source!r} escapes the repo"
+
+            key = str(resolved)
+            if key not in _text_cache:
+                try:
+                    size = resolved.stat().st_size
+                except OSError:
+                    size = None
+                if size is not None and size > _MAX_MATCH_BYTES:
+                    # Deliberately NOT cached: caching would have to store a
+                    # None text, which reads back as "missing or unreadable"
+                    # and would lose the size in the message. A repeat stat()
+                    # is cheap and still never reads the file.
+                    return None, (
+                        f"locator file {loc.source!r} is {size} bytes, "
+                        f"over the {_MAX_MATCH_BYTES}-byte match limit"
+                    )
+                loaded: str | None = None
+                try:
+                    loaded = resolved.read_text()
+                except (OSError, ValueError):
+                    # ValueError covers UnicodeDecodeError on a non-UTF-8 file
+                    # (a ValueError subclass, NOT an OSError -- see the comment
+                    # in _observe_located); OSError covers missing files and a
+                    # directory given as `from`.
+                    loaded = None
+                _text_cache[key] = loaded
+
+            text = _text_cache[key]
+            where = repr(loc.source)
+
+        if text is None:
+            return None, f"locator file {loc.source!r} is missing or unreadable"
+
+        captured, reason = resolve_match(text, loc.pattern)
+        if captured is None:
+            return None, f"locator pattern in {where} did not resolve: {reason}"
+
+        try:
+            value = float(captured.strip())
+        except ValueError:
+            return None, (
+                f"locator capture {captured!r} in {where} is not a finite number"
+            )
+
+        if math.isnan(value) or math.isinf(value):
+            return None, (
+                f"locator capture {captured!r} in {where} is not finite: {value!r}"
             )
 
         return value, ""
@@ -779,8 +968,13 @@ def run_reproduction(
     claim_results = []
     for claim in claims:
         if claim.locator is not None:
+            # Explicit isinstance chain, never an unguarded fallback: a
+            # PatternLocator dropping into the JSON reader would raise
+            # AttributeError on the missing `.path`.
             if isinstance(claim.locator, TableLocator):
                 observed, fail_msg = _observe_table_located(claim.locator)
+            elif isinstance(claim.locator, PatternLocator):
+                observed, fail_msg = _observe_pattern_located(claim.locator)
             else:
                 observed, fail_msg = _observe_located(claim.locator)
             if observed is None:
