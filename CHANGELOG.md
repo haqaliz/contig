@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-07-21
+
 ### Added
 
 - **`contig reproduce` gains a TSV/CSV table cell locator — the C8 slice 3 named as "the next
@@ -1959,6 +1961,10 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.43.0]: https://github.com/haqaliz/contig/releases/tag/v0.43.0
+[0.42.0]: https://github.com/haqaliz/contig/releases/tag/v0.42.0
+[0.41.0]: https://github.com/haqaliz/contig/releases/tag/v0.41.0
+[0.40.0]: https://github.com/haqaliz/contig/releases/tag/v0.40.0
 [0.39.0]: https://github.com/haqaliz/contig/releases/tag/v0.39.0
 [0.38.0]: https://github.com/haqaliz/contig/releases/tag/v0.38.0
 [0.37.0]: https://github.com/haqaliz/contig/releases/tag/v0.37.0
