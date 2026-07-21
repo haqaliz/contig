@@ -754,6 +754,14 @@ def reproduce(
     into a JSON file) or a TSV/CSV cell (`from` + `column` + `row`, optionally
     `header`/`delimiter`) -- e.g. `{"id": "log2fc", "value": -2.31, "from":
     "out/de.tsv", "column": "log2FoldChange", "row": {"gene_id": "ENSG1"}}`.
+
+    A locator may instead be a regex `pattern`: on its own it is matched
+    against the run's own stdout/stderr, and with `from` it is matched against
+    that repo-relative file -- e.g. `{"id": "auc", "value": 0.91, "pattern":
+    "Final AUC: ([0-9.]+)"}`. The observed value is capture group 1 when the
+    pattern has capturing groups, otherwise the whole match. Matching is
+    strict: a pattern that matches 0 times or more than 1 time leaves the
+    claim UNVERIFIED rather than guessing which number was meant.
     """
     repo_path = Path(repo)
     if not repo_path.is_dir():
@@ -807,9 +815,12 @@ def reproduce(
     # in. Reject an absolute path or one that resolves outside repo_path
     # (e.g. "../secret.json") before anything runs -- the engine also
     # defends against this, but refusing here means no run and no record.
+    # A `from`-less pattern locator (source is None) names no file at all --
+    # it reads the run's own stdout/stderr -- so there is nothing to contain
+    # and nothing to join onto repo_path; skip it like an unlocated claim.
     repo_root = repo_path.resolve()
     for claim in claims_list:
-        if claim.locator is None:
+        if claim.locator is None or claim.locator.source is None:
             continue
         resolved_locator = (repo_path / claim.locator.source).resolve()
         try:
