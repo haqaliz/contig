@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-07-22
+
 ### Added
 
 - **`contig reproduce` gains a Jupyter notebook (`.ipynb`) claim locator — the C8 slice 5
@@ -2145,6 +2147,7 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.45.0]: https://github.com/haqaliz/contig/releases/tag/v0.45.0
 [0.44.0]: https://github.com/haqaliz/contig/releases/tag/v0.44.0
 [0.43.0]: https://github.com/haqaliz/contig/releases/tag/v0.43.0
 [0.42.0]: https://github.com/haqaliz/contig/releases/tag/v0.42.0
