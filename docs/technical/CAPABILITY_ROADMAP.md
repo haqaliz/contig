@@ -1044,7 +1044,7 @@ ever. See [`../planning/variant-annotation-assay/prd.md`](../planning/variant-an
 
 ---
 
-## C8. Reproduce & verify *existing published* work  ·  first slice SHIPPED v0.40.0 + output-locator slice 1.5 SHIPPED v0.41.0 + environment-resurrection slice 2 SHIPPED (Unreleased) + TSV/CSV table-locator slice 3 SHIPPED (Unreleased)  ·  M7+
+## C8. Reproduce & verify *existing published* work  ·  first slice SHIPPED v0.40.0 + output-locator slice 1.5 SHIPPED v0.41.0 + environment-resurrection slice 2 SHIPPED (Unreleased) + TSV/CSV table-locator slice 3 SHIPPED (Unreleased) + stdout/log pattern-locator slice 4 SHIPPED (Unreleased)  ·  M7+
 
 Point the shipped run → self-heal → verify → reproduce engine at a **third-party,
 already-published** bioinformatics repository (a paper + its code/data) and report which of
@@ -1154,12 +1154,67 @@ through the same `.source` field the CLI containment loop and the engine's defen
 already check — **no new code was needed there**; `classify`/`ClaimResult`/`ReproduceRecord`/
 bundle/signing/`--fail-on-diverged` all reused as-is, **no `models.py` change**, `claims_sha256`
 already covers the new claim fields. Stdlib-only (`csv`+`gzip`, both already stdlib) — no new
-dependency. **Deferred:** multi-key/predicate row match, column ranges, regex; stdout/log
-scraping, notebook (`.ipynb`) numeric extraction; paper-parsing; figure/plot & table-image claims
+dependency. **Deferred:** multi-key/predicate row match, column ranges, regex; notebook
+(`.ipynb`) numeric extraction; paper-parsing; figure/plot & table-image claims
 (still hard-blocked — no plot-hash, stdlib-only); remote `<doi|url>`; dashboard card; C6 eval
 fold-in. Test-first (pure reader → engine dispatch → CLI containment/e2e); deterministic; **no
 real repo or network in CI** (on-disk fixture `.tsv`/`.csv`/`.tsv.gz` tables). Plan/PRD under
 `docs/planning/reproduce-tsv-csv-locator/`.
+
+**Shipped (stdout/log pattern locator — slice 4, Unreleased).** Slices 1.5 and 3 both required the
+repo to write its numbers into a **structured file** (JSON or a TSV/CSV table). A large share of
+published analysis scripts do not: they `print()` the headline number or append it to a `.log`, and
+write no JSON and no table at all — so every claim against them degraded to `UNVERIFIED`. A claim
+may now carry `{"pattern": <Python regex>}`, optionally with `{"from": <repo-relative text/log
+file>}`. **Two addressing modes:** `pattern` **without** `from` matches the run's own captured
+combined **stdout+stderr** (text the engine already held, until now read only by
+`detect_missing_module` and the diagnosis evidence); `pattern` **with** `from` matches that
+repo-relative file. `PatternLocator(source: str | None, pattern: str)` carries both — `source is
+None` **is** the stdout mode, and the field is named `source` deliberately so the file case reuses
+every existing `.source` code path. A new pure stdlib `resolve_match` (sibling of
+`resolve_pointer`/`resolve_cell`) finds **all** non-overlapping matches via `re.finditer`, returns
+the raw captured **string**, and **never raises**. **Capture selection: group 1 if the pattern has
+capturing groups, else the whole match** (a named group is group 1 too); flags are **inline**
+(`(?i)`/`(?m)`/`(?s)`) — no `flags`, `group`, or `occurrence` key this slice. **Ambiguity is never
+guessed:** 0 or >1 matches is `UNVERIFIED` with the **count named**, never an arbitrary first-match
+pick; a group 1 that did not participate in the match (`(?:x)?(y)?z` against `"z"`) — the one shape
+that would otherwise crash a caller on `float(None)` — degrades with its own message and test.
+Matching is bounded at **8 MiB** (`_MAX_MATCH_BYTES`), text over the cap being `UNVERIFIED` naming
+the size rather than a silently truncated search (which could report a false "0 matches"); **this
+is a ReDoS input bound, not a memory guard** — in file mode the size is `stat()`ed **before** any
+read so an oversized log is never loaded, but in stdout mode `default_command_executor` already
+buffers the whole output through `subprocess.PIPE` uncapped, a **pre-existing upstream** issue this
+slice neither creates nor solves. `load_claims` validates structurally, pre-run: `pattern` must be
+a non-empty string and **must compile** (`re.error` → `ClaimsError`, exit non-zero, **nothing
+written**), and the xor became a **three-way** exclusion — exactly one of `path`, `column`+`row`,
+or `pattern`, with `pattern` plus **any** table field (`column`/`row`/`header`/`delimiter`)
+rejected rather than silently ignored. `pattern` is the first locator legal **without** `from`, so
+the orphan guard was relaxed for `pattern` only; a bare `path`/table field without `from` stays an
+error. The dispatch head became an explicit `isinstance` chain (the old unguarded `else` would have
+routed the new type into the JSON reader and raised `AttributeError`), calling a new
+`_observe_pattern_located` that reuses the same containment guard and a per-run read cache
+(`_text_cache`). Because the observers are closures over `run_output` and are only called *after*
+the `--allow-install` retry rebinds it, a stdout claim binds the **retried** run's output for free —
+no new mechanism. A **numeric-string capture is the normal, valid case** (the slice-3 rule, not the
+slice-1.5 strict JSON rule): it is `.strip()`ed, `float()`-parsed, and if finite feeds the
+**unchanged** `classify`; unparseable or non-finite is `UNVERIFIED`. Safety and reuse hold: a file
+`from` flows through the same CLI pre-run refusal and engine `relative_to(repo_root)` guard, a
+`from`-less claim touches the filesystem **not at all**, and the one CLI change is the stdout-mode
+skip (`claim.locator.source is None`) that keeps the containment loop from joining a `None`.
+`classify`/`ClaimResult`/`ReproduceRecord`/bundle/signing/`--fail-on-diverged` reused as-is, **no
+`models.py` change**, stdlib-only (`re`, already imported) — no new dependency. **Honest limits:** a
+regex binds to **output formatting**, not a data structure, making this the **weakest locator
+shipped** — mitigated not by cleverness but by the verdict contract (a non-match is `UNVERIFIED`
+naming the count, **never `DIVERGED`**, so formatting drift can never be misread as a failed
+reproduction); and the engine short-circuits every claim to `UNVERIFIED` on a non-zero exit
+*before* any locator runs, so a stdout pattern reads **successful runs only**. **Deferred:**
+`occurrence: first|last` and a `group` override (gated on a counted post-merge experiment over 5
+real repos), a `flags` array, notebook (`.ipynb`) extraction, regex over binary files, persisting
+matched output on the record, paper-parsing, remote `<doi|url>`, dashboard card, C6 eval fold-in;
+figure/plot & table-image claims stay hard-blocked (no plot-hash, stdlib-only). Test-first (schema →
+pure resolver → engine dispatch → CLI containment/e2e); deterministic; **no real repo, network, or
+pip in CI** (scripted executors + on-disk fixture logs). Plan/PRD under
+`docs/planning/reproduce-stdout-log-locator/`.
 
 **Correction to the build surface below (verified against the code, 2026-07-18):** the sentence
 "reuses the existing float-tolerance / plot-hash / seed-aware diffing" was only one-third true.
@@ -1228,7 +1283,7 @@ raw-data egress — runs on the user's / CI compute; only hashes and claim diffs
 | C6 | Eval flywheel as a continuous loop | M6 (detector held-out guard slice 1 SHIPPED, Unreleased — honestly 0.833/10:12, two classes structurally unreachable; repair-loop outcome-match guard slice 2 SHIPPED, Unreleased — honestly 1.0/7:7, 5 classes covered; both wired into CI; folding C1/C3 signals + held-out-accuracy trend pending) | Compounding accuracy from real runs |
 | C7 | Research-use variant annotation & prioritization | M1 + M2 + M3 + M4 + M5 surface+provenance SHIPPED (Unreleased) — germline structural verify + provenance, somatic annotation gate, annotation plausibility (both assays), VEP-vs-SnpEff concordance (both assays: `consequence_concordance` WARN-capped + `gene_symbol_concordance` informational, auto in the verdict, both VCF layouts, annotator-version provenance pair), M5 "corroborated by" line across text/HTML report + `contig methods` + dashboard (reads M4 results, never recomputes) + `AnnotationProvenance.db_version` cache/build token (VEP `cache=` / SnpEff genome) rendered and round-tripped through reproduce with pre-M5 back-compat; **M5 C6 eval fold-in still DEFERRED** (blocked on labeling design) (germline+somatic `annotation_present`/`annotation_complete` structural checks via `VARIANT_ASSAYS`, `AnnotationProvenance` tool+cache/build capture, `--tools …,vep` enablement on both assays, `annotation_real_fraction`/`annotation_consequence_distribution` plausibility checks, all WARN-capped/UNVERIFIED-when-absent; live run may still need a VEP/SnpEff cache Contig does not yet wire — absent annotation degrades to UNVERIFIED, never a false pass; verify-only, prioritization deferred) | Disease-research breadth on-thesis, new corpus; run+verify annotation, never a clinical verdict |
 
-| C8 | Reproduce & verify *existing published* work | first slice SHIPPED v0.40.0 + output-locator slice 1.5 SHIPPED v0.41.0 + env-resurrection slice 2 SHIPPED (Unreleased) + TSV/CSV table-locator slice 3 SHIPPED (Unreleased) · M7+ | Turns the engine on third-party papers (repo+claims → per-claim `REPRODUCED`/`WITHIN-TOLERANCE`/`DIVERGED`/`UNVERIFIED`); strongest quantified pain (~3.2% of 27,271 notebooks reproduce), a free viral community-trust channel, and a new publicly-sourced corpus stream. **Shipped:** `contig reproduce <repo> --run --claims` walking skeleton — scalar per-claim verdict reusing `benchmark._relative_delta`, values bound from a repo-written `results.json`, signed re-runnable bundle via the generic signer, `--fail-on-diverged`; cooperative-repos-only, UNVERIFIED-when-unresolved, no real repo/network in CI. **+ Output-locator (slice 1.5):** a claim may carry `{"from": <repo JSON>, "path": "$.a.b[0]"}` to read numbers out of a repo's own **structured JSON as-is** (a new stdlib dotted+`[n]` `resolve_pointer` walker that never raises; located claims classify through the unchanged core; numeric-string strictly UNVERIFIED; escaping `from` refused pre-run + engine never reads outside the repo; JSON-only, full back-compat, no new dep). **+ Environment resurrection (slice 2):** opt-in `--allow-install` (off by default) turns a first run failing on `No module named 'X'` into a bounded detect→install→retry-once self-heal reusing C2 — pure `detect_missing_module` (charset-guarded top-level pkg) + injected `Installer` seam (fixed `pip install` argv, no shell), one install + one retry (provable termination), every unresolved path UNVERIFIED (never a false reproduce), heal recorded on additive `ReproduceRecord.repair_history` (`missing_dependency` literal kept reproduce-local so the C6 eval-guard baseline is unmoved), executor seam widened `int`→`(exit_code, output)`, no new dep, no real pip/network in CI. **+ TSV/CSV table locator (slice 3):** a claim may also carry `{"from": <repo .tsv/.csv[.gz]>, "column": <name|int>, "row": <int|{key:val}>, "header"?, "delimiter"?}` to read a **tabular** cell — DESeq2/count-matrix/feature-table output — via a new stdlib `_read_table`+`resolve_cell` reader (gzip-transparent, index-safe, never raises) and a per-run parse cache; a numeric-string cell is the normal, valid case here (unlike the JSON rule) and classifies through the unchanged core; row-key 0-or-many matches, ragged rows, duplicate/absent header names, and unparseable/non-finite cells all degrade to UNVERIFIED, never DIVERGED; reuses the JSON locator's containment guard, signer, bundle, and exit contract as-is, no `models.py` change, no new dep. **Deferred:** multi-key/predicate row match, stdout/log scraping, notebook (`.ipynb`) extraction, paper-parsing, figure/plot & table-cell(-image) claims (**plot-hash does not exist and can't be added without breaking the stdlib-only dep contract**), remote `<doi|url>`, dashboard card, C6 fold-in |
+| C8 | Reproduce & verify *existing published* work | first slice SHIPPED v0.40.0 + output-locator slice 1.5 SHIPPED v0.41.0 + env-resurrection slice 2 SHIPPED (Unreleased) + TSV/CSV table-locator slice 3 SHIPPED (Unreleased) + stdout/log pattern-locator slice 4 SHIPPED (Unreleased) · M7+ | Turns the engine on third-party papers (repo+claims → per-claim `REPRODUCED`/`WITHIN-TOLERANCE`/`DIVERGED`/`UNVERIFIED`); strongest quantified pain (~3.2% of 27,271 notebooks reproduce), a free viral community-trust channel, and a new publicly-sourced corpus stream. **Shipped:** `contig reproduce <repo> --run --claims` walking skeleton — scalar per-claim verdict reusing `benchmark._relative_delta`, values bound from a repo-written `results.json`, signed re-runnable bundle via the generic signer, `--fail-on-diverged`; cooperative-repos-only, UNVERIFIED-when-unresolved, no real repo/network in CI. **+ Output-locator (slice 1.5):** a claim may carry `{"from": <repo JSON>, "path": "$.a.b[0]"}` to read numbers out of a repo's own **structured JSON as-is** (a new stdlib dotted+`[n]` `resolve_pointer` walker that never raises; located claims classify through the unchanged core; numeric-string strictly UNVERIFIED; escaping `from` refused pre-run + engine never reads outside the repo; JSON-only, full back-compat, no new dep). **+ Environment resurrection (slice 2):** opt-in `--allow-install` (off by default) turns a first run failing on `No module named 'X'` into a bounded detect→install→retry-once self-heal reusing C2 — pure `detect_missing_module` (charset-guarded top-level pkg) + injected `Installer` seam (fixed `pip install` argv, no shell), one install + one retry (provable termination), every unresolved path UNVERIFIED (never a false reproduce), heal recorded on additive `ReproduceRecord.repair_history` (`missing_dependency` literal kept reproduce-local so the C6 eval-guard baseline is unmoved), executor seam widened `int`→`(exit_code, output)`, no new dep, no real pip/network in CI. **+ TSV/CSV table locator (slice 3):** a claim may also carry `{"from": <repo .tsv/.csv[.gz]>, "column": <name|int>, "row": <int|{key:val}>, "header"?, "delimiter"?}` to read a **tabular** cell — DESeq2/count-matrix/feature-table output — via a new stdlib `_read_table`+`resolve_cell` reader (gzip-transparent, index-safe, never raises) and a per-run parse cache; a numeric-string cell is the normal, valid case here (unlike the JSON rule) and classifies through the unchanged core; row-key 0-or-many matches, ragged rows, duplicate/absent header names, and unparseable/non-finite cells all degrade to UNVERIFIED, never DIVERGED; reuses the JSON locator's containment guard, signer, bundle, and exit contract as-is, no `models.py` change, no new dep. **+ stdout/log pattern locator (slice 4):** a claim may also carry `{"pattern": <regex>}` — with `from` it matches a repo-relative text/log file, **without** `from` it matches the run's own captured stdout+stderr — so repos that merely `print()` their headline number become checkable at all; a new pure stdlib `resolve_match` (never raises) takes group 1 if the pattern has groups else the whole match, inline flags only, and is **strict on ambiguity** (0 or >1 matches → UNVERIFIED with the count named, never an arbitrary pick), with the non-participating-group shape (`float(None)` `TypeError`) guarded; matching is bounded at 8 MiB (a ReDoS input bound, not a memory guard — `default_command_executor` already buffers stdout uncapped upstream); `load_claims` compiles the regex pre-run (uncompilable → `ClaimsError`, nothing written) and the locator xor became three-way (`pattern` + any table field rejected, not silently ignored); the dispatch head became an explicit `isinstance` chain, the retried run's output binds for free via the observer closure, a numeric-string capture is the normal valid case (the slice-3 rule), a `from`-less claim never touches the filesystem, and the CLI containment loop gained only a `source is None` skip; no `models.py` change, no new dep. **Weakest locator shipped** — a regex binds to output formatting, so a non-match is UNVERIFIED, never DIVERGED, and a failed run still short-circuits before any locator. **Deferred:** multi-key/predicate row match, `occurrence`/`group` selectors, notebook (`.ipynb`) extraction, paper-parsing, figure/plot & table-cell(-image) claims (**plot-hash does not exist and can't be added without breaking the stdlib-only dep contract**), remote `<doi|url>`, dashboard card, C6 fold-in |
 
 **One-line mantra:** make every verdict harder to fool, recover more failures
 without a human, and let every run make the next verdict smarter.

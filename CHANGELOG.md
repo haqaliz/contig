@@ -6,6 +6,107 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`contig reproduce` gains a stdout/log regex locator — the C8 slice 4 named as the next
+  unblocked step by the slice-3 entry directly below ("No stdout/log scraping…").** Slices 1.5
+  (v0.41.0) and 3 (v0.43.0) both required the repo to write its numbers into a **structured
+  file** — JSON or a TSV/CSV table. A large share of published analysis scripts do not: they
+  `print()` the headline number, or append it to a `.log`, and write no JSON and no table at
+  all. Against those repos every claim degraded to `UNVERIFIED` — honest, but a dead end. A
+  claim may now carry `{"pattern": <Python regex>}`, optionally with `{"from": <repo-relative
+  text/log file>}`, and `contig reproduce` binds the observed value straight out of free text.
+  - **Two addressing modes.** `pattern` **without** `from` matches against the run's own
+    captured combined **stdout+stderr** — the text the engine already holds, which until now was
+    read only by `detect_missing_module` and the diagnosis evidence. `pattern` **with** `from`
+    matches against that repo-relative text/log file. `PatternLocator(source: str | None,
+    pattern: str)` carries both; `source is None` **is** the stdout mode, and the field is named
+    `source` deliberately so the file case reuses every existing `.source` code path.
+  - **A new pure, stdlib resolver** (`verification/reproduce.py::resolve_match`, sibling of
+    `resolve_pointer`/`resolve_cell`): finds **all** non-overlapping matches with `re.finditer`,
+    returns the raw captured **string**, and **never raises** — an oversized text, an
+    uncompilable pattern, an ambiguous match count, or a non-participating capture group all
+    return `(None, reason)`.
+  - **Capture selection: group 1 if the pattern has capturing groups, else the whole match.**
+    A named group `(?P<v>…)` is group 1 too. There is no `group`, `occurrence`, or `flags` key
+    this slice — **inline flags** (`(?i)`, `(?m)`, `(?s)`) are the supported and documented
+    mechanism, since Python compiles them straight from the pattern string and they need zero
+    schema surface.
+  - **Ambiguity is never guessed.** A pattern matching **0 or more than 1** times is
+    `UNVERIFIED` with the **count named in the message** — never an arbitrary first-match pick.
+    A script that prints its metric every epoch is therefore unverified until the user anchors
+    the pattern (`(?m)^Final AUC: …$`); that is the deliberate strict rule, not a gap.
+  - **The non-participating-group guard.** A group 1 that did not participate in the match
+    (`(?:x)?(y)?z` against `"z"`) yields `None` from `match.group(1)` — the one input shape that
+    would otherwise crash the caller on `float(None)` with a `TypeError`. It degrades to
+    `UNVERIFIED` with its own message and its own test.
+  - **A bounded 8 MiB match input (`_MAX_MATCH_BYTES`) — honestly framed as a ReDoS input
+    bound, NOT a memory guard.** Text over the cap is `UNVERIFIED` naming the size and the cap,
+    **never a silently truncated search** (which could report "0 matches" for a pattern that
+    does match past the cut). In **file** mode the size is checked via `stat()` **before** any
+    read, so an oversized log is never pulled into memory — there the cap is a genuine read
+    bound. In **stdout** mode it is not: `runner.default_command_executor` already buffers the
+    entire run output through `subprocess.PIPE` with **no cap**, so an enormous stdout is a
+    **pre-existing upstream** memory issue this slice neither creates nor solves; the cap there
+    bounds only how much text a regex is run over. Recorded explicitly so the limit is not later
+    removed as "pointless". No regex execution timeout is attempted — not achievable
+    stdlib-only, single-threaded — and a pattern comes from the same claims file as `--run`,
+    which already executes an arbitrary command.
+  - **`load_claims` validates the pattern shape structurally, pre-run.** `pattern` must be a
+    non-empty string and **must compile** — an `re.error` is a `ClaimsError` naming the claim
+    and the regex error, so a malformed regex exits non-zero with **nothing written**: no run,
+    no record, no bundle. The existing xor became a **three-way mutual exclusion**: a claim sets
+    exactly one of `path` (JSON), `column`+`row` (table), or `pattern`. `pattern` together with
+    **any** table field (`column`, `row`, `header`, `delimiter`) is rejected — a table key has
+    no meaning for a regex locator, and accepting it would be a silent misread of the claim's
+    intent. `pattern` is the **first** locator that is legal **without** `from`, so the orphan
+    guard was relaxed for `pattern` only: a `path`/`column`/`row`/`header`/`delimiter` without
+    `from` stays a `ClaimsError`, unchanged.
+  - **`run_reproduction`'s dispatch head became an explicit `isinstance` chain.** It was
+    `if TableLocator: … else: _observe_located(…)` — an unguarded fallback that would have
+    routed a `PatternLocator` into the JSON reader and raised `AttributeError` on the missing
+    `.path`. A new `_observe_pattern_located` (sibling of `_observe_table_located`) reuses the
+    same containment guard and a per-run read cache (`_text_cache`, keyed by resolved path — a
+    log `from` is read **at most once per run** even across several pattern claims on it).
+  - **The retried run's output is bound for free.** The observers are closures over
+    `run_output` and are only ever called *after* the `--allow-install` retry rebinds it, so a
+    stdout claim automatically observes the **retried** run's output, never the failed first
+    run's. No new mechanism — asserted by a scripted-executor test and stated in the docstring.
+  - **A numeric-string capture is the normal, valid case** — the slice-3 table rule, deliberately
+    unlike the slice-1.5 strict-UNVERIFIED JSON rule, because a regex capture is a string by
+    construction. The capture is `.strip()`ed and `float()`-parsed; a non-parsing (`"NA"`) or
+    non-finite (`inf`/`nan`) capture is `UNVERIFIED`, never coerced, never guessed. The finite
+    float feeds the **unchanged** `classify`.
+  - **Safety and reuse, unchanged.** A **file**-mode pattern claim's `from` flows through the
+    same CLI pre-run containment refusal and the same engine `resolved.relative_to(repo_root)`
+    defense-in-depth guard the JSON and table locators already use; an escaping/absolute `from`
+    is refused **before any run**, and one reaching the engine directly degrades to `UNVERIFIED`
+    with the file **never read**. The one new line the CLI needed is the **stdout-mode skip**
+    (`if claim.locator is None or claim.locator.source is None: continue`) — without it the
+    containment loop would have raised `TypeError` joining a `None` source. A `from`-less
+    pattern claim touches the filesystem **not at all**. `classify`, `ClaimResult`,
+    `ReproduceRecord`, bundle writing, signing, `render_reproduction` and `--fail-on-diverged`
+    are all reused as-is — **no `models.py` change**; `claims_sha256` already covers the new
+    `pattern` key since it hashes the claims-file bytes. Stdlib-only (`re`, already imported) —
+    no new dependency.
+  - **Honest scope / limits (recorded, not glossed).** A regex binds to **output formatting**,
+    not to a data structure — a repo changing `print(f"AUC={x}")` to `print(f"AUC: {x}")` breaks
+    the claim — so this is the **weakest locator shipped**. The mitigation is not cleverness but
+    the verdict contract: a non-match is `UNVERIFIED` naming the count, **never `DIVERGED`**, so
+    a formatting drift can never be misread as a failed reproduction. The engine also
+    short-circuits every claim to `UNVERIFIED` on a non-zero exit *before* any locator runs, so
+    a stdout pattern reads **successful runs only** — it cannot scrape numbers out of a crashed
+    run (consistent with every other locator, whose files aren't read either, but worth stating
+    so it isn't reported as a bug). Deferred: an `occurrence: first|last` selector and a `group`
+    override (gated on a counted post-merge experiment over 5 real repos), a `flags` array
+    (inline flags cover it), notebook (`.ipynb`) numeric extraction, regex over binary files,
+    persisting the matched output on the record (would need a `models.py` change), paper-parsing,
+    remote `<doi|url>`, a dashboard card, the C6 eval fold-in. Figure/plot and table-image claims
+    remain **hard-blocked** (no plot-hash exists; perceptual image hashing would break the
+    stdlib-only dependency contract). Test-first (schema → pure resolver → engine dispatch → CLI
+    containment/e2e), deterministic, **no real repo, network, or pip in CI** — scripted executors
+    returning canned `(exit_code, output)` tuples plus on-disk fixture logs in `tmp_path`.
+
 ## [0.43.0] - 2026-07-21
 
 ### Added
