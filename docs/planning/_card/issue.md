@@ -1,66 +1,55 @@
-# Card: feat reproduce-env-resurrection
+# Card: feat reproduce-tsv-csv-locator (C8 slice 3)
 
-**Type:** feat · **Owner:** aliz · **Branch:** `feat/reproduce-env-resurrection/aliz`
+**Type:** feat · **Owner:** aliz · **Branch:** `feat/reproduce-tsv-csv-locator/aliz`
 
-No GitHub issue — this unit of work came from `/contig-next`. The recommendation below is the source brief.
+No GitHub issue — this unit of work came from `/contig-next` (cn), 2026-07-19. The
+recommendation below is the source brief.
 
 ## Brief
 
-**C8 slice 2 — environment resurrection for `contig reproduce`** (walking skeleton).
+Add a **TSV/CSV output-locator** to `contig reproduce` — C8 slice 3, the "named next
+step" deferred by both shipped output-locator slices
+(`docs/technical/CAPABILITY_ROADMAP.md:1093,1122`).
 
-Slices 1 (v0.40.0) and 1.5 (v0.41.0) made `contig reproduce` *read* real repos: it runs a
-repo's script and reports a per-claim verdict (`REPRODUCED` / `WITHIN-TOLERANCE` / `DIVERGED`
-/ `UNVERIFIED`) over scalar numeric claims, binding values from a repo-written `results.json`
-or from a JSON output-locator. But it can only reproduce repos that already **run** — an
-uncooperative repo whose environment is missing a dependency just exits non-zero and degrades
-to UNVERIFIED.
+A reproduce claim should be able to bind its regenerated number from a **cell in a
+repo's own tabular output** (`.tsv`/`.csv`), not only from structured JSON as today, so
+the tool reads real cloned bioinformatics repos whose numbers live in DESeq2 / count /
+stats tables (where the numbers overwhelmingly live in this domain — JSON-only is a weak
+locator for bioinformatics specifically).
 
-This slice attacks the **dominant reproduction-failure class**: `ModuleNotFoundError` /
-`ImportError` + dependency installs are ~76% of reproduction failures
-(`CAPABILITY_ROADMAP.md:1121-1124`; `docs/planning/reproduce-published-work/prd.md:117`).
-The roadmap names environment resurrection as "the load-bearing piece" and scopes it as
-**slice 2 (ImportError → install → retry)**.
+Reuse slice 1.5's `classify` core, the strict numeric-string → UNVERIFIED rule, and the
+pre-run `from`-containment guard; parse with the stdlib `csv` module (no new dependency —
+the stdlib-only runtime contract `pydantic`/`typer`/`cryptography` must hold).
 
-### What to build (walking skeleton)
+## The one design fork to resolve in the dig
 
-When a reproduced repo's run exits non-zero and its captured output shows a
-`ModuleNotFoundError` / `ImportError` naming a missing module:
-1. Detect the missing module name from the captured error text.
-2. Install it through an **injected installer seam** (never a real network install in CI —
-   mirror C2's injectable `IndexBuilder` / scripted-executor pattern).
-3. Retry the run once, under a bounded budget.
-4. Re-classify the claims against the retried run's output.
+The cell-addressing syntax:
+- header-name vs positional column selection
+- row-key-match (e.g. `{"gene":"BRCA1"}`) vs raw row-index selection
+- delimiter sniffing (tab vs comma) and headerless-file handling
 
-Reuse C2's self-heal pattern and the existing injected `executor` seam in
-`src/contig/verification/reproduce.py:244` (`run_reproduction`).
+Everything else inherits the JSON locator's contracts.
 
-### Scope / honesty contract (unchanged)
+## Honesty contract (inherited, non-negotiable)
 
-- An unresolvable environment degrades to **`UNVERIFIED`**, never a false reproduce.
-- Test-first, with a scripted executor + scripted installer — **no real repo, no network, no
-  real installs in CI** (standing determinism contract, `prd.md:140`).
-- Bounded retries so the loop provably terminates (C2 discipline).
-- Layer-2 only (run/self-heal/verify/reproduce). No Layer-1 workflow authoring. No raw-read
-  egress. Stdlib-only runtime dep contract (`pydantic`/`typer`/`cryptography`) preserved —
-  the installer is an injected seam, not a new dependency.
+- Every unresolved / non-numeric / out-of-range address degrades to **UNVERIFIED**, never
+  `DIVERGED`, never a false reproduce.
+- A numeric **string** cell is strictly UNVERIFIED (never coerced) — same as slice 1.5.
+- An escaping / absolute `from` path is refused **pre-run** (exit non-zero, no record);
+  the engine additionally never reads outside the repo.
+- JSON-only was the slice-1.5 scope; this slice adds TSV/CSV. Figure/plot & table-*image*
+  claims remain out of scope (blocked: no plot-hash, stdlib-only dep contract).
 
-### Known caveat (must resolve early)
+## Constraints
 
-The current `executor` seam is typed `Callable[[list[str], Path], int]` — it returns **only
-an exit code**, not stderr/stdout. So an `ImportError` cannot be detected today. The first
-real step is to **widen the executor contract to surface captured output** (or add a
-captured-output seam) before detection is possible. Small, real contract extension — not a
-blocker.
+- Layer-2 only (run/verify/reproduce). Not Layer 1. Research-use, no raw-read egress.
+- Test-first (strict TDD). Deterministic. **No real repo, network, or pip in CI.**
 
-The one genuine go/no-go the PRD flags (`prd.md:201`): does running an uncooperative repo
-actually surface the `ModuleNotFoundError` in a catchable form? The scripted-executor walking
-skeleton is exactly what pins that down in CI.
+## Prior art in-repo (starting points for the dig)
 
-### Explicitly deferred (later slices)
-
-- Trace-based version pinning / observed-version resolution (install the *right* version, not
-  just the module).
-- Multi-module / iterative resolution (install one, hit the next missing import, repeat) —
-  keep the first slice to a single install + single retry; generalize later.
-- Paper-parsing, figure/plot & table-cell claims, TSV/CSV locator, remote `<doi|url>`,
-  dashboard card, C6 eval fold-in (unchanged from the slice-1/1.5 deferral lists).
+- `src/contig/verification/reproduce.py` — `resolve_pointer` / `_parse_path` (JSON walker,
+  slice 1.5), `load_claims`, `classify`, `run_reproduction`, `reduce_reproduction`.
+- `benchmark._relative_delta` — the reused float-tolerance comparison.
+- Slice 1.5 planning: `docs/planning/reproduce-output-locator/`.
+- Slice 1 / slice 2 planning: `docs/planning/reproduce-published-work/`,
+  `docs/planning/reproduce-env-resurrection/`.
