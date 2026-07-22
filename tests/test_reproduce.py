@@ -1301,6 +1301,47 @@ def test_run_reproduction_located_claim_matching_is_reproduced(tmp_path):
     assert result.observed == 0.9
 
 
+def test_run_reproduction_located_claim_stale_exact_match_is_unverified(tmp_path):
+    # THE headline test: a JSON output file the run did NOT rewrite (mtime
+    # predates run start) is UNVERIFIED even when its stored value matches
+    # the claim exactly -- an author's committed artifact must never
+    # produce a false REPRODUCED. Mirrors
+    # test_run_reproduction_notebook_stale_exact_match_is_unverified.
+    p = tmp_path / "out/summary.json"
+    _write_located(tmp_path, "out/summary.json", {"model": {"auc": 0.9}})
+    os.utime(p, (_RUN_START - 10, _RUN_START - 10))
+    claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
+    record = _run(tmp_path, claims, _noop_executor(), run_started_at=_RUN_START)
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "rewritten" in result.message
+    assert "run start" in result.message
+
+
+def test_run_reproduction_located_claim_fresh_still_reproduces(tmp_path):
+    p = tmp_path / "out/summary.json"
+    _write_located(tmp_path, "out/summary.json", {"model": {"auc": 0.9}})
+    os.utime(p, (_RUN_START + 5, _RUN_START + 5))
+    claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
+    record = _run(tmp_path, claims, _noop_executor(), run_started_at=_RUN_START)
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == 0.9
+
+
+def test_run_reproduction_located_claim_missing_run_started_at_raises(tmp_path):
+    # An unstamped run start is a programming error, not a silent
+    # UNVERIFIED -- a None meaning "guard off" would silently disable a
+    # false-pass guard.
+    p = tmp_path / "out/summary.json"
+    _write_located(tmp_path, "out/summary.json", {"model": {"auc": 0.9}})
+    os.utime(p, (_RUN_START + 5, _RUN_START + 5))
+    claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
+    with pytest.raises(ValueError):
+        _run(tmp_path, claims, _noop_executor(), run_started_at=None)
+
+
 def test_run_reproduction_located_claim_drifted_is_diverged_with_message(tmp_path):
     _write_located(tmp_path, "out/summary.json", {"model": {"auc": 0.5}})
     claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]

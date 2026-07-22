@@ -877,17 +877,54 @@ def run_reproduction(
     _text_cache: dict[str, str | None] = {}
     _notebook_cache: dict[str, object | None] = {}
 
+    def _require_fresh(resolved: Path, noun: str, label: str) -> str | None:
+        """Return an UNVERIFIED message when `resolved` was not rewritten by
+        this run, else None.
+
+        A committed artifact holds the AUTHORS' stored output, so binding it
+        would report a false REPRODUCED for a computation that never ran --
+        the exact failure the verdict contract exists to prevent. The
+        undecidable "was this recomputed?" question is replaced by the
+        decidable one: was this file rewritten by THIS run?
+
+        Non-bypassable: `run_started_at is None` is a programming error, not
+        an UNVERIFIED. A None meaning "guard off" would silently disable a
+        false-pass guard, so it raises loudly instead.
+
+        A path that cannot be stat()'d returns None -- NOT a freshness
+        failure. The caller's own missing/unreadable branch owns that
+        message, so this helper never pre-empts a more specific error.
+        """
+        if run_started_at is None:
+            raise ValueError("run_started_at is required to verify a located claim")
+        try:
+            mtime = resolved.stat().st_mtime
+        except OSError:
+            return None
+        if mtime < run_started_at:
+            return f"{noun} {label} was not rewritten by this run (mtime predates run start)"
+        return None
+
     def _observe_located(loc: Locator) -> tuple[float | None, str]:
         """Bind one located claim's observed value from its own repo-relative
         JSON file at `loc.path`. Never reads outside the repo (containment
         guard below); every resolution failure returns `(None, message)`
         rather than raising -- the caller always maps that to `unverified`.
+        Requires the file to have been rewritten by this run (freshness
+        guard) before it is ever parsed.
         """
         resolved = (repo_path / loc.source).resolve()
         try:
             resolved.relative_to(repo_root)  # defense-in-depth: never read outside repo
         except ValueError:
             return None, f"locator 'from' {loc.source!r} escapes the repo"
+
+        # The guard fires before the file is parsed and before the parse
+        # enters the per-run cache, so a stale artifact is never read for
+        # content.
+        stale = _require_fresh(resolved, "locator file", repr(loc.source))
+        if stale:
+            return None, stale
 
         key = str(resolved)
         if key not in _json_cache:
