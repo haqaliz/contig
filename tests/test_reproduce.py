@@ -1220,6 +1220,79 @@ def test_run_reproduction_unparseable_results_file_marks_all_unverified(tmp_path
     assert record.claim_results[0].observed is None
 
 
+def test_run_reproduction_flat_results_stale_exact_match_is_unverified(tmp_path):
+    # THE headline test for this surface: a flat results.json the run did
+    # NOT rewrite (mtime predates run start) is UNVERIFIED even when its
+    # stored value matches the claim exactly -- a committed results.json is
+    # the authors' stored output, not this run's, and binding it would be a
+    # false REPRODUCED. Mirrors
+    # test_run_reproduction_located_claim_stale_exact_match_is_unverified.
+    p = tmp_path / "results.json"
+    p.write_text(json.dumps({"auc": 0.9}))
+    os.utime(p, (_RUN_START - 10, _RUN_START - 10))
+    claims = _claims(("auc", 0.9, 0.05))
+    executor = _fake_executor(0, results=None)  # exit 0, never rewrites results.json
+    record = run_reproduction(
+        repo=str(tmp_path),
+        run_command="echo run",
+        claims=claims,
+        executor=executor,
+        claims_sha256="a" * 64,
+        created_at="2026-07-18T00:00:00Z",
+        reproduce_id="rp_1",
+        run_started_at=_RUN_START,
+    )
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "rewritten" in result.message
+    assert "run start" in result.message
+    assert "unparseable" not in result.message
+
+
+def test_run_reproduction_flat_results_fresh_still_reproduces(tmp_path):
+    p = tmp_path / "results.json"
+    p.write_text(json.dumps({"auc": 0.9}))
+    os.utime(p, (_RUN_START + 5, _RUN_START + 5))
+    claims = _claims(("auc", 0.9, 0.05))
+    executor = _fake_executor(0, results=None)  # exit 0, never rewrites results.json
+    record = run_reproduction(
+        repo=str(tmp_path),
+        run_command="echo run",
+        claims=claims,
+        executor=executor,
+        claims_sha256="a" * 64,
+        created_at="2026-07-18T00:00:00Z",
+        reproduce_id="rp_1",
+        run_started_at=_RUN_START,
+    )
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == 0.9
+
+
+def test_run_reproduction_flat_results_missing_run_started_at_raises(tmp_path):
+    # An unstamped run start is a programming error, not a silent
+    # UNVERIFIED -- a None meaning "guard off" would silently disable a
+    # false-pass guard.
+    p = tmp_path / "results.json"
+    p.write_text(json.dumps({"auc": 0.9}))
+    os.utime(p, (_RUN_START + 5, _RUN_START + 5))
+    claims = _claims(("auc", 0.9, 0.05))
+    executor = _fake_executor(0, results=None)  # exit 0, never rewrites results.json
+    with pytest.raises(ValueError):
+        run_reproduction(
+            repo=str(tmp_path),
+            run_command="echo run",
+            claims=claims,
+            executor=executor,
+            claims_sha256="a" * 64,
+            created_at="2026-07-18T00:00:00Z",
+            reproduce_id="rp_1",
+            run_started_at=None,
+        )
+
+
 def test_run_reproduction_extra_results_keys_are_ignored(tmp_path):
     claims = _claims(("auc", 0.9, 0.05))
     executor = _fake_executor(0, {"auc": 0.9, "unrelated_metric": 42})

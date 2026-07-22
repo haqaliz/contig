@@ -1278,13 +1278,19 @@ def run_reproduction(
 
     results_file = repo_path / results_path
     results: dict | None = None
+    results_stale: str | None = None
     if results_file.exists():
-        try:
-            loaded = json.loads(results_file.read_text())
-        except json.JSONDecodeError:
-            loaded = None
-        if isinstance(loaded, dict):
-            results = loaded
+        # Freshness before parse: a committed results.json is the authors'
+        # stored output, not this run's, and binding it would be a false
+        # REPRODUCED. A stale file is never read for content.
+        results_stale = _require_fresh(results_file, "results file", repr(results_path))
+        if results_stale is None:
+            try:
+                loaded = json.loads(results_file.read_text())
+            except json.JSONDecodeError:
+                loaded = None
+            if isinstance(loaded, dict):
+                results = loaded
 
     claim_results = []
     for claim in claims:
@@ -1324,6 +1330,20 @@ def run_reproduction(
                     tolerance=claim.tolerance,
                     delta=delta,
                     message=message,
+                )
+            )
+            continue
+
+        if results_stale is not None:
+            claim_results.append(
+                ClaimResult(
+                    id=claim.id,
+                    status="unverified",
+                    claimed=claim.value,
+                    observed=None,
+                    tolerance=claim.tolerance,
+                    delta=None,
+                    message=results_stale,
                 )
             )
             continue
