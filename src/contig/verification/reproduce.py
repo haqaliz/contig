@@ -877,7 +877,9 @@ def run_reproduction(
     _text_cache: dict[str, str | None] = {}
     _notebook_cache: dict[str, object | None] = {}
 
-    def _require_fresh(resolved: Path, noun: str, label: str) -> str | None:
+    def _require_fresh(
+        resolved: Path, noun: str, label: str, *, mtime: float | None = None
+    ) -> str | None:
         """Return an UNVERIFIED message when `resolved` was not rewritten by
         this run, else None.
 
@@ -894,13 +896,24 @@ def run_reproduction(
         A path that cannot be stat()'d returns None -- NOT a freshness
         failure. The caller's own missing/unreadable branch owns that
         message, so this helper never pre-empts a more specific error.
+
+        `mtime` lets a caller that already has a `stat()` result (the
+        notebook observer needs the size from the same call) reuse it
+        instead of statting twice; the rule applied is identical.
+
+        NEVER pass `follow_symlinks=False` to the `stat()` below. Statting
+        the link itself would let a `ln -s` created during the run stamp a
+        fresh mtime onto ancient, author-committed content -- reintroducing
+        the exact false pass this guard exists to prevent. `Path.stat()`
+        follows symlinks by default; keep it that way.
         """
         if run_started_at is None:
-            raise ValueError("run_started_at is required to verify a located claim")
-        try:
-            mtime = resolved.stat().st_mtime
-        except OSError:
-            return None
+            raise ValueError("run_started_at is required to read an artifact off disk")
+        if mtime is None:
+            try:
+                mtime = resolved.stat().st_mtime
+            except OSError:
+                return None
         if mtime < run_started_at:
             return f"{noun} {label} was not rewritten by this run (mtime predates run start)"
         return None
@@ -923,7 +936,7 @@ def run_reproduction(
         # enters the per-run cache, so a stale artifact is never read for
         # content.
         stale = _require_fresh(resolved, "locator file", repr(loc.source))
-        if stale:
+        if stale is not None:
             return None, stale
 
         key = str(resolved)
@@ -986,7 +999,7 @@ def run_reproduction(
             return None, f"locator 'from' {loc.source!r} escapes the repo"
 
         stale = _require_fresh(resolved, "table", repr(loc.source))
-        if stale:
+        if stale is not None:
             return None, stale
 
         key = str(resolved)
@@ -1055,7 +1068,7 @@ def run_reproduction(
                 return None, f"locator 'from' {loc.source!r} escapes the repo"
 
             stale = _require_fresh(resolved, "locator file", repr(loc.source))
-            if stale:
+            if stale is not None:
                 return None, stale
 
             key = str(resolved)
@@ -1150,11 +1163,15 @@ def run_reproduction(
                 f"over the {_MAX_MATCH_BYTES}-byte match limit"
             )
 
-        if stat.st_mtime < run_started_at:
-            return None, (
-                f"notebook {loc.source!r} was not rewritten by this run "
-                "(mtime predates run start)"
-            )
+        # Same rule as every other surface, applied through the shared
+        # helper rather than a second inline copy (the two had already
+        # drifted). The already-obtained mtime is passed in so this observer
+        # keeps its single stat() and its size-check-first ordering.
+        stale = _require_fresh(
+            resolved, "notebook", repr(loc.source), mtime=stat.st_mtime
+        )
+        if stale is not None:
+            return None, stale
 
         key = str(resolved)
         if key not in _notebook_cache:

@@ -11,6 +11,7 @@ import gzip
 import json
 import math
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -1197,6 +1198,10 @@ def test_run_reproduction_missing_results_file_marks_all_unverified(tmp_path):
     )
     assert record.claim_results[0].status == "unverified"
     assert record.claim_results[0].observed is None
+    # The freshness guard must never pre-empt this file's own message: a
+    # results.json that cannot be stat()'d is missing, not stale.
+    assert "missing or unparseable" in record.claim_results[0].message
+    assert "rewritten" not in record.claim_results[0].message
 
 
 def test_run_reproduction_unparseable_results_file_marks_all_unverified(tmp_path):
@@ -1253,7 +1258,11 @@ def test_run_reproduction_flat_results_stale_exact_match_is_unverified(tmp_path)
 def test_run_reproduction_flat_results_fresh_still_reproduces(tmp_path):
     p = tmp_path / "results.json"
     p.write_text(json.dumps({"auc": 0.9}))
-    os.utime(p, (_RUN_START + 5, _RUN_START + 5))
+    # Deliberate EXACT-equality stamp: the contract is mtime >= run start
+    # resolves. A coarse-granularity filesystem truncates mtime to the
+    # second, so mtime == run_start is precisely the case a real run lands
+    # on -- pinning it here keeps a `<` -> `<=` mutation from passing.
+    os.utime(p, (_RUN_START, _RUN_START))
     claims = _claims(("auc", 0.9, 0.05))
     executor = _fake_executor(0, results=None)  # exit 0, never rewrites results.json
     record = run_reproduction(
@@ -1395,7 +1404,11 @@ def test_run_reproduction_located_claim_stale_exact_match_is_unverified(tmp_path
 def test_run_reproduction_located_claim_fresh_still_reproduces(tmp_path):
     p = tmp_path / "out/summary.json"
     _write_located(tmp_path, "out/summary.json", {"model": {"auc": 0.9}})
-    os.utime(p, (_RUN_START + 5, _RUN_START + 5))
+    # Deliberate EXACT-equality stamp: the contract is mtime >= run start
+    # resolves. A coarse-granularity filesystem truncates mtime to the
+    # second, so mtime == run_start is precisely the case a real run lands
+    # on -- pinning it here keeps a `<` -> `<=` mutation from passing.
+    os.utime(p, (_RUN_START, _RUN_START))
     claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
     record = _run(tmp_path, claims, _noop_executor(), run_started_at=_RUN_START)
     result = record.claim_results[0]
@@ -1442,6 +1455,10 @@ def test_run_reproduction_located_claim_missing_file_is_unverified(tmp_path):
     result = record.claim_results[0]
     assert result.status == "unverified"
     assert result.observed is None
+    # The freshness guard returns None for an un-stat()-able path, so this
+    # file keeps its own message -- a missing file is missing, not stale.
+    assert "is missing" in result.message
+    assert "rewritten" not in result.message
 
 
 def test_run_reproduction_located_claim_unparseable_json_is_unverified(tmp_path):
@@ -1665,7 +1682,11 @@ def test_run_reproduction_table_claim_fresh_still_reproduces(tmp_path):
         "out/de.tsv",
         [_DE_HEADER, ["ENSG1", "-2.31", "0.001"], ["ENSG2", "0.5", "0.2"]],
     )
-    os.utime(p, (_RUN_START + 5, _RUN_START + 5))
+    # Deliberate EXACT-equality stamp: the contract is mtime >= run start
+    # resolves. A coarse-granularity filesystem truncates mtime to the
+    # second, so mtime == run_start is precisely the case a real run lands
+    # on -- pinning it here keeps a `<` -> `<=` mutation from passing.
+    os.utime(p, (_RUN_START, _RUN_START))
     claims = [
         Claim(
             id="log2fc",
@@ -1776,6 +1797,10 @@ def test_run_reproduction_table_claim_missing_file_is_unverified(tmp_path):
     result = record.claim_results[0]
     assert result.status == "unverified"
     assert result.observed is None
+    # The freshness guard returns None for an un-stat()-able path, so this
+    # file keeps its own message -- a missing file is missing, not stale.
+    assert "is missing or unreadable" in result.message
+    assert "rewritten" not in result.message
 
 
 def test_run_reproduction_table_claim_truncated_gzip_is_unverified(tmp_path):
@@ -2203,6 +2228,10 @@ def test_run_reproduction_pattern_claim_missing_file_is_unverified(tmp_path):
     assert result.status == "unverified"
     assert result.observed is None
     assert "logs/train.log" in result.message
+    # The freshness guard returns None for an un-stat()-able path, so this
+    # file keeps its own message -- a missing file is missing, not stale.
+    assert "is missing or unreadable" in result.message
+    assert "rewritten" not in result.message
 
 
 def test_run_reproduction_pattern_claim_directory_from_is_unverified(tmp_path):
@@ -2572,7 +2601,11 @@ def test_run_reproduction_pattern_claim_stale_exact_match_is_unverified(tmp_path
 def test_run_reproduction_pattern_claim_fresh_still_reproduces(tmp_path):
     p = tmp_path / "logs" / "train.log"
     _write_log(tmp_path, "logs/train.log", "Final AUC: 0.91\n")
-    os.utime(p, (_RUN_START + 5, _RUN_START + 5))
+    # Deliberate EXACT-equality stamp: the contract is mtime >= run start
+    # resolves. A coarse-granularity filesystem truncates mtime to the
+    # second, so mtime == run_start is precisely the case a real run lands
+    # on -- pinning it here keeps a `<` -> `<=` mutation from passing.
+    os.utime(p, (_RUN_START, _RUN_START))
     claims = [
         Claim(
             id="auc",
@@ -2613,7 +2646,10 @@ def test_run_reproduction_pattern_stdout_mode_needs_no_freshness(tmp_path):
     # produced that text by definition. Even a `run_started_at` set far in
     # the future (which would make ANY file on disk look "stale", since no
     # file could have an mtime past it) must not affect a stdout claim: this
-    # arm consults no clock and no file at all.
+    # arm consults no clock and no file at all. The stamp is anchored to
+    # `time.time()`, not `_RUN_START`: a fixed 1970-era constant plus an
+    # offset lands in 2001, which is in the PAST and would make the claim of
+    # a genuinely unreachable future false.
     executor = _fake_executor(0, results=None, output="Final AUC: 0.91\n")
     claims = [
         Claim(
@@ -2623,19 +2659,25 @@ def test_run_reproduction_pattern_stdout_mode_needs_no_freshness(tmp_path):
             locator=PatternLocator(None, r"Final AUC: ([0-9.]+)"),
         )
     ]
-    record = _run(tmp_path, claims, executor, run_started_at=_RUN_START + 10**9)
+    record = _run(tmp_path, claims, executor, run_started_at=time.time() + 10**6)
     result = record.claim_results[0]
     assert result.status == "reproduced"
     assert result.observed == 0.91
 
 
 def test_run_reproduction_pattern_symlinked_artifact_follows_target(tmp_path):
-    # The guard must stat() through a symlink to the TARGET's mtime, not the
-    # link's own. A `ln -s` made during the run would otherwise carry a
-    # fresh link mtime while pointing at ancient, author-committed content --
-    # converting real staleness into a false REPRODUCED. Following the
-    # target closes that hole; `follow_symlinks=False` is deliberately never
-    # used here.
+    # A symlinked artifact must be judged on the TARGET's mtime, not the
+    # link's own: a `ln -s` made during the run would otherwise carry a fresh
+    # link mtime while pointing at ancient, author-committed content --
+    # converting real staleness into a false REPRODUCED. `follow_symlinks=False`
+    # is deliberately never used in `_require_fresh`.
+    #
+    # Scope caveat: this test does NOT by itself prove the `stat()` follows
+    # the link, because the locator observers `.resolve()` the path first,
+    # which already collapses the symlink to its target before any stat()
+    # happens. What it does pin is the end-to-end outcome on this surface:
+    # a link to a stale file is UNVERIFIED. The `stat()`-default half of the
+    # mechanism is documented in `_require_fresh` rather than tested here.
     target = tmp_path / "logs" / "train.log"
     _write_log(tmp_path, "logs/train.log", "Final AUC: 0.91\n")
     os.utime(target, (_RUN_START - 10, _RUN_START - 10))

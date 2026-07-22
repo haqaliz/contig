@@ -151,7 +151,10 @@ confirm the per-claim verdict is sensible. That is the honest proof the surface 
 
 - A notebook-specific size bound or output-stripping (see Risks R3).
 - `metadata.tags` cell addressing; multi-key `contains`; regex cell matching.
-- Extending the freshness guard to the JSON/table locators (see Risks R2).
+- Extending the freshness guard to the JSON/table locators (see Risks R2). — **Closed by the
+  `reproduce-freshness-guard` slice**, which extended the guard to the JSON, table and file-mode
+  pattern locators *and* the flat `--results` read, and unified the notebook branch onto the same
+  shared helper.
 - Paper-parsing, remote `<doi|url>`, dashboard card, C6 eval fold-in — unchanged from the
   standing C8 deferral list. Figures stay hard-blocked (no plot-hash, stdlib-only).
 
@@ -214,6 +217,10 @@ Claims file entry (new form):
   stale-artifact hole (a committed `results.json` or `de.tsv` reproduces just as falsely).
   Widening the guard to them would change shipped behavior and belongs in its own slice.
   This slice states the inconsistency rather than hiding it.
+  **Closed by the `reproduce-freshness-guard` slice** — the guard now covers the JSON, table and
+  file-mode pattern locators and the flat `--results` read, and the notebook branch shares the
+  same helper, so the scope is no longer inconsistent. Left as written above to preserve the
+  history of when the gap was known and accepted.
 - **R3 — `_MAX_MATCH_BYTES` (8 MiB) may be tight for notebooks.** A notebook with embedded
   base64 figures easily exceeds 8 MiB while its *text* is tiny, so a legitimate claim can
   degrade to UNVERIFIED on size alone. Reusing the shipped constant is the consistent

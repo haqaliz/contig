@@ -851,8 +851,9 @@ def reproduce(
     created_at = datetime.now(timezone.utc).isoformat()
 
     # Stamp run-start once, AFTER all pre-run validation and BEFORE the executor
-    # runs. A notebook locator resolves only against a notebook whose mtime is
-    # >= this instant (i.e. one this run rewrote); an older notebook stays
+    # runs. Every artifact read off disk -- the JSON, table, file-mode pattern and
+    # notebook locators, plus the flat --results file -- binds only when its mtime
+    # is >= this instant (i.e. this run rewrote it); anything older stays
     # UNVERIFIED. Captured here so an --allow-install retry does not re-stamp it.
     run_started_at = time.time()
 

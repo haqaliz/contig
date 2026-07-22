@@ -28,7 +28,11 @@ All notable changes to Contig are recorded here. The format follows
     `run_started_at` and `None` otherwise. In every case the guard fires **before the file is
     parsed** and before the parse enters the per-run cache (`_json_cache`/`_table_cache`/
     `_text_cache`), so a stale artifact is never read for content at all. The notebook observer
-    keeps its own inline check (same rule, same message shape), unchanged by this slice.
+    (slice 5) now routes through the **same** helper rather than keeping a second inline copy of
+    the rule: `_require_fresh` takes an optional `mtime=` so a caller that already holds a
+    `stat()` result can pass it in, which lets the notebook branch keep its single `stat()` and
+    its size-check-before-freshness ordering while sharing one implementation. Notebook message
+    wording and check ordering are byte-identical to v0.45.0; no notebook test changed.
   - **The stdout-mode pattern locator is exempt by construction, not by oversight.** A `pattern`
     with no `from` binds the run's **own captured combined stdout+stderr** (`run_output`), touches
     the filesystem not at all, and therefore cannot be stale — there is no pre-existing artifact to
@@ -49,10 +53,14 @@ All notable changes to Contig are recorded here. The format follows
     the old wording would send a user to debug a JSON syntax error that does not exist. The
     freshness branch is therefore checked before the parse and carries its own message onto every
     claim.
-  - **The guard follows symlinks, deliberately.** The path is `resolve()`d and then `stat()`ed, so
-    the **target's** mtime decides. Statting the link itself would let a `ln -s` created during the
-    run mark ancient content "fresh" — turning real staleness into a false pass, which is the one
-    outcome this slice exists to remove.
+  - **The guard follows symlinks, deliberately.** The mechanism is `Path.stat()`'s
+    `follow_symlinks=True` **default**, so the **target's** mtime decides — *not* a `resolve()`
+    call: the four locator observers do `resolve()` their path, but the flat `--results` path is
+    plain `repo_path / results_path` and is never resolved, and it follows symlinks all the same.
+    `follow_symlinks=False` must never be introduced: statting the link itself would let a `ln -s`
+    created during the run mark ancient content "fresh" — turning real staleness into a false pass,
+    which is the one outcome this slice exists to remove. That prohibition is now stated in
+    `_require_fresh`'s docstring next to the `stat()` call itself.
   - **One consistent message stem — "was not rewritten by this run (mtime predates run start)"** —
     across all five guarded surfaces, differing only in the noun and the named path (`results
     file`, `locator file`, `table`, `notebook`). Staleness is therefore greppable and countable
@@ -104,9 +112,22 @@ All notable changes to Contig are recorded here. The format follows
     per surface a stale-artifact-with-an-exactly-matching-value → `UNVERIFIED` case, a
     fresh-artifact-still-`REPRODUCED` case, and a missing-run-start → raises case, plus the
     stdout-mode no-freshness-needed case, a symlink-follows-the-target case, and the retry-written
-    artifact case; deterministic throughout (a fixed 1970-era synthetic run start with `os.utime`-set
-    mtimes, so freshness never depends on wall-clock time), with **no real repo, network, or pip in
-    CI**.
+    artifact case. The four "fresh still reproduces" controls stamp the artifact at **exactly** the
+    run start, which pins the `>=` boundary (a coarse-granularity filesystem truncates mtime to the
+    second, so `mtime == run_start` is precisely the case a real run lands on); the four
+    missing-file cases assert the freshness message is **absent** and each surface's own
+    missing/unreadable wording is intact, pinning "un-`stat()`-able is not a freshness failure".
+    On determinism, precisely: the **guard-specific** tests are decided purely by `os.utime`-set
+    mtimes against a fixed 1970-era synthetic run start; the ~40 **pre-existing** located/table/
+    pattern tests pass the guard because a file written at real wall-clock time has an mtime far
+    past that 1970-era stamp. No real repo, network, or pip in CI.
+  - **Known debt, deliberately not fixed here (pre-existing, not introduced by this slice).** The
+    flat `--results` read catches only `json.JSONDecodeError`, so a **non-UTF-8 `results.json`
+    raises `UnicodeDecodeError` straight out of `run_reproduction` instead of degrading to
+    `UNVERIFIED`**. The three locator observers already handle this — they catch
+    `(ValueError, OSError)`, which covers `UnicodeDecodeError` — so the flat path is the lone
+    outlier. Fixing it is a behavior change that needs its own test, and it is out of scope for a
+    freshness slice; it is recorded here so it is not lost.
 
 ## [0.45.0] - 2026-07-22
 

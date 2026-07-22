@@ -1270,8 +1270,11 @@ of the bug and the one **every "cooperative repo" uses**). One shared nested hel
 `_require_fresh(resolved, noun, label)` in `run_reproduction` returns an UNVERIFIED message when
 the artifact's mtime predates `run_started_at`, and it fires **before the file is parsed** and
 before the parse enters the per-run cache (`_json_cache`/`_table_cache`/`_text_cache`), so a stale
-artifact is never read for content; the notebook observer keeps its own inline check, same rule,
-same message shape. **The stdout-mode pattern locator (`pattern` with no `from`) is exempt by
+artifact is never read for content; the notebook observer (slice 5) now routes through the **same**
+helper instead of a second inline copy — `_require_fresh` takes an optional `mtime=` so a caller
+holding a `stat()` result can pass it in, letting the notebook branch keep its single `stat()` and
+its size-check-before-freshness ordering with identical wording (no notebook test changed).
+**The stdout-mode pattern locator (`pattern` with no `from`) is exempt by
 construction, not by oversight** — it binds the run's own captured combined stdout+stderr, touches
 no filesystem, and cannot be stale; recorded so nobody later bolts a meaningless mtime check onto
 text with no file behind it. **Non-bypassable:** there is **no opt-out flag**, and an **unstamped**
@@ -1281,9 +1284,13 @@ freshness failure — the caller's existing missing/unreadable message still win
 error was pre-empted; and a **stale-but-valid `results.json`** reports the freshness message, never
 the pre-existing "missing or unparseable" wording (the file parses fine — it is merely stale, and
 the old wording would send a user to debug a syntax error that does not exist). The guard
-**follows symlinks** deliberately (`resolve()` then `stat()`, so the *target's* mtime decides):
-statting the link itself would let a `ln -s` created during the run mark ancient content "fresh",
-turning real staleness into a false pass. One consistent message stem — *"was not rewritten by
+**follows symlinks** deliberately, and the mechanism is `Path.stat()`'s `follow_symlinks=True`
+**default**, *not* a `resolve()` call — the locator observers do `resolve()`, but the flat
+`--results` path is plain `repo_path / results_path` and is never resolved, yet follows symlinks
+just the same, so the *target's* mtime decides everywhere. `follow_symlinks=False` must never be
+introduced (a prohibition now written into `_require_fresh`'s docstring): statting the link itself
+would let a `ln -s` created during the run mark ancient content "fresh", turning real staleness
+into a false pass. One consistent message stem — *"was not rewritten by
 this run (mtime predates run start)"* — across all five guarded surfaces makes staleness greppable
 and countable **without new telemetry**; a structured `ClaimResult` field was deliberately deferred
 (it would cost a `models.py` change this slice otherwise avoids). **Honest limits, stated not
@@ -1312,8 +1319,20 @@ the requirement once for all locator forms and `--results` and names the stdout 
 `models.py` change**, no new claim-file syntax, no new dependency, stdlib-only (`Path.stat()`).
 Test-first (per surface: stale-with-an-exactly-matching-value → UNVERIFIED, fresh → still
 REPRODUCED, missing run-start → raises; plus stdout-mode-needs-no-freshness, symlink-follows-target,
-and retry-written artifacts); deterministic (a fixed 1970-era synthetic run start with `os.utime`-set
-mtimes, so freshness never depends on wall-clock time); **no real repo, network, or pip in CI**.
+and retry-written artifacts). The four "fresh" controls stamp the artifact at **exactly** the run
+start, pinning the `>=` boundary (a coarse-granularity filesystem truncates mtime to the second, so
+`mtime == run_start` is precisely what a real run lands on), and the four missing-file cases assert
+the freshness wording is **absent** while each surface's own missing/unreadable message is intact,
+pinning "un-`stat()`-able is not a freshness failure". Determinism, precisely: the
+**guard-specific** tests are decided purely by `os.utime`-set mtimes against a fixed 1970-era
+synthetic run start, while the ~40 **pre-existing** located/table/pattern tests pass the guard
+because a file written at real wall-clock time has an mtime far past that 1970-era stamp. **No real
+repo, network, or pip in CI.** **Known debt carried, not introduced by this slice:** the flat
+`--results` read catches only `json.JSONDecodeError`, so a **non-UTF-8 `results.json` raises
+`UnicodeDecodeError` out of `run_reproduction`** rather than degrading to `UNVERIFIED`; the three
+locator observers already handle it (they catch `(ValueError, OSError)`, which covers
+`UnicodeDecodeError`), making the flat path the lone outlier. Fixing it is a behavior change
+needing its own test and is out of scope for a freshness slice.
 
 **Correction to the build surface below (verified against the code, 2026-07-18):** the sentence
 "reuses the existing float-tolerance / plot-hash / seed-aware diffing" was only one-third true.
