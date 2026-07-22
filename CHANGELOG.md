@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-07-23
+
 ### Changed
 
 - **`contig reproduce`'s mtime freshness guard now covers EVERY binding path that reads a file
@@ -2270,6 +2272,7 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.46.0]: https://github.com/haqaliz/contig/releases/tag/v0.46.0
 [0.45.0]: https://github.com/haqaliz/contig/releases/tag/v0.45.0
 [0.44.0]: https://github.com/haqaliz/contig/releases/tag/v0.44.0
 [0.43.0]: https://github.com/haqaliz/contig/releases/tag/v0.43.0
