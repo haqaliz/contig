@@ -2844,6 +2844,38 @@ def test_run_reproduction_notebook_allow_install_uses_retry_written_notebook(tmp
     assert result.observed == 0.91
 
 
+def test_run_reproduction_allow_install_uses_retry_written_results(tmp_path):
+    # Mirrors test_run_reproduction_notebook_allow_install_uses_retry_written_notebook,
+    # but for the flat results.json surface: run_started_at is stamped ONCE
+    # (here, before the first run) and not re-stamped on the --allow-install
+    # retry. The retry writes a fresh results.json, whose mtime is well after
+    # our injected run start, so it resolves.
+    run_started = 1.0  # any real file written now has a far-later mtime
+
+    def executor(argv, repo):
+        if executor.calls == 0:
+            executor.calls += 1
+            return 1, "No module named 'numpy'"
+        executor.calls += 1
+        (Path(repo) / "results.json").write_text(json.dumps({"auc": 0.91}))
+        return 0, ""
+
+    executor.calls = 0
+    installer = _ScriptedInstaller(0)
+    record = _run(
+        tmp_path,
+        _claims(("auc", 0.91, 0.05)),
+        executor,
+        allow_install=True,
+        installer=installer,
+        run_started_at=run_started,
+    )
+    assert executor.calls == 2
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == 0.91
+
+
 def _now_mtime() -> float:
     import time
 
