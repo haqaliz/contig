@@ -28,6 +28,10 @@ from contig.verification.reproduce import (
     run_reproduction,
 )
 
+# A fixed synthetic run-start so freshness is decided purely by the mtimes we
+# set with os.utime, never by wall-clock time.
+_RUN_START = 1_000_000.0
+
 
 # ---------------------------------------------------------------------------
 # classify()
@@ -1116,6 +1120,7 @@ def test_run_reproduction_missing_claim_key_is_unverified(tmp_path):
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     by_id = {r.id: r for r in record.claim_results}
     assert by_id["auc"].status == "reproduced"
@@ -1134,6 +1139,7 @@ def test_run_reproduction_non_numeric_string_observed_is_unverified(tmp_path):
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     assert record.claim_results[0].status == "unverified"
     assert record.claim_results[0].observed is None
@@ -1150,6 +1156,7 @@ def test_run_reproduction_boolean_observed_is_unverified(tmp_path):
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     assert record.claim_results[0].status == "unverified"
     assert record.claim_results[0].observed is None
@@ -1167,6 +1174,7 @@ def test_run_reproduction_nonzero_exit_marks_all_unverified_and_skips_results(tm
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     assert record.exit_code == 1
     assert all(r.status == "unverified" for r in record.claim_results)
@@ -1185,6 +1193,7 @@ def test_run_reproduction_missing_results_file_marks_all_unverified(tmp_path):
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     assert record.claim_results[0].status == "unverified"
     assert record.claim_results[0].observed is None
@@ -1205,6 +1214,7 @@ def test_run_reproduction_unparseable_results_file_marks_all_unverified(tmp_path
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     assert record.claim_results[0].status == "unverified"
     assert record.claim_results[0].observed is None
@@ -1221,6 +1231,7 @@ def test_run_reproduction_extra_results_keys_are_ignored(tmp_path):
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     assert len(record.claim_results) == 1
     assert record.claim_results[0].status == "reproduced"
@@ -1237,6 +1248,7 @@ def test_run_reproduction_returns_full_record_metadata(tmp_path):
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     assert record.reproduce_id == "rp_1"
     assert record.repo == str(tmp_path)
@@ -1261,6 +1273,7 @@ def _run(tmp_path: Path, claims: list[Claim], executor, **overrides) -> "object"
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     kwargs.update(overrides)
     return run_reproduction(**kwargs)
@@ -1440,6 +1453,7 @@ def test_run_reproduction_located_claim_escaping_repo_is_unverified_and_not_read
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     result = record.claim_results[0]
     assert result.status == "unverified"
@@ -1825,6 +1839,7 @@ def test_run_reproduction_table_claim_escaping_repo_is_unverified_and_not_read(
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     result = record.claim_results[0]
     assert result.status == "unverified"
@@ -2176,6 +2191,7 @@ def test_run_reproduction_pattern_claim_escaping_repo_is_unverified_and_not_read
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     result = record.claim_results[0]
     assert result.status == "unverified"
@@ -2340,10 +2356,6 @@ def test_run_reproduction_mixed_pattern_table_json_and_flat_claims_resolve_indep
 # run_reproduction() -- NotebookLocator (slice 5)
 # ---------------------------------------------------------------------------
 
-# A fixed synthetic run-start so freshness is decided purely by the mtimes we
-# set with os.utime, never by wall-clock time.
-_RUN_START = 1_000_000.0
-
 
 def _notebook_doc(output_text: str, source: str = "print(auc)\n") -> dict:
     """A one-code-cell notebook whose single stdout stream prints
@@ -2489,9 +2501,11 @@ def test_run_reproduction_notebook_unresolvable_pattern_is_unverified(tmp_path):
 def test_run_reproduction_notebook_claim_without_run_started_at_raises(tmp_path):
     # Programming error, NOT a silent UNVERIFIED: dispatching a notebook claim
     # with run_started_at=None is a non-bypassable guard that raises loudly.
+    # `_run` now defaults run_started_at, so None must be passed explicitly
+    # here to still exercise the raise.
     _write_notebook(tmp_path, "out.ipynb", _notebook_doc("AUC: 0.91\n"), _RUN_START)
     with pytest.raises(ValueError):
-        _run(tmp_path, [_nb_claim(0.91, 0)], _noop_executor())  # no run_started_at
+        _run(tmp_path, [_nb_claim(0.91, 0)], _noop_executor(), run_started_at=None)
 
 
 def test_run_reproduction_notebook_allow_install_uses_retry_written_notebook(tmp_path):

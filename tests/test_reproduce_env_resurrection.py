@@ -16,6 +16,11 @@ from pathlib import Path
 from contig.models import Diagnosis, ReproduceRecord
 from contig.verification.reproduce import Claim, detect_missing_module, run_reproduction
 
+# Mirrors the fixed synthetic run-start in tests/test_reproduce.py: a 1970-era
+# epoch so freshness is decided purely by mtimes we control, never wall-clock
+# time.
+_RUN_START = 1_000_000.0
+
 
 def test_detect_missing_module_simple_top_level_package():
     assert detect_missing_module("ModuleNotFoundError: No module named 'numpy'") == "numpy"
@@ -111,6 +116,7 @@ def _run(tmp_path: Path, claims: list[Claim], executor, **overrides):
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     kwargs.update(overrides)
     return run_reproduction(**kwargs)
