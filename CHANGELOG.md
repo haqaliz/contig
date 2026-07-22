@@ -6,6 +6,108 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **`contig reproduce`'s mtime freshness guard now covers EVERY binding path that reads a file
+  off disk — the JSON locator, the TSV/CSV table locator, the file-mode pattern locator, and the
+  flat `--results` `results.json` read — closing a silent false-`REPRODUCED` hole that had been
+  open since slice 1.** v0.45.0 shipped the guard for the notebook locator only and recorded the
+  gap in its own deferral list ("the freshness guard is notebook-only … the JSON/table locators
+  keep the same stale-artifact hole, a separate slice"). That gap was not cosmetic: a repo that
+  **commits its outputs** — a checked-in `results.json`, `de.tsv`, `metrics.json`, or `run.log` —
+  reported `REPRODUCED` for a computation that never ran, because the engine read the *authors'*
+  stored numbers and compared them to the *authors'* published claim. The comparison always
+  matched. The verdict contract exists to prevent exactly that failure, and the check that
+  prevents it now runs on all of them.
+  - **The four newly guarded surfaces.** (1) The JSON `path` locator (slice 1.5); (2) the TSV/CSV
+    `column`/`row` table locator (slice 3); (3) the **file-mode** pattern locator, `pattern` +
+    `from` (slice 4); and (4) the flat `--results` read (slice 1) — the **oldest** instance of the
+    bug and the one **every "cooperative repo" path uses**, so it was also the most reachable. All
+    four now route through one shared nested helper, `_require_fresh(resolved, noun, label)` in
+    `run_reproduction`, which returns an UNVERIFIED message when the artifact's mtime predates
+    `run_started_at` and `None` otherwise. In every case the guard fires **before the file is
+    parsed** and before the parse enters the per-run cache (`_json_cache`/`_table_cache`/
+    `_text_cache`), so a stale artifact is never read for content at all. The notebook observer
+    keeps its own inline check (same rule, same message shape), unchanged by this slice.
+  - **The stdout-mode pattern locator is exempt by construction, not by oversight.** A `pattern`
+    with no `from` binds the run's **own captured combined stdout+stderr** (`run_output`), touches
+    the filesystem not at all, and therefore cannot be stale — there is no pre-existing artifact to
+    be fooled by. That is a correctness property of the mode, and it is stated here so it is not
+    later "fixed" by bolting a meaningless mtime check onto text that has no file behind it.
+  - **Non-bypassable by design.** There is **no opt-out flag**: a per-run escape hatch on a
+    false-pass guard is a request to be lied to, and the honest alternative (`UNVERIFIED` plus a
+    message naming the staleness) is already available for free. An **unstamped run start**
+    (`run_started_at is None`) **raises** rather than degrading to "guard off" — a `None` meaning
+    "skip the check" would silently disable a false-pass guard exactly where it is needed, so it is
+    treated as the programming error it is.
+  - **A file that cannot be `stat()`'d is NOT a freshness failure.** `_require_fresh` returns
+    `None` on `OSError`, so the caller's existing missing/unreadable branch still owns that message.
+    No pre-existing error message was pre-empted, and a user whose `from` path is simply wrong is
+    still told that, not told about mtimes.
+  - **A stale-but-valid `results.json` reports the freshness message, never the pre-existing
+    "missing or unparseable results" wording.** The file parses fine; it is merely stale. Reusing
+    the old wording would send a user to debug a JSON syntax error that does not exist. The
+    freshness branch is therefore checked before the parse and carries its own message onto every
+    claim.
+  - **The guard follows symlinks, deliberately.** The path is `resolve()`d and then `stat()`ed, so
+    the **target's** mtime decides. Statting the link itself would let a `ln -s` created during the
+    run mark ancient content "fresh" — turning real staleness into a false pass, which is the one
+    outcome this slice exists to remove.
+  - **One consistent message stem — "was not rewritten by this run (mtime predates run start)"** —
+    across all five guarded surfaces, differing only in the noun and the named path (`results
+    file`, `locator file`, `table`, `notebook`). Staleness is therefore greppable and countable
+    across bundles **without new telemetry**. A structured field on `ClaimResult` (e.g. a
+    `stale`/`reason` discriminator) was **deliberately deferred**: it would cost a `models.py`
+    change this slice otherwise avoids entirely, and the message stem is sufficient until something
+    actually consumes the distinction.
+  - **Honest limit — this proves *rewritten*, not *recomputed*.** A `--run` of
+    `cp committed.json out.json`, a bare `touch`, or a restored build cache passes the guard while
+    computing nothing. The undecidable question ("were these numbers recomputed?") is deliberately
+    replaced by the decidable one ("did THIS run rewrite this file?"). That closes the dominant
+    **honest** hole — a cooperative repo that ships its outputs — not an adversarial user deceiving
+    themselves, which is the same boundary slice 1's "re-runnable" and slice 5's notebook guard
+    already drew.
+  - **Honest limit — no fudge tolerance, deliberately.** The comparison is `mtime >= run_start`
+    with **zero slack**. On a coarse-mtime filesystem (or with a sub-second run) a genuinely
+    regenerated file can carry an mtime marginally *before* the stamped run start and report a
+    false `UNVERIFIED`. That is accepted: **a false UNVERIFIED is honest and recoverable; a false
+    REPRODUCED is neither.** A tolerance window is exactly the size of the hole it opens, so this
+    is recorded explicitly to stop it being "fixed" later by quietly widening the window.
+  - **Honest limit — clock skew is a distinct cause with the same symptom.** The run-start stamp is
+    `time.time()` on the **orchestrating host**, while an artifact's mtime may be written by a
+    **different machine** over NFS/SMB with a different clock. Posture is the same (accept the
+    false UNVERIFIED), but the cause is recorded separately so a future debugger chasing a spurious
+    "was not rewritten" is not sent to the filesystem-granularity explanation when the real answer
+    is two clocks.
+  - **Accepted behavior change, eyes open.** A *legitimate* run that does not rewrite an artifact
+    now reports `UNVERIFIED` where it previously bound a value: a `make`/`snakemake` target that is
+    already up to date, a repo that writes into a **timestamped output directory** while the claim
+    names a stable path, or a `--run` that executes only the final step of a multi-step analysis
+    while the claim addresses an earlier step's artifact. This is a deliberate product decision
+    (strict, no opt-out), not an unnoticed regression. **Revisit trigger:** the first real repo
+    where a legitimately-reproducing run is blocked by the guard — not a hypothetical.
+  - **Unverified base rate, stated as such.** We do **not** know what share of published repos
+    commit their outputs; no such number was measured and none is cited here. The case for this
+    slice rests on the defect being **possible and silent**, not on a frequency estimate. (The
+    ~3.2%-of-27,271-notebooks figure elsewhere in these notes is a *reproduction* rate, **not** a
+    committed-artifact rate, and must not be repurposed as evidence for how often repos ship their
+    outputs.)
+  - **Scope and reuse.** `contig reproduce`'s CLI already stamped the run start once before the
+    first run (shipped for the notebook slice, and **not** re-stamped on an `--allow-install`
+    retry — so an artifact written by either the first or the retried run passes, now pinned by a
+    test for `results.json` as well as for notebooks). This slice therefore needed **no CLI
+    signature change and no new flag** — only the `reproduce` docstring, which now states the
+    freshness requirement **once, for all locator forms and `--results`**, and names the stdout
+    exemption, instead of describing it as notebook-specific. **No `models.py` change**, **no new
+    dependency, stdlib-only** (`Path.stat()`), **no new claim-file syntax**, and no change to
+    `classify`/`ClaimResult`/`ReproduceRecord`/the signed bundle/`--fail-on-diverged`. Test-first:
+    per surface a stale-artifact-with-an-exactly-matching-value → `UNVERIFIED` case, a
+    fresh-artifact-still-`REPRODUCED` case, and a missing-run-start → raises case, plus the
+    stdout-mode no-freshness-needed case, a symlink-follows-the-target case, and the retry-written
+    artifact case; deterministic throughout (a fixed 1970-era synthetic run start with `os.utime`-set
+    mtimes, so freshness never depends on wall-clock time), with **no real repo, network, or pip in
+    CI**.
+
 ## [0.45.0] - 2026-07-22
 
 ### Added
