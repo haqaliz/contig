@@ -877,17 +877,67 @@ def run_reproduction(
     _text_cache: dict[str, str | None] = {}
     _notebook_cache: dict[str, object | None] = {}
 
+    def _require_fresh(
+        resolved: Path, noun: str, label: str, *, mtime: float | None = None
+    ) -> str | None:
+        """Return an UNVERIFIED message when `resolved` was not rewritten by
+        this run, else None.
+
+        A committed artifact holds the AUTHORS' stored output, so binding it
+        would report a false REPRODUCED for a computation that never ran --
+        the exact failure the verdict contract exists to prevent. The
+        undecidable "was this recomputed?" question is replaced by the
+        decidable one: was this file rewritten by THIS run?
+
+        Non-bypassable: `run_started_at is None` is a programming error, not
+        an UNVERIFIED. A None meaning "guard off" would silently disable a
+        false-pass guard, so it raises loudly instead.
+
+        A path that cannot be stat()'d returns None -- NOT a freshness
+        failure. The caller's own missing/unreadable branch owns that
+        message, so this helper never pre-empts a more specific error.
+
+        `mtime` lets a caller that already has a `stat()` result (the
+        notebook observer needs the size from the same call) reuse it
+        instead of statting twice; the rule applied is identical.
+
+        NEVER pass `follow_symlinks=False` to the `stat()` below. Statting
+        the link itself would let a `ln -s` created during the run stamp a
+        fresh mtime onto ancient, author-committed content -- reintroducing
+        the exact false pass this guard exists to prevent. `Path.stat()`
+        follows symlinks by default; keep it that way.
+        """
+        if run_started_at is None:
+            raise ValueError("run_started_at is required to read an artifact off disk")
+        if mtime is None:
+            try:
+                mtime = resolved.stat().st_mtime
+            except OSError:
+                return None
+        if mtime < run_started_at:
+            return f"{noun} {label} was not rewritten by this run (mtime predates run start)"
+        return None
+
     def _observe_located(loc: Locator) -> tuple[float | None, str]:
         """Bind one located claim's observed value from its own repo-relative
         JSON file at `loc.path`. Never reads outside the repo (containment
         guard below); every resolution failure returns `(None, message)`
         rather than raising -- the caller always maps that to `unverified`.
+        Requires the file to have been rewritten by this run (freshness
+        guard) before it is ever parsed.
         """
         resolved = (repo_path / loc.source).resolve()
         try:
             resolved.relative_to(repo_root)  # defense-in-depth: never read outside repo
         except ValueError:
             return None, f"locator 'from' {loc.source!r} escapes the repo"
+
+        # The guard fires before the file is parsed and before the parse
+        # enters the per-run cache, so a stale artifact is never read for
+        # content.
+        stale = _require_fresh(resolved, "locator file", repr(loc.source))
+        if stale is not None:
+            return None, stale
 
         key = str(resolved)
         if key not in _json_cache:
@@ -938,12 +988,19 @@ def run_reproduction(
         is the normal, valid case here -- every table cell is a string, so
         it is float-parsed and, if finite, returned as the observed value
         rather than rejected the way a JSON numeric string is.
+
+        Requires the file to have been rewritten by this run (freshness
+        guard) before it is ever parsed.
         """
         resolved = (repo_path / loc.source).resolve()
         try:
             resolved.relative_to(repo_root)  # defense-in-depth: never read outside repo
         except ValueError:
             return None, f"locator 'from' {loc.source!r} escapes the repo"
+
+        stale = _require_fresh(resolved, "table", repr(loc.source))
+        if stale is not None:
+            return None, stale
 
         key = str(resolved)
         if key not in _table_cache:
@@ -990,6 +1047,11 @@ def run_reproduction(
         checked via `stat()` BEFORE any read, so an oversized log is never
         pulled into memory.
 
+        File mode requires the file to have been rewritten by this run
+        (freshness guard, checked before the size cap and before any read);
+        stdout mode is exempt by construction -- it is the run's own captured
+        output, so it can never be a stale, pre-existing artifact.
+
         Like the table reader and unlike the JSON reader, a numeric-looking
         capture STRING is the normal, valid case -- a regex capture is a
         string by construction -- so it is stripped, float-parsed and, if
@@ -1004,6 +1066,10 @@ def run_reproduction(
                 resolved.relative_to(repo_root)  # defense-in-depth: never read outside repo
             except ValueError:
                 return None, f"locator 'from' {loc.source!r} escapes the repo"
+
+            stale = _require_fresh(resolved, "locator file", repr(loc.source))
+            if stale is not None:
+                return None, stale
 
             key = str(resolved)
             if key not in _text_cache:
@@ -1097,11 +1163,15 @@ def run_reproduction(
                 f"over the {_MAX_MATCH_BYTES}-byte match limit"
             )
 
-        if stat.st_mtime < run_started_at:
-            return None, (
-                f"notebook {loc.source!r} was not rewritten by this run "
-                "(mtime predates run start)"
-            )
+        # Same rule as every other surface, applied through the shared
+        # helper rather than a second inline copy (the two had already
+        # drifted). The already-obtained mtime is passed in so this observer
+        # keeps its single stat() and its size-check-first ordering.
+        stale = _require_fresh(
+            resolved, "notebook", repr(loc.source), mtime=stat.st_mtime
+        )
+        if stale is not None:
+            return None, stale
 
         key = str(resolved)
         if key not in _notebook_cache:
@@ -1225,13 +1295,19 @@ def run_reproduction(
 
     results_file = repo_path / results_path
     results: dict | None = None
+    results_stale: str | None = None
     if results_file.exists():
-        try:
-            loaded = json.loads(results_file.read_text())
-        except json.JSONDecodeError:
-            loaded = None
-        if isinstance(loaded, dict):
-            results = loaded
+        # Freshness before parse: a committed results.json is the authors'
+        # stored output, not this run's, and binding it would be a false
+        # REPRODUCED. A stale file is never read for content.
+        results_stale = _require_fresh(results_file, "results file", repr(results_path))
+        if results_stale is None:
+            try:
+                loaded = json.loads(results_file.read_text())
+            except json.JSONDecodeError:
+                loaded = None
+            if isinstance(loaded, dict):
+                results = loaded
 
     claim_results = []
     for claim in claims:
@@ -1271,6 +1347,20 @@ def run_reproduction(
                     tolerance=claim.tolerance,
                     delta=delta,
                     message=message,
+                )
+            )
+            continue
+
+        if results_stale is not None:
+            claim_results.append(
+                ClaimResult(
+                    id=claim.id,
+                    status="unverified",
+                    claimed=claim.value,
+                    observed=None,
+                    tolerance=claim.tolerance,
+                    delta=None,
+                    message=results_stale,
                 )
             )
             continue

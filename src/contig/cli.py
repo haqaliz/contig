@@ -767,9 +767,16 @@ def reproduce(
     `pattern`), where `cell` is a code-cell index (or `{"contains": <source
     substring>}`) and `pattern` is applied to that cell's captured stdout/
     result text -- e.g. `{"id": "auc", "value": 0.91, "from": "out.ipynb",
-    "cell": 7, "pattern": "AUC: ([0-9.]+)"}`. A notebook locator resolves only
-    against a notebook the run rewrote (checked by file mtime); a notebook the
-    run did not write stays UNVERIFIED.
+    "cell": 7, "pattern": "AUC: ([0-9.]+)"}`.
+
+    Every value read off disk must come from a file THIS run rewrote. Each
+    locator carrying a `from` (JSON, TSV/CSV, text/log, notebook) and the
+    `--results` file itself resolve only when the file's mtime is at or after
+    the run's start; a file the run did not rewrite stays UNVERIFIED rather
+    than binding a committed artifact as a false REPRODUCED. There is no
+    opt-out. The single exemption is a `pattern` with no `from`: it matches
+    the run's own captured stdout/stderr, touches no file on disk, and so can
+    never be stale.
     """
     repo_path = Path(repo)
     if not repo_path.is_dir():
@@ -844,8 +851,9 @@ def reproduce(
     created_at = datetime.now(timezone.utc).isoformat()
 
     # Stamp run-start once, AFTER all pre-run validation and BEFORE the executor
-    # runs. A notebook locator resolves only against a notebook whose mtime is
-    # >= this instant (i.e. one this run rewrote); an older notebook stays
+    # runs. Every artifact read off disk -- the JSON, table, file-mode pattern and
+    # notebook locators, plus the flat --results file -- binds only when its mtime
+    # is >= this instant (i.e. this run rewrote it); anything older stays
     # UNVERIFIED. Captured here so an --allow-install retry does not re-stamp it.
     run_started_at = time.time()
 

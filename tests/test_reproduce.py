@@ -11,6 +11,7 @@ import gzip
 import json
 import math
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,10 @@ from contig.verification.reproduce import (
     load_claims,
     run_reproduction,
 )
+
+# A fixed synthetic run-start so freshness is decided purely by the mtimes we
+# set with os.utime, never by wall-clock time.
+_RUN_START = 1_000_000.0
 
 
 # ---------------------------------------------------------------------------
@@ -1116,6 +1121,7 @@ def test_run_reproduction_missing_claim_key_is_unverified(tmp_path):
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     by_id = {r.id: r for r in record.claim_results}
     assert by_id["auc"].status == "reproduced"
@@ -1134,6 +1140,7 @@ def test_run_reproduction_non_numeric_string_observed_is_unverified(tmp_path):
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     assert record.claim_results[0].status == "unverified"
     assert record.claim_results[0].observed is None
@@ -1150,6 +1157,7 @@ def test_run_reproduction_boolean_observed_is_unverified(tmp_path):
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     assert record.claim_results[0].status == "unverified"
     assert record.claim_results[0].observed is None
@@ -1167,6 +1175,7 @@ def test_run_reproduction_nonzero_exit_marks_all_unverified_and_skips_results(tm
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     assert record.exit_code == 1
     assert all(r.status == "unverified" for r in record.claim_results)
@@ -1185,9 +1194,14 @@ def test_run_reproduction_missing_results_file_marks_all_unverified(tmp_path):
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     assert record.claim_results[0].status == "unverified"
     assert record.claim_results[0].observed is None
+    # The freshness guard must never pre-empt this file's own message: a
+    # results.json that cannot be stat()'d is missing, not stale.
+    assert "missing or unparseable" in record.claim_results[0].message
+    assert "rewritten" not in record.claim_results[0].message
 
 
 def test_run_reproduction_unparseable_results_file_marks_all_unverified(tmp_path):
@@ -1205,9 +1219,87 @@ def test_run_reproduction_unparseable_results_file_marks_all_unverified(tmp_path
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     assert record.claim_results[0].status == "unverified"
     assert record.claim_results[0].observed is None
+
+
+def test_run_reproduction_flat_results_stale_exact_match_is_unverified(tmp_path):
+    # THE headline test for this surface: a flat results.json the run did
+    # NOT rewrite (mtime predates run start) is UNVERIFIED even when its
+    # stored value matches the claim exactly -- a committed results.json is
+    # the authors' stored output, not this run's, and binding it would be a
+    # false REPRODUCED. Mirrors
+    # test_run_reproduction_located_claim_stale_exact_match_is_unverified.
+    p = tmp_path / "results.json"
+    p.write_text(json.dumps({"auc": 0.9}))
+    os.utime(p, (_RUN_START - 10, _RUN_START - 10))
+    claims = _claims(("auc", 0.9, 0.05))
+    executor = _fake_executor(0, results=None)  # exit 0, never rewrites results.json
+    record = run_reproduction(
+        repo=str(tmp_path),
+        run_command="echo run",
+        claims=claims,
+        executor=executor,
+        claims_sha256="a" * 64,
+        created_at="2026-07-18T00:00:00Z",
+        reproduce_id="rp_1",
+        run_started_at=_RUN_START,
+    )
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "rewritten" in result.message
+    assert "run start" in result.message
+    assert "unparseable" not in result.message
+
+
+def test_run_reproduction_flat_results_fresh_still_reproduces(tmp_path):
+    p = tmp_path / "results.json"
+    p.write_text(json.dumps({"auc": 0.9}))
+    # Deliberate EXACT-equality stamp: the contract is mtime >= run start
+    # resolves. A coarse-granularity filesystem truncates mtime to the
+    # second, so mtime == run_start is precisely the case a real run lands
+    # on -- pinning it here keeps a `<` -> `<=` mutation from passing.
+    os.utime(p, (_RUN_START, _RUN_START))
+    claims = _claims(("auc", 0.9, 0.05))
+    executor = _fake_executor(0, results=None)  # exit 0, never rewrites results.json
+    record = run_reproduction(
+        repo=str(tmp_path),
+        run_command="echo run",
+        claims=claims,
+        executor=executor,
+        claims_sha256="a" * 64,
+        created_at="2026-07-18T00:00:00Z",
+        reproduce_id="rp_1",
+        run_started_at=_RUN_START,
+    )
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == 0.9
+
+
+def test_run_reproduction_flat_results_missing_run_started_at_raises(tmp_path):
+    # An unstamped run start is a programming error, not a silent
+    # UNVERIFIED -- a None meaning "guard off" would silently disable a
+    # false-pass guard.
+    p = tmp_path / "results.json"
+    p.write_text(json.dumps({"auc": 0.9}))
+    os.utime(p, (_RUN_START + 5, _RUN_START + 5))
+    claims = _claims(("auc", 0.9, 0.05))
+    executor = _fake_executor(0, results=None)  # exit 0, never rewrites results.json
+    with pytest.raises(ValueError):
+        run_reproduction(
+            repo=str(tmp_path),
+            run_command="echo run",
+            claims=claims,
+            executor=executor,
+            claims_sha256="a" * 64,
+            created_at="2026-07-18T00:00:00Z",
+            reproduce_id="rp_1",
+            run_started_at=None,
+        )
 
 
 def test_run_reproduction_extra_results_keys_are_ignored(tmp_path):
@@ -1221,6 +1313,7 @@ def test_run_reproduction_extra_results_keys_are_ignored(tmp_path):
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     assert len(record.claim_results) == 1
     assert record.claim_results[0].status == "reproduced"
@@ -1237,6 +1330,7 @@ def test_run_reproduction_returns_full_record_metadata(tmp_path):
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     assert record.reproduce_id == "rp_1"
     assert record.repo == str(tmp_path)
@@ -1261,6 +1355,7 @@ def _run(tmp_path: Path, claims: list[Claim], executor, **overrides) -> "object"
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     kwargs.update(overrides)
     return run_reproduction(**kwargs)
@@ -1286,6 +1381,51 @@ def test_run_reproduction_located_claim_matching_is_reproduced(tmp_path):
     result = record.claim_results[0]
     assert result.status == "reproduced"
     assert result.observed == 0.9
+
+
+def test_run_reproduction_located_claim_stale_exact_match_is_unverified(tmp_path):
+    # THE headline test: a JSON output file the run did NOT rewrite (mtime
+    # predates run start) is UNVERIFIED even when its stored value matches
+    # the claim exactly -- an author's committed artifact must never
+    # produce a false REPRODUCED. Mirrors
+    # test_run_reproduction_notebook_stale_exact_match_is_unverified.
+    p = tmp_path / "out/summary.json"
+    _write_located(tmp_path, "out/summary.json", {"model": {"auc": 0.9}})
+    os.utime(p, (_RUN_START - 10, _RUN_START - 10))
+    claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
+    record = _run(tmp_path, claims, _noop_executor(), run_started_at=_RUN_START)
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "rewritten" in result.message
+    assert "run start" in result.message
+
+
+def test_run_reproduction_located_claim_fresh_still_reproduces(tmp_path):
+    p = tmp_path / "out/summary.json"
+    _write_located(tmp_path, "out/summary.json", {"model": {"auc": 0.9}})
+    # Deliberate EXACT-equality stamp: the contract is mtime >= run start
+    # resolves. A coarse-granularity filesystem truncates mtime to the
+    # second, so mtime == run_start is precisely the case a real run lands
+    # on -- pinning it here keeps a `<` -> `<=` mutation from passing.
+    os.utime(p, (_RUN_START, _RUN_START))
+    claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
+    record = _run(tmp_path, claims, _noop_executor(), run_started_at=_RUN_START)
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == 0.9
+
+
+def test_run_reproduction_located_claim_missing_run_started_at_raises(tmp_path):
+    # An unstamped run start is a programming error, not a silent
+    # UNVERIFIED -- a None meaning "guard off" would silently disable a
+    # false-pass guard.
+    p = tmp_path / "out/summary.json"
+    _write_located(tmp_path, "out/summary.json", {"model": {"auc": 0.9}})
+    os.utime(p, (_RUN_START + 5, _RUN_START + 5))
+    claims = [Claim(id="auc", value=0.9, tolerance=0.05, locator=Locator("out/summary.json", "$.model.auc"))]
+    with pytest.raises(ValueError):
+        _run(tmp_path, claims, _noop_executor(), run_started_at=None)
 
 
 def test_run_reproduction_located_claim_drifted_is_diverged_with_message(tmp_path):
@@ -1315,6 +1455,10 @@ def test_run_reproduction_located_claim_missing_file_is_unverified(tmp_path):
     result = record.claim_results[0]
     assert result.status == "unverified"
     assert result.observed is None
+    # The freshness guard returns None for an un-stat()-able path, so this
+    # file keeps its own message -- a missing file is missing, not stale.
+    assert "is missing" in result.message
+    assert "rewritten" not in result.message
 
 
 def test_run_reproduction_located_claim_unparseable_json_is_unverified(tmp_path):
@@ -1440,6 +1584,7 @@ def test_run_reproduction_located_claim_escaping_repo_is_unverified_and_not_read
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     result = record.claim_results[0]
     assert result.status == "unverified"
@@ -1497,6 +1642,89 @@ def test_run_reproduction_table_claim_named_matching_is_reproduced(tmp_path):
     result = record.claim_results[0]
     assert result.status == "reproduced"
     assert result.observed == -2.31
+
+
+def test_run_reproduction_table_claim_stale_exact_match_is_unverified(tmp_path):
+    # THE headline test for this surface: a committed DESeq2/results table
+    # the run did NOT rewrite (mtime predates run start) is UNVERIFIED even
+    # when its stored value matches the claim exactly -- an author's
+    # committed table must never produce a false REPRODUCED. Mirrors
+    # test_run_reproduction_located_claim_stale_exact_match_is_unverified.
+    p = tmp_path / "out/de.tsv"
+    _write_tsv(
+        tmp_path,
+        "out/de.tsv",
+        [_DE_HEADER, ["ENSG1", "-2.31", "0.001"], ["ENSG2", "0.5", "0.2"]],
+    )
+    os.utime(p, (_RUN_START - 10, _RUN_START - 10))
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator(
+                "out/de.tsv", "log2FoldChange", {"gene_id": "ENSG1"}, "\t", True
+            ),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor(), run_started_at=_RUN_START)
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "rewritten" in result.message
+    assert "run start" in result.message
+
+
+def test_run_reproduction_table_claim_fresh_still_reproduces(tmp_path):
+    p = tmp_path / "out/de.tsv"
+    _write_tsv(
+        tmp_path,
+        "out/de.tsv",
+        [_DE_HEADER, ["ENSG1", "-2.31", "0.001"], ["ENSG2", "0.5", "0.2"]],
+    )
+    # Deliberate EXACT-equality stamp: the contract is mtime >= run start
+    # resolves. A coarse-granularity filesystem truncates mtime to the
+    # second, so mtime == run_start is precisely the case a real run lands
+    # on -- pinning it here keeps a `<` -> `<=` mutation from passing.
+    os.utime(p, (_RUN_START, _RUN_START))
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator(
+                "out/de.tsv", "log2FoldChange", {"gene_id": "ENSG1"}, "\t", True
+            ),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor(), run_started_at=_RUN_START)
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+
+
+def test_run_reproduction_table_claim_missing_run_started_at_raises(tmp_path):
+    # An unstamped run start is a programming error, not a silent
+    # UNVERIFIED -- a None meaning "guard off" would silently disable a
+    # false-pass guard.
+    p = tmp_path / "out/de.tsv"
+    _write_tsv(
+        tmp_path,
+        "out/de.tsv",
+        [_DE_HEADER, ["ENSG1", "-2.31", "0.001"], ["ENSG2", "0.5", "0.2"]],
+    )
+    os.utime(p, (_RUN_START + 5, _RUN_START + 5))
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator(
+                "out/de.tsv", "log2FoldChange", {"gene_id": "ENSG1"}, "\t", True
+            ),
+        )
+    ]
+    with pytest.raises(ValueError):
+        _run(tmp_path, claims, _noop_executor(), run_started_at=None)
 
 
 def test_run_reproduction_table_claim_drifted_is_diverged_with_message(tmp_path):
@@ -1569,6 +1797,10 @@ def test_run_reproduction_table_claim_missing_file_is_unverified(tmp_path):
     result = record.claim_results[0]
     assert result.status == "unverified"
     assert result.observed is None
+    # The freshness guard returns None for an un-stat()-able path, so this
+    # file keeps its own message -- a missing file is missing, not stale.
+    assert "is missing or unreadable" in result.message
+    assert "rewritten" not in result.message
 
 
 def test_run_reproduction_table_claim_truncated_gzip_is_unverified(tmp_path):
@@ -1825,6 +2057,7 @@ def test_run_reproduction_table_claim_escaping_repo_is_unverified_and_not_read(
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     result = record.claim_results[0]
     assert result.status == "unverified"
@@ -1995,6 +2228,10 @@ def test_run_reproduction_pattern_claim_missing_file_is_unverified(tmp_path):
     assert result.status == "unverified"
     assert result.observed is None
     assert "logs/train.log" in result.message
+    # The freshness guard returns None for an un-stat()-able path, so this
+    # file keeps its own message -- a missing file is missing, not stale.
+    assert "is missing or unreadable" in result.message
+    assert "rewritten" not in result.message
 
 
 def test_run_reproduction_pattern_claim_directory_from_is_unverified(tmp_path):
@@ -2176,6 +2413,7 @@ def test_run_reproduction_pattern_claim_escaping_repo_is_unverified_and_not_read
         claims_sha256="a" * 64,
         created_at="2026-07-18T00:00:00Z",
         reproduce_id="rp_1",
+        run_started_at=_RUN_START,
     )
     result = record.claim_results[0]
     assert result.status == "unverified"
@@ -2336,13 +2574,134 @@ def test_run_reproduction_mixed_pattern_table_json_and_flat_claims_resolve_indep
     assert by_id["accuracy"].status == "reproduced"
 
 
+def test_run_reproduction_pattern_claim_stale_exact_match_is_unverified(tmp_path):
+    # A log file the run did NOT rewrite (mtime predates run start) is
+    # UNVERIFIED even when its captured number matches the claim exactly --
+    # an author's committed log must never produce a false REPRODUCED.
+    # Mirrors test_run_reproduction_located_claim_stale_exact_match_is_unverified.
+    p = tmp_path / "logs" / "train.log"
+    _write_log(tmp_path, "logs/train.log", "Final AUC: 0.91\n")
+    os.utime(p, (_RUN_START - 10, _RUN_START - 10))
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator("logs/train.log", r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor(), run_started_at=_RUN_START)
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "rewritten" in result.message
+    assert "run start" in result.message
+
+
+def test_run_reproduction_pattern_claim_fresh_still_reproduces(tmp_path):
+    p = tmp_path / "logs" / "train.log"
+    _write_log(tmp_path, "logs/train.log", "Final AUC: 0.91\n")
+    # Deliberate EXACT-equality stamp: the contract is mtime >= run start
+    # resolves. A coarse-granularity filesystem truncates mtime to the
+    # second, so mtime == run_start is precisely the case a real run lands
+    # on -- pinning it here keeps a `<` -> `<=` mutation from passing.
+    os.utime(p, (_RUN_START, _RUN_START))
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator("logs/train.log", r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor(), run_started_at=_RUN_START)
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == 0.91
+
+
+def test_run_reproduction_pattern_claim_missing_run_started_at_raises(tmp_path):
+    # An unstamped run start is a programming error, not a silent
+    # UNVERIFIED -- a None meaning "guard off" would silently disable a
+    # false-pass guard.
+    p = tmp_path / "logs" / "train.log"
+    _write_log(tmp_path, "logs/train.log", "Final AUC: 0.91\n")
+    os.utime(p, (_RUN_START + 5, _RUN_START + 5))
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator("logs/train.log", r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    with pytest.raises(ValueError):
+        _run(tmp_path, claims, _noop_executor(), run_started_at=None)
+
+
+def test_run_reproduction_pattern_stdout_mode_needs_no_freshness(tmp_path):
+    # THE exemption test. Stdout mode (`PatternLocator(None, ...)`) binds
+    # against the run's own captured combined stdout+stderr -- it touches no
+    # filesystem and cannot be stale by construction, because the run
+    # produced that text by definition. Even a `run_started_at` set far in
+    # the future (which would make ANY file on disk look "stale", since no
+    # file could have an mtime past it) must not affect a stdout claim: this
+    # arm consults no clock and no file at all. The stamp is anchored to
+    # `time.time()`, not `_RUN_START`: a fixed 1970-era constant plus an
+    # offset lands in 2001, which is in the PAST and would make the claim of
+    # a genuinely unreachable future false.
+    executor = _fake_executor(0, results=None, output="Final AUC: 0.91\n")
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator(None, r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, executor, run_started_at=time.time() + 10**6)
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == 0.91
+
+
+def test_run_reproduction_pattern_symlinked_artifact_follows_target(tmp_path):
+    # A symlinked artifact must be judged on the TARGET's mtime, not the
+    # link's own: a `ln -s` made during the run would otherwise carry a fresh
+    # link mtime while pointing at ancient, author-committed content --
+    # converting real staleness into a false REPRODUCED. `follow_symlinks=False`
+    # is deliberately never used in `_require_fresh`.
+    #
+    # Scope caveat: this test does NOT by itself prove the `stat()` follows
+    # the link, because the locator observers `.resolve()` the path first,
+    # which already collapses the symlink to its target before any stat()
+    # happens. What it does pin is the end-to-end outcome on this surface:
+    # a link to a stale file is UNVERIFIED. The `stat()`-default half of the
+    # mechanism is documented in `_require_fresh` rather than tested here.
+    target = tmp_path / "logs" / "train.log"
+    _write_log(tmp_path, "logs/train.log", "Final AUC: 0.91\n")
+    os.utime(target, (_RUN_START - 10, _RUN_START - 10))
+    link = tmp_path / "logs" / "train_link.log"
+    link.symlink_to(target)
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator("logs/train_link.log", r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor(), run_started_at=_RUN_START)
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "rewritten" in result.message
+    assert "run start" in result.message
+
+
 # ---------------------------------------------------------------------------
 # run_reproduction() -- NotebookLocator (slice 5)
 # ---------------------------------------------------------------------------
-
-# A fixed synthetic run-start so freshness is decided purely by the mtimes we
-# set with os.utime, never by wall-clock time.
-_RUN_START = 1_000_000.0
 
 
 def _notebook_doc(output_text: str, source: str = "print(auc)\n") -> dict:
@@ -2489,9 +2848,11 @@ def test_run_reproduction_notebook_unresolvable_pattern_is_unverified(tmp_path):
 def test_run_reproduction_notebook_claim_without_run_started_at_raises(tmp_path):
     # Programming error, NOT a silent UNVERIFIED: dispatching a notebook claim
     # with run_started_at=None is a non-bypassable guard that raises loudly.
+    # `_run` now defaults run_started_at, so None must be passed explicitly
+    # here to still exercise the raise.
     _write_notebook(tmp_path, "out.ipynb", _notebook_doc("AUC: 0.91\n"), _RUN_START)
     with pytest.raises(ValueError):
-        _run(tmp_path, [_nb_claim(0.91, 0)], _noop_executor())  # no run_started_at
+        _run(tmp_path, [_nb_claim(0.91, 0)], _noop_executor(), run_started_at=None)
 
 
 def test_run_reproduction_notebook_allow_install_uses_retry_written_notebook(tmp_path):
@@ -2514,6 +2875,38 @@ def test_run_reproduction_notebook_allow_install_uses_retry_written_notebook(tmp
     record = _run(
         tmp_path,
         [_nb_claim(0.91, 0)],
+        executor,
+        allow_install=True,
+        installer=installer,
+        run_started_at=run_started,
+    )
+    assert executor.calls == 2
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == 0.91
+
+
+def test_run_reproduction_allow_install_uses_retry_written_results(tmp_path):
+    # Mirrors test_run_reproduction_notebook_allow_install_uses_retry_written_notebook,
+    # but for the flat results.json surface: run_started_at is stamped ONCE
+    # (here, before the first run) and not re-stamped on the --allow-install
+    # retry. The retry writes a fresh results.json, whose mtime is well after
+    # our injected run start, so it resolves.
+    run_started = 1.0  # any real file written now has a far-later mtime
+
+    def executor(argv, repo):
+        if executor.calls == 0:
+            executor.calls += 1
+            return 1, "No module named 'numpy'"
+        executor.calls += 1
+        (Path(repo) / "results.json").write_text(json.dumps({"auc": 0.91}))
+        return 0, ""
+
+    executor.calls = 0
+    installer = _ScriptedInstaller(0)
+    record = _run(
+        tmp_path,
+        _claims(("auc", 0.91, 0.05)),
         executor,
         allow_install=True,
         installer=installer,

@@ -56,6 +56,7 @@ The CLI and the test suite work **without** Nextflow/Java/Docker; only live runs
 | `contig list` | All bundled runs |
 | `contig corpus-promote` | Promote a confirmed pending failure case into the golden corpus |
 | `contig eval-detector` | Score the failure detector against the labeled failure corpus (`--detector rules-strict` or `--detector llm` to score a different detector, `--snapshot` to record a point in the history, `--history` to show the trend) |
+| `contig reproduce <repo> --run "<cmd>" --claims <file>` | Run a third-party repo's script and report, per stated number, whether it actually regenerates: `REPRODUCED` / `WITHIN-TOLERANCE` / `DIVERGED` / `UNVERIFIED` (see below) |
 | `contig version` | Installed version |
 
 Run `uv run contig <command> --help` for the full flag list of any command.
@@ -207,6 +208,79 @@ Each run writes `runs/<id>/run_record.json`, a portable record pinning inputs
 (checksums), pipeline + revision, parameters, container/tool versions, every QC
 result, and the full repair chain. `contig show <id>` re-reads it; hand the
 bundle to a colleague (or a reviewer) to reproduce the result.
+
+---
+
+## Reproduce someone else's published work
+
+`contig reproduce` points the same engine at a **third-party, already-published**
+repository and reports which of the paper's stated numbers actually regenerate.
+It is the run → verify loop turned around to face other people's analyses.
+
+```bash
+contig reproduce ./cloned-paper-repo \
+  --run "python analysis.py" \
+  --claims claims.json
+```
+
+A claims file lists the numbers the paper states, and where each one lives in the
+output the script produces:
+
+```json
+[
+  {"id": "auc", "value": 0.91, "tolerance": 0.01,
+   "from": "out/metrics.json", "path": "$.model.auc"},
+
+  {"id": "log2fc", "value": 2.31,
+   "from": "out/de.tsv", "column": "log2FoldChange", "row": {"gene": "ENSG1"}},
+
+  {"id": "n_sig", "value": 412,
+   "pattern": "significant genes: ([0-9]+)"},
+
+  {"id": "median_depth", "value": 30.4,
+   "from": "out/report.ipynb", "cell": {"contains": "print(depth)"},
+   "pattern": "depth: ([0-9.]+)"}
+]
+```
+
+Five ways to address a number: a **JSON** pointer (`path`), a **TSV/CSV** cell
+(`column` + `row`, gzip-transparent), a **regex** over a text/log file (`pattern`
+with `from`), a regex over the run's own **stdout/stderr** (`pattern` with no
+`from`), and a **notebook** cell's output (`cell` + `pattern`). Each claim is
+compared to the regenerated value and classified; the result is a signed,
+re-runnable bundle. `--fail-on-diverged` turns a divergence into a non-zero exit.
+
+`--allow-install` (off by default) additionally lets a repo that fails with
+`ModuleNotFoundError` be healed once: detect the missing module, `pip install`
+it, retry the run exactly once. It is the only flag that touches the network or
+mutates your environment.
+
+### Every value must come from a file *this run* wrote
+
+A published repo very often ships its outputs — a committed `results.json`, a
+committed results table, a notebook with the authors' stored cell outputs. Read
+naively, those would report `REPRODUCED` for a computation that never ran.
+
+So every value read off disk must come from a file the run **rewrote**: each
+locator carrying a `from`, and the `--results` file itself, resolve only when the
+file's mtime is at or after the run's start. A file the run did not rewrite stays
+`UNVERIFIED` rather than binding a committed artifact as a false pass. **There is
+no opt-out.** The single exemption is a `pattern` with no `from`, which matches
+the run's own captured stdout/stderr and so can never be stale.
+
+Two honest limits, worth knowing before you read a verdict:
+
+- It proves the file was **rewritten**, not that the numbers were **recomputed**.
+  A `--run` that copies or touches a committed file passes while computing
+  nothing. This closes the common, honest failure — not deliberate self-deception.
+- There is deliberately **no tolerance window** on the timestamp comparison. On a
+  filesystem with coarse mtime resolution, or when the file's clock and yours
+  disagree (an NFS mount), a genuinely regenerated file can read as `UNVERIFIED`.
+  That is the intended trade: a false `UNVERIFIED` is honest and recoverable, a
+  false `REPRODUCED` is not.
+
+Research-use, computation-only: Contig reports whether the *numbers* regenerate.
+It never judges whether the paper's *conclusions* are correct.
 
 ---
 
