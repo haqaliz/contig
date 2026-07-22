@@ -2472,6 +2472,118 @@ def test_run_reproduction_mixed_pattern_table_json_and_flat_claims_resolve_indep
     assert by_id["accuracy"].status == "reproduced"
 
 
+def test_run_reproduction_pattern_claim_stale_exact_match_is_unverified(tmp_path):
+    # A log file the run did NOT rewrite (mtime predates run start) is
+    # UNVERIFIED even when its captured number matches the claim exactly --
+    # an author's committed log must never produce a false REPRODUCED.
+    # Mirrors test_run_reproduction_located_claim_stale_exact_match_is_unverified.
+    p = tmp_path / "logs" / "train.log"
+    _write_log(tmp_path, "logs/train.log", "Final AUC: 0.91\n")
+    os.utime(p, (_RUN_START - 10, _RUN_START - 10))
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator("logs/train.log", r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor(), run_started_at=_RUN_START)
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "rewritten" in result.message
+    assert "run start" in result.message
+
+
+def test_run_reproduction_pattern_claim_fresh_still_reproduces(tmp_path):
+    p = tmp_path / "logs" / "train.log"
+    _write_log(tmp_path, "logs/train.log", "Final AUC: 0.91\n")
+    os.utime(p, (_RUN_START + 5, _RUN_START + 5))
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator("logs/train.log", r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor(), run_started_at=_RUN_START)
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == 0.91
+
+
+def test_run_reproduction_pattern_claim_missing_run_started_at_raises(tmp_path):
+    # An unstamped run start is a programming error, not a silent
+    # UNVERIFIED -- a None meaning "guard off" would silently disable a
+    # false-pass guard.
+    p = tmp_path / "logs" / "train.log"
+    _write_log(tmp_path, "logs/train.log", "Final AUC: 0.91\n")
+    os.utime(p, (_RUN_START + 5, _RUN_START + 5))
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator("logs/train.log", r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    with pytest.raises(ValueError):
+        _run(tmp_path, claims, _noop_executor(), run_started_at=None)
+
+
+def test_run_reproduction_pattern_stdout_mode_needs_no_freshness(tmp_path):
+    # THE exemption test. Stdout mode (`PatternLocator(None, ...)`) binds
+    # against the run's own captured combined stdout+stderr -- it touches no
+    # filesystem and cannot be stale by construction, because the run
+    # produced that text by definition. Even a `run_started_at` set far in
+    # the future (which would make ANY file on disk look "stale", since no
+    # file could have an mtime past it) must not affect a stdout claim: this
+    # arm consults no clock and no file at all.
+    executor = _fake_executor(0, results=None, output="Final AUC: 0.91\n")
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator(None, r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, executor, run_started_at=_RUN_START + 10**9)
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == 0.91
+
+
+def test_run_reproduction_pattern_symlinked_artifact_follows_target(tmp_path):
+    # The guard must stat() through a symlink to the TARGET's mtime, not the
+    # link's own. A `ln -s` made during the run would otherwise carry a
+    # fresh link mtime while pointing at ancient, author-committed content --
+    # converting real staleness into a false REPRODUCED. Following the
+    # target closes that hole; `follow_symlinks=False` is deliberately never
+    # used here.
+    target = tmp_path / "logs" / "train.log"
+    _write_log(tmp_path, "logs/train.log", "Final AUC: 0.91\n")
+    os.utime(target, (_RUN_START - 10, _RUN_START - 10))
+    link = tmp_path / "logs" / "train_link.log"
+    link.symlink_to(target)
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator("logs/train_link.log", r"Final AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor(), run_started_at=_RUN_START)
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "rewritten" in result.message
+    assert "run start" in result.message
+
+
 # ---------------------------------------------------------------------------
 # run_reproduction() -- NotebookLocator (slice 5)
 # ---------------------------------------------------------------------------

@@ -1034,6 +1034,11 @@ def run_reproduction(
         checked via `stat()` BEFORE any read, so an oversized log is never
         pulled into memory.
 
+        File mode requires the file to have been rewritten by this run
+        (freshness guard, checked before the size cap and before any read);
+        stdout mode is exempt by construction -- it is the run's own captured
+        output, so it can never be a stale, pre-existing artifact.
+
         Like the table reader and unlike the JSON reader, a numeric-looking
         capture STRING is the normal, valid case -- a regex capture is a
         string by construction -- so it is stripped, float-parsed and, if
@@ -1048,6 +1053,10 @@ def run_reproduction(
                 resolved.relative_to(repo_root)  # defense-in-depth: never read outside repo
             except ValueError:
                 return None, f"locator 'from' {loc.source!r} escapes the repo"
+
+            stale = _require_fresh(resolved, "locator file", repr(loc.source))
+            if stale:
+                return None, stale
 
             key = str(resolved)
             if key not in _text_cache:
