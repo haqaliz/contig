@@ -975,12 +975,19 @@ def run_reproduction(
         is the normal, valid case here -- every table cell is a string, so
         it is float-parsed and, if finite, returned as the observed value
         rather than rejected the way a JSON numeric string is.
+
+        Requires the file to have been rewritten by this run (freshness
+        guard) before it is ever parsed.
         """
         resolved = (repo_path / loc.source).resolve()
         try:
             resolved.relative_to(repo_root)  # defense-in-depth: never read outside repo
         except ValueError:
             return None, f"locator 'from' {loc.source!r} escapes the repo"
+
+        stale = _require_fresh(resolved, "table", repr(loc.source))
+        if stale:
+            return None, stale
 
         key = str(resolved)
         if key not in _table_cache:

@@ -1554,6 +1554,85 @@ def test_run_reproduction_table_claim_named_matching_is_reproduced(tmp_path):
     assert result.observed == -2.31
 
 
+def test_run_reproduction_table_claim_stale_exact_match_is_unverified(tmp_path):
+    # THE headline test for this surface: a committed DESeq2/results table
+    # the run did NOT rewrite (mtime predates run start) is UNVERIFIED even
+    # when its stored value matches the claim exactly -- an author's
+    # committed table must never produce a false REPRODUCED. Mirrors
+    # test_run_reproduction_located_claim_stale_exact_match_is_unverified.
+    p = tmp_path / "out/de.tsv"
+    _write_tsv(
+        tmp_path,
+        "out/de.tsv",
+        [_DE_HEADER, ["ENSG1", "-2.31", "0.001"], ["ENSG2", "0.5", "0.2"]],
+    )
+    os.utime(p, (_RUN_START - 10, _RUN_START - 10))
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator(
+                "out/de.tsv", "log2FoldChange", {"gene_id": "ENSG1"}, "\t", True
+            ),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor(), run_started_at=_RUN_START)
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "rewritten" in result.message
+    assert "run start" in result.message
+
+
+def test_run_reproduction_table_claim_fresh_still_reproduces(tmp_path):
+    p = tmp_path / "out/de.tsv"
+    _write_tsv(
+        tmp_path,
+        "out/de.tsv",
+        [_DE_HEADER, ["ENSG1", "-2.31", "0.001"], ["ENSG2", "0.5", "0.2"]],
+    )
+    os.utime(p, (_RUN_START + 5, _RUN_START + 5))
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator(
+                "out/de.tsv", "log2FoldChange", {"gene_id": "ENSG1"}, "\t", True
+            ),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor(), run_started_at=_RUN_START)
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+
+
+def test_run_reproduction_table_claim_missing_run_started_at_raises(tmp_path):
+    # An unstamped run start is a programming error, not a silent
+    # UNVERIFIED -- a None meaning "guard off" would silently disable a
+    # false-pass guard.
+    p = tmp_path / "out/de.tsv"
+    _write_tsv(
+        tmp_path,
+        "out/de.tsv",
+        [_DE_HEADER, ["ENSG1", "-2.31", "0.001"], ["ENSG2", "0.5", "0.2"]],
+    )
+    os.utime(p, (_RUN_START + 5, _RUN_START + 5))
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator(
+                "out/de.tsv", "log2FoldChange", {"gene_id": "ENSG1"}, "\t", True
+            ),
+        )
+    ]
+    with pytest.raises(ValueError):
+        _run(tmp_path, claims, _noop_executor(), run_started_at=None)
+
+
 def test_run_reproduction_table_claim_drifted_is_diverged_with_message(tmp_path):
     _write_tsv(tmp_path, "out/de.tsv", [_DE_HEADER, ["ENSG1", "-1.0", "0.001"]])
     claims = [
