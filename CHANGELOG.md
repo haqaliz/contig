@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-07-23
+
 ### Added
 
 - **`contig reproduce` now accepts an `https://` git URL as its repo argument, behind an opt-in
@@ -2389,6 +2391,7 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.47.0]: https://github.com/haqaliz/contig/releases/tag/v0.47.0
 [0.46.0]: https://github.com/haqaliz/contig/releases/tag/v0.46.0
 [0.45.0]: https://github.com/haqaliz/contig/releases/tag/v0.45.0
 [0.44.0]: https://github.com/haqaliz/contig/releases/tag/v0.44.0
