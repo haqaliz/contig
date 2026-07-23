@@ -139,3 +139,70 @@ def test_a_refusal_carries_no_rev():
     refused = RevArgument.refuse("nope")
     assert refused.rev is None
     assert refused.refusal == "nope"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: the targeted-fetch argv builders.
+#
+# Asserted EXACTLY, as slice 6 asserts _git_clone_argv
+# (test_reproduce_remote_intake.py:207). The real fetcher is never executed.
+#
+# Why a targeted fetch and not `git clone --depth 1 --branch <ref>`: --branch
+# accepts a tag or branch ONLY and rejects a raw SHA -- and a raw SHA is the
+# input that matters most, since it is what source_commit contains.
+# ---------------------------------------------------------------------------
+
+
+def test_git_init_argv_is_exact():
+    from contig.runner import _git_init_argv
+
+    assert _git_init_argv() == ["git", "init", "-q"]
+
+
+def test_git_remote_add_argv_is_exact():
+    from contig.runner import _git_remote_add_argv
+
+    assert _git_remote_add_argv("https://github.com/lab/paper-code") == [
+        "git",
+        "remote",
+        "add",
+        "origin",
+        "--",
+        "https://github.com/lab/paper-code",
+    ]
+
+
+def test_git_fetch_argv_is_exact():
+    from contig.runner import _git_fetch_argv
+
+    assert _git_fetch_argv("v2.1") == [
+        "git",
+        "fetch",
+        "--depth",
+        "1",
+        "origin",
+        "--",
+        "v2.1",
+    ]
+
+
+def test_git_checkout_argv_is_exact():
+    from contig.runner import _git_checkout_argv
+
+    # --detach is explicit so the detached state is intentional, not incidental.
+    assert _git_checkout_argv() == ["git", "checkout", "--detach", "FETCH_HEAD"]
+
+
+def test_remote_add_and_fetch_place_their_argument_after_the_dashdash():
+    # The `--` terminator is the second line of defence behind the validator's
+    # leading-dash refusal. Verified against real git that both subcommands
+    # accept it.
+    from contig.runner import _git_fetch_argv, _git_remote_add_argv
+
+    remote_argv = _git_remote_add_argv("https://example.com/x")
+    assert remote_argv[-2] == "--"
+    assert remote_argv[-1] == "https://example.com/x"
+
+    fetch_argv = _git_fetch_argv("main")
+    assert fetch_argv[-2] == "--"
+    assert fetch_argv[-1] == "main"
