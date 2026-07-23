@@ -1,127 +1,98 @@
-# Phase 2 dig — feat reproduce-remote-intake (C8 slice 6)
+# Understanding: feat reproduce-rev-pin (C8 slice 7)
 
-Grounded in the worktree at `origin/master` (v0.46.0). Every claim below is line-cited;
-anything unverified is labelled as such.
+Phase-2 dig note. Written before any PRD work.
 
 ## What the work is really asking
 
-Make `contig reproduce` able to take a **remote git URL** instead of only a local directory,
-fetch it, record the **resolved commit** so the reproduction is itself re-runnable, and hand
-the checkout to the already-shipped engine unchanged.
+Slice 6 (v0.47.0) made a remote reproduction **attributable**: the bundle records
+`source_url` + `source_commit`. It did not make it **replayable** — nothing in the product
+reads `source_commit` back (`CHANGELOG.md:114`; the slice-6 PRD flags this itself as
+**RISK-5**, "the pin has no in-product consumer yet… the slice's headline value is partly
+deferred to a follow-on that is not scheduled", `docs/planning/reproduce-remote-intake/prd.md:229-236`).
 
-## Current state (verified)
+This slice is that follow-on: `contig reproduce <url> --allow-fetch --rev <ref>` checks out a
+**caller-chosen** revision, and the resulting `source_commit` is the revision the caller asked
+for. That closes the loop — take a bundle, read its pin, re-run at exactly that revision.
 
-- **Intake is local-only and validated first.** `cli.py:781-784` is the entire intake:
-  `repo_path = Path(repo)`; `if not repo_path.is_dir(): "No such repo directory" → Exit(1)`.
-  Everything downstream (`--results` containment `:789-794`, locator containment `:836-847`,
-  the engine's `repo_root` `reproduce.py:874`) keys off that path.
-- **`ReproduceRecord` has no revision field.** `models.py:669-678`: `reproduce_id`, `repo`,
-  `run_command`, `claims_sha256`, `claim_results`, `exit_code`, `created_at`, `interpreter`,
-  `tool`, `repair_history`. `repair_history: list[RepairStep] = []` (`:678`) is the slice-2
-  precedent for an **additive, defaulted** field that keeps older bundles loading.
-- **The re-runnable manifest omits any revision.** `bundle.py:89-96` writes `reproduce.json`
-  with `reproduce_id`, `repo`, `run_command`, `claims_sha256`, `created_at`. For a remote
-  repo, `repo` alone (a URL whose default branch moves) is **not** re-runnable — the
-  strongest argument for pinning the commit, and a reproduce-guarantee argument rather than a
-  nice-to-have.
-- **Seam conventions are uniform.** `runner.py:567-578` declares three seams as plain callable
-  aliases — `Executor`, `IndexBuilder`, `Installer`, all `Callable[[list[str], Path], int]`,
-  each commented "tests inject a fake, so no real tool runs in CI". Defaults (`:594-647`) all
-  use `subprocess.run` with an **argv list, no shell, `check=False`**, converting failure to a
-  returned exit code rather than an exception. `_pip_install_argv` (`:635-637`) is the "fixed
-  argv, no interpolation" pattern to copy. `default_command_executor` (`:608-619`) is the odd
-  one out: it returns `(exit_code, combined_output)`.
-- **Run-scoped scratch dirs are established.** `self_heal.py:635` (`run_dir/healed_index/star`)
-  and `:795` (`run_dir/healed_reference`) — a fetched checkout should follow the same shape.
-- **Dependency contract.** `pyproject.toml:30-34`: runtime deps are exactly `pydantic`,
-  `typer`, `cryptography`. Git would be an **external binary** invoked via subprocess (like
-  samtools/STAR), not a Python dependency — so the stdlib-only contract holds.
-- **No network code exists anywhere in `src/contig/` except `default_installer`'s pip**
-  (`runner.py:640-647`). This slice adds the second network surface in the codebase.
-- **CI has no marker infrastructure.** `.github/workflows/ci.yml:20` is a bare `uv run pytest`;
-  `pyproject.toml:58-60` sets only `testpaths`/`addopts` — **no custom markers**. Manual gates
-  elsewhere are done by *injected seams*, not skip markers (the only `skipif`s are
-  signing-key ones: `tests/test_bundle.py:172`, `tests/test_reproduce_bundle.py:18`). A
-  network-free suite must therefore be achieved **by construction**, not by excluding tests.
+## Affected code (all read in this worktree)
 
-## The finding that most shapes the design
-
-**The fetch must happen BEFORE `run_started_at` is stamped, and this is a correctness
-requirement, not a style preference.**
-
-`cli.py:853-858` stamps `run_started_at = time.time()` after all validation and before the
-executor. The v0.46.0 freshness guard (`reproduce.py:880-919`) marks any artifact whose
-`mtime < run_started_at` UNVERIFIED, precisely so a repo that **commits its outputs** cannot
-report a false `REPRODUCED`.
-
-A `git clone` writes every file at clone time. Therefore:
-
-- **Clone before the stamp** → every author-committed artifact has `mtime < run_started_at`
-  → correctly stale → the guard keeps working exactly as designed. ✅
-- **Clone after the stamp** → every author-committed artifact looks *fresh* → the guard is
-  silently disabled for remote repos → **reintroduces the exact false-`REPRODUCED` hole
-  v0.46.0 just closed**, and reintroduces it only on the path (real published repos) where it
-  matters most. ❌
-
-This ordering deserves an explicit regression test: *a cloned repo with a committed
-`results.json` whose value exactly matches the claim must report UNVERIFIED, not REPRODUCED.*
-
-## Affected areas
-
-| Area | File | Change shape |
+| Area | File:line | Note |
 |---|---|---|
-| Intake + ordering | `cli.py:781-784`, `:853-858` | branch local-path vs URL; fetch before stamp |
-| New seam | `runner.py:567-578`, `:594-647` | `Fetcher` alias + `default_fetcher` + `_git_clone_argv` |
-| Record | `models.py:669-678` | additive defaulted fields (source URL, resolved commit) |
-| Manifest | `bundle.py:89-96` | carry the pin so a remote reproduction is re-runnable |
-| Docs | `CHANGELOG.md`, `CAPABILITY_ROADMAP.md` C8 §1047-1390 + table row `:1404` + the now-stale "no network" at `:1377`, `docs/USAGE.md` (`:59`, `:214`-~`:312`) | standard shipped-slice sweep. **Not `FEATURES.md`** — its table (`:248-256`) stops at C6 and the last slice left it untouched |
+| Fetch seam type | `src/contig/runner.py:580-586` | `Fetcher = Callable[[list[str], Path], tuple[int, str]]` — returns `(exit_code, combined_output)`, unlike the bare-int `IndexBuilder`/`Installer` |
+| Clone argv | `src/contig/runner.py:658-668` | `["git","clone","--depth","1","--",url,str(dest)]`; the `--` terminator is the second line of defence behind the leading-dash refusal |
+| HEAD argv | `src/contig/runner.py:671-673` | `["git","rev-parse","HEAD"]` |
+| Default fetcher | `src/contig/runner.py:676-694` | merges stderr into stdout; converts a missing `git` binary into `(127, msg)` rather than raising |
+| Argument classifier | `src/contig/fetch.py:102-147` | pure; ordered leading-dash → https → DOI → other-scheme → scp-like → local |
+| Fetch orchestration | `src/contig/fetch.py:194-264` | `dest.absolute()` first; refuse non-empty dest; `parent_created_here` cleanup scoping; clone → rev-parse → `_FULL_SHA_RE.fullmatch` |
+| CLI command | `src/contig/cli.py:715-961` | flags, ordering, containment guards, the clone-before-stamp comment at `:906-912` |
+| Record fields | `ReproduceRecord.source_url` / `.source_commit` | additive, default `None`, emitted unconditionally in `reproduce.json` |
+| Tests | `tests/test_reproduce_remote_intake.py` (25.9K) | scripted-fetcher pattern; argv builders asserted exactly (`:207-231`) |
 
-## Ambiguities / open questions for the PRD
+## The load-bearing question — resolved by experiment, not by reasoning
 
-1. **Seam signature.** `int` (like `IndexBuilder`) or `(int, str)` (like
-   `default_command_executor`)? Git's stderr is the only useful diagnostic for a failed clone,
-   which argues for `(int, str)`.
-2. **How is the commit resolved?** A second `git rev-parse HEAD` through the same seam, or
-   `git clone` then read `.git/HEAD`/refs? The former needs the seam to return stdout.
-3. **Opt-in flag shape and default.** Mirror `--allow-install`'s posture
-   (`reproduce-env-resurrection/prd.md:123-124`: "Absent the flag, the command never installs,
-   never hits the network, never mutates the environment"). Name TBD (`--allow-fetch`?).
-4. **URL validation.** Needs a scheme allowlist and, critically, **refusal of any URL starting
-   with `-`** (git would read it as an option — argv injection). Charset-guard precedent:
-   `reproduce.py:44` `_SAFE_PACKAGE_TOKEN_RE`. Whether `file://` and `git+ssh` are allowed is
-   a product decision.
-5. **Where does the checkout live?** `runs_dir/<reproduce_id>/source/` (bundle-local, follows
-   the `healed_*` precedent) vs a temp dir. Bundle-local is inspectable after the fact but
-   bloats the bundle.
-6. **Ref/tag/commit pinning on the way in** — does the user get `--rev`, or only "clone the
-   default branch and record what we got"? Recording is required; requesting is optional.
-7. **Shallow vs full clone.** `--depth 1` is faster but complicates `rev-parse` semantics and
-   makes a `--rev` of an older commit impossible.
-8. **Is `git` present?** An absent binary must be an honest pre-run refusal, never a traceback.
+`git clone --depth 1` cannot check out an arbitrary SHA. The slice-6 PRD anticipated this
+(**RISK-2**, `prd.md:217-219`: "a `--rev` follow-on will need `--depth 1 --branch <ref>` or a
+targeted fetch"). Those two options are **not** equivalent:
 
-## Contradictions / corrections to the brief
+- `git clone --depth 1 --branch <ref>` accepts a **tag or branch only** — it rejects a raw SHA,
+  which is the single most important `--rev` input (it is what `source_commit` contains).
+- A **targeted fetch** handles all three.
 
-- The brief said to mirror "`runner.Installer` / `runner.IndexBuilder`" — accurate
-  (`runner.py:572-578`), **but** those return bare `int` while the reproduce executor returns
-  `(int, str)`. "Mirror the seam" is therefore ambiguous; see open question 1.
-- The brief implied there might be prior-dig blockers on remote intake. **There are none.**
-  Every prior C8 PRD lists remote `<doi|url>` as a scope deferral only
-  (`reproduce-output-locator/prd.md:124`, `reproduce-env-resurrection/prd.md:148-149`,
-  `reproduce-notebook-locator/prd.md:158`, `reproduce-freshness-guard/prd.md:231`), and
-  `reproduce-freshness-guard/prd.md:159` states plainly: *"Extending freshness to
-  remote/`<doi|url>` intake — that intake does not exist yet."* Deferred for scope, never for
-  feasibility.
-- Every prior PRD's primary persona **already assumes a cloned repo as a manual human step**
-  (`reproduce-env-resurrection/prd.md:70`, `reproduce-output-locator/prd.md:60`,
-  `reproduce-notebook-locator/prd.md:64`: "Clones a public repo, runs its script…"). This
-  slice automates a step the product design already presumed; it does not change the persona.
-- My own earlier assumption that kallisto/STARsolo-style tests are excluded by a **pytest
-  marker** was wrong: there is no marker infrastructure (`pyproject.toml:58-60`). Those tools
-  stay out of CI by seam injection alone.
+I ran the targeted-fetch shape locally against a scratch repo (scratchpad, not in the repo):
 
-## Guardrail check (CLAUDE.md)
+```
+git init -q . && git remote add origin <url>
+git fetch --depth 1 origin <rev>     # <rev> = full SHA | tag | branch
+git checkout --detach FETCH_HEAD
+git rev-parse HEAD                    # → the exact 40-hex SHA
+```
 
-On-thesis Layer 2: intake for run → self-heal → verify → reproduce. No NL→workflow authoring,
-no wet-lab/clinical dependency, no proprietary data. The one genuinely new risk is **executing
-third-party code Contig itself fetched** — which is why the opt-in gate and the argv-injection
-refusal are requirements, not polish.
+- full SHA of a **non-HEAD, older** commit: works, `rev-parse HEAD` returns exactly that SHA.
+- tag (`v1`): works, resolves to the tagged commit.
+- nonexistent SHA: **exit 128**, `fatal: git upload-pack: not our ref <sha>` — a clean,
+  distinguishable refusal (verified with the exit code unmasked by a pipe).
+
+So one mechanism covers SHA, tag, and branch. **Recommendation: targeted fetch, and leave the
+no-`--rev` path on the existing `git clone --depth 1` byte-identical** so every slice-6 test
+and behaviour is untouched.
+
+**The residual, honest risk:** fetch-by-raw-SHA depends on the server enabling
+`uploadpack.allowReachableSHA1InWant`. My local test used the local file transport, which is
+permissive — it proves the *client* mechanics, **not** the server policy. GitHub and GitLab
+enable it; many self-hosted remotes do not. Fetching by **tag or branch** has no such
+dependency. This needs an explicit decision (below) and must not be glossed.
+
+## Open questions for the review gate
+
+1. **Server refuses fetch-by-SHA — fall back, or refuse?**
+   (a) honest refusal naming the reason and suggesting a tag/branch; (b) fall back to a full
+   (non-shallow) clone + `git checkout <rev>`, which always works but can be very large.
+   My lean is **(a) for this slice** — bounded, fixed argv, matches the command's standing
+   "refuse, write nothing" ethos — with (b) recorded as the follow-on and a revisit trigger.
+2. **Where does the *requested* ref get recorded?** `source_commit` holds the *resolved* SHA;
+   for a tag or branch the requested ref is otherwise lost. Adding a third record field
+   (`source_rev`) would **re-break signature verification for every v0.47.0 signed reproduce
+   bundle**, exactly as slice 6 did (the canonical payload gains a key). The alternative is
+   recording it only in the unsigned `reproduce.json` invocation manifest, which costs nothing.
+   This is a real trade (fidelity vs. a second break in two releases) and belongs at the gate.
+3. **Does `--rev` with a *local* repo refuse, or is it silently ignored?** Refusing pre-run is
+   consistent with every other guard in this command. Confirm.
+
+## Contradictions / things to flag
+
+- Nothing in the brief contradicts the code. One correction to the brief itself: it proposed
+  `git checkout FETCH_HEAD`; it should be `git checkout --detach FETCH_HEAD` to make the
+  detached state explicit rather than incidental.
+- **Do not "fix" the disclosed signature break** from slice 6 (pre-slice-6 signed reproduce
+  bundles no longer verify). It is disclosed and pinned by a test.
+- Slice 6's **manual post-merge smoke test was never run** (`prd.md:265-269` defines it: clone
+  ≥1 real public repo, confirm the SHA is recorded, and confirm a repo with committed outputs
+  reports `UNVERIFIED` not `REPRODUCED`). Slice 6 shipped a real bug a green suite missed
+  (relative `--runs-dir` → clone into the wrong directory, `CHANGELOG.md:105`). This slice
+  must carry both smoke tests, not just its own.
+
+## Guardrail check (`CLAUDE.md`)
+
+Layer 2 throughout — reproducibility infrastructure on the user's own compute. No NL→workflow
+authoring, no wet-lab/clinical dependency, no proprietary data, no new runtime dependency
+(stdlib `subprocess` only; `git` required only on the remote path, as already).
