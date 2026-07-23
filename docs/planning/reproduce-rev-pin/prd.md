@@ -20,7 +20,7 @@ slice-6 PRD says so itself, as its own RISK-5:
 > "With `--depth 1` and `--rev` deferred, **no code path reads `source_commit`** — only a
 > human can act on it (`git checkout <sha>` by hand). So the slice's headline value is partly
 > deferred to a follow-on that is not scheduled."
-> — `docs/planning/reproduce-remote-intake/prd.md:229-233`
+> — `docs/planning/reproduce-remote-intake/prd.md:226-231`
 
 `CHANGELOG.md:114-118` states the same limit in the shipped release notes: "the pin is
 auditable, not yet replayable… Do not read the recorded commit as making a run automatically

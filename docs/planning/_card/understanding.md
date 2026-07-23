@@ -8,7 +8,7 @@ Slice 6 (v0.47.0) made a remote reproduction **attributable**: the bundle record
 `source_url` + `source_commit`. It did not make it **replayable** — nothing in the product
 reads `source_commit` back (`CHANGELOG.md:114`; the slice-6 PRD flags this itself as
 **RISK-5**, "the pin has no in-product consumer yet… the slice's headline value is partly
-deferred to a follow-on that is not scheduled", `docs/planning/reproduce-remote-intake/prd.md:229-236`).
+deferred to a follow-on that is not scheduled", `docs/planning/reproduce-remote-intake/prd.md:226-234`).
 
 This slice is that follow-on: `contig reproduce <url> --allow-fetch --rev <ref>` checks out a
 **caller-chosen** revision, and the resulting `source_commit` is the revision the caller asked
