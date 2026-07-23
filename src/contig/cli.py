@@ -40,7 +40,7 @@ from contig.corpus import (
     promote_pending_case,
 )
 from contig.detect import get_detector
-from contig.fetch import classify_repo_argument, fetch_repo
+from contig.fetch import classify_repo_argument, classify_rev_argument, fetch_repo
 from contig.eval_history import (
     append_snapshot,
     default_history_path,
@@ -745,6 +745,16 @@ def reproduce(
             "the environment; off by default (a missing module stays UNVERIFIED)."
         ),
     ),
+    rev: str = typer.Option(
+        None,
+        "--rev",
+        help=(
+            "Revision to check out: a full 40-character commit SHA, a tag, or a "
+            "branch. Requires an https:// URL and --allow-fetch. With it, the "
+            "recorded source_commit is the revision you asked for rather than "
+            "whatever HEAD happened to be at fetch time."
+        ),
+    ),
     allow_fetch: bool = typer.Option(
         False,
         "--allow-fetch/--no-allow-fetch",
@@ -816,6 +826,26 @@ def reproduce(
             err=True,
         )
         raise typer.Exit(code=1)
+
+    # --rev is meaningless without something to check out. Refusing here --
+    # rather than ignoring it -- matters because a caller who passes --rev and
+    # sees a success would reasonably believe they pinned a revision. Checked
+    # after the --allow-fetch refusal above, so a URL without the flag reports
+    # the flag (the more actionable of the two problems), and before anything
+    # is created on disk.
+    if rev is not None and repo_argument.kind == "local":
+        typer.echo(
+            "--rev applies only to a remote https:// URL fetched with "
+            "--allow-fetch; a local repo is used as-is",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if rev is not None:
+        rev_argument = classify_rev_argument(rev)
+        if rev_argument.refusal is not None:
+            typer.echo(rev_argument.refusal, err=True)
+            raise typer.Exit(code=1)
 
     # The run id is generated here, ahead of every validation gate, because a
     # remote run's checkout path is derived from it and the containment guards
@@ -903,16 +933,19 @@ def reproduce(
             )
             raise typer.Exit(code=1)
 
-    # The clone is the FIRST disk write of this command, and it deliberately
-    # happens BEFORE run_started_at is stamped below. A clone writes every file
-    # at clone time; stamping first would make every author-committed artifact
+    # The clone (or, with --rev, the targeted fetch + checkout) is the FIRST
+    # disk write of this command, and it deliberately happens BEFORE
+    # run_started_at is stamped below. Either shape writes every file at
+    # fetch time; stamping first would make every author-committed artifact
     # look freshly written by this run and silently disable the freshness guard
     # for remote repos -- reopening the false-REPRODUCED hole on the very path
     # (real published repos) where it matters most. A failed fetch leaves no
     # directory behind (see fetch_repo).
     source_commit: str | None = None
     if repo_argument.kind == "remote":
-        fetched = fetch_repo(repo_argument.url, repo_path, fetcher=default_fetcher)
+        fetched = fetch_repo(
+            repo_argument.url, repo_path, fetcher=default_fetcher, rev=rev
+        )
         if fetched.refusal is not None:
             typer.echo(fetched.refusal, err=True)
             raise typer.Exit(code=1)
@@ -953,7 +986,7 @@ def reproduce(
             }
         )
 
-    write_reproduce_bundle(record, Path(runs_dir) / reproduce_id)
+    write_reproduce_bundle(record, Path(runs_dir) / reproduce_id, requested_rev=rev)
 
     typer.echo(render_reproduction(record))
 

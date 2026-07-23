@@ -544,3 +544,254 @@ def test_requested_rev_does_not_change_the_signature(tmp_path):
     # Same record -> same signed payload, regardless of the manifest field.
     assert sig_a["signed_sha256"] == sig_b["signed_sha256"]
     assert verify_signature(record, sig_b["signature"], sig_b["public_key"])
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: CLI wiring.
+#
+# Drives the real `reproduce` command through CliRunner with two seams faked
+# (Fetcher, command executor), following test_reproduce_remote_intake.py:413.
+# ---------------------------------------------------------------------------
+
+import json  # noqa: E402
+import time  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from typer.testing import CliRunner  # noqa: E402
+
+from contig.cli import app  # noqa: E402
+
+runner = CliRunner()
+
+
+class _ScriptedRevCheckoutFetcher:
+    """Simulates the 5-call targeted fetch, materializing the tree at CHECKOUT.
+
+    `files` are written by the checkout call -- the step that actually puts
+    files in the worktree -- so each file's mtime is the checkout instant,
+    exactly as a real fetch+checkout leaves it. `settle` makes that instant
+    measurably earlier than anything the CLI stamps afterwards, so the
+    ordering assertion cannot flake on a shared float mtime.
+    """
+
+    def __init__(self, files=None, commit=_A_SHA, fail_at=None, fail_output="", settle=0.05):
+        self.files = dict(files or {})
+        self.commit = commit
+        self.fail_at = fail_at
+        self.fail_output = fail_output
+        self.settle = settle
+        self.calls: list[tuple[list[str], Path]] = []
+
+    def __call__(self, argv, cwd):
+        self.calls.append((list(argv), Path(cwd)))
+        idx = len(self.calls) - 1
+        if self.fail_at == idx:
+            return 128, self.fail_output
+        if argv[:2] == ["git", "checkout"]:
+            for name, text in self.files.items():
+                path = Path(cwd) / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
+            time.sleep(self.settle)
+            return 0, ""
+        if argv[:2] == ["git", "rev-parse"]:
+            return 0, self.commit + "\n"
+        return 0, ""
+
+
+def _claims_file(tmp_path, claims):
+    path = tmp_path / "claims.json"
+    path.write_text(json.dumps(claims))
+    return path
+
+
+def _bundle_dirs(runs_dir):
+    if not runs_dir.exists():
+        return []
+    return sorted(p for p in runs_dir.iterdir() if p.is_dir())
+
+
+def _read_record(runs_dir):
+    (bundle,) = _bundle_dirs(runs_dir)
+    return json.loads((bundle / "reproduce_record.json").read_text())
+
+
+def _invoke(claims, runs_dir, *, repo=_URL, extra=()):
+    return runner.invoke(
+        app,
+        [
+            "reproduce",
+            repo,
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+            *extra,
+        ],
+    )
+
+
+def test_committed_results_in_a_rev_checkout_stays_unverified(tmp_path, monkeypatch):
+    """The ordering regression (spec criterion 11, PRD RISK-2).
+
+    The checkout must happen BEFORE run_started_at is stamped. If it were
+    stamped first, every author-committed artifact would look freshly written
+    by this run and the freshness guard would be silently disabled on exactly
+    the published repos it exists for.
+
+    Here the repo COMMITS a results.json whose value exactly equals the claim.
+    A correct implementation reports `unverified`; an incorrectly-ordered one
+    reports `reproduced`.
+    """
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    runs_dir = tmp_path / "runs"
+    fetcher = _ScriptedRevCheckoutFetcher(files={"results.json": json.dumps({"auc": 0.9})})
+    monkeypatch.setattr("contig.cli.default_fetcher", fetcher)
+    # The run itself writes nothing -- the only results.json is the committed one.
+    monkeypatch.setattr("contig.cli.default_command_executor", lambda cmd, cwd: (0, ""))
+
+    result = _invoke(claims, runs_dir, extra=["--allow-fetch", "--rev", "v2.1"])
+
+    assert result.exit_code == 0, result.output
+    (claim,) = _read_record(runs_dir)["claim_results"]
+    assert claim["status"] == "unverified"
+
+
+def test_rev_run_records_the_requested_ref_and_the_resolved_commit(tmp_path, monkeypatch):
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    runs_dir = tmp_path / "runs"
+    fetcher = _ScriptedRevCheckoutFetcher()
+    monkeypatch.setattr("contig.cli.default_fetcher", fetcher)
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor",
+        lambda cmd, cwd: (
+            (cwd / "results.json").write_text(json.dumps({"auc": 0.9})),
+            (0, ""),
+        )[1],
+    )
+
+    result = _invoke(claims, runs_dir, extra=["--allow-fetch", "--rev", "v2.1"])
+
+    assert result.exit_code == 0, result.output
+    record = _read_record(runs_dir)
+    assert record["source_commit"] == _A_SHA
+    assert record["repo"] == _URL
+
+    (bundle,) = _bundle_dirs(runs_dir)
+    manifest = json.loads((bundle / "reproduce.json").read_text())
+    assert manifest["requested_rev"] == "v2.1"
+    assert manifest["source_commit"] == _A_SHA
+
+    # The targeted fetch ran, not a clone.
+    assert [argv[:2] for argv, _ in fetcher.calls] == [
+        ["git", "init"],
+        ["git", "remote"],
+        ["git", "fetch"],
+        ["git", "checkout"],
+        ["git", "rev-parse"],
+    ]
+
+
+def test_rev_with_a_local_repo_is_refused_before_anything_is_written(tmp_path, monkeypatch):
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    runs_dir = tmp_path / "runs"
+    local_repo = tmp_path / "repo"
+    local_repo.mkdir()
+    fetcher = _ScriptedRevCheckoutFetcher()
+    monkeypatch.setattr("contig.cli.default_fetcher", fetcher)
+    monkeypatch.setattr("contig.cli.default_command_executor", lambda cmd, cwd: (0, ""))
+
+    result = _invoke(claims, runs_dir, repo=str(local_repo), extra=["--rev", "v2.1"])
+
+    assert result.exit_code != 0
+    assert "--rev" in result.output
+    assert fetcher.calls == []
+    assert _bundle_dirs(runs_dir) == []
+
+
+def test_rev_without_allow_fetch_hits_the_existing_allow_fetch_refusal(tmp_path, monkeypatch):
+    """The URL is refused first, naming --allow-fetch -- precedence is pinned."""
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    runs_dir = tmp_path / "runs"
+    fetcher = _ScriptedRevCheckoutFetcher()
+    monkeypatch.setattr("contig.cli.default_fetcher", fetcher)
+    monkeypatch.setattr("contig.cli.default_command_executor", lambda cmd, cwd: (0, ""))
+
+    result = _invoke(claims, runs_dir, extra=["--rev", "v2.1"])
+
+    assert result.exit_code != 0
+    assert "--allow-fetch" in result.output
+    assert fetcher.calls == []
+    assert _bundle_dirs(runs_dir) == []
+
+
+@pytest.mark.parametrize("bad_rev", ["--upload-pack=/bin/sh", "296569a", "main~1", ""])
+def test_invalid_rev_is_refused_before_any_git_runs(tmp_path, monkeypatch, bad_rev):
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    runs_dir = tmp_path / "runs"
+    fetcher = _ScriptedRevCheckoutFetcher()
+    monkeypatch.setattr("contig.cli.default_fetcher", fetcher)
+    monkeypatch.setattr("contig.cli.default_command_executor", lambda cmd, cwd: (0, ""))
+
+    result = _invoke(claims, runs_dir, extra=["--allow-fetch", "--rev", bad_rev])
+
+    assert result.exit_code != 0
+    assert fetcher.calls == []
+    assert _bundle_dirs(runs_dir) == []
+
+
+def test_failed_rev_fetch_exits_nonzero_and_leaves_no_bundle(tmp_path, monkeypatch):
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    runs_dir = tmp_path / "runs"
+    fetcher = _ScriptedRevCheckoutFetcher(
+        fail_at=2, fail_output=f"fatal: git upload-pack: not our ref {_A_SHA}\n"
+    )
+    monkeypatch.setattr("contig.cli.default_fetcher", fetcher)
+    monkeypatch.setattr("contig.cli.default_command_executor", lambda cmd, cwd: (0, ""))
+
+    result = _invoke(claims, runs_dir, extra=["--allow-fetch", "--rev", _A_SHA])
+
+    assert result.exit_code != 0
+    assert "allowReachableSHA1InWant" in result.output
+    assert _bundle_dirs(runs_dir) == []
+
+
+def test_no_rev_remote_run_still_clones_and_records_null_requested_rev(tmp_path, monkeypatch):
+    """Back-compat (spec criterion 12): the slice-6 path is unchanged."""
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    runs_dir = tmp_path / "runs"
+
+    class _CloneFetcher:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, argv, cwd):
+            self.calls.append((list(argv), Path(cwd)))
+            if len(self.calls) == 1:
+                Path(argv[-1]).mkdir(parents=True, exist_ok=True)
+                time.sleep(0.05)
+                return 0, "Cloning...\n"
+            return 0, _A_SHA + "\n"
+
+    fetcher = _CloneFetcher()
+    monkeypatch.setattr("contig.cli.default_fetcher", fetcher)
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor",
+        lambda cmd, cwd: (
+            (cwd / "results.json").write_text(json.dumps({"auc": 0.9})),
+            (0, ""),
+        )[1],
+    )
+
+    result = _invoke(claims, runs_dir, extra=["--allow-fetch"])
+
+    assert result.exit_code == 0, result.output
+    assert [argv[:2] for argv, _ in fetcher.calls] == [
+        ["git", "clone"],
+        ["git", "rev-parse"],
+    ]
+    (bundle,) = _bundle_dirs(runs_dir)
+    manifest = json.loads((bundle / "reproduce.json").read_text())
+    assert manifest["requested_rev"] is None
