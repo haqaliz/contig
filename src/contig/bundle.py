@@ -69,7 +69,9 @@ def load_bundle(dest_dir: str | Path) -> RunRecord:
     return RunRecord.model_validate_json(json_path.read_text())
 
 
-def write_reproduce_bundle(record: ReproduceRecord, dest_dir: str | Path) -> Path:
+def write_reproduce_bundle(
+    record: ReproduceRecord, dest_dir: str | Path, *, requested_rev: str | None = None
+) -> Path:
     """Serialize ``record`` to ``dest_dir/reproduce_record.json`` and return that path.
 
     Also writes ``dest_dir/reproduce.json``, the small re-runnable manifest (repo +
@@ -78,7 +80,12 @@ def write_reproduce_bundle(record: ReproduceRecord, dest_dir: str | Path) -> Pat
     for a remote run ``repo`` holds the URL and the local checkout path is never
     persisted). ``source_url``/``source_commit`` are emitted unconditionally --
     present and ``null`` for a local run -- so a consumer can always read the key
-    without a ``.get()`` dance. When ``CONTIG_SIGNING_KEY`` is set,
+    without a ``.get()`` dance. ``requested_rev`` -- the ``--rev`` the caller asked
+    for, which for a tag or branch is not recoverable from the resolved SHA -- is
+    emitted the same way. It lives in the manifest and NOT on the record
+    deliberately: the manifest is unsigned invocation metadata, so adding it breaks
+    no existing signature, and the resolved ``source_commit`` stays the attested
+    fact. When ``CONTIG_SIGNING_KEY`` is set,
     also writes a detached signature sidecar over the record's canonical content, via
     the same ``_maybe_write_signature`` used for RunRecord -- it only calls
     ``record.model_dump(mode="json")`` under the hood, so it signs a ReproduceRecord
@@ -98,6 +105,7 @@ def write_reproduce_bundle(record: ReproduceRecord, dest_dir: str | Path) -> Pat
         "created_at": record.created_at,
         "source_url": record.source_url,
         "source_commit": record.source_commit,
+        "requested_rev": requested_rev,
     }
     (dest / "reproduce.json").write_text(json.dumps(manifest, indent=2))
 

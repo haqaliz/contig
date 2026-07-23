@@ -449,3 +449,98 @@ def test_non_empty_destination_is_refused_before_any_git_runs(tmp_path):
     assert result.refusal is not None
     assert fetcher.calls == []
     assert (dest / "existing.txt").read_text() == "do not touch"
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: requested_rev in the UNSIGNED invocation manifest.
+#
+# D2: the requested ref is invocation metadata, not an attested fact. It goes
+# in reproduce.json, which is not signed -- so every v0.47.0 signed reproduce
+# bundle keeps verifying. The resolved source_commit remains the attested pin.
+# ---------------------------------------------------------------------------
+
+
+def _a_record():
+    from contig.models import ClaimResult, ReproduceRecord
+
+    return ReproduceRecord(
+        reproduce_id="rp_1",
+        repo=_URL,
+        run_command="python train.py",
+        claims_sha256="a" * 64,
+        claim_results=[
+            ClaimResult(
+                id="c1",
+                status="reproduced",
+                claimed=0.9,
+                observed=0.9,
+                tolerance=0.02,
+                delta=0.0,
+                message="ok",
+            )
+        ],
+        exit_code=0,
+        created_at="2026-07-23T00:00:00Z",
+        interpreter="cpython-3.12",
+        tool="contig",
+        source_url=_URL,
+        source_commit=_A_SHA,
+    )
+
+
+def test_requested_rev_is_written_to_the_manifest(tmp_path):
+    import json
+
+    from contig.bundle import write_reproduce_bundle
+
+    write_reproduce_bundle(_a_record(), tmp_path, requested_rev="v2.1")
+
+    manifest = json.loads((tmp_path / "reproduce.json").read_text())
+    assert manifest["requested_rev"] == "v2.1"
+    assert manifest["source_commit"] == _A_SHA
+
+
+def test_requested_rev_is_emitted_unconditionally_as_null_when_absent(tmp_path):
+    import json
+
+    from contig.bundle import write_reproduce_bundle
+
+    write_reproduce_bundle(_a_record(), tmp_path)
+
+    manifest = json.loads((tmp_path / "reproduce.json").read_text())
+    # Present and null -- a consumer never needs a .get() dance, matching how
+    # source_url/source_commit are emitted.
+    assert "requested_rev" in manifest
+    assert manifest["requested_rev"] is None
+
+
+def test_requested_rev_does_not_change_the_signature(tmp_path):
+    """D2's whole point: adding a manifest key breaks no existing signature."""
+    import json
+
+    from contig.bundle import write_reproduce_bundle
+    from contig.signing import generate_keypair, signing_available, verify_signature
+
+    if not signing_available():
+        pytest.skip("signing backend unavailable")
+
+    private_key, _ = generate_keypair()
+    record = _a_record()
+
+    unpinned = tmp_path / "unpinned"
+    pinned = tmp_path / "pinned"
+    import os
+
+    os.environ["CONTIG_SIGNING_KEY"] = private_key
+    try:
+        write_reproduce_bundle(record, unpinned)
+        write_reproduce_bundle(record, pinned, requested_rev="v2.1")
+    finally:
+        del os.environ["CONTIG_SIGNING_KEY"]
+
+    sig_a = json.loads((unpinned / "signature.json").read_text())
+    sig_b = json.loads((pinned / "signature.json").read_text())
+
+    # Same record -> same signed payload, regardless of the manifest field.
+    assert sig_a["signed_sha256"] == sig_b["signed_sha256"]
+    assert verify_signature(record, sig_b["signature"], sig_b["public_key"])
