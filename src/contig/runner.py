@@ -668,6 +668,57 @@ def _git_clone_argv(url: str, dest: Path) -> list[str]:
     return ["git", "clone", "--depth", "1", "--", url, str(dest)]
 
 
+def _git_init_argv() -> list[str]:
+    """Build the fixed argv that makes an existing empty directory a git repo.
+
+    Run with the destination itself as cwd. This replaces `git clone`'s
+    directory creation on the `--rev` path: a shallow clone cannot check out
+    an arbitrary commit, so the revision is fetched into a repo initialised
+    here instead.
+    """
+    return ["git", "init", "-q"]
+
+
+def _git_remote_add_argv(url: str) -> list[str]:
+    """Build the fixed argv that points a freshly-initialised repo at `url`.
+
+    The `--` terminator serves the same purpose as in `_git_clone_argv`: the
+    second line of defence behind classify_repo_argument's leading-dash
+    refusal. `git remote add` accepts it (verified against real git).
+    """
+    return ["git", "remote", "add", "origin", "--", url]
+
+
+def _git_fetch_argv(rev: str) -> list[str]:
+    """Build the fixed argv that fetches exactly one revision, shallowly.
+
+    `--depth 1` for the same reason as the clone: much faster on the real
+    published repos this targets. Unlike `git clone --depth 1 --branch <ref>`
+    -- which accepts a tag or branch but REJECTS a raw SHA -- a targeted fetch
+    resolves a full SHA, a tag, or a branch, and a raw SHA is the input that
+    matters most, since it is what `source_commit` contains.
+
+    The `--` terminator is the second line of defence behind
+    classify_rev_argument's leading-dash refusal (`git fetch` accepts it,
+    verified against real git).
+
+    Fetching a raw SHA depends on the server enabling
+    `uploadpack.allowReachableSHA1InWant`. GitHub and GitLab do; a remote that
+    does not is surfaced as an honest refusal by the caller, never a silent
+    fallback to a full clone.
+    """
+    return ["git", "fetch", "--depth", "1", "origin", "--", rev]
+
+
+def _git_checkout_argv() -> list[str]:
+    """Build the fixed argv that checks out whatever `_git_fetch_argv` fetched.
+
+    `--detach` is explicit so the detached-HEAD state is intentional rather
+    than incidental; `git rev-parse HEAD` reads the same either way.
+    """
+    return ["git", "checkout", "--detach", "FETCH_HEAD"]
+
+
 def _git_rev_parse_argv() -> list[str]:
     """Build the fixed argv that resolves HEAD to its full commit SHA."""
     return ["git", "rev-parse", "HEAD"]

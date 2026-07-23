@@ -56,7 +56,7 @@ The CLI and the test suite work **without** Nextflow/Java/Docker; only live runs
 | `contig list` | All bundled runs |
 | `contig corpus-promote` | Promote a confirmed pending failure case into the golden corpus |
 | `contig eval-detector` | Score the failure detector against the labeled failure corpus (`--detector rules-strict` or `--detector llm` to score a different detector, `--snapshot` to record a point in the history, `--history` to show the trend) |
-| `contig reproduce <repo\|url> --run "<cmd>" --claims <file>` | Run a third-party repo's script and report, per stated number, whether it actually regenerates: `REPRODUCED` / `WITHIN-TOLERANCE` / `DIVERGED` / `UNVERIFIED`. Takes a local path, or an `https://` git URL with `--allow-fetch` (see below) |
+| `contig reproduce <repo\|url> --run "<cmd>" --claims <file>` | Run a third-party repo's script and report, per stated number, whether it actually regenerates: `REPRODUCED` / `WITHIN-TOLERANCE` / `DIVERGED` / `UNVERIFIED`. Takes a local path, or an `https://` git URL with `--allow-fetch`; `--rev <sha\|tag\|branch>` pins the revision (see below) |
 | `contig version` | Installed version |
 
 Run `uv run contig <command> --help` for the full flag list of any command.
@@ -271,6 +271,31 @@ commit on the record as `source_commit`, alongside the URL as `source_url`. A
 local-path run leaves both `null`. That pin is what lets someone else check your
 reproduction claim; a local directory path tells them nothing.
 
+`--rev` names the revision to check out, so the pin becomes something Contig
+itself can consume rather than only a human:
+
+```bash
+contig reproduce https://github.com/lab/paper-code --allow-fetch \
+  --rev 5a8dce6c03eed91b742215ce61f5415ca617f654 \
+  --run "python analysis.py" \
+  --claims claims.json
+```
+
+It takes a full 40-character commit SHA, a tag, or a branch, and requires a URL
+plus `--allow-fetch`. Given a full SHA, Contig verifies the checkout actually
+landed on it and **refuses rather than records a pin that isn't what you asked
+for**. The requested ref is written to `reproduce.json` as `requested_rev`; the
+resolved SHA stays on the record as `source_commit`. That is the round-trip:
+take a bundle's `source_commit`, pass it back as `--rev`, get the same checkout.
+
+Two honest limits. An **abbreviated** SHA is refused up front — git cannot fetch
+one, and the error you would otherwise get reads like a typo'd branch name. And
+fetching a **bare commit** requires the server to allow it
+(`uploadpack.allowReachableSHA1InWant`); GitHub and GitLab do, some self-hosted
+remotes do not. When a remote refuses, Contig says so and suggests a tag or
+branch — it does **not** silently fall back to a full clone, which could pull
+gigabytes without asking.
+
 Without `--allow-fetch`, a URL is refused rather than treated as a path — it
 reaches the network and writes a checkout under your runs directory, so you have
 to ask. Only `https://` is accepted: `ssh://`, `git://`, `file://`, the
@@ -282,10 +307,10 @@ Three things worth knowing about a fetched run:
 - **The commit is the attested fact; the checkout is a convenience copy.** The
   signature covers the *record*, not the `source/` tree — that tree is unsigned
   and unhashed, and nothing detects it if you edit it afterwards.
-- **The pin is auditable, not automatically replayable.** There is no `--rev`
-  yet, so nothing in Contig consumes `source_commit` — a human reads it and runs
-  `git checkout <sha>`. The clone is `--depth 1`, so what you get is whatever
-  `HEAD` was at fetch time.
+- **Without `--rev`, you get whatever `HEAD` was at fetch time.** The clone is
+  `--depth 1` and unpinned, so re-running tomorrow — after the authors push —
+  reproduces a *different* revision than your earlier bundle attests to, with no
+  error. Pass `--rev` (below) when that matters.
 - **The freshness rule below applies to a fetched checkout exactly as to a local
   repo.** A clone writes every file at clone time, so Contig clones *before* it
   stamps the run's start — a repo that commits its outputs still reports

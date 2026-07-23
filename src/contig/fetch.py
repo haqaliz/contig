@@ -15,7 +15,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from contig.runner import Fetcher, _git_clone_argv, _git_rev_parse_argv
+from contig.runner import (
+    Fetcher,
+    _git_checkout_argv,
+    _git_clone_argv,
+    _git_fetch_argv,
+    _git_init_argv,
+    _git_remote_add_argv,
+    _git_rev_parse_argv,
+)
 
 
 @dataclass(frozen=True)
@@ -148,6 +156,108 @@ def classify_repo_argument(arg: str) -> RepoArgument:
 
 
 @dataclass(frozen=True)
+class RevArgument:
+    """The result of classifying one `contig reproduce --rev` argument.
+
+    Exactly one of `rev` / `refusal` is populated, enforced in `__post_init__`
+    for the same reason as `RepoArgument`: a refused revision must never be
+    misread as an accepted one by code that only checks `rev`.
+    """
+
+    rev: str | None
+    refusal: str | None
+
+    def __post_init__(self) -> None:
+        if self.refusal is not None:
+            if self.rev is not None:
+                raise ValueError("a refused RevArgument must not also carry a rev")
+            return
+        if self.rev is None:
+            raise ValueError("RevArgument requires either rev or refusal")
+
+    @classmethod
+    def accept(cls, rev: str) -> "RevArgument":
+        return cls(rev=rev, refusal=None)
+
+    @classmethod
+    def refuse(cls, reason: str) -> "RevArgument":
+        return cls(rev=None, refusal=reason)
+
+
+# An abbreviated SHA git cannot fetch: `git fetch --depth 1 origin -- <7-hex>`
+# fails with "couldn't find remote ref". Checked BEFORE the refname rules,
+# because a 7-hex string is a perfectly valid refname and would otherwise be
+# accepted and then fail with a message that reads like a typo'd branch.
+_SHORT_SHA_RE = re.compile(r"^[0-9a-f]{7,39}$", re.IGNORECASE)
+
+# The full SHA shape, accepted outright.
+_REV_FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
+
+# Refname forms git itself rejects (see git-check-ref-format), plus the
+# characters that carry meaning in a revision expression (`~`, `^`, `:`).
+_REFNAME_INVALID_SUBSTRINGS = ("..", "~", "^", ":", "?", "*", "[", "\\")
+
+
+def classify_rev_argument(arg: str) -> RevArgument:
+    """Classify a `contig reproduce --rev` argument as accepted or refused.
+
+    Pure and deterministic: no filesystem, subprocess, or network access.
+    Decision order (each rule only applies if none above it matched):
+
+    1. A leading "-" is refused before anything else, unconditionally. The
+       rev is passed to `git fetch`, so an argument like "--upload-pack=..."
+       reaching git as an option -- rather than as the ref positional -- is a
+       remote-code-execution shape. Checking this first means no other shape,
+       not even an otherwise-valid SHA, can be crafted to bypass it.
+    2. Empty / whitespace-only is refused.
+    3. Any whitespace or control character anywhere is refused.
+    4. A full 40-hex SHA is accepted outright (it is not a valid refname by
+       the rules below, but it is the single most important input: it is what
+       `source_commit` contains).
+    5. A 7-to-39-hex abbreviated SHA is refused, naming the full form.
+    6. A refname-invalid form is refused.
+    7. Anything else is accepted verbatim and unnormalized -- it becomes part
+       of a provenance record.
+    """
+    if arg.startswith("-"):
+        return RevArgument.refuse(
+            f"{arg!r} looks like a command-line option, not a revision; "
+            "pass a commit SHA, tag, or branch"
+        )
+
+    if not arg.strip():
+        return RevArgument.refuse("--rev must not be empty")
+
+    if any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in arg):
+        return RevArgument.refuse(
+            f"{arg!r} contains whitespace or a control character; "
+            "pass a commit SHA, tag, or branch"
+        )
+
+    if _REV_FULL_SHA_RE.match(arg):
+        return RevArgument.accept(arg)
+
+    if _SHORT_SHA_RE.match(arg):
+        return RevArgument.refuse(
+            f"{arg!r} looks like an abbreviated commit SHA; git cannot fetch "
+            "one. Pass the full 40-character SHA (or a tag or branch)"
+        )
+
+    if (
+        any(bad in arg for bad in _REFNAME_INVALID_SUBSTRINGS)
+        or arg.startswith(("/", "."))
+        or arg.endswith(("/", "."))
+        or arg.endswith(".lock")
+    ):
+        return RevArgument.refuse(
+            f"{arg!r} is not a valid git revision name; "
+            "pass a commit SHA, tag, or branch"
+        )
+
+    return RevArgument.accept(arg)
+
+
+@dataclass(frozen=True)
 class FetchResult:
     """The result of `fetch_repo`: a clone + resolved commit, or a refusal.
 
@@ -191,8 +301,28 @@ class FetchResult:
 _FULL_SHA_RE = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
 
 
-def fetch_repo(url: str, dest: Path, *, fetcher: Fetcher) -> FetchResult:
+# The shape git uses when a remote refuses to serve a revision by name.
+# Observed against real GitHub: this fires BOTH when the commit does not exist
+# and when the server refuses `want <sha>` (no
+# uploadpack.allowReachableSHA1InWant) -- git does not distinguish them, so
+# neither does the message. Matched as a case-insensitive substring (not a
+# regex) so an unrelated fetch failure is never mislabelled.
+_NOT_OUR_REF_MARKERS = ("not our ref", "upload-pack")
+
+
+def fetch_repo(
+    url: str, dest: Path, *, fetcher: Fetcher, rev: str | None = None
+) -> FetchResult:
     """Clone `url` into `dest`, resolve HEAD, and validate the pin.
+
+    With `rev` set, a targeted fetch of that revision replaces the shallow
+    clone: `git init` / `remote add` / `fetch --depth 1 <rev>` / `checkout
+    --detach FETCH_HEAD`, all run with `dest` as cwd. `git clone --depth 1`
+    cannot check out an arbitrary commit, and `--branch <ref>` accepts only a
+    tag or branch -- while a raw SHA is the input that matters most, since it
+    is what `source_commit` contains.
+
+    `rev=None` keeps the clone path byte-identical to what shipped in slice 6.
 
     Sequence: refuse a non-empty `dest` outright (something else owns that
     path); wipe/recreate `dest` as fresh scratch (mirrors the run-scoped
@@ -240,12 +370,47 @@ def fetch_repo(url: str, dest: Path, *, fetcher: Fetcher) -> FetchResult:
     def _cleanup() -> None:
         shutil.rmtree(dest.parent if parent_created_here else dest, ignore_errors=True)
 
-    # dest does not exist as a git repo yet -- the parent is the sensible cwd
-    # for the clone command (dest itself is just the clone's target argument).
-    clone_code, clone_output = fetcher(_git_clone_argv(url, dest), dest.parent)
-    if clone_code != 0:
-        _cleanup()
-        return FetchResult.refuse(f"git clone failed: {clone_output.strip()}")
+    if rev is None:
+        # dest does not exist as a git repo yet -- the parent is the sensible cwd
+        # for the clone command (dest itself is just the clone's target argument).
+        clone_code, clone_output = fetcher(_git_clone_argv(url, dest), dest.parent)
+        if clone_code != 0:
+            _cleanup()
+            return FetchResult.refuse(f"git clone failed: {clone_output.strip()}")
+    else:
+        # Every step runs INSIDE dest: `git init` makes it a repo, and the
+        # remaining steps operate on that repo. Each failure refuses, cleans
+        # up, and surfaces git's own output -- git's stderr is the only useful
+        # diagnostic, and default_fetcher merges it into the returned text.
+        steps = (
+            ("git init", _git_init_argv()),
+            ("git remote add", _git_remote_add_argv(url)),
+            ("git fetch", _git_fetch_argv(rev)),
+            ("git checkout", _git_checkout_argv()),
+        )
+        for label, argv in steps:
+            code, output = fetcher(argv, dest)
+            if code == 0:
+                continue
+            _cleanup()
+            reason = f"{label} failed: {output.strip()}"
+            if label == "git fetch" and any(
+                marker in output.lower() for marker in _NOT_OUR_REF_MARKERS
+            ):
+                # The remote accepted the connection but refused to serve this
+                # revision by name -- overwhelmingly because it does not enable
+                # uploadpack.allowReachableSHA1InWant. Say so, and say what
+                # works instead. Deliberately NOT a silent fallback to a full
+                # clone: that can pull gigabytes on exactly the large published
+                # repos this targets.
+                reason += (
+                    "\nThe remote refused to serve that revision by name. Either "
+                    "it does not exist (check the SHA), or the remote does not "
+                    "allow fetching a bare commit "
+                    "(uploadpack.allowReachableSHA1InWant) -- in which case pass "
+                    "a tag or branch to --rev instead."
+                )
+            return FetchResult.refuse(reason)
 
     # Resolve HEAD from inside the checkout.
     rev_code, rev_output = fetcher(_git_rev_parse_argv(), dest)
@@ -259,6 +424,23 @@ def fetch_repo(url: str, dest: Path, *, fetcher: Fetcher) -> FetchResult:
         return FetchResult.refuse(
             "git rev-parse HEAD did not return a single 40-character hex commit "
             f"SHA (refusing to record an unvalidated pin): {rev_output!r}"
+        )
+
+    # Normalized only on the --rev path: R1 promises the no-rev path stays
+    # byte-identical to slice 6, which recorded rev-parse's output as-is.
+    if rev is not None:
+        commit = commit.lower()
+
+    # When the caller named a full SHA, the checkout must actually be at it.
+    # A pin that isn't what was asked for is worse than no pin -- the whole
+    # point of --rev is that the recorded commit is the requested one. A tag
+    # or branch has nothing to compare against: whatever resolved is the
+    # answer.
+    if rev is not None and _REV_FULL_SHA_RE.match(rev) and commit != rev.lower():
+        _cleanup()
+        return FetchResult.refuse(
+            f"requested revision {rev} but the checkout resolved to {commit}; "
+            "refusing to record a pin that is not what was asked for"
         )
 
     return FetchResult.ok(dest, commit)

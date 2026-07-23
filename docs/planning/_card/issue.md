@@ -1,61 +1,70 @@
-# Card: feat reproduce-remote-intake (C8, slice 6)
+# Card: feat reproduce-rev-pin (C8, slice 7)
 
-**Type:** feat · **Owner:** aliz · **Branch:** `feat/reproduce-remote-intake/aliz`
+**Type:** feat · **Owner:** aliz · **Branch:** `feat/reproduce-rev-pin/aliz`
 
 No GitHub issue — this unit of work came from `/contig-next` (cn), 2026-07-23. The
 recommendation below is the source brief.
 
 ## Brief
 
-C8 slice 6: teach `contig reproduce` to take a **remote git/HTTPS repo URL** as its `repo`
-argument (today `cli.py:715` is local-path-only: `repo: str = "Path to the local repo to
-reproduce"`), fetching it into a run-scoped directory, recording the resolved **commit SHA**
-on the `ReproduceRecord`/bundle so a remote reproduction is itself re-runnable, then handing
-the working tree to the unchanged existing engine — locators, freshness guard,
-`--allow-install`, signing, and `--fail-on-diverged` all reused, not forked.
+Add `--rev <ref>` to `contig reproduce` so the recorded `source_commit` pin from C8 slice 6
+becomes **replayable**, not just auditable. Today nothing in the product consumes
+`source_commit` (`CHANGELOG.md:114` — "the pin is auditable, not yet replayable… only a human
+can act on it (`git checkout <sha>`)").
 
-Fetching must sit behind an **injectable seam** (mirroring `runner.Installer` /
-`runner.IndexBuilder`) so CI stays network-free and tests use a scripted fetcher over on-disk
-fixtures; a local path must keep behaving byte-identically.
+`--rev` takes a full SHA, tag, or branch; is only legal alongside an `https://` URL +
+`--allow-fetch`; is validated/refused **before anything is written** (the same
+no-bundle-no-litter contract as slice 6); and the resulting `source_commit` must equal the
+requested revision when a full SHA was given.
 
-**Caveats to design around up front:**
+## Key design risk (resolve first in the dig)
 
-1. This makes Contig fetch code it then executes. Gate the remote path behind an explicit
-   opt-in flag in the `--allow-install` spirit, and contain the checkout inside the runs dir.
-2. **Scope DOI resolution out of this slice** — a DOI→repo mapping is heuristic (landing page,
-   sometimes Zenodo/DataCite `codeRepository`), so either defer it or make an unresolvable DOI
-   an honest pre-run refusal that writes nothing, never a guessed URL.
+`--depth 1` cannot check out an arbitrary SHA. The fetch shape must change — `git init` +
+`git fetch --depth 1 origin <rev>` + `git checkout FETCH_HEAD` — and that path depends on the
+remote enabling `uploadpack.allowReachableSHA1InWant`. GitHub enables it; many self-hosted
+remotes do not. **Decide explicitly** between a full-clone fallback and an honest refusal.
+Keep the existing leading-dash-refused-first argv safety.
 
-Every unresolved path (fetch fails, bad URL, unreachable host) is an honest
-exit-non-zero-nothing-written or UNVERIFIED, never a false REPRODUCED.
+## Verification caveat
+
+CI has no network (the `Fetcher` is injected; `default_fetcher` is asserted on for argv shape
+only), so slice 6's wiring-vs-invocation gap applies here too — slice 6 shipped a real bug a
+green suite missed (the relative-`--runs-dir` clone failure, `CHANGELOG.md:105`). Plan a
+**manual real-clone smoke test** against a public repo, including the still-pending slice-6
+one, before calling this done.
 
 ## Why this was picked (from the `cn` ranking)
 
-- **It is the missing half of C8.** Six slices shipped the *binding* side (JSON `path`,
-  TSV/CSV cell, stdout/log regex, notebook cell, env resurrection, freshness guard across all
-  surfaces — `docs/technical/CAPABILITY_ROADMAP.md:1047-1335`, CHANGELOG v0.40.0→v0.46.0). The
-  *intake* side never moved. Every C8 slice's deferral list carries "remote `<doi|url>`"
-  (`CAPABILITY_ROADMAP.md:1073, 1093, 1159, 1213, 1252`), and the capability's own build
-  surface names `contig reproduce <repo|doi>` as the shipping surface (`:1372`).
-- **It unblocks two things gated on real repos, not on code.** The slice-4 `occurrence`/`group`
-  selectors are explicitly "gated on a counted post-merge experiment over 5 real repos"
-  (`:1211`), and C8's corpus stream into C6 ("every reproduction attempt is a labeled corpus
-  case", `:1379`) needs actual published-repo attempts.
-- **It is the acquisition channel the roadmap already banked on.** "I ran 50 published papers'
-  code — here is how many reproduced" (`:1353-1355`) is a batch over URLs, not over hand-cloned
-  directories. Layer-2 throughout: fetch, run, self-heal, verify — no workflow authoring, no
-  clinical/wet-lab dependency.
+- **It closes the loop slice 6 left open.** Slice 6 records *which revision of which repo*
+  produced a verdict; `--rev` is what makes that record re-runnable — the difference between a
+  provenance string and a reproducibility guarantee.
+- **It is the named next deferral, not an invention.** `CAPABILITY_ROADMAP.md:1466` (C8 row)
+  and `CHANGELOG.md:123` both list "`--rev`/tag/branch selection" first in the still-deferred
+  set, with **no blocker attached** — unlike its neighbours (DOI resolution is out of scope by
+  design; figure/plot claims need a plot-hash that would break the stdlib-only dep contract).
+- **Pure Layer-2 moat work**: reproducibility infrastructure on the user's compute,
+  stdlib-only, no new dependency, reusing the injected `Fetcher` seam.
 
-## Explicitly out of scope / not picked alongside
+## Explicitly out of scope / do not touch
 
-- Figure/plot claims — hard-blocked (no plot-hash; would break the stdlib-only dependency
-  contract, `CAPABILITY_ROADMAP.md:1337-1344`).
-- Paper-parsing to extract claims — a separate, larger slice.
-- C6 eval fold-in of reproduce outcomes — blocked on a labeling design (`:878-884`).
-- Dashboard card for `reproduce` — pure surface over shipped logic; deferred again.
+- **DOI resolution** — explicitly out of scope in C8; stays refused with a message that says so.
+- **The disclosed signature break** — pre-slice-6 *signed* reproduce bundles no longer verify
+  (the canonical payload gained two `null` keys). Disclosed and pinned by a test; do **not**
+  "fix" it in this slice.
+- Checkout pruning, hashing/signing the checkout tree, private-repo credentials, submodules.
+- Paper-parsing, figure/plot claims, dashboard card, C6 eval fold-in — all unchanged deferrals.
 
 ## Alternates the `cn` run considered and ranked below this
 
-- C8 dashboard card for `reproduce` (cheap, visible, low moat).
-- C5 RO-Crate export of reference identity/provenance (`:815`) — stdlib JSON-LD, deepens the
-  reproduce guarantee, but no demand-pull.
+- C6 fold-in of C1/C3 signals into the eval corpus (`CAPABILITY_ROADMAP.md:908`) — real
+  leverage, but its C7 sibling is blocked pending a labeling design, so scope is fuzzier.
+- Checkout pruning / hashing the fetched tree (`CHANGELOG.md:120`) — real hygiene gap, but
+  housekeeping rather than verdict-strength.
+- Explicitly **not** picked: bwa-mem2 build+redirect — `CAPABILITY_ROADMAP.md:255` records it
+  has **no live trigger** (sarek auto-builds the index; Contig exposes no flag to supply one).
+
+## Grounding files
+
+- `docs/technical/CAPABILITY_ROADMAP.md` — C8 section + sequencing-summary C8 row.
+- `CHANGELOG.md` §0.47.0 — slice 6 as shipped, its honest limits, and the deferral list.
+- `docs/planning/reproduce-remote-intake/` — slice 6 PRD + plan.
