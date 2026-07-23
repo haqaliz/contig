@@ -98,6 +98,10 @@ fetched, not what is attested.
   git rev-parse HEAD
   ```
 
+  The `--` terminator is **verified to be accepted** by both `git remote add` and `git fetch`
+  (exit 0, URL and ref parsed correctly), so the second-line-of-defence discipline that
+  `_git_clone_argv` established carries over to every step of the sequence.
+
   **Why targeted fetch and not `clone --depth 1 --branch <ref>`:** `--branch` accepts a tag or
   branch **only** and rejects a raw SHA — and a raw SHA is the single most important `--rev`
   input, since it is exactly what `source_commit` contains. Slice 6's RISK-2 named both options
@@ -212,10 +216,16 @@ fetched, not what is attested.
   the wrong directory, `CHANGELOG.md:105-113`: "a green suite proved the wiring, never the
   invocation"). **Mitigation:** the manual gate below is **mandatory**, not optional, and it
   carries slice 6's never-run checklist too.
-- **OPEN-1:** should `--rev` accept a short SHA (e.g. 7-hex)? Leaning **no** for this slice —
-  `git fetch` by abbreviated SHA is not reliably supported, and R4's equality check is defined
-  on the full form. A short SHA would be refused by R5's charset rules only accidentally, so
-  this needs an explicit refusal or an explicit acceptance in the plan.
+- ~~**OPEN-1**~~ **resolved into R5a — short SHAs are refused explicitly.** Verified by
+  experiment: `git fetch --depth 1 origin -- <7-hex>` fails with
+  `fatal: couldn't find remote ref 296569a` (exit 128). Git cannot fetch an abbreviated SHA at
+  all. R5's refname rules would **not** catch it (a 7-hex string is a perfectly valid refname),
+  so it would fall through to a confusing "couldn't find remote ref" that reads like a typo'd
+  branch. **R5a:** a `--rev` that is 7-to-39 hex characters is refused pre-run, naming the
+  cause — pass the **full 40-character** SHA. A genuine 7-hex *branch name* is vanishingly
+  unlikely and is the acceptable false positive. (A full 40-hex SHA passes
+  `git check-ref-format --allow-onelevel`, so R5's rules do not accidentally refuse the input
+  that matters most.)
 - **OPEN-2:** should a `--rev` that resolves to a commit **not** reachable from any branch
   (e.g. a gc-able dangling commit) be treated differently? Leaning no — `not our ref` already
   covers it as a refusal.
