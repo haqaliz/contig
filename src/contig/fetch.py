@@ -210,7 +210,16 @@ def fetch_repo(url: str, dest: Path, *, fetcher: Fetcher) -> FetchResult:
     directory (e.g. holding other run state this function knows nothing
     about), a failure here must not delete it out from under the caller.
     """
-    dest = Path(dest)
+    # Made absolute BEFORE anything is built from it. The clone runs with
+    # `dest.parent` as its cwd, so a RELATIVE dest would be resolved a second
+    # time against that cwd -- `runs/<id>/source` cloned from inside
+    # `runs/<id>/` lands in `runs/<id>/runs/<id>/source`, leaving the real
+    # dest an empty non-repo that `git rev-parse` then fails in. The CLI's
+    # default `--runs-dir runs` produces exactly that relative path, so this
+    # is the normal case, not an edge one. `.absolute()` (not `.resolve()`)
+    # deliberately: prepending the cwd is all that is needed, and resolving
+    # symlinks here would change the path the caller gets back.
+    dest = Path(dest).absolute()
 
     if dest.exists() and any(dest.iterdir()):
         return FetchResult.refuse(

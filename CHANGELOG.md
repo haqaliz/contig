@@ -87,11 +87,28 @@ All notable changes to Contig are recorded here. The format follows
     changed and this disclosure needs revisiting.
   - **Honest limit — no real git, no network, no real repo in CI.** The `Fetcher` seam is injected
     everywhere (mirroring `Executor`/`IndexBuilder`/`Installer`); the real `default_fetcher` is
-    asserted on for **argv shape only** and is never executed. The slice is therefore **reasoned
-    and unit-tested, not observed: no real clone has been performed.** The go/no-go is a
-    post-merge manual smoke test — clone one small real public repo, confirm the SHA is recorded,
-    and confirm a repo with committed outputs reports `UNVERIFIED` — and **it has not been run
-    yet.**
+    asserted on for **argv shape only** and is never executed — so the *automated* evidence is
+    reasoned and unit-tested, not observed.
+  - **The manual smoke test WAS run, pre-merge, and it caught a real bug.** Against
+    `octocat/Hello-World` the clone succeeded, the recorded `source_commit`
+    (`7fd1a60b01f91b314f59955a4e4d4e80d8edf11d`) was confirmed equal to the repository's actual
+    upstream `HEAD`, and the claim reproduced. Against `octocat/Spoon-Knife` a claim bound to a
+    **committed** `styles.css` value that would have matched **exactly** (`384`) reported
+    `UNVERIFIED` — *"locator file 'styles.css' was not rewritten by this run (mtime predates run
+    start)"* — rather than a false `REPRODUCED`. That is the slice's central promise, now
+    **observed** rather than only reasoned.
+    - **The bug it caught:** `fetch_repo` passed the destination to `git clone` **relative**
+      while running with `dest.parent` as cwd, so git resolved it a second time —
+      `runs/<id>/source` became `runs/<id>/runs/<id>/source`, leaving the real destination an
+      empty non-repo that `git rev-parse` then failed in with *"not a git repository"*. The
+      CLI's default `--runs-dir runs` produces exactly that relative shape, so **every real
+      remote run would have failed**; it was invisible to the suite because every fixture test
+      passes an already-absolute `tmp_path`. `fetch_repo` now makes the destination absolute
+      before building anything from it (`.absolute()`, not `.resolve()` — prepending the cwd is
+      all that is needed, and resolving symlinks would change the path the caller gets back),
+      pinned by a regression test that fails against the pre-fix code. **This is the argument
+      for the manual gate, not against it:** a green suite proved the wiring, never the
+      invocation.
   - **Honest limit — the pin is auditable, not yet replayable.** `--rev` is deferred, so **nothing
     in the product consumes `source_commit`**: only a human can act on it (`git checkout <sha>`).
     The clone is `--depth 1`, which is much faster on the large repos this targets and still

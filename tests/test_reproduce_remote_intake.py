@@ -677,3 +677,33 @@ def test_locator_containment_is_evaluated_against_the_checkout_not_the_url(
     assert "escapes the repo" not in result.output
     (claim,) = _read_record(runs_dir)["claim_results"]
     assert claim["status"] == "reproduced"
+
+
+def test_fetch_repo_passes_an_absolute_destination_even_when_given_a_relative_one(
+    tmp_path, monkeypatch
+):
+    """A relative dest must reach git as an absolute path.
+
+    The clone runs with `dest.parent` as its cwd, so a relative dest would be
+    resolved a SECOND time against that cwd: `runs/<id>/source` cloned from
+    inside `runs/<id>/` lands in `runs/<id>/runs/<id>/source`, leaving the real
+    dest an empty non-repo that `git rev-parse` fails in. The CLI's default
+    `--runs-dir runs` produces exactly this relative shape, so this is the
+    normal path. Caught by a real clone, not by the fixtures -- every other
+    fetch_repo test passes an already-absolute `tmp_path`.
+    """
+    monkeypatch.chdir(tmp_path)
+    relative_dest = Path("runs") / "run-1" / "source"
+    fetcher = _ScriptedFetcher(script=[(0, "Cloning into '...'\n"), (0, _A_SHA + "\n")])
+
+    result = fetch_repo("https://github.com/lab/paper-code", relative_dest, fetcher=fetcher)
+
+    assert result.refusal is None
+    clone_argv, clone_cwd = fetcher.calls[0]
+    assert Path(clone_argv[-1]).is_absolute(), (
+        f"git would resolve {clone_argv[-1]!r} against cwd {clone_cwd} a second time"
+    )
+    # And the checkout really is where the caller will look for it.
+    assert (tmp_path / "runs" / "run-1" / "source").is_dir()
+    _, rev_cwd = fetcher.calls[1]
+    assert Path(rev_cwd).is_absolute()
