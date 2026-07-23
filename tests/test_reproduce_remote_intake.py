@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from contig.fetch import RepoArgument, classify_repo_argument
+from contig.fetch import FetchResult, RepoArgument, classify_repo_argument, fetch_repo
 from contig.runner import _git_clone_argv, _git_rev_parse_argv, default_fetcher
 
 
@@ -230,3 +230,172 @@ def test_default_fetcher_converts_missing_binary_to_nonzero_not_exception(tmp_pa
     code, output = default_fetcher(["contig-nonexistent-git-binary-xyz"], tmp_path)
     assert code != 0
     assert "contig-nonexistent-git-binary-xyz" in output
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: fetch_repo -- clone -> resolve commit -> validate -> clean up.
+#
+# A scripted Fetcher stands in for the injected seam (mirrors _ScriptedInstaller
+# in tests/test_reproduce_env_resurrection.py): it records every (argv, cwd)
+# call and returns canned (exit_code, output) tuples in call order. A
+# successful clone (call 1) also creates the destination directory named in
+# the clone argv and drops a marker file into it -- the filesystem side-effect
+# a real `git clone` would leave -- so assertions can check the checkout tree,
+# not just the fetcher's own bookkeeping. No real git or network is touched
+# anywhere in this section.
+# ---------------------------------------------------------------------------
+
+
+class _ScriptedFetcher:
+    def __init__(self, script):
+        self.script = list(script)
+        self.calls: list[tuple[list[str], Path]] = []
+
+    def __call__(self, argv: list[str], cwd: Path) -> tuple[int, str]:
+        self.calls.append((list(argv), Path(cwd)))
+        code, output = self.script[len(self.calls) - 1]
+        if len(self.calls) == 1 and code == 0:
+            # Simulate `git clone`'s filesystem effect: the destination is the
+            # last argv element (see _git_clone_argv).
+            dest = Path(argv[-1])
+            dest.mkdir(parents=True, exist_ok=True)
+            (dest / "README.md").write_text("cloned fixture content\n")
+        return code, output
+
+
+_A_SHA = "a" * 40
+
+
+def test_fetch_repo_happy_path_returns_path_and_exact_sha(tmp_path):
+    dest = tmp_path / "rp_1" / "source"
+    fetcher = _ScriptedFetcher(script=[(0, "Cloning into '...'\n"), (0, _A_SHA + "\n")])
+
+    result = fetch_repo("https://github.com/lab/paper-code", dest, fetcher=fetcher)
+
+    assert result.refusal is None
+    assert result.path == dest
+    assert result.commit == _A_SHA
+    assert (dest / "README.md").exists()
+
+    assert len(fetcher.calls) == 2
+    clone_argv, clone_cwd = fetcher.calls[0]
+    assert clone_argv == _git_clone_argv("https://github.com/lab/paper-code", dest)
+    # dest does not exist as a git repo yet -- the parent is the sensible cwd.
+    assert clone_cwd == dest.parent
+    rev_argv, rev_cwd = fetcher.calls[1]
+    assert rev_argv == _git_rev_parse_argv()
+    # rev-parse must run INSIDE the checkout.
+    assert rev_cwd == dest
+
+
+def test_fetch_repo_refuses_non_empty_destination_and_leaves_it_untouched(tmp_path):
+    dest = tmp_path / "rp_1" / "source"
+    dest.mkdir(parents=True)
+    (dest / "existing.txt").write_text("do not touch")
+    fetcher = _ScriptedFetcher(script=[])
+
+    result = fetch_repo("https://github.com/lab/paper-code", dest, fetcher=fetcher)
+
+    assert result.refusal is not None
+    assert result.path is None
+    assert result.commit is None
+    assert (dest / "existing.txt").read_text() == "do not touch"
+    assert fetcher.calls == []
+
+
+def test_fetch_repo_clone_failure_refuses_naming_output_and_leaves_no_directory(tmp_path):
+    dest = tmp_path / "rp_1" / "source"
+    fetcher = _ScriptedFetcher(script=[(128, "fatal: repository 'x' not found")])
+
+    result = fetch_repo("https://github.com/lab/paper-code", dest, fetcher=fetcher)
+
+    assert result.refusal is not None
+    assert "fatal: repository 'x' not found" in result.refusal
+    assert not dest.exists()
+    assert not dest.parent.exists()
+
+
+def test_fetch_repo_rev_parse_failure_refuses_and_leaves_no_directory(tmp_path):
+    dest = tmp_path / "rp_1" / "source"
+    fetcher = _ScriptedFetcher(
+        script=[(0, "Cloning into '...'\n"), (128, "fatal: not a git repository")]
+    )
+
+    result = fetch_repo("https://github.com/lab/paper-code", dest, fetcher=fetcher)
+
+    assert result.refusal is not None
+    assert "fatal: not a git repository" in result.refusal
+    assert not dest.exists()
+    assert not dest.parent.exists()
+
+
+@pytest.mark.parametrize(
+    "rev_output",
+    [
+        "",
+        "a1b2c3d",  # abbreviated (7 hex chars)
+        "g" + "a" * 39,  # 40 chars but one is non-hex
+    ],
+    ids=["empty", "abbreviated", "non-hex-char"],
+)
+def test_fetch_repo_refuses_non_40_hex_rev_parse_output(tmp_path, rev_output):
+    dest = tmp_path / "rp_1" / "source"
+    fetcher = _ScriptedFetcher(script=[(0, "Cloning into '...'\n"), (0, rev_output)])
+
+    result = fetch_repo("https://github.com/lab/paper-code", dest, fetcher=fetcher)
+
+    assert result.refusal is not None
+    assert result.commit is None
+    assert not dest.exists()
+    assert not dest.parent.exists()
+
+
+def test_fetch_repo_strips_trailing_newline_from_an_otherwise_valid_sha(tmp_path):
+    dest = tmp_path / "rp_1" / "source"
+    fetcher = _ScriptedFetcher(script=[(0, "Cloning into '...'\n"), (0, _A_SHA + "\n")])
+
+    result = fetch_repo("https://github.com/lab/paper-code", dest, fetcher=fetcher)
+
+    assert result.refusal is None
+    assert result.commit == _A_SHA
+
+
+def test_fetch_repo_refuses_multiline_rev_parse_output_even_with_a_valid_sha_present(tmp_path):
+    # Sharp edge: default_fetcher merges stderr into stdout, so a warning line
+    # can ride alongside a genuinely valid SHA. Scavenging a SHA-looking token
+    # out of multi-line output risks recording a commit that is not actually
+    # HEAD -- a false pin is worse than a refusal -- so the WHOLE stripped
+    # output must be exactly one 40-hex SHA, or this refuses.
+    dest = tmp_path / "rp_1" / "source"
+    rev_output = f"warning: redirecting to canonical URL\n{_A_SHA}\n"
+    fetcher = _ScriptedFetcher(script=[(0, "Cloning into '...'\n"), (0, rev_output)])
+
+    result = fetch_repo("https://github.com/lab/paper-code", dest, fetcher=fetcher)
+
+    assert result.refusal is not None
+    assert result.commit is None
+    assert not dest.exists()
+    assert not dest.parent.exists()
+
+
+def test_fetch_repo_cleanup_preserves_a_parent_the_caller_already_owned(tmp_path):
+    # When <reproduce_id>/ already existed before this call (the caller put
+    # other state there), a failure must remove only the source/ subtree this
+    # function itself created -- never a parent it does not own.
+    parent = tmp_path / "rp_1"
+    parent.mkdir()
+    (parent / "manifest.json").write_text("{}")
+    dest = parent / "source"
+    fetcher = _ScriptedFetcher(script=[(128, "fatal: repository 'x' not found")])
+
+    result = fetch_repo("https://github.com/lab/paper-code", dest, fetcher=fetcher)
+
+    assert result.refusal is not None
+    assert not dest.exists()
+    assert parent.exists()
+    assert (parent / "manifest.json").read_text() == "{}"
+
+
+def test_fetch_result_refusal_cannot_be_constructed_with_a_path_or_commit():
+    with pytest.raises(ValueError):
+        FetchResult(path=Path("/tmp/x"), commit=None, refusal="not allowed")

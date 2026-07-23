@@ -10,8 +10,12 @@ argument belongs in.
 from __future__ import annotations
 
 import re
+import shutil
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
+
+from contig.runner import Fetcher, _git_clone_argv, _git_rev_parse_argv
 
 
 @dataclass(frozen=True)
@@ -141,3 +145,111 @@ def classify_repo_argument(arg: str) -> RepoArgument:
         )
 
     return RepoArgument.local()
+
+
+@dataclass(frozen=True)
+class FetchResult:
+    """The result of `fetch_repo`: a clone + resolved commit, or a refusal.
+
+    Exactly one of (`path`/`commit` set) / (`refusal` set) is populated,
+    enforced in `__post_init__` for the same reason as `RepoArgument`: a
+    refused fetch must never be misread as a successful one by code that only
+    checks `path`. Construct via `FetchResult.ok(path, commit)` or
+    `.refuse(reason)` -- the bare constructor is kept public only because
+    `frozen=True` dataclasses need one, and because tests exercise the
+    invariant directly.
+    """
+
+    path: Path | None
+    commit: str | None
+    refusal: str | None
+
+    def __post_init__(self) -> None:
+        if self.refusal is not None:
+            if self.path is not None or self.commit is not None:
+                raise ValueError("a refused FetchResult must not also carry path/commit")
+            return
+        if self.path is None or self.commit is None:
+            raise ValueError("FetchResult requires either (path and commit) or refusal")
+
+    @classmethod
+    def ok(cls, path: Path, commit: str) -> "FetchResult":
+        return cls(path=path, commit=commit, refusal=None)
+
+    @classmethod
+    def refuse(cls, reason: str) -> "FetchResult":
+        return cls(path=None, commit=None, refusal=reason)
+
+
+# The full-SHA shape `git rev-parse HEAD` is expected to produce. Matched with
+# fullmatch against the STRIPPED output -- not searched for as a substring --
+# so a multi-line output (default_fetcher merges stderr into stdout, so a
+# warning line can ride alongside a real SHA) can never be scavenged for a
+# SHA-looking token. An unvalidated or fabricated pin is worse than no pin at
+# all, since the whole point of this slice is that the recorded commit is
+# trustworthy.
+_FULL_SHA_RE = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
+
+
+def fetch_repo(url: str, dest: Path, *, fetcher: Fetcher) -> FetchResult:
+    """Clone `url` into `dest`, resolve HEAD, and validate the pin.
+
+    Sequence: refuse a non-empty `dest` outright (something else owns that
+    path); wipe/recreate `dest` as fresh scratch (mirrors the run-scoped
+    scratch convention in self_heal.py: STAR-index rebuild and reference
+    recompress both `rmtree(ignore_errors=True)` then `mkdir(parents=True,
+    exist_ok=True)` before writing into a directory they own); clone; resolve
+    the commit; validate it is a bare 40-hex SHA. Any failure after the
+    directory is created is cleaned up so a refused run leaves no litter --
+    a half-cloned or empty directory would look like a real run bundle to
+    anything scanning the runs directory.
+
+    Cleanup scope: `dest` is what this function is asked to create and own.
+    Its parent (typically `<runs_dir>/<reproduce_id>/`) is only removed if
+    THIS call is the one that created it -- if the caller already had that
+    directory (e.g. holding other run state this function knows nothing
+    about), a failure here must not delete it out from under the caller.
+    """
+    dest = Path(dest)
+
+    if dest.exists() and any(dest.iterdir()):
+        return FetchResult.refuse(
+            f"destination {dest} already exists and is not empty; "
+            "refusing to clone into it"
+        )
+
+    # This call owns dest.parent's creation only if it doesn't exist yet --
+    # remembered now, before mkdir(parents=True) below can create it, so
+    # cleanup on failure knows whether it may remove the parent too.
+    parent_created_here = not dest.parent.exists()
+
+    # Fresh scratch dir: wipe any residue (e.g. from a stale prior attempt) so
+    # the clone below writes into a directory only this call has touched.
+    shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True, exist_ok=True)
+
+    def _cleanup() -> None:
+        shutil.rmtree(dest.parent if parent_created_here else dest, ignore_errors=True)
+
+    # dest does not exist as a git repo yet -- the parent is the sensible cwd
+    # for the clone command (dest itself is just the clone's target argument).
+    clone_code, clone_output = fetcher(_git_clone_argv(url, dest), dest.parent)
+    if clone_code != 0:
+        _cleanup()
+        return FetchResult.refuse(f"git clone failed: {clone_output.strip()}")
+
+    # Resolve HEAD from inside the checkout.
+    rev_code, rev_output = fetcher(_git_rev_parse_argv(), dest)
+    if rev_code != 0:
+        _cleanup()
+        return FetchResult.refuse(f"git rev-parse HEAD failed: {rev_output.strip()}")
+
+    commit = rev_output.strip()
+    if not _FULL_SHA_RE.fullmatch(commit):
+        _cleanup()
+        return FetchResult.refuse(
+            "git rev-parse HEAD did not return a single 40-character hex commit "
+            f"SHA (refusing to record an unvalidated pin): {rev_output!r}"
+        )
+
+    return FetchResult.ok(dest, commit)
