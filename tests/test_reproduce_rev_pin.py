@@ -206,3 +206,246 @@ def test_remote_add_and_fetch_place_their_argument_after_the_dashdash():
     fetch_argv = _git_fetch_argv("main")
     assert fetch_argv[-2] == "--"
     assert fetch_argv[-1] == "main"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: fetch_repo's targeted-fetch branch.
+#
+# A scripted Fetcher stands in for the injected seam (mirrors _ScriptedFetcher
+# in test_reproduce_remote_intake.py:254). The difference from the clone path:
+# `git init` (call 1) creates nothing new -- fetch_repo already created dest --
+# and it is the CHECKOUT (call 4) that materialises the worktree files.
+# ---------------------------------------------------------------------------
+
+_A_SHA = "a" * 40
+_B_SHA = "b" * 40
+_URL = "https://github.com/lab/paper-code"
+
+
+class _ScriptedRevFetcher:
+    """Records every (argv, cwd) and returns canned (exit_code, output) in order."""
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.calls: list[tuple[list[str], object]] = []
+
+    def __call__(self, argv, cwd):
+        from pathlib import Path
+
+        self.calls.append((list(argv), Path(cwd)))
+        code, output = self.script[len(self.calls) - 1]
+        # The checkout is what puts files in the worktree.
+        if argv[:2] == ["git", "checkout"] and code == 0:
+            (Path(cwd) / "README.md").write_text("checked-out fixture content\n")
+        return code, output
+
+
+def _ok_script(sha=_A_SHA):
+    """init, remote add, fetch, checkout, rev-parse -- all succeeding."""
+    return [(0, ""), (0, ""), (0, ""), (0, ""), (0, sha + "\n")]
+
+
+@pytest.mark.parametrize("rev", ["a" * 40, "v2.1", "main"])
+def test_targeted_fetch_happy_path_returns_path_and_sha(tmp_path, rev):
+    from contig.fetch import fetch_repo
+    from contig.runner import (
+        _git_checkout_argv,
+        _git_fetch_argv,
+        _git_init_argv,
+        _git_remote_add_argv,
+        _git_rev_parse_argv,
+    )
+
+    dest = tmp_path / "rp_1" / "source"
+    # A tag/branch resolves to whatever the remote says; a full SHA must match
+    # itself (asserted separately below).
+    sha = rev if len(rev) == 40 else _A_SHA
+    fetcher = _ScriptedRevFetcher(_ok_script(sha))
+
+    result = fetch_repo(_URL, dest, fetcher=fetcher, rev=rev)
+
+    assert result.refusal is None
+    assert result.path == dest
+    assert result.commit == sha
+    assert (dest / "README.md").exists()
+
+    # Exactly five calls, in order, EVERY ONE with dest as cwd -- unlike the
+    # clone path, which runs in dest.parent. `git init` makes dest a repo, so
+    # every later step runs inside it.
+    assert [argv for argv, _ in fetcher.calls] == [
+        _git_init_argv(),
+        _git_remote_add_argv(_URL),
+        _git_fetch_argv(rev),
+        _git_checkout_argv(),
+        _git_rev_parse_argv(),
+    ]
+    assert all(cwd == dest for _, cwd in fetcher.calls)
+
+
+def test_no_rev_keeps_the_slice6_clone_path_byte_identical(tmp_path):
+    """The back-compat guarantee: rev=None must behave exactly as slice 6 did."""
+    from contig.fetch import fetch_repo
+    from contig.runner import _git_clone_argv, _git_rev_parse_argv
+
+    dest = tmp_path / "rp_1" / "source"
+
+    class _CloneFetcher:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, argv, cwd):
+            from pathlib import Path
+
+            self.calls.append((list(argv), Path(cwd)))
+            if len(self.calls) == 1:
+                Path(argv[-1]).mkdir(parents=True, exist_ok=True)
+                return 0, "Cloning...\n"
+            return 0, _A_SHA + "\n"
+
+    fetcher = _CloneFetcher()
+    result = fetch_repo(_URL, dest, fetcher=fetcher)
+
+    assert result.commit == _A_SHA
+    assert [argv for argv, _ in fetcher.calls] == [
+        _git_clone_argv(_URL, dest),
+        _git_rev_parse_argv(),
+    ]
+    assert fetcher.calls[0][1] == dest.parent
+
+
+@pytest.mark.parametrize("failing_step", [0, 1, 2, 3, 4])
+def test_each_git_step_failing_refuses_and_leaves_no_directory(tmp_path, failing_step):
+    from contig.fetch import fetch_repo
+
+    dest = tmp_path / "rp_1" / "source"
+    script = _ok_script()
+    script[failing_step] = (128, "fatal: something went wrong\n")
+    fetcher = _ScriptedRevFetcher(script)
+
+    result = fetch_repo(_URL, dest, fetcher=fetcher, rev="v2.1")
+
+    assert result.path is None
+    assert result.commit is None
+    assert result.refusal is not None
+    assert "something went wrong" in result.refusal
+    # This call created dest.parent, so cleanup removes it entirely -- no
+    # half-fetched directory left looking like a real run bundle.
+    assert not dest.exists()
+    assert not dest.parent.exists()
+
+
+def test_failed_fetch_does_not_remove_a_parent_it_did_not_create(tmp_path):
+    from contig.fetch import fetch_repo
+
+    parent = tmp_path / "rp_1"
+    parent.mkdir(parents=True)
+    (parent / "other_run_state.json").write_text("{}")
+    dest = parent / "source"
+
+    script = _ok_script()
+    script[2] = (128, "fatal: bad ref\n")
+    result = fetch_repo(_URL, dest, fetcher=_ScriptedRevFetcher(script), rev="v2.1")
+
+    assert result.refusal is not None
+    assert not dest.exists()
+    # The caller owned this directory; a failed fetch must not delete it.
+    assert (parent / "other_run_state.json").exists()
+
+
+def test_requested_full_sha_must_equal_the_resolved_sha(tmp_path):
+    """R4: never record a pin that isn't what the caller asked for."""
+    from contig.fetch import fetch_repo
+
+    dest = tmp_path / "rp_1" / "source"
+    # Asked for _A_SHA; the checkout resolved to _B_SHA.
+    fetcher = _ScriptedRevFetcher(_ok_script(_B_SHA))
+
+    result = fetch_repo(_URL, dest, fetcher=fetcher, rev=_A_SHA)
+
+    assert result.commit is None
+    assert result.refusal is not None
+    assert _A_SHA in result.refusal and _B_SHA in result.refusal
+    assert not dest.exists()
+
+
+def test_requested_sha_matching_case_insensitively_is_accepted_and_lowercased(tmp_path):
+    from contig.fetch import fetch_repo
+
+    dest = tmp_path / "rp_1" / "source"
+    fetcher = _ScriptedRevFetcher(_ok_script(_A_SHA.upper()))
+
+    result = fetch_repo(_URL, dest, fetcher=fetcher, rev=_A_SHA)
+
+    assert result.refusal is None
+    assert result.commit == _A_SHA  # recorded lowercase
+
+
+def test_a_tag_has_no_sha_to_compare_against_so_any_resolved_sha_is_kept(tmp_path):
+    from contig.fetch import fetch_repo
+
+    dest = tmp_path / "rp_1" / "source"
+    result = fetch_repo(
+        _URL, dest, fetcher=_ScriptedRevFetcher(_ok_script(_B_SHA)), rev="v2.1"
+    )
+
+    assert result.refusal is None
+    assert result.commit == _B_SHA
+
+
+def test_remote_refusing_fetch_by_commit_names_the_likely_cause(tmp_path):
+    """R6/D1: honest refusal, never a silent fallback to a full clone."""
+    from contig.fetch import fetch_repo
+
+    dest = tmp_path / "rp_1" / "source"
+    script = _ok_script()
+    script[2] = (128, f"fatal: git upload-pack: not our ref {_A_SHA}\n")
+
+    result = fetch_repo(_URL, dest, fetcher=_ScriptedRevFetcher(script), rev=_A_SHA)
+
+    assert result.refusal is not None
+    assert "allowReachableSHA1InWant" in result.refusal
+    # And it tells the user what to do instead.
+    assert "tag" in result.refusal.lower() or "branch" in result.refusal.lower()
+
+
+def test_an_ordinary_fetch_failure_does_not_claim_the_sha_cause(tmp_path):
+    from contig.fetch import fetch_repo
+
+    dest = tmp_path / "rp_1" / "source"
+    script = _ok_script()
+    script[2] = (128, "fatal: could not read Username for 'https://host'\n")
+
+    result = fetch_repo(_URL, dest, fetcher=_ScriptedRevFetcher(script), rev="v2.1")
+
+    assert result.refusal is not None
+    assert "allowReachableSHA1InWant" not in result.refusal
+
+
+def test_unvalidated_rev_parse_output_is_still_refused_on_the_rev_path(tmp_path):
+    from contig.fetch import fetch_repo
+
+    dest = tmp_path / "rp_1" / "source"
+    script = _ok_script()
+    script[4] = (0, "warning: something\n" + _A_SHA + "\n")
+
+    result = fetch_repo(_URL, dest, fetcher=_ScriptedRevFetcher(script), rev="v2.1")
+
+    # Multi-line output is refused outright, never scavenged for a SHA.
+    assert result.commit is None
+    assert result.refusal is not None
+    assert not dest.exists()
+
+
+def test_non_empty_destination_is_refused_before_any_git_runs(tmp_path):
+    from contig.fetch import fetch_repo
+
+    dest = tmp_path / "rp_1" / "source"
+    dest.mkdir(parents=True)
+    (dest / "existing.txt").write_text("do not touch")
+    fetcher = _ScriptedRevFetcher(_ok_script())
+
+    result = fetch_repo(_URL, dest, fetcher=fetcher, rev="v2.1")
+
+    assert result.refusal is not None
+    assert fetcher.calls == []
+    assert (dest / "existing.txt").read_text() == "do not touch"

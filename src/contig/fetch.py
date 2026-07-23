@@ -15,7 +15,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from contig.runner import Fetcher, _git_clone_argv, _git_rev_parse_argv
+from contig.runner import (
+    Fetcher,
+    _git_checkout_argv,
+    _git_clone_argv,
+    _git_fetch_argv,
+    _git_init_argv,
+    _git_remote_add_argv,
+    _git_rev_parse_argv,
+)
 
 
 @dataclass(frozen=True)
@@ -293,8 +301,26 @@ class FetchResult:
 _FULL_SHA_RE = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
 
 
-def fetch_repo(url: str, dest: Path, *, fetcher: Fetcher) -> FetchResult:
+# The shape git uses when a server refuses `want <sha>` -- i.e. it does not
+# enable uploadpack.allowReachableSHA1InWant. Matched as a case-insensitive
+# substring (not a regex) so an unrelated fetch failure is never mislabelled
+# with a cause it does not have.
+_NOT_OUR_REF_MARKERS = ("not our ref", "upload-pack")
+
+
+def fetch_repo(
+    url: str, dest: Path, *, fetcher: Fetcher, rev: str | None = None
+) -> FetchResult:
     """Clone `url` into `dest`, resolve HEAD, and validate the pin.
+
+    With `rev` set, a targeted fetch of that revision replaces the shallow
+    clone: `git init` / `remote add` / `fetch --depth 1 <rev>` / `checkout
+    --detach FETCH_HEAD`, all run with `dest` as cwd. `git clone --depth 1`
+    cannot check out an arbitrary commit, and `--branch <ref>` accepts only a
+    tag or branch -- while a raw SHA is the input that matters most, since it
+    is what `source_commit` contains.
+
+    `rev=None` keeps the clone path byte-identical to what shipped in slice 6.
 
     Sequence: refuse a non-empty `dest` outright (something else owns that
     path); wipe/recreate `dest` as fresh scratch (mirrors the run-scoped
@@ -342,12 +368,45 @@ def fetch_repo(url: str, dest: Path, *, fetcher: Fetcher) -> FetchResult:
     def _cleanup() -> None:
         shutil.rmtree(dest.parent if parent_created_here else dest, ignore_errors=True)
 
-    # dest does not exist as a git repo yet -- the parent is the sensible cwd
-    # for the clone command (dest itself is just the clone's target argument).
-    clone_code, clone_output = fetcher(_git_clone_argv(url, dest), dest.parent)
-    if clone_code != 0:
-        _cleanup()
-        return FetchResult.refuse(f"git clone failed: {clone_output.strip()}")
+    if rev is None:
+        # dest does not exist as a git repo yet -- the parent is the sensible cwd
+        # for the clone command (dest itself is just the clone's target argument).
+        clone_code, clone_output = fetcher(_git_clone_argv(url, dest), dest.parent)
+        if clone_code != 0:
+            _cleanup()
+            return FetchResult.refuse(f"git clone failed: {clone_output.strip()}")
+    else:
+        # Every step runs INSIDE dest: `git init` makes it a repo, and the
+        # remaining steps operate on that repo. Each failure refuses, cleans
+        # up, and surfaces git's own output -- git's stderr is the only useful
+        # diagnostic, and default_fetcher merges it into the returned text.
+        steps = (
+            ("git init", _git_init_argv()),
+            ("git remote add", _git_remote_add_argv(url)),
+            ("git fetch", _git_fetch_argv(rev)),
+            ("git checkout", _git_checkout_argv()),
+        )
+        for label, argv in steps:
+            code, output = fetcher(argv, dest)
+            if code == 0:
+                continue
+            _cleanup()
+            reason = f"{label} failed: {output.strip()}"
+            if label == "git fetch" and any(
+                marker in output.lower() for marker in _NOT_OUR_REF_MARKERS
+            ):
+                # The remote accepted the connection but refused to serve this
+                # revision by name -- overwhelmingly because it does not enable
+                # uploadpack.allowReachableSHA1InWant. Say so, and say what
+                # works instead. Deliberately NOT a silent fallback to a full
+                # clone: that can pull gigabytes on exactly the large published
+                # repos this targets.
+                reason += (
+                    "\nThe remote may not allow fetching a bare commit "
+                    "(uploadpack.allowReachableSHA1InWant). Pass a tag or "
+                    "branch to --rev instead."
+                )
+            return FetchResult.refuse(reason)
 
     # Resolve HEAD from inside the checkout.
     rev_code, rev_output = fetcher(_git_rev_parse_argv(), dest)
@@ -361,6 +420,23 @@ def fetch_repo(url: str, dest: Path, *, fetcher: Fetcher) -> FetchResult:
         return FetchResult.refuse(
             "git rev-parse HEAD did not return a single 40-character hex commit "
             f"SHA (refusing to record an unvalidated pin): {rev_output!r}"
+        )
+
+    # Normalized only on the --rev path: R1 promises the no-rev path stays
+    # byte-identical to slice 6, which recorded rev-parse's output as-is.
+    if rev is not None:
+        commit = commit.lower()
+
+    # When the caller named a full SHA, the checkout must actually be at it.
+    # A pin that isn't what was asked for is worse than no pin -- the whole
+    # point of --rev is that the recorded commit is the requested one. A tag
+    # or branch has nothing to compare against: whatever resolved is the
+    # answer.
+    if rev is not None and _REV_FULL_SHA_RE.match(rev) and commit != rev.lower():
+        _cleanup()
+        return FetchResult.refuse(
+            f"requested revision {rev} but the checkout resolved to {commit}; "
+            "refusing to record a pin that is not what was asked for"
         )
 
     return FetchResult.ok(dest, commit)
