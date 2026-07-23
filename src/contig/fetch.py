@@ -148,6 +148,108 @@ def classify_repo_argument(arg: str) -> RepoArgument:
 
 
 @dataclass(frozen=True)
+class RevArgument:
+    """The result of classifying one `contig reproduce --rev` argument.
+
+    Exactly one of `rev` / `refusal` is populated, enforced in `__post_init__`
+    for the same reason as `RepoArgument`: a refused revision must never be
+    misread as an accepted one by code that only checks `rev`.
+    """
+
+    rev: str | None
+    refusal: str | None
+
+    def __post_init__(self) -> None:
+        if self.refusal is not None:
+            if self.rev is not None:
+                raise ValueError("a refused RevArgument must not also carry a rev")
+            return
+        if self.rev is None:
+            raise ValueError("RevArgument requires either rev or refusal")
+
+    @classmethod
+    def accept(cls, rev: str) -> "RevArgument":
+        return cls(rev=rev, refusal=None)
+
+    @classmethod
+    def refuse(cls, reason: str) -> "RevArgument":
+        return cls(rev=None, refusal=reason)
+
+
+# An abbreviated SHA git cannot fetch: `git fetch --depth 1 origin -- <7-hex>`
+# fails with "couldn't find remote ref". Checked BEFORE the refname rules,
+# because a 7-hex string is a perfectly valid refname and would otherwise be
+# accepted and then fail with a message that reads like a typo'd branch.
+_SHORT_SHA_RE = re.compile(r"^[0-9a-f]{7,39}$", re.IGNORECASE)
+
+# The full SHA shape, accepted outright.
+_REV_FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
+
+# Refname forms git itself rejects (see git-check-ref-format), plus the
+# characters that carry meaning in a revision expression (`~`, `^`, `:`).
+_REFNAME_INVALID_SUBSTRINGS = ("..", "~", "^", ":", "?", "*", "[", "\\")
+
+
+def classify_rev_argument(arg: str) -> RevArgument:
+    """Classify a `contig reproduce --rev` argument as accepted or refused.
+
+    Pure and deterministic: no filesystem, subprocess, or network access.
+    Decision order (each rule only applies if none above it matched):
+
+    1. A leading "-" is refused before anything else, unconditionally. The
+       rev is passed to `git fetch`, so an argument like "--upload-pack=..."
+       reaching git as an option -- rather than as the ref positional -- is a
+       remote-code-execution shape. Checking this first means no other shape,
+       not even an otherwise-valid SHA, can be crafted to bypass it.
+    2. Empty / whitespace-only is refused.
+    3. Any whitespace or control character anywhere is refused.
+    4. A full 40-hex SHA is accepted outright (it is not a valid refname by
+       the rules below, but it is the single most important input: it is what
+       `source_commit` contains).
+    5. A 7-to-39-hex abbreviated SHA is refused, naming the full form.
+    6. A refname-invalid form is refused.
+    7. Anything else is accepted verbatim and unnormalized -- it becomes part
+       of a provenance record.
+    """
+    if arg.startswith("-"):
+        return RevArgument.refuse(
+            f"{arg!r} looks like a command-line option, not a revision; "
+            "pass a commit SHA, tag, or branch"
+        )
+
+    if not arg.strip():
+        return RevArgument.refuse("--rev must not be empty")
+
+    if any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in arg):
+        return RevArgument.refuse(
+            f"{arg!r} contains whitespace or a control character; "
+            "pass a commit SHA, tag, or branch"
+        )
+
+    if _REV_FULL_SHA_RE.match(arg):
+        return RevArgument.accept(arg)
+
+    if _SHORT_SHA_RE.match(arg):
+        return RevArgument.refuse(
+            f"{arg!r} looks like an abbreviated commit SHA; git cannot fetch "
+            "one. Pass the full 40-character SHA (or a tag or branch)"
+        )
+
+    if (
+        any(bad in arg for bad in _REFNAME_INVALID_SUBSTRINGS)
+        or arg.startswith(("/", "."))
+        or arg.endswith(("/", "."))
+        or arg.endswith(".lock")
+    ):
+        return RevArgument.refuse(
+            f"{arg!r} is not a valid git revision name; "
+            "pass a commit SHA, tag, or branch"
+        )
+
+    return RevArgument.accept(arg)
+
+
+@dataclass(frozen=True)
 class FetchResult:
     """The result of `fetch_repo`: a clone + resolved commit, or a refusal.
 
