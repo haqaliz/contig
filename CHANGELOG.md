@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-07-23
+
 ### Added
 
 - **`contig reproduce` now takes `--rev <sha|tag|branch>`, so a remote reproduction is
