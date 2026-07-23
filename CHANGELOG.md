@@ -6,6 +6,88 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`contig reproduce` now takes `--rev <sha|tag|branch>`, so a remote reproduction is
+  *replayable* and not merely attributable.** Slice 6 recorded `source_url`/`source_commit`
+  but nothing in the product read them back — the clone was always `--depth 1` of whatever
+  `HEAD` happened to be at fetch time, so re-running after the authors pushed silently
+  reproduced a **different revision** than the bundle attested to, with no error. This closes
+  the loop slice 6 left open and retires its RISK-5 ("the pin has no in-product consumer yet").
+  - **The surface.** `contig reproduce <https-url> --allow-fetch --rev <ref> --run "<cmd>"
+    --claims <file>` checks out the revision the caller named. `--rev` requires a URL **and**
+    `--allow-fetch`; passing it with a local repo path is **refused pre-run** rather than
+    silently ignored, because a caller who passes `--rev` and sees a success would reasonably
+    believe they had pinned a revision. A URL without `--allow-fetch` still hits the existing
+    slice-6 refusal naming that flag — the more actionable of the two problems — and the
+    precedence is pinned by a test.
+  - **A targeted fetch replaces the clone, and only when `--rev` is given.** `git init` /
+    `git remote add origin -- <url>` / `git fetch --depth 1 origin -- <rev>` /
+    `git checkout --detach FETCH_HEAD`, all run with the destination as cwd. Slice 6's PRD
+    left the mechanism open ("`--depth 1 --branch <ref>` **or** a targeted fetch"); this is the
+    ruling between them, and they are **not** equivalent: `--branch` accepts a tag or branch
+    **only and rejects a raw SHA** — and a raw SHA is the input that matters most, since it is
+    exactly what `source_commit` contains. Verified against real git that one targeted fetch
+    resolves a full SHA, a tag, **and** a branch. Without `--rev` the path is the **unchanged**
+    `git clone --depth 1`, byte-identical to slice 6 and pinned by leaving that slice's entire
+    test file untouched.
+  - **A requested full SHA must equal the resolved one.** After checkout, `git rev-parse HEAD`
+    is `fullmatch`ed as 40-hex exactly as before, and then — when `--rev` was a full SHA —
+    compared against it case-insensitively. A mismatch **refuses** rather than records: the
+    whole point of `--rev` is that the recorded commit is the requested one, and a pin that
+    isn't what was asked for is worse than no pin. A tag or branch has nothing to compare
+    against, so whatever resolved is recorded.
+  - **An abbreviated SHA is refused up front**, naming the full form. Verified against real
+    git: `git fetch --depth 1 origin -- <7-hex>` fails with `couldn't find remote ref`. Git
+    cannot fetch an abbreviated SHA at all, and because a 7-hex string is a **perfectly valid
+    refname** the refname rules would not catch it — the user would get an error that reads
+    like a typo'd branch name. Checked before the refname rules for exactly that reason.
+  - **A remote that refuses fetch-by-commit gets an honest refusal, never a silent fallback.**
+    When the fetch fails with git's `not our ref` / `upload-pack` shape, the message names the
+    likely cause — the remote may not enable `uploadpack.allowReachableSHA1InWant` — and says
+    to pass a tag or branch instead. A full-clone fallback was **deliberately declined**: it can
+    pull gigabytes without asking on exactly the large published repos this targets. Revisit
+    trigger: the first real repo a user hits that refuses fetch-by-SHA. An unrelated fetch
+    failure is never mislabelled with a cause it does not have (pinned by its own test).
+  - **`--rev` validation is pure and ordered, refusing before any I/O.** A leading `-` is
+    refused **first and unconditionally** — an option reaching `git fetch` in the ref position
+    is the same RCE shape the repo-argument classifier guards against, and checking it first
+    means no other shape, not even an otherwise-valid SHA, can bypass it. Then empty/whitespace,
+    then any whitespace or control character, then the full-SHA accept, then the short-SHA
+    refusal, then git's refname-invalid forms (`..`, `~`, `^`, `:`, `?`, `*`, `[`, `\`, leading
+    or trailing `/` or `.`, trailing `.lock`). A `--` terminator additionally rides in the argv
+    as a second line of defence, and `git remote add` and `git fetch` were **verified** to
+    accept it.
+  - **The requested ref is recorded in the UNSIGNED invocation manifest, deliberately.**
+    `reproduce.json` gains `requested_rev` (emitted unconditionally, `null` when `--rev` was
+    omitted, matching how `source_url`/`source_commit` are emitted); `write_reproduce_bundle`
+    gained an additive `requested_rev=None` parameter since the manifest is derived purely from
+    the record. There is **no `models.py` change and no new signed field**: adding one would
+    have re-broken signature verification for **every v0.47.0 signed reproduce bundle**, a
+    second break in two releases. So **every existing signed reproduce bundle still verifies**,
+    asserted explicitly rather than assumed. The trade is stated plainly: for a tag or branch
+    the requested ref is invocation metadata and is **not attested** — the resolved
+    `source_commit` remains the attested fact.
+  - **The fetch still precedes the run-start freshness stamp**, unchanged from slice 6 and for
+    the same reason: a checkout writes every file at checkout time, so stamping first would
+    silently disable the freshness guard on exactly the published repos it exists for. Verified
+    by **mutation** — moving the fetch below the stamp kills both this slice's ordering test and
+    slice 6's, and the tests were restored to green only by putting it back.
+  - **Every failure path exits non-zero with no bundle and no litter**: a bad `--rev`, any of the
+    four git steps failing, an unvalidated `rev-parse`, or a SHA mismatch. Cleanup stays scoped
+    exactly as slice 6 scoped it — the parent directory is removed only if **this call** created
+    it, so a failed fetch never deletes state the caller already owned.
+  - **Honest limits.** Fetching a bare commit depends on **server policy**
+    (`uploadpack.allowReachableSHA1InWant`); GitHub and GitLab enable it, many self-hosted
+    remotes do not, and **CI cannot observe this** — the local experiment that validated the
+    mechanism used the permissive local transport and proves *client* mechanics only. Tag and
+    branch `--rev` have no such dependency. As with every C8 slice there is **no real git,
+    network, or repo in CI** (the `Fetcher` is injected), so correctness here is reasoned and
+    unit-tested, not observed; the manual real-network gate — which carries slice 6's
+    never-run checklist as well as this slice's — is the only real validation. No new
+    dependency (stdlib `subprocess` through the existing seam); `git` is required only on the
+    remote path, as already.
+
 ## [0.47.0] - 2026-07-23
 
 ### Added
