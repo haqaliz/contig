@@ -1,55 +1,61 @@
-# Card: feat reproduce-freshness-guard (C8, follow-on to slice 5)
+# Card: feat reproduce-remote-intake (C8, slice 6)
 
-**Type:** feat · **Owner:** aliz · **Branch:** `feat/reproduce-freshness-guard/aliz`
+**Type:** feat · **Owner:** aliz · **Branch:** `feat/reproduce-remote-intake/aliz`
 
 No GitHub issue — this unit of work came from `/contig-next` (cn), 2026-07-23. The
 recommendation below is the source brief.
 
 ## Brief
 
-Extend the `contig reproduce` mtime freshness guard — today live only in the notebook
-(`.ipynb`) locator branch (`src/contig/verification/reproduce.py:1061-1103`,
-`run_started_at` threaded at `:847`) — to the JSON (slice 1.5), TSV/CSV table (slice 3),
-and file-mode pattern (slice 4) locators, so a claim can never bind to an artifact the
-run did not rewrite.
+C8 slice 6: teach `contig reproduce` to take a **remote git/HTTPS repo URL** as its `repo`
+argument (today `cli.py:715` is local-path-only: `repo: str = "Path to the local repo to
+reproduce"`), fetching it into a run-scoped directory, recording the resolved **commit SHA**
+on the `ReproduceRecord`/bundle so a remote reproduction is itself re-runnable, then handing
+the working tree to the unchanged existing engine — locators, freshness guard,
+`--allow-install`, signing, and `--fail-on-diverged` all reused, not forked.
 
-This is the slice `docs/planning/reproduce-notebook-locator/prd.md:202-215` (R2)
-explicitly deferred as "its own slice": a committed `results.json` or `de.tsv`
-reproduces just as falsely as a committed notebook.
+Fetching must sit behind an **injectable seam** (mirroring `runner.Installer` /
+`runner.IndexBuilder`) so CI stays network-free and tests use a scripted fetcher over on-disk
+fixtures; a local path must keep behaving byte-identically.
 
-**Caveat the dig must decide, not assume:** this changes shipped behavior (a repo whose
-`--run` doesn't rewrite the located file flips `REPRODUCED` → `UNVERIFIED`) — choose
-guard-on-by-default vs. an opt-out flag, and confirm the `pattern`-without-`from` stdout
-mode is exempt by construction.
+**Caveats to design around up front:**
 
-**Constraints:** keep R1 unchanged (no fudge tolerance), stdlib-only, no `models.py`
-change if avoidable, test-first with `os.utime` fixtures and scripted executors, no real
-repo or network in CI.
+1. This makes Contig fetch code it then executes. Gate the remote path behind an explicit
+   opt-in flag in the `--allow-install` spirit, and contain the checkout inside the runs dir.
+2. **Scope DOI resolution out of this slice** — a DOI→repo mapping is heuristic (landing page,
+   sometimes Zenodo/DataCite `codeRepository`), so either defer it or make an unresolvable DOI
+   an honest pre-run refusal that writes nothing, never a guessed URL.
 
-## Why (from the /contig-next ranking)
+Every unresolved path (fetch fails, bad URL, unreachable host) is an honest
+exit-non-zero-nothing-written or UNVERIFIED, never a false REPRODUCED.
 
-- Closes a live false-`REPRODUCED` class in already-shipped code, not a new feature.
-- Directly on the moat: "make every verdict harder to fool"
-  (`docs/technical/CAPABILITY_ROADMAP.md:1325`). C8's pitch — "I ran 50 published papers'
-  code, here's how many reproduced" (`:1270-1274`) — is only credible if the count isn't
-  inflated by artifacts the authors committed.
-- Unblocked and small: the mechanism exists and is tested; this generalizes a
-  `stat().st_mtime >= run_started_at` check that today lives only in the notebook branch.
-  Contrast the standing C8 list: paper-parsing needs a PDF dependency (the stdlib-only
-  contract is what already hard-blocks figures, `CAPABILITY_ROADMAP.md:1256-1263`); remote
-  `<doi|url>` needs network + DOI resolution.
+## Why this was picked (from the `cn` ranking)
 
-## Named prior art / constraints to honor
+- **It is the missing half of C8.** Six slices shipped the *binding* side (JSON `path`,
+  TSV/CSV cell, stdout/log regex, notebook cell, env resurrection, freshness guard across all
+  surfaces — `docs/technical/CAPABILITY_ROADMAP.md:1047-1335`, CHANGELOG v0.40.0→v0.46.0). The
+  *intake* side never moved. Every C8 slice's deferral list carries "remote `<doi|url>`"
+  (`CAPABILITY_ROADMAP.md:1073, 1093, 1159, 1213, 1252`), and the capability's own build
+  surface names `contig reproduce <repo|doi>` as the shipping surface (`:1372`).
+- **It unblocks two things gated on real repos, not on code.** The slice-4 `occurrence`/`group`
+  selectors are explicitly "gated on a counted post-merge experiment over 5 real repos"
+  (`:1211`), and C8's corpus stream into C6 ("every reproduction attempt is a labeled corpus
+  case", `:1379`) needs actual published-repo attempts.
+- **It is the acquisition channel the roadmap already banked on.** "I ran 50 published papers'
+  code — here is how many reproduced" (`:1353-1355`) is a batch over URLs, not over hand-cloned
+  directories. Layer-2 throughout: fetch, run, self-heal, verify — no workflow authoring, no
+  clinical/wet-lab dependency.
 
-- **R1 (accepted, do not "fix"):** coarse-mtime filesystems can yield a false `UNVERIFIED`.
-  No fudge tolerance — "a tolerance is exactly the size of the hole it opens"
-  (`reproduce-notebook-locator/prd.md:202-208`).
-- **R1a (honest limit):** the guard proves *rewritten*, not *recomputed*.
-- **R2 (this slice):** guard scope is deliberately inconsistent today; widening it changes
-  shipped behavior and belongs in its own slice.
+## Explicitly out of scope / not picked alongside
 
-## Alternates considered and rejected for now
+- Figure/plot claims — hard-blocked (no plot-hash; would break the stdlib-only dependency
+  contract, `CAPABILITY_ROADMAP.md:1337-1344`).
+- Paper-parsing to extract claims — a separate, larger slice.
+- C6 eval fold-in of reproduce outcomes — blocked on a labeling design (`:878-884`).
+- Dashboard card for `reproduce` — pure surface over shipped logic; deferred again.
 
-- Remote `<doi|url>` intake (network + clone safety surface).
-- C6 fold-in of C1/C3 signals — genuinely blocked on a labeling design
-  (`CAPABILITY_ROADMAP.md:1029`, `:908-910`).
+## Alternates the `cn` run considered and ranked below this
+
+- C8 dashboard card for `reproduce` (cheap, visible, low moat).
+- C5 RO-Crate export of reference identity/provenance (`:815`) — stdlib JSON-LD, deepens the
+  reproduce guarantee, but no demand-pull.

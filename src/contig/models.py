@@ -676,3 +676,5 @@ class ReproduceRecord(BaseModel):
     interpreter: str | None = None
     tool: str = "contig"
     repair_history: list[RepairStep] = []
+    source_url: str | None = None
+    source_commit: str | None = None

@@ -40,6 +40,7 @@ from contig.corpus import (
     promote_pending_case,
 )
 from contig.detect import get_detector
+from contig.fetch import classify_repo_argument, fetch_repo
 from contig.eval_history import (
     append_snapshot,
     default_history_path,
@@ -122,6 +123,7 @@ from contig.runner import (
     PipelineExecutionError,
     default_command_executor,
     default_executor,
+    default_fetcher,
     default_index_builder,
     default_installer,
 )
@@ -712,7 +714,9 @@ def rerun(
 
 @app.command()
 def reproduce(
-    repo: str = typer.Argument(..., help="Path to the local repo to reproduce"),
+    repo: str = typer.Argument(
+        ..., help="Path to a local repo, or an https:// git URL (with --allow-fetch)"
+    ),
     run: str = typer.Option(..., "--run", help="Command to run inside the repo"),
     claims: str = typer.Option(..., "--claims", help="Path to the claims JSON file"),
     results: str = typer.Option(
@@ -741,6 +745,16 @@ def reproduce(
             "the environment; off by default (a missing module stays UNVERIFIED)."
         ),
     ),
+    allow_fetch: bool = typer.Option(
+        False,
+        "--allow-fetch/--no-allow-fetch",
+        help=(
+            "Clone an https:// git URL passed as the repo argument into the run "
+            "bundle and run against that checkout. Reaches the network and writes "
+            "a checkout under the runs directory; off by default (a URL is "
+            "refused without it)."
+        ),
+    ),
 ) -> None:
     """Reproduce a published paper/repo's claims against a fresh run.
 
@@ -749,6 +763,18 @@ def reproduce(
     a signed, re-runnable bundle under `runs_dir`. Nothing is written when the
     repo is missing or the claims file is malformed -- validation happens
     before any run or record.
+
+    `repo` is either a local path or an https:// git URL. A URL requires
+    --allow-fetch (off by default): with it, the repo is cloned into
+    `<runs_dir>/<reproduce_id>/source` and the run happens against that
+    checkout, with the URL and the resolved HEAD commit recorded on the
+    bundle as `source_url`/`source_commit` -- the pin that says which
+    revision produced this verdict. The record's `repo` stays the URL; the
+    local checkout path never enters the portable manifest. The freshness
+    requirement below applies to a fetched checkout exactly as to a local
+    repo: a clone writes every file at clone time, and the clone happens
+    BEFORE the run's start is stamped, so a repo that commits its outputs
+    cannot report a false REPRODUCED off the authors' stored numbers.
 
     A claim's locator may target a JSON value (`from` + `path`, a JSONPath-lite
     into a JSON file) or a TSV/CSV cell (`from` + `column` + `row`, optionally
@@ -778,10 +804,41 @@ def reproduce(
     the run's own captured stdout/stderr, touches no file on disk, and so can
     never be stale.
     """
-    repo_path = Path(repo)
-    if not repo_path.is_dir():
-        typer.echo(f"No such repo directory: {repo}", err=True)
+    repo_argument = classify_repo_argument(repo)
+    if repo_argument.refusal is not None:
+        typer.echo(repo_argument.refusal, err=True)
         raise typer.Exit(code=1)
+
+    if repo_argument.kind == "remote" and not allow_fetch:
+        typer.echo(
+            f"{repo} is a remote URL; pass --allow-fetch to clone it "
+            "(it reaches the network and writes a checkout under --runs-dir)",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # The run id is generated here, ahead of every validation gate, because a
+    # remote run's checkout path is derived from it and the containment guards
+    # below must run against that real path. It is only a name at this point;
+    # nothing is created on disk until the fetch (or, for a local run, until
+    # the bundle is written).
+    reproduce_id = _generate_run_id()
+
+    if repo_argument.kind == "local":
+        repo_path = Path(repo)
+        if not repo_path.is_dir():
+            typer.echo(f"No such repo directory: {repo}", err=True)
+            raise typer.Exit(code=1)
+    else:
+        # The PROSPECTIVE checkout path -- not created yet. The containment
+        # guards below must never join a user path onto the raw URL string:
+        # Path("https://host/org/repo") / "../../etc/passwd" is lexically
+        # "inside" Path("https://host/org/repo"), so both guards would become
+        # silent no-ops on exactly the untrusted third-party repos they exist
+        # for. Path.resolve() on a not-yet-existing path is well-defined and
+        # touches no filesystem, so every cheap refusal still runs BEFORE the
+        # expensive, disk-touching clone.
+        repo_path = Path(runs_dir) / reproduce_id / "source"
 
     # --results is repo-relative by contract (no raw-data egress outside the
     # repo Contig is asked to run in). Reject an absolute path or one that
@@ -846,8 +903,22 @@ def reproduce(
             )
             raise typer.Exit(code=1)
 
+    # The clone is the FIRST disk write of this command, and it deliberately
+    # happens BEFORE run_started_at is stamped below. A clone writes every file
+    # at clone time; stamping first would make every author-committed artifact
+    # look freshly written by this run and silently disable the freshness guard
+    # for remote repos -- reopening the false-REPRODUCED hole on the very path
+    # (real published repos) where it matters most. A failed fetch leaves no
+    # directory behind (see fetch_repo).
+    source_commit: str | None = None
+    if repo_argument.kind == "remote":
+        fetched = fetch_repo(repo_argument.url, repo_path, fetcher=default_fetcher)
+        if fetched.refusal is not None:
+            typer.echo(fetched.refusal, err=True)
+            raise typer.Exit(code=1)
+        source_commit = fetched.commit
+
     claims_sha256 = hashlib.sha256(Path(claims).read_bytes()).hexdigest()
-    reproduce_id = _generate_run_id()
     created_at = datetime.now(timezone.utc).isoformat()
 
     # Stamp run-start once, AFTER all pre-run validation and BEFORE the executor
@@ -858,7 +929,7 @@ def reproduce(
     run_started_at = time.time()
 
     record = run_reproduction(
-        repo,
+        str(repo_path),
         run,
         claims_list,
         executor=default_command_executor,
@@ -870,6 +941,18 @@ def reproduce(
         installer=default_installer,
         run_started_at=run_started_at,
     )
+    if repo_argument.kind == "remote":
+        # `repo` on the record is the URL, never the local scratch checkout:
+        # the checkout is a per-run path that means nothing to anyone else,
+        # while the URL + commit is the pin that makes the bundle portable.
+        record = record.model_copy(
+            update={
+                "repo": repo_argument.url,
+                "source_url": repo_argument.url,
+                "source_commit": source_commit,
+            }
+        )
+
     write_reproduce_bundle(record, Path(runs_dir) / reproduce_id)
 
     typer.echo(render_reproduction(record))

@@ -56,7 +56,7 @@ The CLI and the test suite work **without** Nextflow/Java/Docker; only live runs
 | `contig list` | All bundled runs |
 | `contig corpus-promote` | Promote a confirmed pending failure case into the golden corpus |
 | `contig eval-detector` | Score the failure detector against the labeled failure corpus (`--detector rules-strict` or `--detector llm` to score a different detector, `--snapshot` to record a point in the history, `--history` to show the trend) |
-| `contig reproduce <repo> --run "<cmd>" --claims <file>` | Run a third-party repo's script and report, per stated number, whether it actually regenerates: `REPRODUCED` / `WITHIN-TOLERANCE` / `DIVERGED` / `UNVERIFIED` (see below) |
+| `contig reproduce <repo\|url> --run "<cmd>" --claims <file>` | Run a third-party repo's script and report, per stated number, whether it actually regenerates: `REPRODUCED` / `WITHIN-TOLERANCE` / `DIVERGED` / `UNVERIFIED`. Takes a local path, or an `https://` git URL with `--allow-fetch` (see below) |
 | `contig version` | Installed version |
 
 Run `uv run contig <command> --help` for the full flag list of any command.
@@ -252,8 +252,47 @@ re-runnable bundle. `--fail-on-diverged` turns a divergence into a non-zero exit
 
 `--allow-install` (off by default) additionally lets a repo that fails with
 `ModuleNotFoundError` be healed once: detect the missing module, `pip install`
-it, retry the run exactly once. It is the only flag that touches the network or
-mutates your environment.
+it, retry the run exactly once. It touches the network and mutates your
+environment, which is why you have to ask for it.
+
+`--allow-fetch` (off by default) lets you skip the clone-it-yourself step: pass
+an `https://` git URL instead of a path and Contig clones it for you, shallowly,
+into `runs/<id>/source/`, and runs there.
+
+```bash
+contig reproduce https://github.com/lab/paper-code --allow-fetch \
+  --run "python analysis.py" \
+  --claims claims.json
+```
+
+The point is not convenience — it is that the bundle then records **which
+revision** it ran. It resolves `HEAD` after cloning and pins the exact 40-character
+commit on the record as `source_commit`, alongside the URL as `source_url`. A
+local-path run leaves both `null`. That pin is what lets someone else check your
+reproduction claim; a local directory path tells them nothing.
+
+Without `--allow-fetch`, a URL is refused rather than treated as a path — it
+reaches the network and writes a checkout under your runs directory, so you have
+to ask. Only `https://` is accepted: `ssh://`, `git://`, `file://`, the
+`git@host:path` shorthand, and DOIs are all refused up front, before anything is
+written. (DOI intake is not supported yet; the refusal says so.)
+
+Three things worth knowing about a fetched run:
+
+- **The commit is the attested fact; the checkout is a convenience copy.** The
+  signature covers the *record*, not the `source/` tree — that tree is unsigned
+  and unhashed, and nothing detects it if you edit it afterwards.
+- **The pin is auditable, not automatically replayable.** There is no `--rev`
+  yet, so nothing in Contig consumes `source_commit` — a human reads it and runs
+  `git checkout <sha>`. The clone is `--depth 1`, so what you get is whatever
+  `HEAD` was at fetch time.
+- **The freshness rule below applies to a fetched checkout exactly as to a local
+  repo.** A clone writes every file at clone time, so Contig clones *before* it
+  stamps the run's start — a repo that commits its outputs still reports
+  `UNVERIFIED`, not a false `REPRODUCED`.
+
+Checkouts are not cleaned up: each fetched run leaves a full copy of the repo
+under its run directory.
 
 ### Every value must come from a file *this run* wrote
 

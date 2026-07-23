@@ -228,3 +228,141 @@ def test_bundle_json_without_repair_history_still_loads_as_empty_list(tmp_path):
 
     loaded = load_reproduction(tmp_path)
     assert loaded.repair_history == []
+
+
+# --- source_url / source_commit survive the bundle round-trip (Task 4) --------
+
+
+def _remote_record() -> ReproduceRecord:
+    record = _record()
+    return record.model_copy(
+        update={
+            "source_url": "https://github.com/example/paper.git",
+            "source_commit": "a" * 40,
+        }
+    )
+
+
+def test_remote_record_source_fields_round_trip_through_the_bundle(tmp_path, monkeypatch):
+    monkeypatch.delenv("CONTIG_SIGNING_KEY", raising=False)
+    original = _remote_record()
+
+    json_path = write_reproduce_bundle(original, tmp_path)
+
+    loaded = load_reproduction(json_path.parent)
+    assert loaded == original
+    assert loaded.source_url == "https://github.com/example/paper.git"
+    assert loaded.source_commit == "a" * 40
+
+
+def test_reproduce_manifest_carries_source_url_and_commit(tmp_path, monkeypatch):
+    monkeypatch.delenv("CONTIG_SIGNING_KEY", raising=False)
+    record = _remote_record()
+
+    write_reproduce_bundle(record, tmp_path)
+
+    manifest = json.loads((tmp_path / "reproduce.json").read_text())
+    assert manifest["source_url"] == record.source_url
+    assert manifest["source_commit"] == record.source_commit
+
+
+def test_reproduce_manifest_carries_null_source_fields_for_a_local_run(tmp_path, monkeypatch):
+    # Unconditional keys: always present, null for a local run -- a consumer can
+    # always do manifest["source_commit"] without a KeyError/.get() dance.
+    monkeypatch.delenv("CONTIG_SIGNING_KEY", raising=False)
+    record = _record()
+    assert record.source_url is None
+    assert record.source_commit is None
+
+    write_reproduce_bundle(record, tmp_path)
+
+    manifest = json.loads((tmp_path / "reproduce.json").read_text())
+    assert manifest["source_url"] is None
+    assert manifest["source_commit"] is None
+
+
+def test_local_record_source_fields_default_to_none_on_round_trip(tmp_path, monkeypatch):
+    monkeypatch.delenv("CONTIG_SIGNING_KEY", raising=False)
+    original = _record()
+
+    json_path = write_reproduce_bundle(original, tmp_path)
+
+    loaded = load_reproduction(json_path.parent)
+    assert loaded == original
+    assert loaded.source_url is None
+    assert loaded.source_commit is None
+
+
+def test_bundle_json_without_source_fields_still_loads_as_none(tmp_path):
+    # Pre-slice bundle: neither key exists in the JSON at all.
+    legacy_json = {
+        "reproduce_id": "rp_legacy",
+        "repo": "https://github.com/example/paper",
+        "run_command": "python train.py --seed 0",
+        "claims_sha256": "a" * 64,
+        "claim_results": [],
+        "exit_code": 0,
+        "created_at": "2026-07-18T00:00:00Z",
+        "interpreter": "cpython-3.12",
+        "tool": "contig",
+    }
+    (tmp_path / "reproduce_record.json").write_text(json.dumps(legacy_json))
+
+    loaded = load_reproduction(tmp_path)
+    assert loaded.source_url is None
+    assert loaded.source_commit is None
+
+
+# --- disclosed caveat: a pre-slice-6 SIGNED bundle no longer verifies ----------
+#
+# Adding source_url/source_commit is back-compatible for LOADING (the test above)
+# but NOT for a signature made before the fields existed. `canonical_record_bytes`
+# is `record.model_dump(mode="json")` (signing.py:63), which includes every field,
+# so today's canonical payload carries two extra null keys that the old signed
+# bytes never had. This test pins that as a KNOWN, DISCLOSED property rather than
+# a latent surprise -- if it ever starts passing, the canonical-payload contract
+# changed and the CHANGELOG's disclosure needs revisiting.
+
+
+def _pre_slice_6_canonical_bytes(record: ReproduceRecord) -> bytes:
+    """The canonical bytes this record would have produced before slice 6.
+
+    Rebuilt by dropping exactly the two fields slice 6 added -- the rest of the
+    canonicalization (sorted keys, compact separators, UTF-8) is copied from
+    `signing.canonical_record_bytes` so the only difference under test is the
+    added keys.
+    """
+    payload = record.model_dump(mode="json")
+    old = {k: v for k, v in payload.items() if k not in ("source_url", "source_commit")}
+    assert set(payload) - set(old) == {"source_url", "source_commit"}
+    return json.dumps(old, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+@requires_signing
+def test_pre_slice_6_signature_over_a_record_without_source_fields_no_longer_verifies(
+    tmp_path, monkeypatch
+):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    private_key, public_key = generate_keypair()
+    record = _record()  # a local run: both new fields are None
+    assert record.source_url is None and record.source_commit is None
+
+    # Sign the bytes an older Contig would have produced for this same record.
+    old_signature = (
+        Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key))
+        .sign(_pre_slice_6_canonical_bytes(record))
+        .hex()
+    )
+
+    # The two extra null keys change the canonical payload, so the old signature
+    # does not verify -- even though nothing about the run itself changed.
+    assert verify_signature(record, old_signature, public_key) is False
+
+    # And the fresh signature over today's bytes does verify: the break is the
+    # payload shape, not the signing machinery.
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+    _maybe_write_signature(record, tmp_path)
+    sidecar = json.loads((tmp_path / "signature.json").read_text())
+    assert verify_signature(record, sidecar["signature"], sidecar["public_key"]) is True
+    assert sidecar["signature"] != old_signature

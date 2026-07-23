@@ -577,6 +577,14 @@ IndexBuilder = Callable[[list[str], Path], int]
 # IndexBuilder / default_index_builder).
 Installer = Callable[[list[str], Path], int]
 
+# A fetcher runs a git argv (clone or rev-parse) in the given cwd. The default
+# shells out; tests inject a fake so no real git and no network is touched in
+# CI (mirrors Executor / IndexBuilder / Installer). Unlike those, it returns
+# `(exit_code, stdout)` rather than a bare exit code: git's stderr is the only
+# useful diagnostic for a failed clone, and `git rev-parse`'s stdout is how the
+# resolved commit is read -- and that commit is the whole point of the slice.
+Fetcher = Callable[[list[str], Path], tuple[int, str]]
+
 
 class PipelineExecutionError(RuntimeError):
     """Raised when the workflow manager exits nonzero (DETECT, ARCHITECTURE §5.1).
@@ -645,6 +653,44 @@ def default_installer(cmd: list[str], cwd: Path) -> int:
     """
     proc = subprocess.run(cmd, cwd=cwd, check=False)
     return proc.returncode
+
+
+def _git_clone_argv(url: str, dest: Path) -> list[str]:
+    """Build the fixed argv for a shallow clone of `url` into `dest`.
+
+    `--depth 1` is deliberate: much faster on the real published repos this
+    targets, and HEAD still resolves to a full 40-char SHA so the commit pin
+    is unaffected. The `--` terminator is required, not cosmetic: it is the
+    second line of defence behind classify_repo_argument's leading-dash
+    refusal, stopping any argument that survives classification from being
+    read by git as an option.
+    """
+    return ["git", "clone", "--depth", "1", "--", url, str(dest)]
+
+
+def _git_rev_parse_argv() -> list[str]:
+    """Build the fixed argv that resolves HEAD to its full commit SHA."""
+    return ["git", "rev-parse", "HEAD"]
+
+
+def default_fetcher(cmd: list[str], cwd: Path) -> tuple[int, str]:
+    """Run a git argv (clone or rev-parse) in cwd, returning `(exit_code, stdout)`.
+
+    stderr is merged into stdout so a failed clone's diagnostic isn't lost;
+    for `git rev-parse HEAD` the same stream carries the resolved commit.
+    Tests inject a fake fetcher so no real git and no network is touched in
+    CI (mirrors default_index_builder / default_installer).
+    """
+    try:
+        proc = subprocess.run(
+            cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False
+        )
+    except FileNotFoundError as exc:
+        # subprocess.run raises when the binary is absent; every other seam
+        # in this file converts failure into a return value rather than
+        # raising, and the caller in a later task depends on that.
+        return 127, f"git executable not found: {exc}"
+    return proc.returncode, proc.stdout or ""
 
 
 def read_run_log(run_dir: str | Path) -> str:
