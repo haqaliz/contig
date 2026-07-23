@@ -6,6 +6,106 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`contig reproduce` now accepts an `https://` git URL as its repo argument, behind an opt-in
+  `--allow-fetch`: it shallow-clones the repo into the run bundle, resolves `HEAD`, and records
+  the exact commit on the record as `source_commit`.** Until now reproducing a published paper
+  required the user to clone it themselves and then remember, by hand, which revision they had
+  checked out — so the bundle's `repo` field was a local path that meant nothing to anyone else
+  and the verdict was not attributable to a revision. With this slice the bundle says *which
+  revision of which repository produced this verdict*, which is what makes a reproduction claim
+  checkable by a third party at all.
+  - **The surface.** `contig reproduce <https-url> --allow-fetch --run "<cmd>" --claims <file>`
+    clones into `<runs-dir>/<reproduce_id>/source/` and runs there. `ReproduceRecord` gained two
+    additive fields, `source_url` and `source_commit` (both defaulting to `None`), and
+    `reproduce.json` emits **both keys unconditionally** — present and `null` for a local run —
+    so a consumer never needs a `.get()` dance. The record's `repo` holds the **URL**, never the
+    per-run checkout path: a scratch path under someone's runs directory is meaningless to a
+    reader, while URL + commit is the portable pin.
+  - **`--allow-fetch` is off by default and a URL without it is refused**, naming the flag. It is
+    the second flag on this command (after `--allow-install`) that gates a side effect the user
+    might not want: it reaches the **network** and writes a checkout under `--runs-dir`. The two
+    are independent — passing `--allow-fetch` does not enable installing, and vice versa (pinned
+    by a test).
+  - **Argument classification is pure, ordered, and refuses before anything is written.** A
+    leading `-` is refused **first, unconditionally**, ahead of any scheme parsing: an argument
+    like `--upload-pack=…` reaching git as an *option* rather than as the repo positional is a
+    remote-code-execution shape, and checking it first means no scheme or path pattern can be
+    crafted to slip past. Then `https://` (case-insensitive) is accepted **verbatim, unnormalized**
+    — it becomes part of a provenance record. Then a DOI (`doi:…` or a bare `10.<digits>/…`) is
+    refused **naming DOI explicitly**, so a pasted DOI gets the real reason instead of "No such
+    repo directory: 10.1234/xyz". Then any other URL-ish form — `http://`, `ssh://`, `git://`,
+    `file://`, git's arbitrary-command `ext::` transport, and the scp-like `git@host:path`
+    shorthand — is refused, naming `https://` as the accepted form. Everything else is a local
+    path, exactly as before. `git clone -- <url>` additionally passes a `--` terminator as a
+    **second line of defence** behind the leading-dash refusal.
+  - **The recorded commit is validated, never scavenged.** `git rev-parse HEAD`'s output is
+    `strip()`ed and then matched with `fullmatch` against a 40-hex pattern — *not* searched for a
+    SHA-shaped substring. The fetcher merges stderr into stdout (git's stderr is the only useful
+    diagnostic for a failed clone), so a warning line can ride alongside a real SHA; a multi-line
+    output is **refused outright**. A fabricated or partially-parsed pin is worse than no pin,
+    because the recorded commit is the entire point of the slice.
+  - **Every failure path exits non-zero with no bundle and no litter.** A bad URL, a failed clone,
+    a failed `rev-parse`, an unvalidated SHA, or a non-empty destination all refuse; anything
+    created by the attempt is removed. Cleanup is scoped to what the call created: `<id>/source`
+    is always removed, but its parent only if **this call** created it — if the caller already
+    owned that directory, a failed fetch must not delete it out from under them. A half-cloned or
+    empty directory left behind would look like a real run bundle to anything scanning the runs
+    directory.
+  - **The clone happens BEFORE the run-start freshness stamp — deliberately, and this is the
+    subtlest decision in the slice.** v0.46.0's guard marks any artifact whose mtime predates the
+    run start as `UNVERIFIED`, so a repo that **commits its outputs** cannot report a false
+    `REPRODUCED`. A `git clone` writes *every* file at clone time. Stamping first and cloning
+    second would therefore make every author-committed artifact look freshly written by this run
+    and **silently disable the guard on exactly the repos it matters most for** — real, published,
+    third-party ones. Verified by mutation: with the ordering inverted, the pinning test
+    `test_committed_results_file_in_a_fetched_checkout_stays_unverified` flips from `unverified`
+    to `reproduced`. The ordering is load-bearing, not incidental, and must survive any future
+    refactor of this command's preamble.
+  - **The checkout is evidence, not attestation.** `_maybe_write_signature` signs the **record**
+    only. The `source/` tree is **unsigned and unhashed**: it can be modified after the run with
+    nothing detecting it. **The commit SHA is the attested fact; `source/` is a convenience copy
+    for inspection.** Hashing the tree is deliberately a separate slice, and nothing in this
+    entry should be read as claiming the checkout is verified.
+  - **Caveat for signing users — a pre-slice-6 SIGNED reproduce bundle no longer verifies.
+    Disclosed, not fixed.** `canonical_record_bytes` is `record.model_dump(mode="json")`
+    (`signing.py:63`), which includes **every** field, so today's canonical payload carries two
+    extra `null` keys (`source_url`, `source_commit`) that an older bundle's signed bytes never
+    had. An old bundle still **loads** — both fields default to `None`, and that back-compat is
+    tested — but its Ed25519 signature **no longer matches**. Verified empirically, not assumed.
+    This is the same shape the somatic empty-call-set slice disclosed for `verdict`, with one
+    honest difference that must not be glossed: **that slice's blast radius was only bundles whose
+    verdict actually flips; this one is *every* signed reproduce bundle.** Signing is opt-in
+    (`CONTIG_SIGNING_KEY`), which bounds who is affected, but that is not a reason to soften the
+    statement. It is not fixed because the only clean fix — canonicalizing with `exclude_none` —
+    would change the canonical bytes for `RunRecord` too and break every existing signature in the
+    product, a strictly worse trade than a disclosed, additive break confined to reproduce
+    bundles. The behavior is **pinned by a test** rather than left latent:
+    `test_pre_slice_6_signature_over_a_record_without_source_fields_no_longer_verifies` in
+    `tests/test_reproduce_bundle.py` — if it ever starts passing, the canonical-payload contract
+    changed and this disclosure needs revisiting.
+  - **Honest limit — no real git, no network, no real repo in CI.** The `Fetcher` seam is injected
+    everywhere (mirroring `Executor`/`IndexBuilder`/`Installer`); the real `default_fetcher` is
+    asserted on for **argv shape only** and is never executed. The slice is therefore **reasoned
+    and unit-tested, not observed: no real clone has been performed.** The go/no-go is a
+    post-merge manual smoke test — clone one small real public repo, confirm the SHA is recorded,
+    and confirm a repo with committed outputs reports `UNVERIFIED` — and **it has not been run
+    yet.**
+  - **Honest limit — the pin is auditable, not yet replayable.** `--rev` is deferred, so **nothing
+    in the product consumes `source_commit`**: only a human can act on it (`git checkout <sha>`).
+    The clone is `--depth 1`, which is much faster on the large repos this targets and still
+    resolves a full 40-char SHA, but it means the checkout is HEAD-at-fetch-time and not a
+    revision the user chose. Do not read the recorded commit as making a run automatically
+    replayable; it makes it **attributable**.
+  - **Honest limit — bundle-local checkouts are not pruned.** Every fetched run leaves a full
+    checkout under its run directory, and nothing garbage-collects them; the runs directory grows.
+  - **Still deferred:** DOI resolution (explicitly out of scope — refused with a message that says
+    so), `--rev`/tag/branch selection, hashing or signing the checkout tree, private-repo
+    credentials, submodules, and checkout pruning. No new dependency (stdlib `subprocess` +
+    `shutil`); `git` itself is only required on the remote path. Test-first, and the local-path
+    behavior is unchanged and pinned by its own test.
+
 ## [0.46.0] - 2026-07-23
 
 ### Changed
