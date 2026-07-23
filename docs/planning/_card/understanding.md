@@ -1,173 +1,127 @@
-# Understanding — feat/reproduce-freshness-guard (C8, follow-on to slice 5)
+# Phase 2 dig — feat reproduce-remote-intake (C8 slice 6)
 
-Phase-2 dig note. Read after `issue.md`. Everything below is verified against the code in
-this worktree (branched from `origin/master` @ v0.45.0), not from memory.
+Grounded in the worktree at `origin/master` (v0.46.0). Every claim below is line-cited;
+anything unverified is labelled as such.
 
----
+## What the work is really asking
 
-## 1. What the work is really asking
+Make `contig reproduce` able to take a **remote git URL** instead of only a local directory,
+fetch it, record the **resolved commit** so the reproduction is itself re-runnable, and hand
+the checkout to the already-shipped engine unchanged.
 
-The notebook locator (slice 5) shipped a **freshness guard**: a `.ipynb` binds a claim only
-when its mtime is `>= run_started_at`, i.e. only when *this run* rewrote it. The reason is
-stated in the code itself (`reproduce.py:1058-1078`): a committed notebook holds the
-*authors'* stored outputs, so reading them reports a false `REPRODUCED`.
+## Current state (verified)
 
-**That reason is not notebook-specific.** A committed `results.json`, a committed `de.tsv`,
-or a committed `train.log` produces exactly the same false `REPRODUCED`. The notebook slice
-knew this and named it as its own deferred slice — `reproduce-notebook-locator/prd.md:213-215`
-(R2): *"Guard scope is deliberately inconsistent. Slices 1.5 and 3 have the same
-stale-artifact hole (a committed `results.json` or `de.tsv` reproduces just as falsely).
-Widening the guard to them would change shipped behavior and belongs in its own slice."*
+- **Intake is local-only and validated first.** `cli.py:781-784` is the entire intake:
+  `repo_path = Path(repo)`; `if not repo_path.is_dir(): "No such repo directory" → Exit(1)`.
+  Everything downstream (`--results` containment `:789-794`, locator containment `:836-847`,
+  the engine's `repo_root` `reproduce.py:874`) keys off that path.
+- **`ReproduceRecord` has no revision field.** `models.py:669-678`: `reproduce_id`, `repo`,
+  `run_command`, `claims_sha256`, `claim_results`, `exit_code`, `created_at`, `interpreter`,
+  `tool`, `repair_history`. `repair_history: list[RepairStep] = []` (`:678`) is the slice-2
+  precedent for an **additive, defaulted** field that keeps older bundles loading.
+- **The re-runnable manifest omits any revision.** `bundle.py:89-96` writes `reproduce.json`
+  with `reproduce_id`, `repo`, `run_command`, `claims_sha256`, `created_at`. For a remote
+  repo, `repo` alone (a URL whose default branch moves) is **not** re-runnable — the
+  strongest argument for pinning the commit, and a reproduce-guarantee argument rather than a
+  nice-to-have.
+- **Seam conventions are uniform.** `runner.py:567-578` declares three seams as plain callable
+  aliases — `Executor`, `IndexBuilder`, `Installer`, all `Callable[[list[str], Path], int]`,
+  each commented "tests inject a fake, so no real tool runs in CI". Defaults (`:594-647`) all
+  use `subprocess.run` with an **argv list, no shell, `check=False`**, converting failure to a
+  returned exit code rather than an exception. `_pip_install_argv` (`:635-637`) is the "fixed
+  argv, no interpolation" pattern to copy. `default_command_executor` (`:608-619`) is the odd
+  one out: it returns `(exit_code, combined_output)`.
+- **Run-scoped scratch dirs are established.** `self_heal.py:635` (`run_dir/healed_index/star`)
+  and `:795` (`run_dir/healed_reference`) — a fetched checkout should follow the same shape.
+- **Dependency contract.** `pyproject.toml:30-34`: runtime deps are exactly `pydantic`,
+  `typer`, `cryptography`. Git would be an **external binary** invoked via subprocess (like
+  samtools/STAR), not a Python dependency — so the stdlib-only contract holds.
+- **No network code exists anywhere in `src/contig/` except `default_installer`'s pip**
+  (`runner.py:640-647`). This slice adds the second network surface in the codebase.
+- **CI has no marker infrastructure.** `.github/workflows/ci.yml:20` is a bare `uv run pytest`;
+  `pyproject.toml:58-60` sets only `testpaths`/`addopts` — **no custom markers**. Manual gates
+  elsewhere are done by *injected seams*, not skip markers (the only `skipif`s are
+  signing-key ones: `tests/test_bundle.py:172`, `tests/test_reproduce_bundle.py:18`). A
+  network-free suite must therefore be achieved **by construction**, not by excluding tests.
 
-This slice is that widening. It is a **verdict-honesty fix to already-shipped code**, not a
-new feature: it removes a live false-`REPRODUCED` class rather than adding a capability.
+## The finding that most shapes the design
 
-## 2. The real scope is FIVE binding surfaces, not the three in the brief
+**The fetch must happen BEFORE `run_started_at` is stamped, and this is a correctness
+requirement, not a style preference.**
 
-The brief named the JSON, table, and pattern-file locators. The dig found a fourth
-unguarded read and confirms a fifth is immune:
+`cli.py:853-858` stamps `run_started_at = time.time()` after all validation and before the
+executor. The v0.46.0 freshness guard (`reproduce.py:880-919`) marks any artifact whose
+`mtime < run_started_at` UNVERIFIED, precisely so a repo that **commits its outputs** cannot
+report a false `REPRODUCED`.
 
-| # | Binding path | Code | Reads disk? | Guarded today? |
-|---|---|---|---|---|
-| 1 | JSON `path` locator (slice 1.5) | `_observe_located`, `reproduce.py:879-…` | yes | **no** |
-| 2 | TSV/CSV `column`/`row` locator (slice 3) | `_observe_table_located` | yes | **no** |
-| 3 | Pattern locator **with** `from` (slice 4) | `_observe_pattern_located`, `:974-1056` | yes | **no** |
-| 4 | **Flat `--results` `results.json`** (slice 1) | `run_reproduction`, `:1226-1234` | yes | **no** |
-| 5 | Pattern locator **without** `from` (stdout mode) | `_observe_pattern_located`, `:998-1000` | **no** | n/a — immune |
-| 6 | Notebook `cell`+`pattern` (slice 5) | `_observe_notebook_located`, `:1058-1104` | yes | **yes** |
+A `git clone` writes every file at clone time. Therefore:
 
-**Surface 4 is the dig's main correction to the brief.** The original cooperative-repo path
-— the one slice 1 shipped and the one every "just write a `results.json`" repo uses — reads
-`repo/results.json` off disk at `:1226-1234` with no freshness check whatsoever. It is the
-*oldest* instance of the hole and the brief did not name it. Leaving it out would ship a
-guard that is still inconsistent, which is precisely the defect R2 filed.
+- **Clone before the stamp** → every author-committed artifact has `mtime < run_started_at`
+  → correctly stale → the guard keeps working exactly as designed. ✅
+- **Clone after the stamp** → every author-committed artifact looks *fresh* → the guard is
+  silently disabled for remote repos → **reintroduces the exact false-`REPRODUCED` hole
+  v0.46.0 just closed**, and reintroduces it only on the path (real published repos) where it
+  matters most. ❌
 
-**Surface 5 is immune by construction**, confirmed at `reproduce.py:998-1000`: with
-`loc.source is None` the text is `run_output`, a closure variable holding the run's own
-captured stdout/stderr. It touches the filesystem "not at all" and cannot be stale — the
-run produced it by definition. It needs no guard and must not be given one.
+This ordering deserves an explicit regression test: *a cloned repo with a committed
+`results.json` whose value exactly matches the claim must report UNVERIFIED, not REPRODUCED.*
 
-## 3. What already exists and is reused unchanged
+## Affected areas
 
-- **The guard mechanism**: `reproduce.py:1089-1104` — one `stat()` for both size and mtime,
-  size bound checked **first** (`:1094`), then `stat.st_mtime < run_started_at` (`:1100`),
-  message *"was not rewritten by this run (mtime predates run start)"*.
-- **The timestamp**: `cli.py:850` already stamps `run_started_at = time.time()`
-  unconditionally — after all pre-run validation, before the executor, and deliberately
-  **not** re-stamped on an `--allow-install` retry (`cli.py:846-849`) — and passes it at
-  `:863`. **No CLI change is needed for this slice.**
-- **The shared field**: all four locator dataclasses (`:149-212`) expose `.source`
-  (`str`, or `str | None` for `PatternLocator`). A single freshness helper keyed on a
-  resolved path serves every branch.
-- **Containment**: each observer already resolves under `repo_root` and refuses escapes.
-- **A single insertion point, verified.** All three unguarded observers share a
-  byte-for-byte identical prologue — `resolved = (repo_path / loc.source).resolve()`, then
-  `resolved.relative_to(repo_root)` in a `try/except ValueError`, then a cache-keyed read:
-  JSON `:884-904`, table `:942-950`, pattern-file `:1002-1032`. The guard slots in
-  immediately **after** the containment check and **before** the cache-keyed read in each,
-  which is also what makes the two parse-cache call-count assertions (§5) drop to 0. The
-  flat `--results` path (`:1226-1234`) has a different shape — no containment step, since
-  the path is not user-authored — so it needs its own `stat()` call rather than the shared
-  helper's full prologue.
-- **Everything downstream**: `classify`, `ClaimResult`, `ReproduceRecord`, the bundle, the
-  signer, `--fail-on-diverged`. No `models.py` change expected, no new dependency
-  (`stat()` is stdlib), no new claim-file syntax.
+| Area | File | Change shape |
+|---|---|---|
+| Intake + ordering | `cli.py:781-784`, `:853-858` | branch local-path vs URL; fetch before stamp |
+| New seam | `runner.py:567-578`, `:594-647` | `Fetcher` alias + `default_fetcher` + `_git_clone_argv` |
+| Record | `models.py:669-678` | additive defaulted fields (source URL, resolved commit) |
+| Manifest | `bundle.py:89-96` | carry the pin so a remote reproduction is re-runnable |
+| Docs | `CHANGELOG.md`, `CAPABILITY_ROADMAP.md` C8 §1047-1390 + table row `:1404` + the now-stale "no network" at `:1377`, `docs/USAGE.md` (`:59`, `:214`-~`:312`) | standard shipped-slice sweep. **Not `FEATURES.md`** — its table (`:248-256`) stops at C6 and the last slice left it untouched |
 
-## 4. The decision the brief flagged — and what the dig found
+## Ambiguities / open questions for the PRD
 
-### 4a. Default-on vs. opt-out
+1. **Seam signature.** `int` (like `IndexBuilder`) or `(int, str)` (like
+   `default_command_executor`)? Git's stderr is the only useful diagnostic for a failed clone,
+   which argues for `(int, str)`.
+2. **How is the commit resolved?** A second `git rev-parse HEAD` through the same seam, or
+   `git clone` then read `.git/HEAD`/refs? The former needs the seam to return stdout.
+3. **Opt-in flag shape and default.** Mirror `--allow-install`'s posture
+   (`reproduce-env-resurrection/prd.md:123-124`: "Absent the flag, the command never installs,
+   never hits the network, never mutates the environment"). Name TBD (`--allow-fetch`?).
+4. **URL validation.** Needs a scheme allowlist and, critically, **refusal of any URL starting
+   with `-`** (git would read it as an option — argv injection). Charset-guard precedent:
+   `reproduce.py:44` `_SAFE_PACKAGE_TOKEN_RE`. Whether `file://` and `git+ssh` are allowed is
+   a product decision.
+5. **Where does the checkout live?** `runs_dir/<reproduce_id>/source/` (bundle-local, follows
+   the `healed_*` precedent) vs a temp dir. Bundle-local is inspectable after the fact but
+   bloats the bundle.
+6. **Ref/tag/commit pinning on the way in** — does the user get `--rev`, or only "clone the
+   default branch and record what we got"? Recording is required; requesting is optional.
+7. **Shallow vs full clone.** `--depth 1` is faster but complicates `rev-parse` semantics and
+   makes a `--rev` of an older commit impossible.
+8. **Is `git` present?** An absent binary must be an honest pre-run refusal, never a traceback.
 
-**Recommendation: guard on by default, no opt-out flag.**
+## Contradictions / corrections to the brief
 
-An opt-out is a hole the exact size of the defect. The legitimate-sounding case ("my repo
-doesn't rewrite that file") is not legitimate: if the run did not produce the artifact, the
-claim is not reproducing anything — `UNVERIFIED` is the true answer. This matches how slice
-5 reasoned about a fudge tolerance (`prd.md:202-208`: *"a tolerance is exactly the size of
-the hole it opens"*). **Open question for the interview**, not settled unilaterally.
+- The brief said to mirror "`runner.Installer` / `runner.IndexBuilder`" — accurate
+  (`runner.py:572-578`), **but** those return bare `int` while the reproduce executor returns
+  `(int, str)`. "Mirror the seam" is therefore ambiguous; see open question 1.
+- The brief implied there might be prior-dig blockers on remote intake. **There are none.**
+  Every prior C8 PRD lists remote `<doi|url>` as a scope deferral only
+  (`reproduce-output-locator/prd.md:124`, `reproduce-env-resurrection/prd.md:148-149`,
+  `reproduce-notebook-locator/prd.md:158`, `reproduce-freshness-guard/prd.md:231`), and
+  `reproduce-freshness-guard/prd.md:159` states plainly: *"Extending freshness to
+  remote/`<doi|url>` intake — that intake does not exist yet."* Deferred for scope, never for
+  feasibility.
+- Every prior PRD's primary persona **already assumes a cloned repo as a manual human step**
+  (`reproduce-env-resurrection/prd.md:70`, `reproduce-output-locator/prd.md:60`,
+  `reproduce-notebook-locator/prd.md:64`: "Clones a public repo, runs its script…"). This
+  slice automates a step the product design already presumed; it does not change the persona.
+- My own earlier assumption that kallisto/STARsolo-style tests are excluded by a **pytest
+  marker** was wrong: there is no marker infrastructure (`pyproject.toml:58-60`). Those tools
+  stay out of CI by seam injection alone.
 
-### 4b. The `raise`-when-unstamped rule is the real fork
+## Guardrail check (CLAUDE.md)
 
-`_observe_notebook_located` **raises** `ValueError` when `run_started_at is None`
-(`:1080-1081`), on the stated grounds that a `None` default meaning "guard off" is a silent
-bypass. That rule is itself pinned by a test (`test_reproduce.py:2490-2494`).
-
-`run_started_at` is a **defaulted** parameter (`float | None = None`, `:847`). Copying the
-raise to the other four surfaces means every call site must stamp it. Measured blast radius:
-
-- **Copy the raise** → ~42 tests in `test_reproduce.py` need `run_started_at` threaded.
-- **Tolerate `None`** (skip the check when unstamped) → 21 tests, but reintroduces a silent
-  bypass for any future caller that forgets — the exact thing slice 5 refused.
-
-Given there is exactly **one production caller** (`cli.py:852`) and it always stamps, the
-raise is affordable; the cost is mechanical test churn, not risk. A middle path worth
-raising in the interview: make `run_started_at` a **required keyword** so a missing stamp is
-a `TypeError` at every call site at once, rather than a runtime `ValueError` reachable only
-on the locator branch.
-
-### 4c. Ordering within each observer
-
-The size check must stay **before** the mtime check (as at `:1094` vs `:1100`), or
-`test_run_reproduction_pattern_claim_oversized_file_is_unverified_and_not_read`
-(`test_reproduce.py:2230`, asserts the byte count in the message) changes meaning. More
-generally the guard should fire **before** parse but its message will now pre-empt several
-existing failure messages — 6 tests assert on those (see §5).
-
-## 5. Blast radius, measured
-
-From the test-map dig (all counts verified against the files):
-
-- **15 tests flip** `reproduced`/`within-tolerance`/`diverged` → `unverified`: 4 JSON
-  (`test_reproduce.py:1282, 1291, 1303, 1405`), 7 table (`:1480, 1502, 1523, 1541, 1707,
-  1726, 1766`), 4 pattern-file (`:1968, 2105, 2205, 2297`). Cause: the `_write_*` helpers
-  (`:1269, :1468, :1859`) write the fixture *before* the run and `_run` (`:1255`) never
-  passes `run_started_at`.
-- **6 tests keep `unverified` but assert a message** the guard would pre-empt
-  (`:1331, 1600, 1617, 1634, 2277, 2230`).
-- **2 of the 15 also assert a parse-cache call count** (`:1726` table parsed once, `:2205`
-  file read once) — a pre-parse guard drops those counts to 0, so the assertion, not just
-  the status, changes.
-- **CLI e2e churn is ~zero**: every locator e2e already writes its fixture *inside* the fake
-  executor (`test_cli_reproduce.py:403, 643, 779`), so those files are naturally fresh —
-  which is itself evidence the guard matches how a real run behaves.
-- **The fix pattern already exists** and is copyable verbatim: module-level `_RUN_START`
-  (`test_reproduce.py:2343`), an mtime-stamping writer `_write_notebook` (`:2364`), and
-  `run_started_at=_RUN_START` through `_run`'s `**overrides`.
-
-There is no `conftest.py` in `tests/`; helpers are file-local, so the new stamping helpers
-follow the same convention.
-
-## 6. Ambiguities / open questions for the interview
-
-1. **Opt-out flag: none (recommended) or `--allow-stale-artifacts`?** §4a argues none.
-2. **Is the flat `--results` path in scope?** The dig says yes (§2, surface 4) — excluding
-   it re-files R2 rather than closing it. Confirm.
-3. **`run_started_at`: required keyword, or keep defaulted + raise on the guarded branches?**
-   §4b. Required-keyword is louder but touches more call sites at once.
-4. **Message wording**: reuse *"was not rewritten by this run (mtime predates run start)"*
-   verbatim per surface, with the artifact kind swapped (`results file`/`locator file`/
-   `table`), or one uniform noun? Consistency helps; per-kind nouns match existing messages.
-5. **Does the flat-results guard fire per-claim or once per run?** The file is read once at
-   `:1226`; a stale one should mark **every** flat claim `unverified` with the freshness
-   reason, not the existing *"results file is missing or unparseable"* message, which would
-   be actively misleading (the file parses fine — it is just stale).
-
-## 7. Guardrail check (`CLAUDE.md`)
-
-- **Layer 2, squarely.** This is verify/reproduce hardening — "make every verdict harder to
-  fool" (`CAPABILITY_ROADMAP.md:1325`). Nothing here authors a workflow from English.
-- **Moat #1 (verification infrastructure).** It removes a false-pass class from the verdict,
-  which is the durable asset; a better base model does not make it redundant.
-- **No wet-lab/clinical/proprietary-data dependency.** Pure engine work.
-- **Stdlib-only holds** — `stat()`, already used.
-- **Honesty contract preserved**: every new failure path is `UNVERIFIED`, never `DIVERGED`,
-  matching the shipped rule that formatting/availability problems must not be misread as a
-  failed reproduction.
-
-## 8. Honest limits this slice inherits (must be restated, not "fixed")
-
-- **R1** — coarse-mtime filesystems can yield a false `UNVERIFIED`. Accepted deliberately;
-  **no fudge tolerance**. A false `UNVERIFIED` is honest and recoverable; a false
-  `REPRODUCED` is not.
-- **R1a** — the guard proves *rewritten*, not *recomputed*. A `--run` of
-  `cp committed.json out.json` passes while computing nothing. It closes the dominant honest
-  hole, not adversarial self-deceit.
+On-thesis Layer 2: intake for run → self-heal → verify → reproduce. No NL→workflow authoring,
+no wet-lab/clinical dependency, no proprietary data. The one genuinely new risk is **executing
+third-party code Contig itself fetched** — which is why the opt-in gate and the argv-injection
+refusal are requirements, not polish.
