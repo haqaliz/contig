@@ -83,8 +83,15 @@ All notable changes to Contig are recorded here. The format follows
     mechanism used the permissive local transport and proves *client* mechanics only. Tag and
     branch `--rev` have no such dependency. As with every C8 slice there is **no real git,
     network, or repo in CI** (the `Fetcher` is injected), so correctness here is reasoned and
-    unit-tested, not observed; the manual real-network gate — which carries slice 6's
-    never-run checklist as well as this slice's — is the only real validation. No new
+    unit-tested, not observed. **The manual real-network gate was RUN for this slice** (against
+    `octocat/Hello-World` and `octocat/Spoon-Knife`), carrying slice 6's never-run checklist as
+    well: a real bare-SHA fetch from GitHub records a pin matching the checked-out `HEAD`, a
+    branch resolves correctly, a bogus rev leaves no bundle, and a claim against a **committed**
+    file whose value *exactly* matches reports `UNVERIFIED` — with a positive control confirming
+    the guard still reports `REPRODUCED` when the run does rewrite the file. **The gate caught a
+    real defect:** GitHub returns `not our ref` for a nonexistent commit *and* for a policy
+    refusal, so the first R6 message misattributed a typo'd SHA to a server-policy problem; it
+    now names both causes and says to check the SHA first. No new
     dependency (stdlib `subprocess` through the existing seam); `git` is required only on the
     remote path, as already.
 

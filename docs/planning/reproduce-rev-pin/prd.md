@@ -266,6 +266,48 @@ Test-first. Layers, in order:
 
 ---
 
+## Manual gate — RUN, 2026-07-23 (real network, real git, real public repos)
+
+Executed against `github.com/octocat/Hello-World` and `github.com/octocat/Spoon-Knife`,
+pre-merge rather than post-merge. **All checks passed.** Slice 6's outstanding checklist was
+run at the same time and also passed.
+
+Slice 6 (was outstanding since v0.47.0):
+
+- [x] Real clone through the real seam; SHA recorded. `source_commit` =
+      `b1b3f9723831141a31a1a7252a213e216ea76e56`, and `git rev-parse HEAD` in the checkout
+      returns the same — the recorded pin matches the tree on disk.
+- [x] **Relative** `--runs-dir` (the v0.47.0 bug) — every invocation used a relative dir.
+- [x] A value living in a **committed** file the run never rewrites reports `UNVERIFIED`, not
+      `REPRODUCED`: a claim of `384` against Spoon-Knife's committed `styles.css`, where the
+      committed value is **exactly** 384, returned
+      `locator file 'styles.css' was not rewritten by this run (mtime predates run start)`.
+- [x] **Positive control** (not in the original checklist, added because an always-UNVERIFIED
+      guard would also pass the check above): the same claim with a run that *does* rewrite
+      `styles.css` returns `REPRODUCED`. The guard discriminates.
+
+Slice 7:
+
+- [x] `--rev <full sha>` of a **non-HEAD** commit → `source_commit` equals that SHA.
+      **This is the check CI structurally cannot make**: it confirms GitHub really does serve
+      `want <sha>`, which unit tests can only assume.
+- [x] `--rev <branch>` (`test`) → resolved to `b3cbd5bb…`, matching `git ls-remote`;
+      `requested_rev` recorded as `test` in `reproduce.json`.
+- [x] `--rev <bogus sha>` → exit non-zero, **no bundle directory**.
+- [x] `--rev` + local repo → refused pre-run, no bundle.
+- [x] `--rev <short sha>` → refused pre-run naming the full form, no bundle.
+- [x] `--rev` without `--allow-fetch` → the existing slice-6 refusal naming `--allow-fetch`.
+- [x] Round-trip: the requested SHA, the recorded `source_commit`, and the checked-out `HEAD`
+      are all the same string.
+
+**One defect found and fixed by this gate, invisible to CI:** GitHub returns `not our ref` for
+a **nonexistent** commit *and* for a policy refusal — git does not distinguish them. The
+original R6 message therefore told a user with a typo'd SHA that their remote might not enable
+`uploadpack.allowReachableSHA1InWant`, which is misleading. The message now names both
+possibilities and tells them to check the SHA first. This is precisely the class of bug the
+gate exists to catch, and the second consecutive C8 slice where a green suite proved the
+wiring but not the invocation.
+
 ## Post-merge validation (manual, not CI) — MANDATORY
 
 **[Decision D3.]** This slice carries slice 6's outstanding checklist as well as its own,

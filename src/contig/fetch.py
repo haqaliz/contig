@@ -301,10 +301,12 @@ class FetchResult:
 _FULL_SHA_RE = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
 
 
-# The shape git uses when a server refuses `want <sha>` -- i.e. it does not
-# enable uploadpack.allowReachableSHA1InWant. Matched as a case-insensitive
-# substring (not a regex) so an unrelated fetch failure is never mislabelled
-# with a cause it does not have.
+# The shape git uses when a remote refuses to serve a revision by name.
+# Observed against real GitHub: this fires BOTH when the commit does not exist
+# and when the server refuses `want <sha>` (no
+# uploadpack.allowReachableSHA1InWant) -- git does not distinguish them, so
+# neither does the message. Matched as a case-insensitive substring (not a
+# regex) so an unrelated fetch failure is never mislabelled.
 _NOT_OUR_REF_MARKERS = ("not our ref", "upload-pack")
 
 
@@ -402,9 +404,11 @@ def fetch_repo(
                 # clone: that can pull gigabytes on exactly the large published
                 # repos this targets.
                 reason += (
-                    "\nThe remote may not allow fetching a bare commit "
-                    "(uploadpack.allowReachableSHA1InWant). Pass a tag or "
-                    "branch to --rev instead."
+                    "\nThe remote refused to serve that revision by name. Either "
+                    "it does not exist (check the SHA), or the remote does not "
+                    "allow fetching a bare commit "
+                    "(uploadpack.allowReachableSHA1InWant) -- in which case pass "
+                    "a tag or branch to --rev instead."
                 )
             return FetchResult.refuse(reason)
 
