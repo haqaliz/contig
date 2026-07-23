@@ -73,8 +73,12 @@ def write_reproduce_bundle(record: ReproduceRecord, dest_dir: str | Path) -> Pat
     """Serialize ``record`` to ``dest_dir/reproduce_record.json`` and return that path.
 
     Also writes ``dest_dir/reproduce.json``, the small re-runnable manifest (repo +
-    run_command + claims_sha256, no absolute scratch paths -- mirrors LaunchManifest's
-    discipline of omitting scratch/outdir paths). When ``CONTIG_SIGNING_KEY`` is set,
+    run_command + claims_sha256 + source_url + source_commit, no absolute scratch
+    paths -- mirrors LaunchManifest's discipline of omitting scratch/outdir paths;
+    for a remote run ``repo`` holds the URL and the local checkout path is never
+    persisted). ``source_url``/``source_commit`` are emitted unconditionally --
+    present and ``null`` for a local run -- so a consumer can always read the key
+    without a ``.get()`` dance. When ``CONTIG_SIGNING_KEY`` is set,
     also writes a detached signature sidecar over the record's canonical content, via
     the same ``_maybe_write_signature`` used for RunRecord -- it only calls
     ``record.model_dump(mode="json")`` under the hood, so it signs a ReproduceRecord
@@ -92,6 +96,8 @@ def write_reproduce_bundle(record: ReproduceRecord, dest_dir: str | Path) -> Pat
         "run_command": record.run_command,
         "claims_sha256": record.claims_sha256,
         "created_at": record.created_at,
+        "source_url": record.source_url,
+        "source_commit": record.source_commit,
     }
     (dest / "reproduce.json").write_text(json.dumps(manifest, indent=2))
 
