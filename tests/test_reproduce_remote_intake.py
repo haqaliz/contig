@@ -13,12 +13,18 @@ strict TDD applies to each phase as it's added.
 
 from __future__ import annotations
 
+import json
+import time
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
+from contig.cli import app
 from contig.fetch import FetchResult, RepoArgument, classify_repo_argument, fetch_repo
 from contig.runner import _git_clone_argv, _git_rev_parse_argv, default_fetcher
+
+runner = CliRunner()
 
 
 # ---------------------------------------------------------------------------
@@ -399,3 +405,275 @@ def test_fetch_repo_cleanup_preserves_a_parent_the_caller_already_owned(tmp_path
 def test_fetch_result_refusal_cannot_be_constructed_with_a_path_or_commit():
     with pytest.raises(ValueError):
         FetchResult(path=Path("/tmp/x"), commit=None, refusal="not allowed")
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: the CLI wiring -- `contig reproduce <https url> --allow-fetch`.
+#
+# These drive the real `reproduce` command through CliRunner with two seams
+# faked: the Fetcher (no git, no network) and the command executor (no
+# subprocess), following tests/test_cli_reproduce.py's conventions.
+#
+# The fetcher below materializes a checkout tree the way a real `git clone`
+# does -- every file written AT CLONE TIME -- because the ordering of the
+# clone against the CLI's `run_started_at` freshness stamp is precisely what
+# the first test in this section pins.
+# ---------------------------------------------------------------------------
+
+
+class _ScriptedCheckoutFetcher:
+    """A Fetcher that simulates `git clone` by materializing a checkout tree.
+
+    `files` maps checkout-relative paths to text. The clone call (call 1)
+    writes them into the destination named in the clone argv, so each file's
+    mtime is the CLONE INSTANT -- exactly as a real clone leaves it. Call 2
+    is `git rev-parse HEAD` and returns `commit`.
+
+    `settle` sleeps briefly after the write so the clone instant is
+    measurably earlier than anything the CLI timestamps afterwards; without
+    it a correctly-ordered clone could share a float mtime with the stamp
+    taken microseconds later and make the freshness assertion flaky.
+    """
+
+    def __init__(
+        self,
+        files=None,
+        commit=_A_SHA,
+        clone_code=0,
+        clone_output="Cloning into '...'\n",
+        settle=0.05,
+    ):
+        self.files = dict(files or {})
+        self.commit = commit
+        self.clone_code = clone_code
+        self.clone_output = clone_output
+        self.settle = settle
+        self.calls: list[tuple[list[str], Path]] = []
+
+    def __call__(self, argv: list[str], cwd: Path) -> tuple[int, str]:
+        self.calls.append((list(argv), Path(cwd)))
+        if len(self.calls) == 1:
+            if self.clone_code != 0:
+                return self.clone_code, self.clone_output
+            dest = Path(argv[-1])
+            for name, text in self.files.items():
+                path = dest / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
+            time.sleep(self.settle)
+            return 0, self.clone_output
+        return 0, self.commit + "\n"
+
+
+_URL = "https://github.com/lab/paper-code"
+
+
+def _claims_file(tmp_path, claims):
+    path = tmp_path / "claims.json"
+    path.write_text(json.dumps(claims))
+    return path
+
+
+def _bundle_dirs(runs_dir: Path) -> list[Path]:
+    if not runs_dir.exists():
+        return []
+    return sorted(p for p in runs_dir.iterdir() if p.is_dir())
+
+
+def _read_record(runs_dir: Path) -> dict:
+    (bundle,) = _bundle_dirs(runs_dir)
+    return json.loads((bundle / "reproduce_record.json").read_text())
+
+
+def _invoke(tmp_path, claims, runs_dir, *, repo=_URL, extra=()):
+    return runner.invoke(
+        app,
+        [
+            "reproduce",
+            repo,
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+            *extra,
+        ],
+    )
+
+
+def test_committed_results_file_in_a_fetched_checkout_stays_unverified(
+    tmp_path, monkeypatch
+):
+    """THE freshness regression: a clone must precede the run-start stamp.
+
+    The checkout ships a COMMITTED results.json whose value exactly equals the
+    claim, and the run rewrites nothing. If the clone runs before the
+    `run_started_at` stamp (correct), every cloned file is older than the
+    boundary and the claim stays UNVERIFIED. If the clone runs after the stamp,
+    every author-committed artifact looks freshly written and this reports a
+    false REPRODUCED -- the exact hole the freshness guard exists to close, on
+    the one code path (real published repos) where it matters most.
+    """
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    runs_dir = tmp_path / "runs"
+    fetcher = _ScriptedCheckoutFetcher(files={"results.json": json.dumps({"auc": 0.9})})
+    monkeypatch.setattr("contig.cli.default_fetcher", fetcher)
+    # The run itself writes nothing: only the authors' committed file is on disk.
+    monkeypatch.setattr("contig.cli.default_command_executor", lambda cmd, cwd: (0, ""))
+
+    result = _invoke(tmp_path, claims, runs_dir, extra=["--allow-fetch"])
+
+    assert result.exit_code == 0, result.output
+    record = _read_record(runs_dir)
+    (claim,) = record["claim_results"]
+    assert claim["status"] == "unverified", record
+
+
+def test_remote_url_without_allow_fetch_is_refused_and_writes_no_bundle(
+    tmp_path, monkeypatch
+):
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    runs_dir = tmp_path / "runs"
+    fetcher = _ScriptedCheckoutFetcher(files={"results.json": json.dumps({"auc": 0.9})})
+    monkeypatch.setattr("contig.cli.default_fetcher", fetcher)
+    monkeypatch.setattr("contig.cli.default_command_executor", lambda cmd, cwd: (0, ""))
+
+    result = _invoke(tmp_path, claims, runs_dir)
+
+    assert result.exit_code != 0
+    assert "--allow-fetch" in result.output
+    assert fetcher.calls == []
+    assert _bundle_dirs(runs_dir) == []
+
+
+def test_remote_run_records_source_url_and_commit_and_keeps_repo_as_the_url(
+    tmp_path, monkeypatch
+):
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    runs_dir = tmp_path / "runs"
+    fetcher = _ScriptedCheckoutFetcher()
+    monkeypatch.setattr("contig.cli.default_fetcher", fetcher)
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor",
+        lambda cmd, cwd: ((cwd / "results.json").write_text(json.dumps({"auc": 0.9})), (0, ""))[1],
+    )
+
+    result = _invoke(tmp_path, claims, runs_dir, extra=["--allow-fetch"])
+
+    assert result.exit_code == 0, result.output
+    record = _read_record(runs_dir)
+    assert record["source_url"] == _URL
+    assert record["source_commit"] == _A_SHA
+    # The URL, never the local scratch checkout path.
+    assert record["repo"] == _URL
+
+    (bundle,) = _bundle_dirs(runs_dir)
+    manifest = json.loads((bundle / "reproduce.json").read_text())
+    assert manifest["source_url"] == _URL
+    assert manifest["source_commit"] == _A_SHA
+    assert manifest["repo"] == _URL
+
+    (claim,) = record["claim_results"]
+    assert claim["status"] == "reproduced"
+
+
+def test_failed_fetch_exits_nonzero_and_leaves_no_bundle_directory(tmp_path, monkeypatch):
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    runs_dir = tmp_path / "runs"
+    fetcher = _ScriptedCheckoutFetcher(
+        clone_code=128, clone_output="fatal: repository not found"
+    )
+    monkeypatch.setattr("contig.cli.default_fetcher", fetcher)
+    monkeypatch.setattr("contig.cli.default_command_executor", lambda cmd, cwd: (0, ""))
+
+    result = _invoke(tmp_path, claims, runs_dir, extra=["--allow-fetch"])
+
+    assert result.exit_code != 0
+    assert "clone" in result.output.lower()
+    assert _bundle_dirs(runs_dir) == []
+
+
+def test_locator_escaping_the_repo_is_refused_before_any_clone(tmp_path, monkeypatch):
+    """Containment must still bite in remote mode.
+
+    Joining onto a raw URL string would make the guard a lexical no-op
+    (`Path("https://x/y") / "../../etc/passwd"` resolves "inside"
+    `Path("https://x/y")`), silently disabling it exactly when the repo is
+    untrusted third-party code. The guard runs against the prospective
+    checkout path, so it refuses BEFORE the clone -- asserted here by the
+    fetcher never being called.
+    """
+    claims = _claims_file(
+        tmp_path,
+        [{"id": "auc", "value": 0.9, "from": "../../etc/passwd", "path": "auc"}],
+    )
+    runs_dir = tmp_path / "runs"
+    fetcher = _ScriptedCheckoutFetcher()
+    monkeypatch.setattr("contig.cli.default_fetcher", fetcher)
+    monkeypatch.setattr("contig.cli.default_command_executor", lambda cmd, cwd: (0, ""))
+
+    result = _invoke(tmp_path, claims, runs_dir, extra=["--allow-fetch"])
+
+    assert result.exit_code != 0
+    assert "escapes the repo" in result.output
+    assert fetcher.calls == []
+    assert _bundle_dirs(runs_dir) == []
+
+
+def test_results_path_escaping_the_repo_is_refused_before_any_clone(tmp_path, monkeypatch):
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    runs_dir = tmp_path / "runs"
+    fetcher = _ScriptedCheckoutFetcher()
+    monkeypatch.setattr("contig.cli.default_fetcher", fetcher)
+    monkeypatch.setattr("contig.cli.default_command_executor", lambda cmd, cwd: (0, ""))
+
+    result = _invoke(
+        tmp_path,
+        claims,
+        runs_dir,
+        extra=["--allow-fetch", "--results", "../../secret.json"],
+    )
+
+    assert result.exit_code != 0
+    assert "--results path escapes the repo" in result.output
+    assert fetcher.calls == []
+    assert _bundle_dirs(runs_dir) == []
+
+
+def test_locator_containment_is_evaluated_against_the_checkout_not_the_url(
+    tmp_path, monkeypatch
+):
+    """The guard's base must be the prospective checkout path, not the URL.
+
+    This is the discriminating case. A `from` of "../source/results.json"
+    stays INSIDE the checkout (`<runs_dir>/<id>/source`) and must be allowed.
+    Joining it onto the raw URL string instead gives a relative path anchored
+    at the process cwd -- `Path("https://github.com/lab/paper-code") /
+    "../source/results.json"` resolves to `<cwd>/https:/github.com/lab/source/
+    results.json`, outside `<cwd>/https:/github.com/lab/paper-code` -- so the
+    guard would refuse a legitimate locator. Escaping paths (tested above) are
+    refused under either base, which is why they alone cannot catch a wrong
+    base; this one can.
+    """
+    claims = _claims_file(
+        tmp_path,
+        [{"id": "auc", "value": 0.9, "from": "../source/results.json", "path": "auc"}],
+    )
+    runs_dir = tmp_path / "runs"
+    fetcher = _ScriptedCheckoutFetcher()
+    monkeypatch.setattr("contig.cli.default_fetcher", fetcher)
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor",
+        lambda cmd, cwd: (
+            (cwd / "results.json").write_text(json.dumps({"auc": 0.9})),
+            (0, ""),
+        )[1],
+    )
+
+    result = _invoke(tmp_path, claims, runs_dir, extra=["--allow-fetch"])
+
+    assert result.exit_code == 0, result.output
+    assert "escapes the repo" not in result.output
+    (claim,) = _read_record(runs_dir)["claim_results"]
+    assert claim["status"] == "reproduced"

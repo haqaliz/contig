@@ -1188,3 +1188,89 @@ def test_reproduce_docstring_notes_pattern_locator_support():
     assert "stdout" in doc
     assert "group 1" in doc
     assert "unverified" in doc
+
+
+def test_reproduce_registers_allow_fetch_flag():
+    # Same reasoning as test_reproduce_registers_allow_install_flag: introspect
+    # the Click command rather than scraping Rich-rendered `--help`.
+    import typer
+
+    reproduce_cmd = typer.main.get_command(app).commands["reproduce"]
+    opts = [o for p in reproduce_cmd.params for o in (list(p.opts) + list(p.secondary_opts))]
+    assert "--allow-fetch" in opts
+    assert "--no-allow-fetch" in opts
+
+
+def test_reproduce_allow_fetch_does_not_imply_allow_install(tmp_path, monkeypatch):
+    # The two flags gate different side effects (fetching code vs mutating the
+    # environment). Passing --allow-fetch on a LOCAL repo must leave the
+    # installer seam untouched when a run fails on a missing module.
+    repo = _repo(tmp_path)
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    installer_calls = []
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor",
+        _fake_executor(results=None, exit_code=1, output="ModuleNotFoundError: No module named 'numpy'"),
+    )
+    monkeypatch.setattr(
+        "contig.cli.default_installer",
+        lambda *a, **k: installer_calls.append((a, k)) or (0, ""),
+    )
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--allow-fetch",
+        ],
+    )
+    assert result.exit_code == 0
+    assert installer_calls == []
+
+
+def test_reproduce_local_run_leaves_source_url_and_commit_null(tmp_path, monkeypatch):
+    # A local-path run is unchanged by the remote-intake wiring: no fetch, and
+    # both provenance fields stay None (emitted as null in the manifest).
+    repo = _repo(tmp_path)
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor", _fake_executor({"auc": 0.9})
+    )
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        [
+            "reproduce",
+            str(repo),
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+        ],
+    )
+    assert result.exit_code == 0
+    (bundle,) = [p for p in runs_dir.iterdir() if p.is_dir()]
+    record = json.loads((bundle / "reproduce_record.json").read_text())
+    assert record["source_url"] is None
+    assert record["source_commit"] is None
+    assert record["repo"] == str(repo)
+    manifest = json.loads((bundle / "reproduce.json").read_text())
+    assert manifest["source_url"] is None
+    assert manifest["source_commit"] is None
+
+
+def test_reproduce_docstring_covers_the_remote_url_form():
+    from contig.cli import reproduce
+
+    doc = (reproduce.__doc__ or "").lower()
+    assert "https://" in doc
+    assert "--allow-fetch" in doc
+    assert "clone" in doc
