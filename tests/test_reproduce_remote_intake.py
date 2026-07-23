@@ -1,19 +1,24 @@
-"""Boundary tests for C8 slice 6 phase 1: the pure repo-argument classifier
-`classify_repo_argument` that decides how `contig reproduce` should treat its
-`repo` argument -- local path, remote https URL, or refusal.
+"""Boundary tests for C8 slice 6: remote-repo intake for `contig reproduce`.
 
-Strict TDD: this file is written before `classify_repo_argument`/`RepoArgument`
-exist in src/contig/fetch.py.
+Phase 1 -- the pure repo-argument classifier `classify_repo_argument` that
+decides how `contig reproduce` should treat its `repo` argument -- local path,
+remote https URL, or refusal. It does no I/O of any kind; a later phase adds
+the fetching.
 
-`classify_repo_argument` does no I/O of any kind. It only classifies the
-string; a later slice adds the fetching.
+Phase 2 -- the injectable `Fetcher` seam in src/contig/runner.py (fixed git
+argv builders + the default subprocess implementation) that a later task uses
+to actually clone. `classify_repo_argument`/`RepoArgument` predate this file;
+strict TDD applies to each phase as it's added.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from contig.fetch import RepoArgument, classify_repo_argument
+from contig.runner import _git_clone_argv, _git_rev_parse_argv, default_fetcher
 
 
 # ---------------------------------------------------------------------------
@@ -179,3 +184,49 @@ def test_kind_and_refusal_are_mutually_exclusive(arg):
 def test_refusal_cannot_be_constructed_with_a_kind():
     with pytest.raises(ValueError):
         RepoArgument(kind="local", url=None, refusal="not allowed")
+
+
+# ---------------------------------------------------------------------------
+# Fetcher seam: fixed argv builders + the default subprocess implementation.
+#
+# `default_fetcher`'s success path (a real `git clone`/`git rev-parse` running
+# against the network) is intentionally NEVER exercised here -- mirrors
+# tests/verification/test_count_quantifier.py:1-8. Only the pure argv builders
+# and the FileNotFoundError -> non-zero conversion (safe: touches no git, no
+# network) are tested. A later task injects a fake Fetcher for the real
+# clone-orchestration tests.
+# ---------------------------------------------------------------------------
+
+
+def test_git_clone_argv_is_exact():
+    argv = _git_clone_argv("https://github.com/lab/paper-code", Path("/tmp/dest"))
+    assert argv == [
+        "git",
+        "clone",
+        "--depth",
+        "1",
+        "--",
+        "https://github.com/lab/paper-code",
+        "/tmp/dest",
+    ]
+
+
+def test_git_clone_argv_places_url_after_the_dashdash_terminator():
+    # Asserting on index positions (not just membership) so a refactor that
+    # drops the `--` terminator -- letting a crafted url be read as an option
+    # -- fails this test.
+    argv = _git_clone_argv("https://github.com/lab/paper-code", Path("/tmp/dest"))
+    dashdash_index = argv.index("--")
+    url_index = argv.index("https://github.com/lab/paper-code")
+    assert url_index == dashdash_index + 1
+
+
+def test_git_rev_parse_argv_is_exact():
+    assert _git_rev_parse_argv() == ["git", "rev-parse", "HEAD"]
+
+
+def test_default_fetcher_converts_missing_binary_to_nonzero_not_exception(tmp_path):
+    # Deliberately non-existent executable name: touches no git, no network.
+    code, output = default_fetcher(["contig-nonexistent-git-binary-xyz"], tmp_path)
+    assert code != 0
+    assert "contig-nonexistent-git-binary-xyz" in output
