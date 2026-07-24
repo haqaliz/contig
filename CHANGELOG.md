@@ -65,6 +65,53 @@ All notable changes to Contig are recorded here. The format follows
     import inside the seam — no new runtime dependency. Test-first; **no real LLM, network, PDF,
     or repo in CI**. Plan/PRD under `docs/planning/reproduce-paper-claims/`.
 
+- **`contig reproduce` now records a deterministic content hash of the fetched checkout tree,
+  closing the gap slice 6 disclosed in its own words: "hashing the tree is deliberately a
+  separate slice" (C8 slice 8).** Slices 6/7 recorded and pinned the resolved commit
+  (`source_commit`) but the `source/` checkout itself stayed unhashed and unsigned — modifiable
+  after the run with nothing detecting it. This slice attests the actual bytes checked out, not
+  only the nominal commit.
+  - **The algorithm is published so a third party can recompute it byte-for-byte, without git or
+    Contig's source.** `compute_tree_sha256(root)`: walk the tree with
+    `os.walk(followlinks=False)`; prune any directory component named `.git` (at any depth) and
+    any symlinked directory; for each regular, non-symlink file the key is its POSIX-relative
+    path and the value is its SHA-256; fold the lines `f"{relpath}\0{hexdigest}\n"` (NUL
+    delimiter — illegal in POSIX paths), **sorted** by that string; SHA-256 the UTF-8
+    concatenation; return the hex digest. A missing or non-directory root, or any `OSError` while
+    reading a file, returns `None` for the **whole** result — never a partial or fabricated
+    digest.
+  - **Scope: remote (`--allow-fetch`) runs only, taken pre-run.** The hash is computed right
+    after `fetch_repo` succeeds and before the `run_started_at` freshness stamp, over the
+    `source/` checkout — so neither an `--allow-install` retry nor anything the run itself writes
+    into the checkout can ever change the recorded digest. Local repo-path runs record
+    `source_tree_sha256: None`.
+  - **Signed.** `ReproduceRecord.source_tree_sha256: str | None = None` is additive and rides the
+    existing `canonical_record_bytes` signature — no change to the signing code itself.
+    `reproduce.json` gains an unsigned echo of the same value, emitted unconditionally (`null`
+    for a local run), matching how `source_url`/`source_commit` are emitted.
+  - **What it adds over `source_commit` — stated honestly, not oversold.** For a remote run
+    pinned by a **full SHA**, the git commit already cryptographically binds its tree, so
+    re-cloning and checking `git rev-parse HEAD` proves much the same thing; the tree hash is not
+    novel there. Its marginal, non-redundant value is: (a) the `--rev` **tag or branch** case
+    slice 7 explicitly left "not attested"; (b) **git-free verification** — an auditor can
+    recompute the digest from files alone, with no git and no network; and (c) groundwork for the
+    deferred local-path and shipped-`source/` hashing, where there is no commit at all.
+  - **Honest limits.** It attests the bytes present at hash time, not that they were
+    *scientifically* recomputed — the same boundary the freshness guard already draws (R1). And
+    it attests the commit↔tree linkage verifiable by re-clone; it deliberately does **not** make
+    the bundle's post-run `source/` copy self-checkable, since that copy gains the run's own
+    outputs *after* the hash is taken — hashing the shipped, post-run tree is a distinct, deferred
+    feature (R3).
+  - **Caveat for signing users — the third disclosed signature break, not fixed.** Adding a field
+    to the signed record changes `canonical_record_bytes`, so a pre-slice-8 **signed** reproduce
+    bundle still **loads** (the new field defaults to `None`, back-compat tested) but its
+    signature **no longer verifies**. This is the third consecutive break — after slice 6's
+    `source_url`/`source_commit` and the somatic empty-call-set slice's `verdict` — bounded to
+    opt-in `CONTIG_SIGNING_KEY` signers, and pinned by
+    `test_pre_slice_8_signature_over_a_record_without_tree_hash_no_longer_verifies` rather than
+    left latent.
+  - No new dependency (stdlib `hashlib`/`os` only).
+
 ## [0.48.0] - 2026-07-23
 
 ### Added

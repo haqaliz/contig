@@ -678,3 +678,4 @@ class ReproduceRecord(BaseModel):
     repair_history: list[RepairStep] = []
     source_url: str | None = None
     source_commit: str | None = None
+    source_tree_sha256: str | None = None
