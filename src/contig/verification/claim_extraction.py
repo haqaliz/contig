@@ -18,9 +18,13 @@ UNVERIFIED -- extraction can never manufacture a false REPRODUCED.
 
 from __future__ import annotations
 
+import json
 import math
+import os
 import re
 from dataclasses import dataclass
+
+from contig import detect
 
 _DEFAULT_TOLERANCE = 0.1
 
@@ -273,3 +277,152 @@ def _unique_id(slug: str, used_ids: set[str]) -> str:
     candidate = f"{slug}_{n}"
     used_ids.add(candidate)
     return candidate
+
+
+# --- optional, env-gated LLM assist (aspect `llm-assist`) ----------------------
+# A pure no-op unless a provider AND its key are configured (the gate is
+# `detect._selected_provider`, the single source of truth shared with the `llm`
+# detector). When configured, one prompt is sent through `_llm_complete` -- the
+# ONLY place a provider SDK is imported (lazily) or the network is touched -- and
+# the reply is parsed defensively. Every failure (provider/network/parse/shape)
+# degrades to `[]`: the deterministic core always stands alone.
+
+
+def _build_extraction_prompt(text: str) -> str:
+    """One prompt asking for a strict JSON list of numeric claims.
+
+    The contract (shared with `cli-command` and the review sidecar) is a JSON
+    list of `{"metric": str, "value": number, "unit": str|null,
+    "source_text": str}` and nothing else.
+    """
+    return (
+        "You are a scientific-paper claim extractor. From the paper text below, "
+        "extract every quantitative result claim: a named metric bound to a "
+        "numeric value.\n\n"
+        'Reply with ONLY a JSON list of objects, each '
+        '{"metric": string, "value": number, "unit": string or null, '
+        '"source_text": string (the sentence the value came from)}. '
+        "For a percentage use the raw number and unit \"%\" (87, not 0.87). "
+        "Return [] if there are no claims. Output the JSON list and nothing else."
+        "\n\nPaper text:\n" + text + "\n"
+    )
+
+
+def _llm_complete(provider: str, prompt: str) -> str:
+    """Send one prompt to the selected provider and return the raw text reply.
+
+    This is the ONLY place a provider SDK is imported (lazily) or the network is
+    touched, so the whole assist is mocked by monkeypatching this one function.
+    Its shape mirrors `detect._llm_complete` but it is a SEPARATE, module-local
+    seam so extraction is mockable independently of the failure detector. The API
+    key is read from env here and never logged or returned.
+    """
+    key_env = detect._LLM_PROVIDER_KEY_ENV[provider]
+    api_key = os.environ[key_env]
+    if provider == "claude":
+        from anthropic import Anthropic
+
+        client = Anthropic(api_key=api_key)
+        resp = client.messages.create(
+            model="claude-opus-4-8",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return "".join(
+            block.text for block in resp.content if getattr(block, "type", None) == "text"
+        )
+    # openai
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key)
+    resp = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return resp.choices[0].message.content or ""
+
+
+def _claims_from_reply(reply: str) -> list[ExtractedClaim]:
+    """Parse a model reply into `ExtractedClaim`s, swallowing every error.
+
+    Tolerant of a JSON list wrapped in prose (list-analogue of
+    `detect._extract_json_object`). Each entry needs a finite, non-bool numeric
+    `value`; ids are the same slug+uniquify rule as the core; `origin="llm"`.
+    Any provider/parse/shape problem (including a raised exception) degrades to
+    `[]` -- this never raises (mirrors `_diagnosis_from_reply`).
+    """
+    try:
+        entries = _extract_json_list(reply)
+        if entries is None:
+            return []
+        claims: list[ExtractedClaim] = []
+        used_ids: set[str] = set()
+        for entry in entries:
+            claim = _claim_from_entry(entry, used_ids)
+            if claim is not None:
+                claims.append(claim)
+        return claims
+    except Exception:
+        return []
+
+
+def _extract_json_list(text: str) -> list | None:
+    """Parse a top-level JSON list out of a reply, or None if not a list."""
+    stripped = text.strip()
+    try:
+        obj = json.loads(stripped)
+    except (ValueError, TypeError):
+        return None
+    return obj if isinstance(obj, list) else None
+
+
+def _claim_from_entry(entry: object, used_ids: set[str]) -> ExtractedClaim | None:
+    """Build one llm-origin `ExtractedClaim` from a reply entry, or None.
+
+    Requires a dict with a finite, non-bool numeric `value`. `metric`, `unit`
+    and `source_text` are coerced to their expected types; a missing/invalid
+    entry contributes nothing (skipped, never raised).
+    """
+    if not isinstance(entry, dict):
+        return None
+    raw_value = entry.get("value")
+    if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
+        return None
+    value = float(raw_value)
+    if not math.isfinite(value):
+        return None
+    metric = str(entry.get("metric") or "")
+    raw_unit = entry.get("unit")
+    unit = str(raw_unit) if isinstance(raw_unit, str) and raw_unit else None
+    source_text = str(entry.get("source_text") or "")
+    claim_id = _unique_id(_slug(metric), used_ids)
+    return ExtractedClaim(
+        id=claim_id,
+        value=value,
+        metric=metric,
+        unit=unit,
+        source_text=source_text,
+        origin="llm",
+    )
+
+
+def extract_with_llm(text: str) -> list[ExtractedClaim]:
+    """Optional LLM assist: extra candidate claims, or `[]` when unconfigured.
+
+    Gated by `detect._selected_provider()` (the shared env gate): unconfigured
+    (`CONTIG_LLM_PROVIDER` unset / unknown / missing key) returns `[]` without
+    importing a provider SDK or touching the network. When configured, one
+    extraction prompt is sent through the module-local `_llm_complete` seam and
+    the reply is parsed defensively. Never raises.
+    """
+    provider = detect._selected_provider()
+    if provider is None:
+        return []
+    try:
+        reply = _llm_complete(provider, _build_extraction_prompt(text))
+    except Exception:
+        # A provider/network error must never crash extraction; degrade to the
+        # deterministic core alone. The exception is intentionally not logged
+        # (it can carry request context, including the key).
+        return []
+    return _claims_from_reply(reply)
