@@ -56,6 +56,18 @@ The `test_detect_llm.py` discipline — the real provider is **never** called in
   request), **never executed** in CI. A **manual pre-merge gate** (documented in the plan) runs
   it once against a real provider.
 
+## Manual pre-merge gate (human-run, once)
+
+CI never calls a real provider: the `_llm_complete` seam is monkeypatched in
+every test, and the real seam is **shape-asserted only** (a fake `anthropic`/
+`openai` module injected into `sys.modules`; the built request's `model`/
+`max_tokens`/`messages` are asserted and the key is confirmed absent from the
+request — no network). Before merge, a human runs the real path **once** with a
+real `CONTIG_LLM_PROVIDER` + key against a fixture paper, confirms claims come
+back (`origin=='llm'`), nothing raises, and no key leaks, then records the result
+in the PR description. The gate stays manual by design — a real key must never
+live in CI. (Full command in the plan's "Manual pre-merge gate" section.)
+
 ## Dependencies & sequencing
 
 After `extractor-core` (imports `ExtractedClaim`, the slug/uniquify helper, the dedup key).

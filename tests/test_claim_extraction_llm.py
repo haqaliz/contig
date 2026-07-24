@@ -276,3 +276,109 @@ def test_merge_composes_real_core_and_llm_extractions(monkeypatch) -> None:
     assert ("AUC", "heuristic") in metrics  # core kept, llm dup dropped
     assert ("F1", "llm") in metrics  # llm-only appended
     assert len({c.id for c in merged}) == len(merged)  # ids unique
+
+
+# --- Phase 4: real _llm_complete shape-asserted, NEVER executed against a net --
+# The provider SDKs are not installed; we inject a FAKE module into sys.modules
+# so the lazy `import` inside the real seam resolves to our recorder. This
+# asserts the request the seam builds (model/max_tokens/messages) without any
+# network call. This is the only test that exercises the real _llm_complete.
+
+
+def test_real_seam_builds_claude_request_without_network(monkeypatch) -> None:
+    import sys
+    import types
+
+    monkeypatch.setenv("CONTIG_LLM_PROVIDER", "claude")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "super-secret-key-value")
+
+    captured: dict = {}
+
+    class _Block:
+        type = "text"
+        text = "[]"
+
+    class _Resp:
+        content = [_Block()]
+
+    class _Messages:
+        def create(self, **kwargs):
+            captured["request"] = kwargs
+            return _Resp()
+
+    class _FakeAnthropic:
+        def __init__(self, api_key: str) -> None:
+            captured["api_key"] = api_key
+            self.messages = _Messages()
+
+    fake_mod = types.ModuleType("anthropic")
+    fake_mod.Anthropic = _FakeAnthropic
+    monkeypatch.setitem(sys.modules, "anthropic", fake_mod)
+
+    reply = claim_extraction._llm_complete("claude", "EXTRACT-PROMPT-BODY")
+
+    assert reply == "[]"  # text blocks concatenated
+    req = captured["request"]
+    assert req["model"] == "claude-opus-4-8"
+    assert isinstance(req["max_tokens"], int) and req["max_tokens"] > 0
+    assert req["messages"] == [{"role": "user", "content": "EXTRACT-PROMPT-BODY"}]
+    # the key is passed to the client but never appears in the built request
+    assert captured["api_key"] == "super-secret-key-value"
+    assert "super-secret-key-value" not in json.dumps(req)
+
+
+def test_real_seam_builds_openai_request_without_network(monkeypatch) -> None:
+    import sys
+    import types
+
+    monkeypatch.setenv("CONTIG_LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    captured: dict = {}
+
+    class _Message:
+        content = "[]"
+
+    class _Choice:
+        message = _Message()
+
+    class _Resp:
+        choices = [_Choice()]
+
+    class _Completions:
+        def create(self, **kwargs):
+            captured["request"] = kwargs
+            return _Resp()
+
+    class _Chat:
+        def __init__(self) -> None:
+            self.completions = _Completions()
+
+    class _FakeOpenAI:
+        def __init__(self, api_key: str) -> None:
+            captured["api_key"] = api_key
+            self.chat = _Chat()
+
+    fake_mod = types.ModuleType("openai")
+    fake_mod.OpenAI = _FakeOpenAI
+    monkeypatch.setitem(sys.modules, "openai", fake_mod)
+
+    reply = claim_extraction._llm_complete("openai", "EXTRACT-PROMPT-BODY")
+
+    assert reply == "[]"
+    req = captured["request"]
+    assert req["model"] == "gpt-4o"
+    assert req["messages"] == [{"role": "user", "content": "EXTRACT-PROMPT-BODY"}]
+    assert captured["api_key"] == "test-key"
+
+
+def test_claim_extraction_does_not_import_a_provider_sdk_at_module_top() -> None:
+    # Guardrail: importing claim_extraction never pulls a provider SDK, and the
+    # detect->claim_extraction edge is one-way (no import cycle).
+    import sys
+
+    assert "anthropic" not in sys.modules
+    assert "openai" not in sys.modules
+    import contig.detect as _detect
+
+    assert "claim_extraction" not in _detect.__dict__  # detect does not import us
