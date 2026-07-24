@@ -135,3 +135,161 @@ def test_extract_claims_summary_mentions_out_and_sidecar(tmp_path):
     assert "claims.draft.json" in result.output
     assert "review.md" in result.output
     assert "locator" in result.output.lower()
+
+
+def test_extract_claims_real_output_never_trips_internal_error(tmp_path):
+    # Pins the load-bearing invariant: for real extractor output the round-trip
+    # through load_claims never fails, so the internal-error path never fires.
+    paper = _paper(tmp_path)
+    out = tmp_path / "claims.draft.json"
+    result = runner.invoke(
+        app, ["extract-claims", str(paper), "--out", str(out), "--no-llm"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "internal error" not in result.output.lower()
+    load_claims(out)  # loads without raising
+
+
+# --- Phase 3: guards -- input failures, overwrite, empty, flags ----------------
+
+
+def test_extract_claims_missing_input_writes_nothing(tmp_path):
+    out = tmp_path / "claims.draft.json"
+    result = runner.invoke(
+        app, ["extract-claims", str(tmp_path / "nope.md"), "--out", str(out), "--no-llm"]
+    )
+    assert result.exit_code != 0
+    assert not out.exists()
+    assert not (tmp_path / "claims.draft.review.md").exists()
+
+
+def test_extract_claims_directory_input_refused(tmp_path):
+    d = tmp_path / "adir"
+    d.mkdir()
+    out = tmp_path / "claims.draft.json"
+    result = runner.invoke(
+        app, ["extract-claims", str(d), "--out", str(out), "--no-llm"]
+    )
+    assert result.exit_code != 0
+    assert not out.exists()
+
+
+def test_extract_claims_oversized_input_refused(tmp_path):
+    from contig.verification.reproduce import _MAX_MATCH_BYTES
+
+    paper = tmp_path / "big.md"
+    with open(paper, "wb") as handle:
+        handle.truncate(_MAX_MATCH_BYTES + 1)  # sparse: no 8 MiB actually written
+    out = tmp_path / "claims.draft.json"
+    result = runner.invoke(
+        app, ["extract-claims", str(paper), "--out", str(out), "--no-llm"]
+    )
+    assert result.exit_code != 0
+    assert str(_MAX_MATCH_BYTES) in result.output or "cap" in result.output.lower()
+    assert not out.exists()
+
+
+def test_extract_claims_non_utf8_input_refused(tmp_path):
+    paper = tmp_path / "bad.md"
+    paper.write_bytes(b"\xff\xfe\x00 not utf-8 \xff")
+    out = tmp_path / "claims.draft.json"
+    result = runner.invoke(
+        app, ["extract-claims", str(paper), "--out", str(out), "--no-llm"]
+    )
+    assert result.exit_code != 0
+    assert not out.exists()
+
+
+def test_extract_claims_out_equals_input_refused(tmp_path):
+    paper = _paper(tmp_path, name="claims.md")
+    result = runner.invoke(
+        app, ["extract-claims", str(paper), "--out", str(paper), "--no-llm"]
+    )
+    assert result.exit_code != 0
+    # The paper is untouched.
+    assert paper.read_text(encoding="utf-8") == _FIXTURE_TEXT
+
+
+def test_extract_claims_existing_out_without_force_refused(tmp_path):
+    paper = _paper(tmp_path)
+    out = tmp_path / "claims.draft.json"
+    out.write_text("PRE-EXISTING", encoding="utf-8")
+    result = runner.invoke(
+        app, ["extract-claims", str(paper), "--out", str(out), "--no-llm"]
+    )
+    assert result.exit_code != 0
+    assert "--force" in result.output
+    assert out.read_text(encoding="utf-8") == "PRE-EXISTING"  # untouched
+
+
+def test_extract_claims_force_overwrites(tmp_path):
+    paper = _paper(tmp_path)
+    out = tmp_path / "claims.draft.json"
+    out.write_text("PRE-EXISTING", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        ["extract-claims", str(paper), "--out", str(out), "--no-llm", "--force"],
+    )
+    assert result.exit_code == 0, result.output
+    assert out.read_text(encoding="utf-8") != "PRE-EXISTING"
+    load_claims(out)
+
+
+def test_extract_claims_no_llm_passes_use_llm_false(tmp_path, monkeypatch):
+    seen = {}
+
+    def _recorder(text, *, use_llm):
+        seen["use_llm"] = use_llm
+        return extract_claims(text)
+
+    monkeypatch.setattr(cli, "default_extractor", _recorder)
+    paper = _paper(tmp_path)
+    out = tmp_path / "claims.draft.json"
+    result = runner.invoke(
+        app, ["extract-claims", str(paper), "--out", str(out), "--no-llm"]
+    )
+    assert result.exit_code == 0, result.output
+    assert seen["use_llm"] is False
+
+
+def test_extract_claims_default_passes_use_llm_true(tmp_path, monkeypatch):
+    seen = {}
+
+    def _recorder(text, *, use_llm):
+        seen["use_llm"] = use_llm
+        return extract_claims(text)
+
+    monkeypatch.setattr(cli, "default_extractor", _recorder)
+    paper = _paper(tmp_path)
+    out = tmp_path / "claims.draft.json"
+    result = runner.invoke(app, ["extract-claims", str(paper), "--out", str(out)])
+    assert result.exit_code == 0, result.output
+    assert seen["use_llm"] is True
+
+
+def test_extract_claims_empty_extraction_is_exit_zero(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "default_extractor", lambda text, *, use_llm: [])
+    paper = _paper(tmp_path, text="This paragraph has no numeric metric claims at all.\n")
+    out = tmp_path / "claims.draft.json"
+    result = runner.invoke(
+        app, ["extract-claims", str(paper), "--out", str(out), "--no-llm"]
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(out.read_text()) == []
+    sidecar = tmp_path / "claims.draft.review.md"
+    assert sidecar.exists()
+    assert "no numeric claims found" in sidecar.read_text().lower()
+    assert "no numeric claims found" in result.output.lower()
+
+
+def test_extract_claims_registers_flags_and_arg():
+    import typer
+
+    cmd = typer.main.get_command(app).commands["extract-claims"]
+    opts = [o for p in cmd.params for o in (list(p.opts) + list(p.secondary_opts))]
+    assert "--out" in opts
+    assert "--no-llm" in opts
+    assert "--force" in opts
+    # The positional `paper` argument is registered.
+    arg_names = [p.name for p in cmd.params if p.param_type_name == "argument"]
+    assert "paper" in arg_names
