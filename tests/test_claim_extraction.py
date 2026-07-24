@@ -10,6 +10,7 @@ input degrades to `[]`, mirroring the never-raises resolvers in
 from __future__ import annotations
 
 import dataclasses
+import math
 
 import pytest
 
@@ -176,3 +177,122 @@ def test_distinct_metrics_sharing_a_value_are_two_claims():
         ("accuracy", 0.9),
     }
     assert len({c.id for c in claims}) == 2
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: robustness + the labeled fixture corpus
+# ---------------------------------------------------------------------------
+
+
+def test_extract_claims_never_raises_on_wild_inputs():
+    # Mirror of tests/test_reproduce_locator.py's never-raises test: a grab-bag
+    # of adversarial inputs must always yield a list, never an exception.
+    wild_inputs = [
+        "",
+        "   \n\t  ",
+        "no numbers or metrics here at all",
+        "\x00\x01\x02 control chars and \x7f delete",
+        "AUC of",  # metric + connective, no number
+        "0.9 0.9 0.9 AUC",  # numbers before the metric
+        "%%% ::: === <<< >>>",
+        "AUC of <=>= 0.5",
+        "r² r-squared r2 correlation pearson spearman",
+        "AUC of 1e999999 and accuracy of nan and recall of inf",
+        # a wall of prose with 100 numbers and scattered metric words
+        (" ".join(f"value {i} was {i}.{i}" for i in range(100))
+         + " AUC of 0.9 accuracy of 88%"),
+    ]
+    for text in wild_inputs:
+        result = extract_claims(text)
+        assert isinstance(result, list)
+        for claim in result:
+            assert isinstance(claim, ExtractedClaim)
+
+    # non-str inputs degrade to [] rather than raising
+    for bad in [None, 123, 3.14, ["AUC of 0.9"], {"text": "AUC of 0.9"}, b"AUC of 0.9"]:
+        assert extract_claims(bad) == []  # type: ignore[arg-type]
+
+
+# Labeled fixture corpus: short paper-excerpt strings, each paired with the
+# hand-labeled set of (metric_slug, value, unit) it should yield. The bar is
+# "recovers every labeled claim, emits zero malformed entries" (PRD goal #3).
+_CORPUS: tuple[tuple[str, str, set[tuple[str, float, str | None]]], ...] = (
+    (
+        "ml_results",
+        "On the held-out test set the classifier achieved an AUC of 0.94 and "
+        "an accuracy of 91%. The F1 score was 0.88, while precision reached "
+        "0.90 and recall was 0.86.",
+        {
+            ("auc", 0.94, None),
+            ("accuracy", 91.0, "%"),
+            ("f1_score", 0.88, None),
+            ("precision", 0.90, None),
+            ("recall", 0.86, None),
+        },
+    ),
+    (
+        "genomics_de",
+        "Differential expression analysis identified a log2 fold change of "
+        "-2.3 for the gene, with a Pearson correlation of 0.76 between "
+        "replicates. Specificity was 0.98.",
+        {
+            ("log2_fold_change", -2.3, None),
+            ("correlation", 0.76, None),
+            ("specificity", 0.98, None),
+        },
+    ),
+    (
+        "percent_and_inequality",
+        "The assay reached a sensitivity of 95% and a specificity of 88%. All "
+        "p-values were < 0.001, and the RMSE was 0.12.",
+        {
+            ("sensitivity", 95.0, "%"),
+            ("specificity", 88.0, "%"),
+            ("rmse", 0.12, None),
+        },
+    ),
+    (
+        "duplicate_and_distinct",
+        "In the abstract we state an AUC of 0.90. As shown in Table 2, the AUC "
+        "of 0.90 is confirmed, and the MAE was 0.05.",
+        {
+            ("auc", 0.90, None),
+            ("mae", 0.05, None),
+        },
+    ),
+)
+
+
+def test_corpus_recovers_every_labeled_claim_with_no_malformed_entries():
+    for name, text, expected in _CORPUS:
+        claims = extract_claims(text)
+        got = {(_slug(c.metric), c.value, c.unit) for c in claims}
+        # recall: every labeled claim is recovered
+        assert expected <= got, f"{name}: missed {expected - got}"
+        # precision on the corpus: no spurious extra claims
+        assert got == expected, f"{name}: unexpected extras {got - expected}"
+        # zero malformed: finite float value, non-empty id, unit is None or "%"
+        for c in claims:
+            assert isinstance(c.value, float) and math.isfinite(c.value)
+            assert isinstance(c.id, str) and c.id
+            assert c.unit in (None, "%")
+
+
+def test_corpus_percentage_keeps_raw_value_not_divided():
+    (_, text, _) = _CORPUS[2]  # percent_and_inequality
+    by_slug = {_slug(c.metric): c for c in extract_claims(text)}
+    assert by_slug["sensitivity"].value == 95.0
+    assert by_slug["sensitivity"].unit == "%"
+
+
+def test_corpus_inequality_value_is_absent():
+    (_, text, _) = _CORPUS[2]
+    assert all(c.value != 0.001 for c in extract_claims(text))
+
+
+def test_corpus_duplicate_collapses_to_one_claim():
+    (_, text, _) = _CORPUS[3]  # duplicate_and_distinct
+    claims = extract_claims(text)
+    auc_claims = [c for c in claims if _slug(c.metric) == "auc"]
+    assert len(auc_claims) == 1
+    assert "abstract" in auc_claims[0].source_text
