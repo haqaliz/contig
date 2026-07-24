@@ -1,70 +1,70 @@
-# Card: feat reproduce-rev-pin (C8, slice 7)
+# Card: feat reproduce-paper-claims (C8, next slice — paper-claim extraction)
 
-**Type:** feat · **Owner:** aliz · **Branch:** `feat/reproduce-rev-pin/aliz`
+**Type:** feat · **Owner:** aliz · **Branch:** `feat/reproduce-paper-claims/aliz`
 
-No GitHub issue — this unit of work came from `/contig-next` (cn), 2026-07-23. The
+No GitHub issue — this unit of work came from `/contig-next` (cn), 2026-07-24. The
 recommendation below is the source brief.
 
 ## Brief
 
-Add `--rev <ref>` to `contig reproduce` so the recorded `source_commit` pin from C8 slice 6
-becomes **replayable**, not just auditable. Today nothing in the product consumes
-`source_commit` (`CHANGELOG.md:114` — "the pin is auditable, not yet replayable… only a human
-can act on it (`git checkout <sha>`)").
+Turn `contig reproduce` from "point it at a repo **and hand-author a claims file**" into
+"point it at the paper's text and get a *draft* claims file to review" — extracting the
+paper's stated numeric claims (value + tolerance + a candidate locator) behind an
+injectable seam, gated by human review before any binding.
 
-`--rev` takes a full SHA, tag, or branch; is only legal alongside an `https://` URL +
-`--allow-fetch`; is validated/refused **before anything is written** (the same
-no-bundle-no-litter contract as slice 6); and the resulting `source_commit` must equal the
-requested revision when a full SHA was given.
+Slices 1–7 (v0.40.0 → v0.48.0) built the whole reproduce spine: the per-claim verdict
+(`REPRODUCED`/`WITHIN-TOLERANCE`/`DIVERGED`/`UNVERIFIED`), the JSON/TSV-CSV/stdout/notebook
+locators, environment resurrection, the mtime freshness guard, remote `https://` intake,
+and `--rev` revision pinning. The value the user still hand-supplies is the **claims list
+itself** (`CHANGELOG.md:697` — the repo writes `results.json`, the user writes the claims
+file). Paper-claim extraction is the step named as "next"/deferred in **every** C8 slice
+deferral list (`CAPABILITY_ROADMAP.md:1073`; `CHANGELOG.md:420,523,595,686`).
+
+## Why it's the pick (moat)
+
+- Squarely **Layer 2** — this is verification *input* (extracting claims to verify), not
+  Layer-1 workflow authoring (`CLAUDE.md` wedge). It deepens the reproduce moat: the
+  reproduce PRD's own review gate called externally-credible reproduce the point of C8,
+  and claim extraction is what makes it turnkey on a real published paper.
+- "Gets better as base models improve" (`CLAUDE.md` #3) — the extractor is an env-gated,
+  injectable seam, exactly like the optional `llm` detector already shipped
+  (`FEATURES.md:225`).
+- The **verdict contract already contains the risk**: any claim that can't be bound or is
+  ambiguous degrades to `UNVERIFIED`, never a false `REPRODUCED` — the invariant every C8
+  slice holds. Extraction can be imperfect without ever lying.
 
 ## Key design risk (resolve first in the dig)
 
-`--depth 1` cannot check out an arbitrary SHA. The fetch shape must change — `git init` +
-`git fetch --depth 1 origin <rev>` + `git checkout FETCH_HEAD` — and that path depends on the
-remote enabling `uploadpack.allowReachableSHA1InWant`. GitHub enables it; many self-hosted
-remotes do not. **Decide explicitly** between a full-clone fallback and an honest refusal.
-Keep the existing leading-dash-refused-first argv safety.
+**Reliable claim extraction from prose is the unresolved feasibility question** — this is
+why it stayed deferred through 7 slices. The honest first slice is narrow:
+
+- Extract **candidate** numeric claims from a supplied **plain-text / markdown** source
+  (NOT PDF, NOT DOI — those stay out of scope: network + parsing) into a **draft claims
+  file the user edits**, never auto-verifying unreviewed claims.
+- Keep the extractor an **injectable seam** — a regex/heuristic core that always runs, plus
+  an **optional** env-gated LLM assist that is **never run in CI** (deterministic
+  fixtures, mirroring the whole C8 track's "no LLM/network/pip in CI" discipline).
+- Extraction feeds a **human-review gate**: the output is a *draft* claims file (the same
+  schema `load_claims` already validates), not a set of auto-bound claims.
+- **Figures stay hard-blocked** (no plot-hash, stdlib-only). Table-image claims blocked.
 
 ## Verification caveat
 
-CI has no network (the `Fetcher` is injected; `default_fetcher` is asserted on for argv shape
-only), so slice 6's wiring-vs-invocation gap applies here too — slice 6 shipped a real bug a
-green suite missed (the relative-`--runs-dir` clone failure, `CHANGELOG.md:105`). Plan a
-**manual real-clone smoke test** against a public repo, including the still-pending slice-6
-one, before calling this done.
+As with every C8 slice: **no real LLM, network, or PDF in CI.** The extractor seam is
+injected; the real optional-LLM path is asserted for prompt/shape only and never executed.
+Correctness of the deterministic (regex/heuristic) core is unit-tested against on-disk
+fixture text/markdown; the LLM assist is manual-gate only.
 
-## Why this was picked (from the `cn` ranking)
+## Scope boundaries (explicit non-goals for this slice)
 
-- **It closes the loop slice 6 left open.** Slice 6 records *which revision of which repo*
-  produced a verdict; `--rev` is what makes that record re-runnable — the difference between a
-  provenance string and a reproducibility guarantee.
-- **It is the named next deferral, not an invention.** `CAPABILITY_ROADMAP.md:1466` (C8 row)
-  and `CHANGELOG.md:123` both list "`--rev`/tag/branch selection" first in the still-deferred
-  set, with **no blocker attached** — unlike its neighbours (DOI resolution is out of scope by
-  design; figure/plot claims need a plot-hash that would break the stdlib-only dep contract).
-- **Pure Layer-2 moat work**: reproducibility infrastructure on the user's compute,
-  stdlib-only, no new dependency, reusing the injected `Fetcher` seam.
+- No PDF parsing, no DOI resolution, no paper *fetching* (all deferred/out of scope).
+- No auto-verification of unreviewed claims — extraction produces a draft for review.
+- No figure/plot or table-image claims (hard-blocked, no plot-hash).
+- No change to the shipped verdict/locator/bundle contract — this is claims-file *input*
+  generation, feeding the unchanged `load_claims` → `run_reproduction` path.
 
-## Explicitly out of scope / do not touch
+## No PRD yet
 
-- **DOI resolution** — explicitly out of scope in C8; stays refused with a message that says so.
-- **The disclosed signature break** — pre-slice-6 *signed* reproduce bundles no longer verify
-  (the canonical payload gained two `null` keys). Disclosed and pinned by a test; do **not**
-  "fix" it in this slice.
-- Checkout pruning, hashing/signing the checkout tree, private-repo credentials, submodules.
-- Paper-parsing, figure/plot claims, dashboard card, C6 eval fold-in — all unchanged deferrals.
-
-## Alternates the `cn` run considered and ranked below this
-
-- C6 fold-in of C1/C3 signals into the eval corpus (`CAPABILITY_ROADMAP.md:908`) — real
-  leverage, but its C7 sibling is blocked pending a labeling design, so scope is fuzzier.
-- Checkout pruning / hashing the fetched tree (`CHANGELOG.md:120`) — real hygiene gap, but
-  housekeeping rather than verdict-strength.
-- Explicitly **not** picked: bwa-mem2 build+redirect — `CAPABILITY_ROADMAP.md:255` records it
-  has **no live trigger** (sarek auto-builds the index; Contig exposes no flag to supply one).
-
-## Grounding files
-
-- `docs/technical/CAPABILITY_ROADMAP.md` — C8 section + sequencing-summary C8 row.
-- `CHANGELOG.md` §0.47.0 — slice 6 as shipped, its honest limits, and the deferral list.
-- `docs/planning/reproduce-remote-intake/` — slice 6 PRD + plan.
+There is no `docs/planning/reproduce-paper-*` dir on master — scope this from the C8
+deferral lists test-first. The candidate is well-supported by the docs (named repeatedly),
+just not yet PRD'd.
