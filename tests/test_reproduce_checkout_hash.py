@@ -1,25 +1,39 @@
-"""Tests for the checkout-tree digest helper (C8 slice 8, Phase 1).
+"""Tests for the checkout-tree digest helper (C8 slice 8, Phase 1) and the
+signed record field + manifest echo + back-compat + disclosed break (Phase 2).
 
 `compute_tree_sha256` is a pure, stdlib-only helper: no git, no network. All
 fixture trees here are built directly on disk under `tmp_path`. The published
 algorithm (walk with `os.walk(followlinks=False)`, prune `.git` dirs and
 symlinked dirs, fold sorted `f"{relpath}\\0{hexdigest}\\n"` lines, sha256 the
 UTF-8 blob) is pinned by test 10 so the CHANGELOG spec stays honest.
+
+Phase 2 adds `ReproduceRecord.source_tree_sha256` (signed, additive, defaults
+to `None`) and echoes it in the unsigned `reproduce.json` manifest. Adding a
+signed field breaks old signatures made before the field existed -- this is
+the third disclosed signature break (after slice 6's source_url/source_commit)
+and is pinned, not silently absorbed, by
+`test_pre_slice_8_signature_over_a_record_without_tree_hash_no_longer_verifies`.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 from pathlib import Path
 
 import pytest
 
-from contig.bundle import compute_tree_sha256
-from contig.models import sha256_file
+from contig.bundle import _maybe_write_signature, compute_tree_sha256, write_reproduce_bundle
+from contig.models import ClaimResult, ReproduceRecord, sha256_file
+from contig.signing import generate_keypair, signing_available, verify_signature
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+requires_signing = pytest.mark.skipif(
+    not signing_available(), reason="cryptography not installed"
+)
 
 
 def _write(root: Path, rel: str, content: bytes = b"hello") -> Path:
@@ -215,3 +229,128 @@ def test_compute_tree_sha256_matches_documented_algorithm(tmp_path: Path) -> Non
     expected = hashlib.sha256(blob).hexdigest()
 
     assert compute_tree_sha256(tmp_path) == expected
+
+
+# --- Phase 2: signed record field + manifest echo + back-compat + the disclosed
+# break -----------------------------------------------------------------------
+
+
+def _claim(id_="c1", status="reproduced", claimed=0.9, observed=0.9, tolerance=0.02, delta=0.0):
+    return ClaimResult(
+        id=id_,
+        status=status,
+        claimed=claimed,
+        observed=observed,
+        tolerance=tolerance,
+        delta=delta,
+        message="ok",
+    )
+
+
+def _record(**overrides) -> ReproduceRecord:
+    fields = dict(
+        reproduce_id="rp_1",
+        repo="https://github.com/example/paper",
+        run_command="python train.py --seed 0",
+        claims_sha256="a" * 64,
+        claim_results=[_claim()],
+        exit_code=0,
+        created_at="2026-07-18T00:00:00Z",
+        interpreter="cpython-3.12",
+        tool="contig",
+    )
+    fields.update(overrides)
+    return ReproduceRecord(**fields)
+
+
+def test_reproduce_record_source_tree_sha256_defaults_to_none_and_loads_old_json() -> None:
+    # A record built without the new field defaults to None.
+    record = _record()
+    assert record.source_tree_sha256 is None
+
+    # A pre-slice-8 JSON payload -- the key doesn't exist at all -- still
+    # validates, and the field loads as None (back-compat).
+    legacy_json = {
+        "reproduce_id": "rp_legacy",
+        "repo": "https://github.com/example/paper",
+        "run_command": "python train.py --seed 0",
+        "claims_sha256": "a" * 64,
+        "claim_results": [],
+        "exit_code": 0,
+        "created_at": "2026-07-18T00:00:00Z",
+        "interpreter": "cpython-3.12",
+        "tool": "contig",
+        "source_url": None,
+        "source_commit": None,
+    }
+    loaded = ReproduceRecord.model_validate_json(json.dumps(legacy_json))
+    assert loaded.source_tree_sha256 is None
+
+
+def test_reproduce_manifest_emits_source_tree_sha256(tmp_path: Path) -> None:
+    digest = "b" * 64
+
+    with_hash = _record(source_tree_sha256=digest)
+    write_reproduce_bundle(with_hash, tmp_path / "with_hash")
+    manifest = json.loads((tmp_path / "with_hash" / "reproduce.json").read_text())
+    assert manifest["source_tree_sha256"] == digest
+
+    without_hash = _record()
+    write_reproduce_bundle(without_hash, tmp_path / "without_hash")
+    manifest_none = json.loads((tmp_path / "without_hash" / "reproduce.json").read_text())
+    assert "source_tree_sha256" in manifest_none
+    assert manifest_none["source_tree_sha256"] is None
+
+
+# --- disclosed caveat: a pre-slice-8 SIGNED bundle no longer verifies ----------
+#
+# Adding source_tree_sha256 to the record is back-compatible for LOADING (the
+# test above) but NOT for a signature made before the field existed --
+# `canonical_record_bytes` is `record.model_dump(mode="json")`, which now
+# includes an extra null key that the old signed bytes never had. This is the
+# third disclosed signature break (after slice 6's source_url/source_commit);
+# it is pinned here as a KNOWN property, not a latent surprise.
+
+
+def _pre_slice_8_canonical_bytes(record: ReproduceRecord) -> bytes:
+    """The canonical bytes this record would have produced before slice 8.
+
+    Rebuilt by dropping exactly the field slice 8 added -- the rest of the
+    canonicalization (sorted keys, compact separators, UTF-8) is copied from
+    `signing.canonical_record_bytes` so the only difference under test is the
+    added key.
+    """
+    payload = record.model_dump(mode="json")
+    old = {k: v for k, v in payload.items() if k != "source_tree_sha256"}
+    assert set(payload) - set(old) == {"source_tree_sha256"}
+    return json.dumps(old, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+@requires_signing
+def test_pre_slice_8_signature_over_a_record_without_tree_hash_no_longer_verifies(
+    tmp_path, monkeypatch
+):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    private_key, public_key = generate_keypair()
+    record = _record()  # a local run: the new field is None
+    assert record.source_tree_sha256 is None
+
+    # Sign the bytes an older Contig would have produced for this same record.
+    old_signature = (
+        Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key))
+        .sign(_pre_slice_8_canonical_bytes(record))
+        .hex()
+    )
+
+    # The extra null key changes the canonical payload, so the old signature
+    # does not verify -- even though nothing about the run itself changed.
+    assert verify_signature(record, old_signature, public_key) is False
+
+    # And the fresh signature over today's bytes does verify: the break is the
+    # payload shape, not the signing machinery.
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+    _maybe_write_signature(record, tmp_path)
+    sidecar = json.loads((tmp_path / "signature.json").read_text())
+    assert verify_signature(record, sidecar["signature"], sidecar["public_key"]) is True
+    assert sidecar["signature"] != old_signature

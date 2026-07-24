@@ -76,21 +76,24 @@ def write_reproduce_bundle(
     """Serialize ``record`` to ``dest_dir/reproduce_record.json`` and return that path.
 
     Also writes ``dest_dir/reproduce.json``, the small re-runnable manifest (repo +
-    run_command + claims_sha256 + source_url + source_commit, no absolute scratch
-    paths -- mirrors LaunchManifest's discipline of omitting scratch/outdir paths;
-    for a remote run ``repo`` holds the URL and the local checkout path is never
-    persisted). ``source_url``/``source_commit`` are emitted unconditionally --
-    present and ``null`` for a local run -- so a consumer can always read the key
-    without a ``.get()`` dance. ``requested_rev`` -- the ``--rev`` the caller asked
-    for, which for a tag or branch is not recoverable from the resolved SHA -- is
-    emitted the same way. It lives in the manifest and NOT on the record
-    deliberately: the manifest is unsigned invocation metadata, so adding it breaks
-    no existing signature, and the resolved ``source_commit`` stays the attested
-    fact. When ``CONTIG_SIGNING_KEY`` is set,
-    also writes a detached signature sidecar over the record's canonical content, via
-    the same ``_maybe_write_signature`` used for RunRecord -- it only calls
-    ``record.model_dump(mode="json")`` under the hood, so it signs a ReproduceRecord
-    exactly as it signs a RunRecord.
+    run_command + claims_sha256 + source_url + source_commit + source_tree_sha256, no
+    absolute scratch paths -- mirrors LaunchManifest's discipline of omitting
+    scratch/outdir paths; for a remote run ``repo`` holds the URL and the local
+    checkout path is never persisted). ``source_url``/``source_commit``/
+    ``source_tree_sha256`` are emitted unconditionally -- present and ``null`` for a
+    local run -- so a consumer can always read the key without a ``.get()`` dance.
+    ``requested_rev`` -- the ``--rev`` the caller asked for, which for a tag or branch
+    is not recoverable from the resolved SHA -- is emitted the same way. It lives in
+    the manifest and NOT on the record deliberately: the manifest is unsigned
+    invocation metadata, so adding it breaks no existing signature, and the resolved
+    ``source_commit`` stays the attested fact. ``source_tree_sha256`` is the opposite
+    case: it is a field on ``record`` (see ``ReproduceRecord.source_tree_sha256``), so
+    it is part of the SIGNED canonical payload -- the manifest key here is just an
+    echo of that attested value, not a second source of truth. When
+    ``CONTIG_SIGNING_KEY`` is set, also writes a detached signature sidecar over the
+    record's canonical content, via the same ``_maybe_write_signature`` used for
+    RunRecord -- it only calls ``record.model_dump(mode="json")`` under the hood, so
+    it signs a ReproduceRecord exactly as it signs a RunRecord.
     """
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
@@ -106,6 +109,7 @@ def write_reproduce_bundle(
         "created_at": record.created_at,
         "source_url": record.source_url,
         "source_commit": record.source_commit,
+        "source_tree_sha256": record.source_tree_sha256,
         "requested_rev": requested_rev,
     }
     (dest / "reproduce.json").write_text(json.dumps(manifest, indent=2))
