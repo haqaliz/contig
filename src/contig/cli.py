@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses as _dataclasses
 import hashlib
 import json as _json
+import os
 import re as _re
 import shlex
 import shutil
@@ -117,7 +118,18 @@ from contig.verification.sc_count_quantifier import (
     SecondScQuantifierError,
     run_starsolo_quantifier,
 )
-from contig.verification.reproduce import ClaimsError, load_claims, run_reproduction
+from contig.verification.claim_extraction import (
+    ExtractedClaim,
+    extract_claims,
+    extract_with_llm,
+    merge_claims,
+)
+from contig.verification.reproduce import (
+    ClaimsError,
+    _MAX_MATCH_BYTES,
+    load_claims,
+    run_reproduction,
+)
 from contig.verification.structural import manifest_for
 from contig.runner import (
     PipelineExecutionError,
@@ -208,6 +220,24 @@ def _parse_backend_opts(opts: list[str] | None) -> dict[str, str]:
 def _generate_run_id() -> str:
     """A fresh, sortable run id from the current UTC instant (PRD: run-<iso>)."""
     return "run-" + datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%fZ")
+
+
+def default_extractor(text: str, *, use_llm: bool) -> list[ExtractedClaim]:
+    """Compose the deterministic core with the optional LLM assist.
+
+    The single monkeypatchable entry point the `extract-claims` command uses
+    (mirrors `default_command_executor`/`default_installer`/`default_fetcher`),
+    so CLI tests swap the whole extraction by patching `contig.cli.default_extractor`.
+
+    `use_llm=False` returns `extract_claims(text)` alone -- the assist is never
+    invoked. `use_llm=True` merges `extract_with_llm(text)` into the core via
+    `merge_claims` (core wins on a `(metric, value)` clash); when no provider is
+    configured `extract_with_llm` returns `[]`, so the result is core-only.
+    """
+    core = extract_claims(text)
+    if not use_llm:
+        return core
+    return merge_claims(core, extract_with_llm(text))
 
 
 @app.callback()
