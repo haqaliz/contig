@@ -99,7 +99,7 @@ platform-guarded skip), 0 failed, 0 errors.
 `fix(reproduce): surface unreadable-dir errors as None; correct stale slice-6 test doc`
 on `feat/reproduce-checkout-hash/aliz` (not pushed).
 
-Commit SHA: see below (filled after commit).
+Commit SHA: `ff4dcd7`
 
 ## Scope discipline
 
