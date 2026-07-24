@@ -327,10 +327,16 @@ def test_bundle_json_without_source_fields_still_loads_as_none(tmp_path):
 def _pre_slice_6_canonical_bytes(record: ReproduceRecord) -> bytes:
     """The canonical bytes this record would have produced before slice 6.
 
-    Rebuilt by dropping exactly the two fields slice 6 added -- the rest of the
-    canonicalization (sorted keys, compact separators, UTF-8) is copied from
-    `signing.canonical_record_bytes` so the only difference under test is the
-    added keys.
+    Rebuilt by dropping exactly the two fields slice 6 added (source_url,
+    source_commit) -- the rest of the canonicalization (sorted keys, compact
+    separators, UTF-8) is copied from `signing.canonical_record_bytes`. Later
+    slices (e.g. slice 8's source_tree_sha256) added more fields that this
+    helper does NOT drop, so for a `_record()` built today the "old" payload
+    still carries `source_tree_sha256: null` alongside the dropped keys' old
+    values -- it is not a byte-for-byte reproduction of an actual pre-slice-6
+    payload. That's fine here: the assertion below only needs the old and
+    fresh payloads to differ so the old signature fails to verify, not that
+    the old payload is historically exact.
     """
     payload = record.model_dump(mode="json")
     old = {k: v for k, v in payload.items() if k not in ("source_url", "source_commit")}
