@@ -7,6 +7,7 @@ that anchor it.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -316,3 +317,40 @@ def compute_output_checksums(results_dir: str | Path) -> dict[str, str]:
         rel = path.relative_to(root).as_posix()
         checksums[rel] = sha256_file(path)
     return checksums
+
+
+def compute_tree_sha256(root: str | Path) -> str | None:
+    """Deterministic, stdlib-only digest of a checkout tree (C8 slice 8).
+
+    Walks ``root`` with ``os.walk(followlinks=False)``, pruning any directory
+    component named ``.git`` (at any depth) and any symlinked directory, so
+    the digest never crosses a repo boundary or leaves containment. For each
+    regular non-symlink file, folds ``f"{posix_relpath}\\0{sha256_file(path)}\\n"``
+    (NUL delimiter -- illegal in POSIX paths) into a sorted list, then returns
+    the hex SHA-256 of the UTF-8 concatenation. This exact algorithm is
+    published (CHANGELOG) so a third party can recompute it byte-for-byte.
+
+    Honest degradation: a missing or non-directory root, or any ``OSError``
+    while reading a file, returns ``None`` -- never a partial or fabricated
+    digest.
+    """
+    base = Path(root)
+    if not base.is_dir():
+        return None
+    lines: list[str] = []
+    try:
+        for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
+            # Prune .git dirs and symlinked dirs in place (os.walk honors edits).
+            dirnames[:] = [
+                d for d in dirnames if d != ".git" and not Path(dirpath, d).is_symlink()
+            ]
+            for name in filenames:
+                p = Path(dirpath, name)
+                if p.is_symlink() or not p.is_file():
+                    continue
+                rel = p.relative_to(base).as_posix()
+                lines.append(f"{rel}\0{sha256_file(p)}\n")
+    except OSError:
+        return None
+    blob = "".join(sorted(lines)).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
