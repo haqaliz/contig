@@ -367,10 +367,24 @@ def _claims_from_reply(reply: str) -> list[ExtractedClaim]:
 
 
 def _extract_json_list(text: str) -> list | None:
-    """Parse a top-level JSON list out of a reply, or None if not a list."""
+    """Parse the first top-level JSON list out of a reply, or None.
+
+    Tolerates a list wrapped in prose by taking the substring from the first
+    '[' to the last ']' (list-analogue of `detect._extract_json_object`).
+    Returns None when nothing parseable is found or the value is not a list.
+    """
     stripped = text.strip()
     try:
         obj = json.loads(stripped)
+        return obj if isinstance(obj, list) else None
+    except (ValueError, TypeError):
+        pass
+    start = text.find("[")
+    end = text.rfind("]")
+    if start == -1 or end == -1 or end < start:
+        return None
+    try:
+        obj = json.loads(text[start : end + 1])
     except (ValueError, TypeError):
         return None
     return obj if isinstance(obj, list) else None

@@ -15,6 +15,7 @@ import json
 import contig.verification.claim_extraction as claim_extraction
 from contig.verification.claim_extraction import (
     ExtractedClaim,
+    _claims_from_reply,
     extract_with_llm,
 )
 
@@ -80,3 +81,109 @@ def test_configured_env_calls_seam_once_with_provider_and_prompt(monkeypatch) ->
     # the seam produced claims tagged as llm-origin
     assert all(isinstance(c, ExtractedClaim) for c in claims)
     assert all(c.origin == "llm" for c in claims)
+
+
+# --- Phase 2: defensive reply parse (never raises) ----------------------------
+
+
+def test_clean_json_list_parsed_into_llm_claims() -> None:
+    claims = _claims_from_reply(json.dumps(_canned_claims()))
+    assert [c.metric for c in claims] == ["AUC", "accuracy"]
+    assert [c.value for c in claims] == [0.91, 87.0]
+    assert [c.unit for c in claims] == [None, "%"]
+    assert all(c.origin == "llm" for c in claims)
+    # ids are the slug of the metric, uniquified within the reply
+    assert [c.id for c in claims] == ["auc", "accuracy"]
+
+
+def test_duplicate_metric_ids_are_uniquified_within_reply() -> None:
+    reply = json.dumps(
+        [
+            {"metric": "AUC", "value": 0.91, "unit": None, "source_text": "a"},
+            {"metric": "auc", "value": 0.88, "unit": None, "source_text": "b"},
+        ]
+    )
+    ids = [c.id for c in _claims_from_reply(reply)]
+    assert ids == ["auc", "auc_2"]
+
+
+def test_prose_wrapped_json_list_is_tolerated() -> None:
+    reply = (
+        "Here are the claims I found:\n"
+        + json.dumps(_canned_claims())
+        + "\nHope this helps!"
+    )
+    claims = _claims_from_reply(reply)
+    assert [c.metric for c in claims] == ["AUC", "accuracy"]
+
+
+def test_not_json_returns_empty() -> None:
+    assert _claims_from_reply("not json at all, sorry") == []
+
+
+def test_json_object_not_a_list_returns_empty() -> None:
+    assert _claims_from_reply(json.dumps({"metric": "AUC", "value": 0.91})) == []
+
+
+def test_entry_missing_value_is_skipped() -> None:
+    reply = json.dumps(
+        [
+            {"metric": "AUC", "unit": None, "source_text": "a"},  # no value
+            {"metric": "accuracy", "value": 87.0, "unit": "%", "source_text": "b"},
+        ]
+    )
+    claims = _claims_from_reply(reply)
+    assert [c.metric for c in claims] == ["accuracy"]
+
+
+def test_non_finite_and_bool_values_are_skipped() -> None:
+    # NaN/Infinity (json allows them by default) and a bool value are all rejected
+    reply = (
+        '[{"metric": "a", "value": NaN, "source_text": "x"},'
+        ' {"metric": "b", "value": Infinity, "source_text": "y"},'
+        ' {"metric": "c", "value": true, "source_text": "z"},'
+        ' {"metric": "d", "value": 0.5, "source_text": "w"}]'
+    )
+    claims = _claims_from_reply(reply)
+    assert [c.metric for c in claims] == ["d"]
+
+
+def test_seam_raising_degrades_to_empty(monkeypatch) -> None:
+    monkeypatch.setenv("CONTIG_LLM_PROVIDER", "claude")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    def _boom(provider: str, prompt: str) -> str:
+        raise RuntimeError("provider unreachable")
+
+    monkeypatch.setattr(claim_extraction, "_llm_complete", _boom)
+    assert extract_with_llm("AUC of 0.91.") == []
+
+
+def test_missing_sdk_import_degrades_to_empty(monkeypatch) -> None:
+    # Configured, but the lazy SDK import inside the real seam raises -> [].
+    monkeypatch.setenv("CONTIG_LLM_PROVIDER", "claude")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _no_anthropic(name, *args, **kwargs):
+        if name == "anthropic":
+            raise ModuleNotFoundError("No module named 'anthropic'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_anthropic)
+    assert extract_with_llm("AUC of 0.91.") == []
+
+
+def test_api_key_never_leaks_into_output_or_log(monkeypatch, caplog) -> None:
+    monkeypatch.setenv("CONTIG_LLM_PROVIDER", "claude")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "super-secret-key-value")
+    monkeypatch.setattr(
+        claim_extraction, "_llm_complete", _fake_completion(_canned_claims())
+    )
+    with caplog.at_level("DEBUG"):
+        claims = extract_with_llm("AUC of 0.91; accuracy of 87%.")
+    blob = " ".join(f"{c.id} {c.metric} {c.source_text}" for c in claims)
+    assert "super-secret-key-value" not in blob
+    assert "super-secret-key-value" not in caplog.text
