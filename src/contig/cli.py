@@ -67,7 +67,7 @@ from contig.heal import (
     snapshot_from_heal_report,
 )
 from contig.snapshot_history import append_jsonl, load_jsonl
-from contig.bundle import compute_output_checksums, write_reproduce_bundle
+from contig.bundle import compute_output_checksums, compute_tree_sha256, write_reproduce_bundle
 from contig.cost import cost_report
 from contig.signing import generate_keypair, signing_available, verify_signature
 from contig.estimate import estimate_run
@@ -942,6 +942,7 @@ def reproduce(
     # (real published repos) where it matters most. A failed fetch leaves no
     # directory behind (see fetch_repo).
     source_commit: str | None = None
+    source_tree_sha256: str | None = None
     if repo_argument.kind == "remote":
         fetched = fetch_repo(
             repo_argument.url, repo_path, fetcher=default_fetcher, rev=rev
@@ -950,6 +951,10 @@ def reproduce(
             typer.echo(fetched.refusal, err=True)
             raise typer.Exit(code=1)
         source_commit = fetched.commit
+        # Hashed here too -- right after the fetch, before run_started_at is
+        # stamped below -- so an --allow-install retry (or anything the run
+        # itself writes into the checkout) can never change the recorded digest.
+        source_tree_sha256 = compute_tree_sha256(repo_path)
 
     claims_sha256 = hashlib.sha256(Path(claims).read_bytes()).hexdigest()
     created_at = datetime.now(timezone.utc).isoformat()
@@ -983,6 +988,7 @@ def reproduce(
                 "repo": repo_argument.url,
                 "source_url": repo_argument.url,
                 "source_commit": source_commit,
+                "source_tree_sha256": source_tree_sha256,
             }
         )
 

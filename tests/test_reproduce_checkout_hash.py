@@ -13,6 +13,11 @@ signed field breaks old signatures made before the field existed -- this is
 the third disclosed signature break (after slice 6's source_url/source_commit)
 and is pinned, not silently absorbed, by
 `test_pre_slice_8_signature_over_a_record_without_tree_hash_no_longer_verifies`.
+
+Phase 3 wires `compute_tree_sha256` into `contig reproduce`'s remote path: the
+digest is taken right after a successful fetch, before `run_started_at` is
+stamped, so an `--allow-install` retry (or anything the run itself writes into
+the checkout) never changes the recorded value. Local runs never compute it.
 """
 
 from __future__ import annotations
@@ -24,8 +29,10 @@ import re
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
 from contig.bundle import _maybe_write_signature, compute_tree_sha256, write_reproduce_bundle
+from contig.cli import app
 from contig.models import ClaimResult, ReproduceRecord, sha256_file
 from contig.signing import generate_keypair, signing_available, verify_signature
 
@@ -354,3 +361,177 @@ def test_pre_slice_8_signature_over_a_record_without_tree_hash_no_longer_verifie
     sidecar = json.loads((tmp_path / "signature.json").read_text())
     assert verify_signature(record, sidecar["signature"], sidecar["public_key"]) is True
     assert sidecar["signature"] != old_signature
+
+
+# --- Phase 3: CLI wiring (remote-only, pre-stamp) -----------------------------
+#
+# The fetcher/executor fakes below are modeled on
+# tests/test_reproduce_remote_intake.py (`_ScriptedCheckoutFetcher`) and
+# tests/test_reproduce_env_resurrection.py:76-94 (`_ScriptedExecutor`) --
+# convention in this suite is that each reproduce test file carries its own
+# small copy of these fixtures rather than importing them across test files.
+
+runner = CliRunner()
+
+_URL = "https://github.com/lab/paper-code"
+_A_SHA = "a" * 40
+
+
+class _ScriptedCheckoutFetcher:
+    """A Fetcher that simulates `git clone` by materializing a checkout tree.
+
+    `files` maps checkout-relative paths to text content. The clone call
+    (call 1) writes them into the destination named in the clone argv -- the
+    tree `contig reproduce` sees the instant the fetch succeeds. Call 2 is
+    `git rev-parse HEAD` and returns `commit`.
+    """
+
+    def __init__(self, files=None, commit=_A_SHA):
+        self.files = dict(files or {})
+        self.commit = commit
+        self.calls: list[tuple[list[str], Path]] = []
+
+    def __call__(self, argv: list[str], cwd: Path) -> tuple[int, str]:
+        self.calls.append((list(argv), Path(cwd)))
+        if len(self.calls) == 1:
+            dest = Path(argv[-1])
+            for name, text in self.files.items():
+                path = dest / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
+            return 0, "Cloning into '...'\n"
+        return 0, self.commit + "\n"
+
+
+def _materialize(root: Path, files: dict[str, str]) -> Path:
+    for name, text in files.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    return root
+
+
+def _claims_file(tmp_path: Path, claims: list[dict]) -> Path:
+    path = tmp_path / "claims.json"
+    path.write_text(json.dumps(claims))
+    return path
+
+
+def _bundle_dirs(runs_dir: Path) -> list[Path]:
+    if not runs_dir.exists():
+        return []
+    return sorted(p for p in runs_dir.iterdir() if p.is_dir())
+
+
+def _read_record(runs_dir: Path) -> dict:
+    (bundle,) = _bundle_dirs(runs_dir)
+    return json.loads((bundle / "reproduce_record.json").read_text())
+
+
+def _invoke(tmp_path: Path, claims: Path, runs_dir: Path, *, repo: str, extra=()):
+    return runner.invoke(
+        app,
+        [
+            "reproduce",
+            repo,
+            "--run",
+            "python eval.py",
+            "--claims",
+            str(claims),
+            "--runs-dir",
+            str(runs_dir),
+            *extra,
+        ],
+    )
+
+
+def test_remote_reproduce_records_source_tree_sha256(tmp_path, monkeypatch):
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    runs_dir = tmp_path / "runs"
+    files = {"code.py": "print('hi')\n", "data/values.csv": "a,b\n1,2\n"}
+    fetcher = _ScriptedCheckoutFetcher(files=files)
+    monkeypatch.setattr("contig.cli.default_fetcher", fetcher)
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor",
+        lambda cmd, cwd: (
+            (Path(cwd) / "results.json").write_text(json.dumps({"auc": 0.9})),
+            (0, ""),
+        )[1],
+    )
+
+    result = _invoke(tmp_path, claims, runs_dir, repo=_URL, extra=["--allow-fetch"])
+
+    assert result.exit_code == 0, result.output
+
+    # Ground truth: the fetched tree, materialized independently. The
+    # checkout itself gains a results.json during the run, so it cannot be
+    # reused as a post-run stand-in for the pre-run tree.
+    expected = compute_tree_sha256(_materialize(tmp_path / "expected_source", files))
+    assert expected is not None
+    assert HEX64.match(expected)
+
+    record = _read_record(runs_dir)
+    assert record["source_tree_sha256"] == expected
+
+    (bundle,) = _bundle_dirs(runs_dir)
+    manifest = json.loads((bundle / "reproduce.json").read_text())
+    assert manifest["source_tree_sha256"] == expected
+
+
+def test_local_reproduce_records_no_source_tree_sha256(tmp_path, monkeypatch):
+    repo_dir = _materialize(tmp_path / "repo", {"code.py": "print('hi')\n"})
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    runs_dir = tmp_path / "runs"
+    monkeypatch.setattr(
+        "contig.cli.default_command_executor",
+        lambda cmd, cwd: (
+            (Path(cwd) / "results.json").write_text(json.dumps({"auc": 0.9})),
+            (0, ""),
+        )[1],
+    )
+
+    result = _invoke(tmp_path, claims, runs_dir, repo=str(repo_dir))
+
+    assert result.exit_code == 0, result.output
+
+    record = _read_record(runs_dir)
+    assert record["source_tree_sha256"] is None
+
+    (bundle,) = _bundle_dirs(runs_dir)
+    manifest = json.loads((bundle / "reproduce.json").read_text())
+    assert manifest["source_tree_sha256"] is None
+
+
+def test_source_tree_sha256_is_taken_pre_run_not_post_retry(tmp_path, monkeypatch):
+    """Pins the pre-stamp placement (PRD success #: retry mutation immunity).
+
+    The scripted executor -- standing in for the run itself, and for what an
+    `--allow-install` retry would do -- writes a NEW file into the checkout
+    while it runs. If the digest were taken after the run (post-stamp), it
+    would include that file; taken pre-run, it must not.
+    """
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    runs_dir = tmp_path / "runs"
+    files = {"code.py": "print('hi')\n"}
+    fetcher = _ScriptedCheckoutFetcher(files=files)
+    monkeypatch.setattr("contig.cli.default_fetcher", fetcher)
+
+    def _executor(cmd: list[str], cwd: Path) -> tuple[int, str]:
+        (Path(cwd) / "results.json").write_text(json.dumps({"auc": 0.9}))
+        (Path(cwd) / "run_output.log").write_text("ran\n")  # not present at fetch time
+        return 0, ""
+
+    monkeypatch.setattr("contig.cli.default_command_executor", _executor)
+
+    result = _invoke(tmp_path, claims, runs_dir, repo=_URL, extra=["--allow-fetch"])
+
+    assert result.exit_code == 0, result.output
+
+    pre_run_expected = compute_tree_sha256(_materialize(tmp_path / "expected_source", files))
+    record = _read_record(runs_dir)
+    assert record["source_tree_sha256"] == pre_run_expected
+
+    (bundle,) = _bundle_dirs(runs_dir)
+    post_run_actual = compute_tree_sha256(bundle / "source")
+    assert post_run_actual != pre_run_expected
+    assert record["source_tree_sha256"] != post_run_actual
