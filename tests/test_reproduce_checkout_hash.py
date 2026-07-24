@@ -203,6 +203,24 @@ def test_compute_tree_sha256_unreadable_file_returns_none(tmp_path: Path) -> Non
         target.chmod(original_mode)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="chmod semantics differ on Windows")
+def test_compute_tree_sha256_unreadable_dir_returns_none(tmp_path: Path) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("running as root: file permissions are bypassed")
+
+    subdir = tmp_path / "locked_dir"
+    subdir.mkdir()
+    _write(subdir, "inside.txt", b"secret")
+    _write(tmp_path, "other.txt", b"fine")
+    original_mode = subdir.stat().st_mode
+    subdir.chmod(0o000)
+    try:
+        result = compute_tree_sha256(tmp_path)
+        assert result is None
+    finally:
+        subdir.chmod(original_mode)
+
+
 def test_compute_tree_sha256_missing_or_nondir_root_returns_none(tmp_path: Path) -> None:
     missing = tmp_path / "does_not_exist"
     assert compute_tree_sha256(missing) is None

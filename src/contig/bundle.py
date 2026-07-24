@@ -323,6 +323,14 @@ def compute_output_checksums(results_dir: str | Path) -> dict[str, str]:
     return checksums
 
 
+def _raise(err: OSError) -> None:
+    """os.walk onerror callback: re-raise so a directory-listing error is never
+    silently swallowed (os.walk's default onerror=None would just skip the
+    unreadable subdir and yield fewer entries -- a partial, dishonest digest).
+    """
+    raise err
+
+
 def compute_tree_sha256(root: str | Path) -> str | None:
     """Deterministic, stdlib-only digest of a checkout tree (C8 slice 8).
 
@@ -335,15 +343,17 @@ def compute_tree_sha256(root: str | Path) -> str | None:
     published (CHANGELOG) so a third party can recompute it byte-for-byte.
 
     Honest degradation: a missing or non-directory root, or any ``OSError``
-    while reading a file, returns ``None`` -- never a partial or fabricated
-    digest.
+    while listing a directory or reading a file, returns ``None`` -- never a
+    partial or fabricated digest. ``os.walk``'s default ``onerror=None`` would
+    otherwise silently skip an unreadable subdirectory and yield fewer
+    entries, so an ``onerror`` callback re-raises into the ``except`` below.
     """
     base = Path(root)
     if not base.is_dir():
         return None
     lines: list[str] = []
     try:
-        for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
+        for dirpath, dirnames, filenames in os.walk(base, followlinks=False, onerror=_raise):
             # Prune .git dirs and symlinked dirs in place (os.walk honors edits).
             dirnames[:] = [
                 d for d in dirnames if d != ".git" and not Path(dirpath, d).is_symlink()
