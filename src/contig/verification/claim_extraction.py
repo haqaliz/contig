@@ -22,7 +22,7 @@ import json
 import math
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from contig import detect
 
@@ -440,3 +440,40 @@ def extract_with_llm(text: str) -> list[ExtractedClaim]:
         # (it can carry request context, including the key).
         return []
     return _claims_from_reply(reply)
+
+
+def _uniquify_ids(claims: list[ExtractedClaim]) -> list[ExtractedClaim]:
+    """Return `claims` with every id re-uniquified in order via `_unique_id`.
+
+    Preserves order; ids collapse to their existing string then get the same
+    `slug`, `slug_2`, ... treatment so the whole list has unique, deterministic
+    ids. Pure -- inputs are frozen dataclasses, so replacements are new objects.
+    """
+    used_ids: set[str] = set()
+    out: list[ExtractedClaim] = []
+    for claim in claims:
+        new_id = _unique_id(claim.id, used_ids)
+        out.append(claim if new_id == claim.id else replace(claim, id=new_id))
+    return out
+
+
+def merge_claims(
+    core: list[ExtractedClaim], llm: list[ExtractedClaim]
+) -> list[ExtractedClaim]:
+    """Union `core` and `llm`, deduped by `(metric_slug, value)`; core wins.
+
+    Deterministic: core claims come first in their order, then llm-only claims
+    (a claim whose `(slug, value)` key already appeared in core is dropped -- the
+    core, deterministic result is authoritative). Ids are re-uniquified across
+    the merged set so the final list always has unique ids. Pure; inputs are
+    untouched.
+    """
+    seen_keys: set[tuple[str, float]] = set()
+    merged: list[ExtractedClaim] = []
+    for claim in list(core) + list(llm):
+        key = (_slug(claim.metric), claim.value)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        merged.append(claim)
+    return _uniquify_ids(merged)

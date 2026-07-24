@@ -16,7 +16,9 @@ import contig.verification.claim_extraction as claim_extraction
 from contig.verification.claim_extraction import (
     ExtractedClaim,
     _claims_from_reply,
+    extract_claims,
     extract_with_llm,
+    merge_claims,
 )
 
 
@@ -187,3 +189,90 @@ def test_api_key_never_leaks_into_output_or_log(monkeypatch, caplog) -> None:
     blob = " ".join(f"{c.id} {c.metric} {c.source_text}" for c in claims)
     assert "super-secret-key-value" not in blob
     assert "super-secret-key-value" not in caplog.text
+
+
+# --- Phase 3: merge_claims (union deduped by (metric_slug, value), core wins) --
+
+
+def _claim(id_: str, metric: str, value: float, origin: str) -> ExtractedClaim:
+    return ExtractedClaim(id=id_, value=value, metric=metric, origin=origin)
+
+
+def test_merge_core_wins_on_collision() -> None:
+    core = [_claim("auc", "AUC", 0.91, "heuristic")]
+    llm = [_claim("auc", "auc", 0.91, "llm")]  # same (slug, value)
+    merged = merge_claims(core, llm)
+    assert len(merged) == 1
+    assert merged[0].origin == "heuristic"
+
+
+def test_merge_appends_llm_only_claims_in_order() -> None:
+    core = [_claim("auc", "AUC", 0.91, "heuristic")]
+    llm = [
+        _claim("auc", "auc", 0.91, "llm"),  # dup -> dropped
+        _claim("f1", "F1", 0.8, "llm"),  # llm-only -> kept
+        _claim("recall", "recall", 0.75, "llm"),  # llm-only -> kept
+    ]
+    merged = merge_claims(core, llm)
+    assert [(c.metric, c.origin) for c in merged] == [
+        ("AUC", "heuristic"),
+        ("F1", "llm"),
+        ("recall", "llm"),
+    ]
+
+
+def test_merge_reuniquifies_ids_across_the_merged_set() -> None:
+    # core and an llm-only claim both slug to "auc" but differ in value ->
+    # both kept, ids must be distinct after merge.
+    core = [_claim("auc", "AUC", 0.91, "heuristic")]
+    llm = [_claim("auc", "auc", 0.88, "llm")]
+    merged = merge_claims(core, llm)
+    ids = [c.id for c in merged]
+    assert len(ids) == len(set(ids))  # all unique
+    assert ids == ["auc", "auc_2"]
+
+
+def test_merge_deduplicates_by_slug_and_value_not_by_id() -> None:
+    # same metric+value but the llm gave a different id string; still a dup.
+    core = [_claim("auc", "AUC", 0.91, "heuristic")]
+    llm = [_claim("some_other_id", "auc", 0.91, "llm")]
+    merged = merge_claims(core, llm)
+    assert len(merged) == 1
+    assert merged[0].origin == "heuristic"
+
+
+def test_merge_is_deterministic_and_pure() -> None:
+    core = [_claim("auc", "AUC", 0.91, "heuristic")]
+    llm = [_claim("f1", "F1", 0.8, "llm")]
+    first = merge_claims(core, llm)
+    second = merge_claims(core, llm)
+    assert [(c.id, c.metric, c.value, c.origin) for c in first] == [
+        (c.id, c.metric, c.value, c.origin) for c in second
+    ]
+    # inputs untouched
+    assert [c.id for c in core] == ["auc"]
+    assert [c.id for c in llm] == ["f1"]
+
+
+def test_merge_composes_real_core_and_llm_extractions(monkeypatch) -> None:
+    # end-to-end: deterministic core + optional llm assist compose cleanly.
+    monkeypatch.setenv("CONTIG_LLM_PROVIDER", "claude")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    text = "The model reached an AUC of 0.91 on the held-out set."
+    core = extract_claims(text)
+    monkeypatch.setattr(
+        claim_extraction,
+        "_llm_complete",
+        _fake_completion(
+            [
+                {"metric": "AUC", "value": 0.91, "unit": None, "source_text": "dup"},
+                {"metric": "F1", "value": 0.8, "unit": None, "source_text": "F1 0.8"},
+            ]
+        ),
+    )
+    llm = extract_with_llm(text)
+    merged = merge_claims(core, llm)
+    metrics = [(c.metric, c.origin) for c in merged]
+    assert ("AUC", "heuristic") in metrics  # core kept, llm dup dropped
+    assert ("F1", "llm") in metrics  # llm-only appended
+    assert len({c.id for c in merged}) == len(merged)  # ids unique
