@@ -8,6 +8,63 @@ All notable changes to Contig are recorded here. The format follows
 
 ### Added
 
+- **`contig extract-claims <paper.txt|md> --out <draft.json>` — the C8 paper-claim extraction
+  slice named as deferred in every prior C8 slice (`CAPABILITY_ROADMAP.md:1073`;
+  `CHANGELOG.md` slice-3/4/5/6 deferral lists).** Slices 1–7 (v0.40.0 → v0.48.0) built the whole
+  verify/locator/bundle spine, but the user still had to **hand-author the claims file** by
+  transcribing every number from the paper. This slice turns a paper's text into a **draft**
+  claims file the user reviews and completes — the step that makes `contig reproduce` turnkey on
+  a real published analysis rather than a maintainer demo. It is claims-file **input generation**
+  only: it does **not** touch `run_reproduction`, `classify`, `ClaimResult`, `ReproduceRecord`,
+  the bundle, signing, or any exit code (the entire reproduce suite is untouched and green).
+  - **A deterministic, stdlib-only core** (`verification/claim_extraction.py::extract_claims`,
+    **never raises**) extracts **named-metric + number** claims — a curated metric vocabulary
+    (AUC, accuracy, precision, recall, F1, sensitivity, specificity, Pearson/Spearman
+    correlation, R², MSE/RMSE/MAE, Dice, IoU, (log2) fold change, …) joined to a number by a
+    connective (`of`/`was`/`=`/`:`/`reached`/`achieved`) within a bounded window. Percentages
+    keep the **raw** value with `unit="%"` (never divided by 100 — the repo may emit `87` or
+    `0.87`, so the human reconciles the scale); **inequalities are skipped** (`p < 0.001` is not
+    a single reproducible value); ids are a deterministic metric slug uniquified per file
+    (`auc`, `auc_2`, …); duplicates collapse on `(metric, value)` file-wide; the nearer metric
+    owns a shared number (precision over recall). On a committed labeled fixture corpus the core
+    recovers 13/13 with zero spurious extras — the "obvious claim" bar, honestly, not a claim of
+    perfect extraction on arbitrary prose.
+  - **An optional, env-gated LLM assist** (`extract_with_llm`) mirrors the shipped `llm`-detector
+    seam exactly: gated on the **reused** `detect._selected_provider()` (`CONTIG_LLM_PROVIDER` +
+    `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`), unconfigured → a pure no-op so the deterministic core
+    stands alone; a single lazy-SDK/network touch point (`_llm_complete`) that tests monkeypatch;
+    a **defensive** reply parser that tolerates prose-wrapped JSON and **swallows every**
+    provider/network/parse/shape error into `[]` (never crashes the caller); and `merge_claims`
+    unions core+LLM deduped on `(metric, value)` with the **core winning**. Importing the module
+    pulls **no** provider SDK; the real seam is **shape-asserted only** in CI (a fake
+    `anthropic`/`openai` injected into `sys.modules`), **never executed** — a documented manual
+    pre-merge gate runs the real provider once. No API key is ever logged (pinned by a test).
+  - **The load-bearing invariant: we never emit a draft our own reproduce path would reject.**
+    The command round-trips the generated draft through the **unchanged `load_claims`** (temp
+    file → `os.replace` on success; a `ClaimsError` removes the temp and exits non-zero as an
+    internal error) before committing `--out`. The draft is **locator-less** by design
+    (`id`/`value`/`tolerance` only) — the paper gives the *value*, not *where it lives in the
+    repo's output*, so inventing a `from`/`path` locator would be dishonest; the user adds the
+    locator during review. A companion **`<out>.review.md` sidecar** carries the provenance the
+    JSON can't: per claim its value, unit, origin (`heuristic`/`llm`), and the **source
+    sentence**, plus the workflow header (add a locator; reconcile any `%` scale) — so the draft
+    JSON stays clean and schema-minimal while review stays informed.
+  - **Honest on every boundary.** A missing/unreadable/oversized (`> _MAX_MATCH_BYTES` = 8 MiB,
+    `stat()`ed before read)/non-UTF-8 input exits non-zero with **nothing written**; `--out`
+    equal to the input, or an existing `--out` without `--force`, is refused; an **empty**
+    extraction writes `[]` + a "no numeric claims found" sidecar and exits **0** (finding nothing
+    is not a failure). `--no-llm` forces core-only even when a provider is configured. Flag/arg
+    registration is asserted by introspecting the Click params, never by scraping `--help`.
+    Because extraction only ever produces a draft the user reviews, and any unreviewed/wrongly
+    extracted claim degrades to `UNVERIFIED` at reproduce time, extraction can be imperfect
+    **without ever manufacturing a false `REPRODUCED`**.
+  - **Honest scope / limits.** **Plain-text/markdown only** — no PDF parsing, no DOI resolution,
+    no paper *fetching* (network + parsing), all deferred. **No locator inference**, no
+    figure/plot or table-image claims (hard-blocked — no plot-hash, stdlib-only), no dashboard
+    surface, no C6 eval fold-in. Stdlib-only core (`re`); the provider SDK is a lazy optional
+    import inside the seam — no new runtime dependency. Test-first; **no real LLM, network, PDF,
+    or repo in CI**. Plan/PRD under `docs/planning/reproduce-paper-claims/`.
+
 - **`contig reproduce` now records a deterministic content hash of the fetched checkout tree,
   closing the gap slice 6 disclosed in its own words: "hashing the tree is deliberately a
   separate slice" (C8 slice 8).** Slices 6/7 recorded and pinned the resolved commit
