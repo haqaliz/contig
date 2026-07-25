@@ -88,8 +88,24 @@ All notable changes to Contig are recorded here. The format follows
     new dependency, no `models.py` change, no verdict/exit-code/signing contract change.
     **D4: the settings are deliberately NOT persisted to `LaunchManifest`** — a stall is a
     property of the machine and its I/O, not of the analysis, and baking a timeout into a
-    reproducible manifest would make replay depend on the original host's speed. Consequence:
-    `rerun`/`resume` do **not** re-enable the watchdog; the flags exist on `run` only.
+    reproducible manifest would make replay depend on the original host's speed. Because they are
+    runtime-only rather than replayed, they must be passed on each invocation — so the same two
+    flags were subsequently added to `rerun` and `resume` (below), the watchdog being most wanted
+    exactly when resuming a run that just stalled.
+- **`--detect-stalls` / `--stall-timeout` on `rerun` and `resume`, not just `run`.** The most
+  natural gesture after a stall — `contig resume <id>` — previously fell back to the `False`
+  default and re-ran **without** the watchdog. All three commands now share one
+  `_validate_stall_flags` helper (and shared help-text constants), so the two refusals behave
+  identically everywhere: `--stall-timeout` without `--detect-stalls` is refused naming the gate
+  flag, and a non-positive timeout under `--detect-stalls` is refused. The refusal still reads
+  Click's parameter **source**, never the value — `3600.0` is both the default and a legal
+  explicit value, so `--stall-timeout 3600` alone is refused too, and a test pins exactly that
+  case for each command because a naive `!= 3600.0` check would pass every other test. Validation
+  runs **before** any filesystem work on all three (`rerun` originally checked the manifest
+  first, so a flag mistake reported a missing manifest — fixed, with a regression test asserting
+  the manifest message is *absent*). Nothing else changed: `run`'s behavior and its existing
+  tests are untouched, and with the flag absent the executor is still the unmodified
+  `default_executor`.
   - **Honest limits, stated as limits.** (1) **Push, not demand-pull:** no design partner asked
     for it and **no real Contig run has ever been observed to hang** — the architectural gap was
     documented, the **frequency is unmeasured**, and nothing here claims otherwise. (2) The

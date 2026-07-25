@@ -395,8 +395,12 @@ design:** `self_heal.py` is **unchanged** — the CLI builds the watchdog throug
 and with the flag absent the executor is the unmodified `default_executor`. **D4 — the settings
 are deliberately NOT persisted to `LaunchManifest`:** a stall is a property of the machine and
 its I/O, not of the analysis, and baking a timeout into a reproducible manifest would make
-replay depend on the original host's speed. A consequence worth knowing: `rerun`/`resume` do
-**not** re-enable the watchdog — the flags exist on `run` only. **Honest limits, stated as
+replay depend on the original host's speed. Because the settings are runtime-only rather than
+replayed from the manifest, they have to be passed again on each invocation — so a **follow-on
+slice** put the same two flags on `rerun` and `resume` behind one shared validator, since the
+most natural gesture after a stall (`contig resume <id>`) had otherwise run *without* the
+watchdog. All three commands validate identically and **before** any filesystem work, so a flag
+mistake reports the flag mistake rather than a missing manifest. **Honest limits, stated as
 limits:** (1) this is **push, not demand-pull** — no design partner asked for it and **no real
 Contig run has ever been observed to hang**; the architectural gap was documented
 (`ARCHITECTURE.md:203`, the `FailureClass` literal, a frozen held-out fixture), but the
