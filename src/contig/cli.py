@@ -2652,11 +2652,11 @@ def heal_guard(
     exits 0. With --snapshot the result is also appended to the committed
     self-heal trend; with --history the recorded trend is printed instead.
 
-    Honest scope: the number is over **7 SYNTHETIC scenarios**, not a field
-    recovery rate. Covered failure classes: bad_param, missing_index, oom,
-    time_limit, tool_crash. Not covered: qc_anomaly and no_progress are
-    currently structurally unreachable (no diagnose_failure rule branch emits
-    them yet); container_pull_failed, container_unavailable, conda_solve_failed,
+    Honest scope: the number is over **8 SYNTHETIC scenarios**, not a field
+    recovery rate. Covered failure classes: bad_param, missing_index, no_progress,
+    oom, time_limit, tool_crash. Not covered: qc_anomaly is currently
+    structurally unreachable (no diagnose_failure rule branch emits it yet);
+    container_pull_failed, container_unavailable, conda_solve_failed,
     platform_unsupported, disk_full, download_failed, permission_denied, and
     missing_reference have no scenario yet and are deferred follow-on slices.
     """

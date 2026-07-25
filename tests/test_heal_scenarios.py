@@ -289,12 +289,12 @@ def test_shipped_heal_scenarios_all_reproduce_their_declared_outcomes():
     scenarios = load_heal_scenarios(default_heal_scenarios_path())
     report = evaluate_heal(scenarios)
 
-    assert report.total == 7
+    assert report.total == 8
     assert report.outcome_match_rate == 1.0, [
         (m.scenario_id, m.divergence) for m in report.mismatches
     ]
-    assert report.healed == 4
-    assert report.recovery_rate == pytest.approx(4 / 7)
+    assert report.healed == 5
+    assert report.recovery_rate == pytest.approx(5 / 8)
 
     covered = {s.expected_class for s in scenarios}
     assert covered >= {"oom", "time_limit", "missing_index", "tool_crash"}
@@ -307,9 +307,9 @@ def test_shipped_heal_baseline_matches_shipped_scenarios():
     baseline = load_heal_baseline(default_heal_baseline_path())
 
     assert baseline is not None
-    assert baseline.scenario_count == 7
+    assert baseline.scenario_count == 8
     assert baseline.outcome_match_rate == 1.0
-    assert baseline.recovery_rate == pytest.approx(4 / 7)
+    assert baseline.recovery_rate == pytest.approx(5 / 8)
     assert baseline.corpus_sha == sha256_file(scenarios_path)
     assert set(baseline.covered_classes) >= {
         "oom",
