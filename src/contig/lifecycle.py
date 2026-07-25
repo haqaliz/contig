@@ -26,6 +26,18 @@ from contig.notify import emit_event
 _ACTIVE_STATES = {"running", "awaiting_approval"}
 
 
+def _is_real_pid(value: object) -> bool:
+    """True for an actual int pid/pgid, not the bool subclass of int.
+
+    isinstance(True, int) is True in Python, so a plain `isinstance(x, int)`
+    guard lets a hand-edited or corrupted status.json's JSON `true` through
+    as pid 1 -- init/launchd's process group. No writer in this codebase has
+    ever produced a bool here; this exists purely so a corrupted file can't
+    signal it.
+    """
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 class CancelError(Exception):
     """Raised when there is no active run to cancel (already done, or no status)."""
 
@@ -106,6 +118,12 @@ def cancel_run(runs_dir: str | Path, run_id: str, *, wait_seconds: float = 2.0) 
     already-cancelled, or unknown run has nothing to cancel. If the run says it is
     active but the process is already dead, the terminal state is still written so
     a stale "running" never lingers.
+
+    `wait_seconds` is the SIGTERM grace period, spent once PER process group.
+    A watchdog run that has both a live `child_pgid` and its own `pid` group
+    can therefore take up to 2x `wait_seconds` to cancel, not `wait_seconds` --
+    a rare admin action taking longer is an acceptable trade against the
+    complexity of a single shared grace window across two independent groups.
     """
     run_dir = Path(runs_dir) / run_id
     status = _read_status(run_dir)
@@ -128,11 +146,21 @@ def cancel_run(runs_dir: str | Path, run_id: str, *, wait_seconds: float = 2.0) 
     # attempt's executor republishes a fresh child_pgid before its own child
     # runs -- so treating "absent" as "nothing extra to reap" is correct for
     # every cause, not merely a back-compat shim for pre-watchdog runs.
+    #
+    # The mirror case -- present but STALE -- also happens: self_heal's
+    # auto_approve retry branch (self_heal.py:1041-1063), unlike the other two
+    # retry branches, never calls _write_status before its `continue`, so the
+    # PREVIOUS attempt's dead child_pgid lingers in status.json until the next
+    # attempt's executor overwrites it. Still safe: nothing detached is alive
+    # in that window (anything run synchronously in between, e.g. an index
+    # build, is undetached and reaped via the `pid` path below), and reaping a
+    # stale pgid is exactly what _terminate_process_group's ProcessLookupError
+    # handling is for.
     child_pgid = status.get("child_pgid")
-    if isinstance(child_pgid, int):
+    if _is_real_pid(child_pgid):
         _terminate_process_group(child_pgid, wait_seconds)
     pid = status.get("pid")
-    if isinstance(pid, int):
+    if _is_real_pid(pid):
         _terminate_process_group(pid, wait_seconds)
     _write_terminal_status(run_dir, status, "cancelled")
     emit_event(runs_dir, run_id, "cancelled", f"Run {run_id} was cancelled.")

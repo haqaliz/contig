@@ -208,8 +208,11 @@ def test_cancel_with_dead_child_pgid_still_reaps_run_group(tmp_path, monkeypatch
     assert status["state"] == "cancelled"
 
 
-@pytest.mark.parametrize("bad_child_pgid", ["not-a-pid", None, 12.5])
+@pytest.mark.parametrize("bad_child_pgid", ["not-a-pid", None, 12.5, True, False])
 def test_cancel_ignores_malformed_child_pgid(tmp_path, monkeypatch, bad_child_pgid):
+    # True/False matter because isinstance(True, int) is True in Python: a
+    # hand-edited or corrupted status.json carrying JSON `true` must not slip
+    # past the guard and reach os.getpgid(1) -- that's init/launchd's group.
     d = tmp_path / "r"
     d.mkdir(parents=True)
     (d / "status.json").write_text(
@@ -232,6 +235,36 @@ def test_cancel_ignores_malformed_child_pgid(tmp_path, monkeypatch, bad_child_pg
     cancel_run(tmp_path, "r")
 
     assert killed == [4321]
+    status = json.loads((tmp_path / "r" / "status.json").read_text())
+    assert status["state"] == "cancelled"
+
+
+@pytest.mark.parametrize("bad_pid", [True, False])
+def test_cancel_ignores_bool_pid(tmp_path, monkeypatch, bad_pid):
+    # The same isinstance(x, int) hole exists on `pid` -- guard it too, since
+    # no writer has ever produced a real int here, but a hand-edited or
+    # corrupted status.json shouldn't be able to signal launchd's group.
+    d = tmp_path / "r"
+    d.mkdir(parents=True)
+    (d / "status.json").write_text(
+        json.dumps(
+            {
+                "run_id": "r",
+                "state": "running",
+                "pid": bad_pid,
+                "started_at": "2026-06-22T00:00:00+00:00",
+                "finished_at": None,
+            }
+        )
+    )
+    killed = []
+    monkeypatch.setattr(os, "killpg", lambda pgid, sig: killed.append(pgid))
+    monkeypatch.setattr(os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(os, "kill", lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError()))
+
+    cancel_run(tmp_path, "r")
+
+    assert killed == []
     status = json.loads((tmp_path / "r" / "status.json").read_text())
     assert status["state"] == "cancelled"
 
