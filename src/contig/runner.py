@@ -8,13 +8,21 @@ assembly is layered on once the toolchain (Nextflow/Docker) is present.
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 import re
+import signal
 import subprocess
 import sys
+import time
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import Callable
+
+
+logger = logging.getLogger(__name__)
 
 
 def _contig_version() -> str | None:
@@ -30,6 +38,15 @@ from contig.models import ExecutionTarget, QCResult, RunRecord, TaskEvent
 from contig.nfconfig import generate_nextflow_config
 from contig.registry import VARIANT_ASSAYS
 from contig.snakemake import build_snakemake_command, parse_snakemake_stats_file
+from contig.stall import (
+    Heartbeat,
+    HeartbeatObserver,
+    changed,
+    evaluate_stall,
+    observe_with_deadline,
+    read_heartbeat,
+    stall_message,
+)
 from contig.verification.ampliseq_metrics import parse_asv_table, parse_dada2_overall_summary
 from contig.verification.annotation_concordance import (
     evaluate_annotation_concordance_from_run,
@@ -611,6 +628,171 @@ def default_executor(cmd: list[str], trace_path: Path) -> int:
             cmd, cwd=trace_path.parent, stdout=log, stderr=subprocess.STDOUT, check=False
         )
     return proc.returncode
+
+
+# How often the watchdog wakes to fingerprint the run's output surfaces. A
+# constant, not a flag (D3): the poll rate is an implementation detail of the
+# supervisor, not a knob a user has any basis to tune. Overridable by keyword
+# for tests only, mirroring `self_heal`'s resource_ceiling precedent.
+_STALL_POLL_INTERVAL_SEC = 30.0
+
+# How long a stalled child gets between SIGTERM and SIGKILL (D5). Mirrors
+# `lifecycle._terminate_process_group`'s ladder.
+_STALL_GRACE_SEC = 5.0
+
+# How long one heartbeat read may take before the watchdog gives up on it and
+# keeps the previous fingerprint (D1). A read that blocks longer than this is a
+# filesystem that cannot answer stat() -- which is itself "no progress".
+_STALL_STAT_DEADLINE_SEC = 5.0
+
+
+def make_watchdog_executor(
+    *,
+    stall_timeout_sec: float,
+    observer: HeartbeatObserver = read_heartbeat,
+    clock: Callable[[], float] = time.monotonic,
+    sleeper: Callable[[float], None] = time.sleep,
+    poll_interval: float = _STALL_POLL_INTERVAL_SEC,
+    grace_sec: float = _STALL_GRACE_SEC,
+    stat_deadline_sec: float = _STALL_STAT_DEADLINE_SEC,
+) -> Executor:
+    """Build an `Executor` that supervises the child and kills a stalled run.
+
+    Returns a closure of exactly the `Executor` shape `(cmd, trace_path) -> int`,
+    so it drops into `run_pipeline`'s existing seam with no other plumbing. A
+    non-positive `stall_timeout_sec` disables supervision entirely and delegates
+    to `default_executor` -- the watchdog is opt-in, and "off" must be the plain
+    executor byte for byte.
+    """
+
+    def _watchdog_executor(cmd: list[str], trace_path: Path) -> int:
+        if stall_timeout_sec <= 0:
+            return default_executor(cmd, trace_path)
+
+        run_dir = trace_path.parent
+        log_path = run_dir / "run.log"
+        # Truncate first, exactly as default_executor's "wb" does, then hand the
+        # child an O_APPEND handle instead. Two processes write this file: the
+        # child (stdout+stderr) and us (the stall verdict). The inherited
+        # descriptor shares its offset with ours, so an ordinary write would
+        # usually land in the right place anyway -- O_APPEND is what makes that
+        # a guarantee rather than a coincidence, holding even if the child
+        # reopens or seeks its stdout, and keeping a dying Nextflow's last words
+        # from landing on top of the verdict.
+        log_path.write_bytes(b"")
+        with open(log_path, "ab") as log:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=run_dir,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                # D2: its own session, so killpg reaps the pipeline's whole tree
+                # without reaping contig itself (today the child shares contig's
+                # group, and killpg on our own group would kill the supervisor).
+                start_new_session=True,
+            )
+            _publish_child_pgid(run_dir, proc.pid)
+
+            previous: Heartbeat | None = None
+            last_change_at = clock()
+            while proc.poll() is None:
+                sleeper(poll_interval)
+                if proc.poll() is not None:
+                    break
+                current = observe_with_deadline(
+                    observer, run_dir, trace_path, previous, stat_deadline_sec
+                )
+                now = clock()
+                decision = evaluate_stall(
+                    previous, current, last_change_at, now, stall_timeout_sec
+                )
+                if changed(previous, current):
+                    last_change_at = now
+                previous = current
+                if not decision.stalled:
+                    continue
+                # Write the verdict BEFORE killing, and flush it: this line is the
+                # detector's only evidence that the run was stalled rather than
+                # merely crashed. Buffered and lost, the feature degrades silently
+                # to a tool_crash misdiagnosis.
+                log.write(
+                    (
+                        stall_message(
+                            decision.idle_sec, stall_timeout_sec, decision.silent_surfaces
+                        )
+                        + "\n"
+                    ).encode()
+                )
+                log.flush()
+                _terminate_child_group(proc, grace_sec)
+                break  # terminate at most once per invocation
+
+            # Returned unchanged: a signalled child is -15/-9, which is non-zero,
+            # so run_pipeline raises PipelineExecutionError and the existing
+            # diagnosis path runs with no new plumbing.
+            return proc.wait()
+
+    return _watchdog_executor
+
+
+def _publish_child_pgid(run_dir: Path, pid: int) -> None:
+    """Merge the detached child's process-group id into status.json (D2).
+
+    `contig cancel` reaps the group of the pid it finds in status.json, which is
+    contig's OWN pid; that only worked because the child shared contig's group.
+    Spawning into a new session removes it from that group, so the child's pgid
+    has to be published for `cancel_run` to reap it too. Purely telemetry for
+    another command: a missing, unreadable, or unwritable status.json is warned
+    about and never allowed to fail the run.
+    """
+    try:
+        pgid = os.getpgid(pid)
+    except OSError:
+        # The child is already gone, so there is no live group to cancel and
+        # nothing worth recording; a recycled pgid would be worse than none.
+        return
+    path = run_dir / "status.json"
+    try:
+        existing = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        logger.warning("could not read %s to record child_pgid: %s", path, exc)
+        return
+    if not isinstance(existing, dict):
+        logger.warning("%s is not a JSON object; not recording child_pgid", path)
+        return
+    existing["child_pgid"] = pgid
+    try:
+        path.write_text(json.dumps(existing))
+    except OSError as exc:
+        logger.warning("could not write %s to record child_pgid: %s", path, exc)
+
+
+def _terminate_child_group(proc: subprocess.Popen, grace_sec: float) -> None:
+    """SIGTERM the stalled child's group, then SIGKILL it if it outlives the grace.
+
+    Mirrors `lifecycle._terminate_process_group` (D5). Signals the GROUP, not the
+    pid: Nextflow's Java process and the tool children it spawned all have to go,
+    or the "terminated" run keeps burning compute. A child that exits inside the
+    grace window is never SIGKILLed, and a group that is already gone is fine --
+    there is simply nothing left to reap.
+    """
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        return
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        proc.wait(timeout=grace_sec)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
 
 
 def default_command_executor(cmd: list[str], cwd: Path) -> tuple[int, str]:
