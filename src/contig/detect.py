@@ -36,30 +36,42 @@ def _has_any(text: str, needles: tuple[str, ...]) -> bool:
     return any(n in low for n in needles)
 
 
-# Phrase-level and deliberately GENERALIZED, not a sentinel only Contig emits:
-# `stall.stall_message` produces the 1st, 2nd and 4th, while the 3rd matches the
-# frozen `holdout-no-progress-1` fixture, whose text names a non-Contig actor
-# ("the progress monitor terminated it as stalled"). Matching both wordings
-# through one tuple is the point — a rule fitted to our own string would fail the
-# held-out case it exists to pass — but the trade is not free: nothing confines
-# these four generic phrases to output we wrote, so third-party tool text
-# containing one of them classifies as no_progress, and from above the OOM branch
-# it out-ranks a genuine exit == 137.
+# Every needle is a phrase `stall.stall_message` actually emits — nothing here is
+# written to catch a particular fixture. What generalizes the branch is that our
+# own wording is ordinary English: the frozen `holdout-no-progress-1` fixture,
+# authored independently and naming a NON-Contig actor ("the progress monitor
+# terminated it as stalled"), matches on "no new output or trace update" and
+# "no forward progress", both of which it shares with us verbatim. So the rule is
+# not fitted to our string, and a fourth needle ("terminated it as stalled") that
+# was once carried for that fixture turned out to be load-bearing for nothing and
+# was dropped.
+#
+# The same genericness is the cost, and it is real and unenforced: nothing
+# confines these phrases to output we wrote, so third-party tool text containing
+# one of them classifies as no_progress — and from above the OOM branch it
+# out-ranks a genuine exit == 137. Keep this tuple as small as the shipped
+# fixtures allow; every phrase added here is false-positive surface charged
+# against every diagnosis Contig makes.
 _NO_PROGRESS_NEEDLES = (
     "no forward progress",
     "no new output or trace update",
-    "terminated it as stalled",
     "terminating the stalled run",
 )
 
 
 def diagnose_failure(events: list[TaskEvent], log_text: str) -> Diagnosis:
-    # The stall watchdog's own verdict outranks even OOM: it is a first-party
-    # statement that this run was killed for making no forward progress, not an
-    # inference from an incidental exit code. A dying Nextflow can still write a
-    # trace row with exit 137 as it is torn down (D5/D6 in the plan), so this
-    # phrase-level check must be checked BEFORE the OOM block below, or that
-    # branch would always win regardless of what the log says.
+    # A stall verdict outranks even OOM, because it is a STATED reason the run
+    # was killed, whereas OOM here is inferred from an exit code the kill itself
+    # produces: a dying Nextflow can write a trace row with exit 137 as the
+    # watchdog's SIGTERM/SIGKILL ladder tears it down (D5/D6 in the plan), so a
+    # check placed below the OOM block would lose to that incidental code no
+    # matter what the log says.
+    #
+    # This ordering is what makes the needles above expensive to get wrong, and
+    # the statement is NOT verified to be ours -- the phrases are generic enough
+    # that third-party text can carry them (see _NO_PROGRESS_NEEDLES). We take
+    # that: a run whose log says it made no forward progress is better served by
+    # a retry than by an OOM patch that raises memory it never ran out of.
     stall_lines = _matching_lines(log_text, _NO_PROGRESS_NEEDLES)
     if stall_lines:
         return Diagnosis(

@@ -48,14 +48,18 @@ All notable changes to Contig are recorded here. The format follows
   - **The `no_progress` detector branch sits AHEAD of the OOM check, deliberately**, reversing a
     standing "OOM wins outright" comment: OOM matches `any(e.exit == 137)` from the **events
     alone**, so a dying Nextflow's exit-137 trace row would beat any branch below it whatever the
-    log said. It keys on four phrase-level needles that are **deliberately generalized, not
-    first-party-unique**: `stall_message` emits three of them, and the fourth ("terminated it as
-    stalled") is there so the independently worded frozen `holdout-no-progress-1` fixture — whose
-    text names a **non-Contig** actor — classifies through the same tuple instead of through a
-    rule fitted to our own string. **First-party uniqueness was traded away for that generality,
-    and the cost is real and unenforced:** third-party tool output containing one of these generic
-    phrases classifies as `no_progress`, and from above the OOM check it out-ranks a genuine
-    `exit == 137`. Tests pin that the emitted message contains none
+    log said. It keys on three phrase-level needles, **every one of them a phrase `stall_message`
+    itself emits** (pinned by a test, so no needle can be added that Contig never writes). The
+    branch generalizes not because a needle was written for the corpus but because **our own
+    wording is ordinary English**: the independently authored frozen `holdout-no-progress-1`
+    fixture, whose text credits a **non-Contig** actor, hits two of the three **verbatim** and
+    classifies through exactly the rule our own message does. A fourth needle ("terminated it as
+    stalled") was carried on the belief the fixture needed it and has been **dropped as
+    redundant** — the fixture classifies without it, so it was pure added false-positive surface.
+    **First-party uniqueness is still given up, and the cost is real and unenforced:** phrases
+    generic enough for an independent author to hit are generic enough for a third-party tool to
+    emit, so foreign output containing one classifies as `no_progress`, and from above the OOM
+    check it out-ranks a genuine `exit == 137`. Tests pin that the emitted message contains none
     of `killed`/`oom`/`out of memory`/`time limit`, and that a **genuine** OOM (exit-137 *and*
     text paths) still classifies `oom`. `propose_patches` gains a `no_progress` →
     `kind="retry"`, `risk="safe"` patch: the loop already passes `-resume`, so the retry reuses
