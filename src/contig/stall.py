@@ -17,7 +17,10 @@ indistinguishable to `changed` on any single observation — only the transition
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
 
 # The literal surface names the detector and the operator-facing message key on.
 # Order matches the sentinel text in `stall_message`.
@@ -94,6 +97,83 @@ def evaluate_stall(
     idle_sec = max(0.0, now - last_change_at)
     stalled = timeout_sec > 0 and idle_sec >= timeout_sec
     return StallDecision(stalled=stalled, idle_sec=idle_sec, silent_surfaces=SURFACE_NAMES)
+
+
+# An observer turns a run directory and the trace-file path into a Heartbeat.
+# Injected in tests so they never touch a real filesystem; mirrors ApprovalPoll
+# (`self_heal.py:297-300`).
+HeartbeatObserver = Callable[[Path, Path], Heartbeat]
+
+
+def read_heartbeat(run_dir: Path, artifact_path: Path) -> Heartbeat:
+    """stat() the three output surfaces and fingerprint them.
+
+    Every `OSError` (including `FileNotFoundError` for a surface that has not
+    been written yet) degrades that surface's field(s) to `None` — never
+    propagates. Deliberately does NOT call `parse_trace_file`: it has no
+    existence guard and raises on an absent trace, and we only need `stat()`,
+    not the parsed rows.
+    """
+    trace_stat = _safe_stat(artifact_path)
+    nflog_stat = _safe_stat(run_dir / ".nextflow.log")
+    runlog_stat = _safe_stat(run_dir / "run.log")
+    return Heartbeat(
+        trace_mtime=trace_stat.st_mtime if trace_stat else None,
+        trace_size=trace_stat.st_size if trace_stat else None,
+        nflog_mtime=nflog_stat.st_mtime if nflog_stat else None,
+        nflog_size=nflog_stat.st_size if nflog_stat else None,
+        runlog_size=runlog_stat.st_size if runlog_stat else None,
+    )
+
+
+def _safe_stat(path: Path):
+    try:
+        return path.stat()
+    except OSError:
+        return None
+
+
+def observe_with_deadline(
+    observer: HeartbeatObserver,
+    run_dir: Path,
+    artifact_path: Path,
+    previous: Heartbeat | None,
+    deadline_sec: float,
+) -> Heartbeat:
+    """Run `observer` off-thread so a wedged mount cannot hang the watchdog.
+
+    `stat()` against a hard-mounted, unresponsive NFS blocks in uninterruptible
+    sleep — no timeout, no signal, can reach through it (D1 in the plan). So the
+    read happens in a **daemon** thread: if it has not returned by `deadline_sec`,
+    we stop waiting and keep `previous` (or an all-`None` `Heartbeat` when there
+    is no previous yet), which reads as "no progress observed" — the honest
+    interpretation, since a filesystem that cannot answer `stat()` is not one on
+    which the pipeline is observably progressing.
+
+    The thread itself is not cancelled and may leak for the life of the wedged
+    read. That is acceptable specifically because it is a daemon thread: daemon
+    threads never block interpreter exit, so a permanently wedged read cannot
+    hang `contig` — it just never contributes its result.
+    """
+    result: list[Heartbeat] = []
+
+    def _observe() -> None:
+        result.append(observer(run_dir, artifact_path))
+
+    thread = threading.Thread(target=_observe, daemon=True)
+    thread.start()
+    thread.join(deadline_sec)
+    if thread.is_alive():
+        if previous is None:
+            return Heartbeat(
+                trace_mtime=None,
+                trace_size=None,
+                nflog_mtime=None,
+                nflog_size=None,
+                runlog_size=None,
+            )
+        return previous
+    return result[0]
 
 
 def stall_message(

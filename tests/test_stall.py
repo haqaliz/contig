@@ -4,11 +4,20 @@
 fingerprints (mtimes/sizes of the surfaces a running pipeline touches) plus the
 timestamp of the last observed change. Pure: no subprocess, no filesystem, no
 sleeping. The observer that produces `Heartbeat` values by stat()-ing real files
-lives elsewhere (off-thread, per D1 in the plan); these tests exercise the
-decision math alone.
+lives in this module too (off-thread, per D1 in the plan), but is exercised
+separately below from the decision math.
 """
 
-from contig.stall import Heartbeat, changed, evaluate_stall, stall_message
+import threading
+
+from contig.stall import (
+    Heartbeat,
+    changed,
+    evaluate_stall,
+    observe_with_deadline,
+    read_heartbeat,
+    stall_message,
+)
 
 
 def _hb(**overrides) -> Heartbeat:
@@ -140,6 +149,117 @@ def test_stall_message_contains_needles_the_detector_keys_on():
     assert "trace.txt" in msg
     assert ".nextflow.log" in msg
     assert "run.log" in msg
+
+
+def test_read_heartbeat_reads_stat_of_all_three_surfaces(tmp_path):
+    artifact_path = tmp_path / "trace.txt"
+    artifact_path.write_text("a-row\n")
+    (tmp_path / ".nextflow.log").write_text("log line\n")
+    (tmp_path / "run.log").write_text("stdout capture\n")
+
+    hb = read_heartbeat(tmp_path, artifact_path)
+
+    trace_stat = artifact_path.stat()
+    nflog_stat = (tmp_path / ".nextflow.log").stat()
+    runlog_stat = (tmp_path / "run.log").stat()
+    assert hb.trace_mtime == trace_stat.st_mtime
+    assert hb.trace_size == trace_stat.st_size
+    assert hb.nflog_mtime == nflog_stat.st_mtime
+    assert hb.nflog_size == nflog_stat.st_size
+    assert hb.runlog_size == runlog_stat.st_size
+
+
+def test_read_heartbeat_missing_files_degrade_to_none_without_raising(tmp_path):
+    # No trace.txt, no .nextflow.log, no run.log: a run that hasn't written
+    # anything yet is normal, not an error (and parse_trace_file would raise
+    # FileNotFoundError here — read_heartbeat must not call it).
+    artifact_path = tmp_path / "trace.txt"
+
+    hb = read_heartbeat(tmp_path, artifact_path)
+
+    assert hb == Heartbeat(
+        trace_mtime=None,
+        trace_size=None,
+        nflog_mtime=None,
+        nflog_size=None,
+        runlog_size=None,
+    )
+
+
+def test_read_heartbeat_run_dir_itself_missing_does_not_raise(tmp_path):
+    # The run dir doesn't exist at all yet — stat() on run_dir / ".nextflow.log"
+    # still just raises FileNotFoundError, which must degrade to None.
+    missing_run_dir = tmp_path / "no-such-run-dir"
+    artifact_path = missing_run_dir / "trace.txt"
+
+    hb = read_heartbeat(missing_run_dir, artifact_path)
+
+    assert hb == Heartbeat(None, None, None, None, None)
+
+
+def test_observe_with_deadline_returns_observer_result_within_deadline():
+    fast_result = _hb(trace_size=999)
+
+    def fast_observer(run_dir, artifact_path):
+        return fast_result
+
+    hb = observe_with_deadline(
+        fast_observer,
+        run_dir=None,
+        artifact_path=None,
+        previous=_hb(),
+        deadline_sec=5.0,
+    )
+
+    assert hb is fast_result
+
+
+def test_observe_with_deadline_returns_previous_when_observer_blocks_past_deadline():
+    # A fake observer that genuinely blocks (never sets the Event) simulates a
+    # wedged NFS stat(): a real stat() there blocks uninterruptibly, so nothing
+    # short of "stop waiting on it" can recover. Bounded here by a short
+    # deadline so the test itself cannot hang the suite; the daemon thread is
+    # abandoned, not joined further.
+    never_set = threading.Event()
+    previous = _hb(trace_size=42)
+
+    def blocking_observer(run_dir, artifact_path):
+        never_set.wait()  # never returns within the test
+        return _hb(trace_size=999)  # pragma: no cover - unreachable in test
+
+    hb = observe_with_deadline(
+        blocking_observer,
+        run_dir=None,
+        artifact_path=None,
+        previous=previous,
+        deadline_sec=0.05,
+    )
+
+    assert hb == previous
+
+
+def test_observe_with_deadline_returns_all_none_heartbeat_when_no_previous_and_blocked():
+    never_set = threading.Event()
+
+    def blocking_observer(run_dir, artifact_path):
+        never_set.wait()
+        return _hb()  # pragma: no cover - unreachable in test
+
+    hb = observe_with_deadline(
+        blocking_observer,
+        run_dir=None,
+        artifact_path=None,
+        previous=None,
+        deadline_sec=0.05,
+    )
+
+    assert hb == Heartbeat(
+        trace_mtime=None,
+        trace_size=None,
+        nflog_mtime=None,
+        nflog_size=None,
+        runlog_size=None,
+    )
 
 
 def test_stall_message_never_contains_oom_or_time_limit_needles():
