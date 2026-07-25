@@ -107,32 +107,54 @@ def test_default_heal_history_path_under_package_data() -> None:
     assert p.parent.name == "data"
 
 
-def test_holdout_seed_is_one_line_matching_baseline() -> None:
+def test_holdout_baseline_matches_a_recorded_trend_point() -> None:
     from contig.holdout import default_holdout_history_path
 
-    # The FIRST line is the seed and must still match the committed baseline.
-    # Later lines are the per-release trend points RELEASING.md step 2 appends
-    # (`contig eval-guard --snapshot`) -- growing that trend is the whole point
-    # of the C6 trend feature, so assert >= 1, not == 1. Pinning it to exactly
-    # one line made following RELEASING.md put master red, and the snapshot
-    # step got skipped for four releases running.
+    # The committed baseline must correspond to an actually-measured point in
+    # the trend, not a number nobody ever ran eval-guard to produce. History is
+    # append-only (RELEASING.md step 2 grows it every release via
+    # `eval-guard --snapshot`) and is NEVER rewritten in place, so the baseline
+    # is not required to be any particular line -- least of all line 0, the
+    # original 0.22.0 seed: an earlier version of this test pinned exactly that
+    # and broke the instant a refreeze actually moved accuracy (this one did,
+    # 84.6% -> 92.3%, the first refreeze that ever changed the number). A trend
+    # whose first point is required to equal the current baseline forever is
+    # not a trend. What actually matters -- and is worth guarding -- is that
+    # *some* recorded point backs the baseline's number on both metrics that
+    # were measured together: accuracy and the held-out corpus's sha. That
+    # catches a baseline hand-edited to a value nothing ever measured.
+    #
+    # contig_version is deliberately NOT part of this cross-check: `--snapshot`
+    # stamps a new history point with the CURRENT contig version without
+    # touching the baseline, so right after a release the newest history point
+    # already carries a newer version than the baseline. Tying the two
+    # together here would turn master red at the very next release -- the same
+    # failure mode that made this test's line-count check `>= 1` instead of
+    # `== 1` at v0.44.0.
     snapshots = load_jsonl(EvalSnapshot, default_holdout_history_path())
     assert len(snapshots) >= 1
     baseline = load_baseline(default_baseline_path())
     assert baseline is not None
-    assert snapshots[0].accuracy == baseline.accuracy
-    assert snapshots[0].corpus_sha == baseline.corpus_sha
-    assert snapshots[0].contig_version == baseline.contig_version
+    assert any(
+        s.accuracy == baseline.accuracy and s.corpus_sha == baseline.corpus_sha
+        for s in snapshots
+    )
 
 
-def test_heal_seed_is_one_line_matching_baseline() -> None:
+def test_heal_baseline_matches_a_recorded_trend_point() -> None:
     from contig.heal import default_heal_history_path
 
-    # Seed line pinned, trend allowed to grow -- see the holdout sibling above.
+    # Same reasoning as the holdout sibling above: the baseline must be backed
+    # by some actually-measured trend point (on outcome_match_rate + corpus_sha),
+    # not pinned to line 0 or to a version -- both traps that only stay hidden
+    # until a refreeze (Task 7's heal-baseline refreeze) actually moves the
+    # number or a release appends a newer-versioned point.
     snapshots = load_jsonl(HealSnapshot, default_heal_history_path())
     assert len(snapshots) >= 1
     baseline = load_heal_baseline(default_heal_baseline_path())
     assert baseline is not None
-    assert snapshots[0].outcome_match_rate == baseline.outcome_match_rate
-    assert snapshots[0].corpus_sha == baseline.corpus_sha
-    assert snapshots[0].contig_version == baseline.contig_version
+    assert any(
+        s.outcome_match_rate == baseline.outcome_match_rate
+        and s.corpus_sha == baseline.corpus_sha
+        for s in snapshots
+    )
