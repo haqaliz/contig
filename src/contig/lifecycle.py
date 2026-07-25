@@ -67,11 +67,20 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _terminate_process_group(pid: int, wait_seconds: float) -> None:
-    """SIGTERM the run's process group, then SIGKILL if it does not exit.
+    """SIGTERM the process group containing pid, then SIGKILL if it does not exit.
 
-    Runs are spawned detached, so the process group id equals the pid; killing
-    the group reaps the Nextflow launcher and its Java/tool children together. A
-    pid that is already gone is fine: there is simply nothing left to reap.
+    Two different callers rely on this, and both work because os.getpgid(pid)
+    resolves whichever group pid currently belongs to, whether or not pid is
+    that group's leader:
+
+    - the run's own pid (status.json's `pid`), whose group is shared with an
+      inherited, non-detached child -- true for every run that predates the
+      stall watchdog, and for the watchdog's own supervising process;
+    - a watchdog-spawned child's pgid (status.json's `child_pgid`), which is
+      also a valid pid to pass here: `start_new_session=True` makes that child
+      a session leader, and a session leader's pid equals its own pgid.
+
+    A pid that is already gone is fine: there is simply nothing left to reap.
     """
     try:
         pgid = os.getpgid(pid)
@@ -106,6 +115,14 @@ def cancel_run(runs_dir: str | Path, run_id: str, *, wait_seconds: float = 2.0) 
     if state not in _ACTIVE_STATES:
         raise CancelError(f"run {run_id!r} is {state!r}, not active (nothing to cancel)")
 
+    # Child group first, then the run's own (D2): the watchdog's detached
+    # child must die before its supervisor, so the pipeline never outlives the
+    # process that would otherwise clean up after it. Absent for every run
+    # written before the watchdog existed -- that back-compat case is a no-op
+    # here, exactly like it was before this branch existed.
+    child_pgid = status.get("child_pgid")
+    if isinstance(child_pgid, int):
+        _terminate_process_group(child_pgid, wait_seconds)
     pid = status.get("pid")
     if isinstance(pid, int):
         _terminate_process_group(pid, wait_seconds)
