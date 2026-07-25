@@ -732,6 +732,17 @@ def test_rerun_generates_a_run_id_when_none_given(tmp_path, monkeypatch):
     assert new_ids[0] in result.output
 
 
+def test_rerun_registers_detect_stalls_and_stall_timeout_flags_with_defaults():
+    import typer
+
+    cmd = typer.main.get_command(app).commands["rerun"]
+    by_name = {p.name: p for p in cmd.params}
+    assert "--detect-stalls" in by_name["detect_stalls"].opts
+    assert by_name["detect_stalls"].default is False
+    assert "--stall-timeout" in by_name["stall_timeout"].opts
+    assert by_name["stall_timeout"].default == 3600.0
+
+
 def test_rerun_errors_when_launch_manifest_missing(tmp_path):
     result = runner.invoke(app, ["rerun", "ghost", "--runs-dir", str(tmp_path)])
     assert result.exit_code != 0
@@ -751,6 +762,94 @@ def test_rerun_rejects_manifest_input_that_no_longer_exists(tmp_path, monkeypatc
     sheet.unlink()
     result = runner.invoke(app, ["rerun", "gone", "--runs-dir", str(tmp_path / "runs")])
     assert result.exit_code != 0
+
+
+def test_rerun_stall_timeout_without_detect_stalls_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(app, ["run", "--run-id", "rr1", "--runs-dir", str(tmp_path / "runs")])
+    result = runner.invoke(
+        app,
+        ["rerun", "rr1", "--runs-dir", str(tmp_path / "runs"), "--new-run-id", "rr1copy",
+         "--stall-timeout", "120"],
+    )
+    assert result.exit_code != 0
+    assert "--detect-stalls" in result.output
+
+
+def test_rerun_stall_timeout_set_to_its_own_default_without_detect_stalls_is_still_refused(
+    tmp_path, monkeypatch
+):
+    # Same discriminating case as run's: --stall-timeout 3600 (the default value,
+    # passed explicitly) must still be refused, pinning get_parameter_source over
+    # a naive value comparison.
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(app, ["run", "--run-id", "rr2", "--runs-dir", str(tmp_path / "runs")])
+    result = runner.invoke(
+        app,
+        ["rerun", "rr2", "--runs-dir", str(tmp_path / "runs"), "--new-run-id", "rr2copy",
+         "--stall-timeout", "3600"],
+    )
+    assert result.exit_code != 0
+    assert "--detect-stalls" in result.output
+
+
+def test_rerun_detect_stalls_with_nonpositive_stall_timeout_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(app, ["run", "--run-id", "rr3", "--runs-dir", str(tmp_path / "runs")])
+    result = runner.invoke(
+        app,
+        ["rerun", "rr3", "--runs-dir", str(tmp_path / "runs"), "--new-run-id", "rr3copy",
+         "--detect-stalls", "--stall-timeout", "0"],
+    )
+    assert result.exit_code != 0
+
+
+def test_rerun_detect_stalls_selects_the_watchdog_executor(tmp_path, monkeypatch):
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(app, ["run", "--run-id", "rr4", "--runs-dir", str(tmp_path / "runs")])
+
+    watchdog_calls = []
+
+    def fake_make_watchdog_executor(*, stall_timeout_sec):
+        watchdog_calls.append(stall_timeout_sec)
+        return _fake_run_executor(TRACE_RUN_OK, GOOD_MQC)
+
+    default_calls = {"n": 0}
+
+    def spy_default_executor(cmd, trace_path):
+        default_calls["n"] += 1
+        return _fake_run_executor(TRACE_RUN_OK, GOOD_MQC)(cmd, trace_path)
+
+    monkeypatch.setattr("contig.cli.make_watchdog_executor", fake_make_watchdog_executor)
+    monkeypatch.setattr("contig.cli.default_executor", spy_default_executor)
+    result = runner.invoke(
+        app,
+        ["rerun", "rr4", "--runs-dir", str(tmp_path / "runs"), "--new-run-id", "rr4copy",
+         "--detect-stalls", "--stall-timeout", "42"],
+    )
+    assert result.exit_code == 0, result.output
+    assert watchdog_calls == [42.0]
+    assert default_calls["n"] == 0  # default_executor must not run when detect_stalls is on
+
+
+def test_rerun_without_detect_stalls_the_default_executor_is_used_untouched(tmp_path, monkeypatch):
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(app, ["run", "--run-id", "rr5", "--runs-dir", str(tmp_path / "runs")])
+
+    watchdog_calls = []
+
+    def fake_make_watchdog_executor(*, stall_timeout_sec):
+        watchdog_calls.append(stall_timeout_sec)
+        return _fake_run_executor(TRACE_RUN_OK, GOOD_MQC)
+
+    monkeypatch.setattr("contig.cli.make_watchdog_executor", fake_make_watchdog_executor)
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["rerun", "rr5", "--runs-dir", str(tmp_path / "runs"), "--new-run-id", "rr5copy"],
+    )
+    assert result.exit_code == 0, result.output
+    assert watchdog_calls == []  # the factory is never touched when the flag is off
 
 
 def _write_disjoint_reference(tmp_path):
@@ -1308,6 +1407,17 @@ def test_cancel_rejects_invalid_run_id(tmp_path):
     assert result.exit_code != 0
 
 
+def test_resume_registers_detect_stalls_and_stall_timeout_flags_with_defaults():
+    import typer
+
+    cmd = typer.main.get_command(app).commands["resume"]
+    by_name = {p.name: p for p in cmd.params}
+    assert "--detect-stalls" in by_name["detect_stalls"].opts
+    assert by_name["detect_stalls"].default is False
+    assert "--stall-timeout" in by_name["stall_timeout"].opts
+    assert by_name["stall_timeout"].default == 3600.0
+
+
 def test_resume_reruns_same_run_id_with_resume_flag(tmp_path, monkeypatch):
     import json
 
@@ -1336,6 +1446,98 @@ def test_resume_reruns_same_run_id_with_resume_flag(tmp_path, monkeypatch):
     assert "-resume" in seen["cmd"]
     # the SAME run id is reused (not a fresh one)
     assert (tmp_path / "runs" / "rsm" / "run_record.json").exists()
+
+
+def test_resume_detect_stalls_selects_the_watchdog_executor(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(app, ["run", "--run-id", "rswd", "--runs-dir", str(tmp_path / "runs")])
+    (tmp_path / "runs" / "rswd" / "status.json").write_text(
+        json.dumps({"run_id": "rswd", "state": "cancelled", "pid": 4321,
+                    "started_at": "2026-06-22T00:00:00+00:00", "finished_at": "2026-06-22T00:01:00+00:00"})
+    )
+
+    watchdog_calls = []
+
+    def fake_make_watchdog_executor(*, stall_timeout_sec):
+        watchdog_calls.append(stall_timeout_sec)
+        return _fake_run_executor(TRACE_RUN_OK, GOOD_MQC)
+
+    default_calls = {"n": 0}
+
+    def spy_default_executor(cmd, trace_path):
+        default_calls["n"] += 1
+        return _fake_run_executor(TRACE_RUN_OK, GOOD_MQC)(cmd, trace_path)
+
+    monkeypatch.setattr("contig.cli.make_watchdog_executor", fake_make_watchdog_executor)
+    monkeypatch.setattr("contig.cli.default_executor", spy_default_executor)
+    result = runner.invoke(
+        app,
+        ["resume", "rswd", "--runs-dir", str(tmp_path / "runs"),
+         "--detect-stalls", "--stall-timeout", "42"],
+    )
+    assert result.exit_code == 0, result.output
+    assert watchdog_calls == [42.0]
+    assert default_calls["n"] == 0  # default_executor must not run when detect_stalls is on
+
+
+def test_resume_without_detect_stalls_the_default_executor_is_used_untouched(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(app, ["run", "--run-id", "rsnd", "--runs-dir", str(tmp_path / "runs")])
+    (tmp_path / "runs" / "rsnd" / "status.json").write_text(
+        json.dumps({"run_id": "rsnd", "state": "cancelled", "pid": 4321,
+                    "started_at": "2026-06-22T00:00:00+00:00", "finished_at": "2026-06-22T00:01:00+00:00"})
+    )
+
+    watchdog_calls = []
+
+    def fake_make_watchdog_executor(*, stall_timeout_sec):
+        watchdog_calls.append(stall_timeout_sec)
+        return _fake_run_executor(TRACE_RUN_OK, GOOD_MQC)
+
+    monkeypatch.setattr("contig.cli.make_watchdog_executor", fake_make_watchdog_executor)
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["resume", "rsnd", "--runs-dir", str(tmp_path / "runs")],
+    )
+    assert result.exit_code == 0, result.output
+    assert watchdog_calls == []  # the factory is never touched when the flag is off
+
+
+def test_resume_stall_timeout_without_detect_stalls_is_refused(tmp_path):
+    result = runner.invoke(
+        app,
+        ["resume", "ghost", "--runs-dir", str(tmp_path / "runs"), "--stall-timeout", "120"],
+    )
+    assert result.exit_code != 0
+    assert "--detect-stalls" in result.output
+
+
+def test_resume_stall_timeout_set_to_its_own_default_without_detect_stalls_is_still_refused(
+    tmp_path,
+):
+    # Same discriminating case as run's: --stall-timeout 3600 (the default value,
+    # passed explicitly) must still be refused, pinning get_parameter_source over
+    # a naive value comparison.
+    result = runner.invoke(
+        app,
+        ["resume", "ghost", "--runs-dir", str(tmp_path / "runs"), "--stall-timeout", "3600"],
+    )
+    assert result.exit_code != 0
+    assert "--detect-stalls" in result.output
+
+
+def test_resume_detect_stalls_with_nonpositive_stall_timeout_is_refused(tmp_path):
+    result = runner.invoke(
+        app,
+        ["resume", "ghost", "--runs-dir", str(tmp_path / "runs"),
+         "--detect-stalls", "--stall-timeout", "0"],
+    )
+    assert result.exit_code != 0
 
 
 def test_resume_refuses_a_finished_run(tmp_path, monkeypatch):
