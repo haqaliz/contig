@@ -36,9 +36,34 @@ def _has_any(text: str, needles: tuple[str, ...]) -> bool:
     return any(n in low for n in needles)
 
 
+_NO_PROGRESS_NEEDLES = (
+    "no forward progress",
+    "no new output or trace update",
+    "terminated it as stalled",
+    "terminating the stalled run",
+)
+
+
 def diagnose_failure(events: list[TaskEvent], log_text: str) -> Diagnosis:
-    # OOM wins outright: an exit-137 kill is unambiguous even if the log also
-    # carries a generic error, so it is checked before any log-text rule.
+    # The stall watchdog's own verdict outranks even OOM: it is a first-party
+    # statement that this run was killed for making no forward progress, not an
+    # inference from an incidental exit code. A dying Nextflow can still write a
+    # trace row with exit 137 as it is torn down (D5/D6 in the plan), so this
+    # phrase-level check must be checked BEFORE the OOM block below, or that
+    # branch would always win regardless of what the log says.
+    stall_lines = _matching_lines(log_text, _NO_PROGRESS_NEEDLES)
+    if stall_lines:
+        return Diagnosis(
+            failure_class="no_progress",
+            root_cause="The stall watchdog terminated the run for making no forward progress.",
+            evidence=stall_lines,
+            confidence=0.9,
+        )
+
+    # OOM wins outright over every rule BELOW this point: an exit-137 kill is
+    # unambiguous even if the log also carries a generic error, so it is
+    # checked before any other log-text rule (but after the no_progress check
+    # above, per D6).
     oom_exit = any(e.exit == 137 for e in events)
     oom_lines = _matching_lines(
         log_text, ("out of memory", "outofmemoryerror", "killed", "oom")

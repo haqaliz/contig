@@ -449,3 +449,72 @@ def test_strict_keeps_strong_conda_signal_but_drops_the_loose_heuristic() -> Non
 def test_strict_keeps_unknown_when_no_task_failed() -> None:
     # No failing task and no signal: both detectors agree on unknown.
     assert diagnose_failure_strict([], "").failure_class == "unknown"
+
+
+# --- no_progress: stall watchdog termination (D6) -------------------------------
+
+
+def test_stall_watchdog_message_is_no_progress() -> None:
+    # Our own emitted sentinel (stall.py:stall_message) must classify as
+    # no_progress. No events: the watchdog kills the run out-of-band, before
+    # Nextflow itself ever reports a task failure.
+    from contig.stall import stall_message
+
+    log = stall_message(
+        idle_sec=1800.0, timeout_sec=1800.0, silent_surfaces=("trace.txt", ".nextflow.log", "run.log")
+    )
+    d = diagnose_failure([], log_text=log)
+    assert d.failure_class == "no_progress"
+
+
+def test_genuine_oom_exit_137_with_no_stall_text_is_still_oom() -> None:
+    # A5: no_progress must not shadow a real OOM. Exit 137, no stall wording.
+    events = [TaskEvent(process="ALIGN", status="FAILED", exit=137)]
+    d = diagnose_failure(events, log_text="process terminated")
+    assert d.failure_class == "oom"
+
+
+def test_genuine_oom_by_text_with_no_stall_text_is_still_oom() -> None:
+    # A5: same, but OOM is signalled by log text rather than the exit code.
+    events = [TaskEvent(process="ASSEMBLE", status="FAILED", exit=1)]
+    log = "java.lang.OutOfMemoryError: Java heap space"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "oom"
+
+
+def test_stall_message_with_incidental_exit_137_is_still_no_progress() -> None:
+    # D6: a dying Nextflow can write a trace row with exit 137 as it is torn
+    # down by the watchdog's SIGTERM/SIGKILL ladder. The first-party stall
+    # verdict must still win over that incidental exit code.
+    from contig.stall import stall_message
+
+    events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=137)]
+    log = stall_message(
+        idle_sec=1800.0, timeout_sec=1800.0, silent_surfaces=("trace.txt", ".nextflow.log", "run.log")
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "no_progress"
+
+
+def test_strict_leaves_no_progress_undemoted() -> None:
+    # no_progress is a high-confidence, first-party signal (0.9), not one of the
+    # two weak-evidence guesses strict steps back from; it must pass through.
+    from contig.stall import stall_message
+
+    log = stall_message(
+        idle_sec=1800.0, timeout_sec=1800.0, silent_surfaces=("trace.txt", ".nextflow.log", "run.log")
+    )
+    assert diagnose_failure_strict([], log_text=log).failure_class == "no_progress"
+
+
+def test_holdout_no_progress_fixture_classifies_as_no_progress() -> None:
+    # Verbatim log_text from src/contig/data/detector_corpus_holdout.jsonl,
+    # case_id "holdout-no-progress-1" (third-party wording, not ours) -- proves
+    # the needles are phrase-level, not fitted to stall.py's exact string.
+    events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=None)]
+    log = (
+        "Task produced no new output or trace update for 6 hours; the progress "
+        "monitor terminated it as stalled (no forward progress)."
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "no_progress"
