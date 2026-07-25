@@ -148,6 +148,18 @@ def propose_patches(diagnosis: Diagnosis) -> list[Patch]:
                 expected_signal="free disk space available",
             )
         ]
+    if diagnosis.failure_class == "no_progress":
+        return [
+            Patch(
+                kind="retry",
+                # Cheap: self_heal.py already passes -resume, so this restarts
+                # from the last completed task rather than from scratch.
+                operation={"retry": True},
+                rationale="No forward progress; terminate and retry from the last completed task.",
+                risk="safe",
+                expected_signal="tasks progressing again",
+            )
+        ]
     if diagnosis.failure_class == "permission_denied":
         return [
             Patch(

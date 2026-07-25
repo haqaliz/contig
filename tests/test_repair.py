@@ -153,3 +153,17 @@ def test_platform_unsupported_proposes_needs_confirmation_not_safe() -> None:
     assert patches and patches[0].risk == "needs_confirmation"
     # retrying on the same machine won't help, so it must NOT auto-apply
     assert has_safe_patch(d) is False
+
+
+def test_no_progress_proposes_safe_retry() -> None:
+    # Retry is cheap: self_heal.py already passes -resume, so a stalled run
+    # resumes from the last completed task rather than starting over.
+    patches = propose_patches(diag("no_progress"))
+    assert len(patches) == 1
+    p = patches[0]
+    assert p.kind == "retry"
+    assert p.risk == "safe"
+    assert p.operation == {"retry": True}
+    assert p.rationale == "No forward progress; terminate and retry from the last completed task."
+    assert p.expected_signal == "tasks progressing again"
+    assert has_safe_patch(diag("no_progress")) is True

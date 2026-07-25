@@ -8,6 +8,119 @@ All notable changes to Contig are recorded here. The format follows
 
 ### Added
 
+- **`contig run --detect-stalls [--stall-timeout SECONDS]` — an opt-in heartbeat stall
+  watchdog, and the first time the `no_progress` failure class is reachable by the detector
+  (C2, with C6 headroom).** Contig could only diagnose a run that **exits**. `default_executor`
+  is a blocking `subprocess.run`, so nothing observed a run in flight: a **hang** — a deadlocked
+  tool, a wedged network mount, a container stuck on a socket — never returned, never raised
+  `PipelineExecutionError`, and never reached the detector; it just consumed the user's compute
+  until a human noticed. `no_progress` was named in `ARCHITECTURE.md:203`, carried in the
+  `FailureClass` literal, and had a frozen held-out fixture — but **no branch of
+  `diagnose_failure` had ever emitted it**.
+  - **Off by default, refused-not-ignored.** `--detect-stalls` defaults to `False`;
+    `--stall-timeout` defaults to **3600 s**. With the flag absent the **executor** is the
+    unmodified `default_executor` and no new execution path runs (the detector's new needle scan
+    is separate: it runs on every `diagnose_failure` call either way, which is the point of it —
+    a `no_progress` log classifies whether or not this run was supervised). `--stall-timeout`
+    passed **without**
+    `--detect-stalls` exits non-zero naming the flag; since `3600.0` is both the default and a
+    legal explicit value, that check reads Click's **`get_parameter_source`**, not the value —
+    pinned by a test that passes the default *explicitly* and asserts refusal (a
+    value-comparison implementation would pass every other test in the diff and fail that one).
+  - **A composite heartbeat, so a healthy-but-slow run is never touched.** Alive if **any** of
+    `trace.txt` (mtime+size), `.nextflow.log` (mtime+size), or `run.log` (size) moved since the
+    last poll; stalled only if **all three** stay silent for the whole window — a trace-only
+    signal goes dark for the entire duration of any single long task, which would make a
+    legitimate 14-hour WGS alignment a false positive. The decision is a **pure** function
+    (`stall.py::evaluate_stall`) over two fingerprints, an injected clock, and the timeout — no
+    subprocess, no sleeping, no filesystem — and a non-positive timeout **can never stall**.
+  - **The observer cannot be hung by the failure it detects.** `stat()` against a hard-mounted
+    unresponsive NFS blocks in uninterruptible sleep, and a wedged mount is a headline stall
+    cause, so the read runs in a **daemon** thread under a 5 s deadline; a missed deadline keeps
+    the previous fingerprint, which reads as "no progress observed". The `run.log` verdict write
+    is bounded the same way — it lands on the same possibly-wedged mount.
+  - **Termination.** `Popen(start_new_session=True)`, poll, and on a stall write the verdict to
+    `run.log` **before** killing (it is the detector's only evidence that the run stalled rather
+    than merely crashed), then SIGTERM → 5 s grace → SIGKILL over the child's **process group**
+    (Nextflow's JVM and tool children, not just the launcher), **at most once per attempt**. The
+    30 s poll wait is taken in short slices and abandoned the moment the child exits, so the
+    self-heal loop's fast failures are not charged a full interval each attempt.
+  - **The `no_progress` detector branch sits AHEAD of the OOM check, deliberately**, reversing a
+    standing "OOM wins outright" comment: OOM matches `any(e.exit == 137)` from the **events
+    alone**, so a dying Nextflow's exit-137 trace row would beat any branch below it whatever the
+    log said. It keys on three phrase-level needles, **every one of them a phrase `stall_message`
+    itself emits** (pinned by a test, so no needle can be added that Contig never writes). The
+    branch generalizes not because a needle was written for the corpus but because **our own
+    wording is ordinary English**: the independently authored frozen `holdout-no-progress-1`
+    fixture, whose text credits a **non-Contig** actor, hits two of the three **verbatim** and
+    classifies through exactly the rule our own message does. A fourth needle ("terminated it as
+    stalled") was carried on the belief the fixture needed it and has been **dropped as
+    redundant** — the fixture classifies without it, so it was pure added false-positive surface.
+    **First-party uniqueness is still given up, and the cost is real and unenforced:** phrases
+    generic enough for an independent author to hit are generic enough for a third-party tool to
+    emit, so foreign output containing one classifies as `no_progress`, and from above the OOM
+    check it out-ranks a genuine `exit == 137`. Tests pin that the emitted message contains none
+    of `killed`/`oom`/`out of memory`/`time limit`, and that a **genuine** OOM (exit-137 *and*
+    text paths) still classifies `oom`. `propose_patches` gains a `no_progress` →
+    `kind="retry"`, `risk="safe"` patch: the loop already passes `-resume`, so the retry reuses
+    cached tasks, bounded by `--max-attempts` and ending in an honest `gave_up`.
+  - **Both C6 guards moved for the first time.** `eval-guard` held-out accuracy **0.846 → 0.923**
+    (11/13 → 12/13), which had been **flat across all six recorded trend points, v0.22.0 →
+    v0.48.0**, with `holdout-no-progress-1` misclassified as `tool_crash` every time (the
+    held-out file itself is unedited, so its `corpus_sha` is unchanged and the guard reported
+    *improved*). `heal-guard` `covered_classes` **5 → 6**, over 8 frozen scenarios instead of 7,
+    outcome-match still **1.0**, recovery 5/8 informational. Both baselines refrozen as a
+    deliberate act. The new `no-progress-heal` scenario uses exit **143** (not 137) and a real
+    watchdog-shaped log with no OOM needles, so it cannot pass by accident. **`qc_anomaly`
+    remains the one structurally unreachable class** — this slice did not close it.
+  - **A regression this slice caused and then fixed, recorded rather than omitted.** Detaching
+    the child into its own session (necessary so the watchdog can `killpg` the pipeline without
+    killing Contig itself) silently removed it from the group `contig cancel` reaps, and left
+    Ctrl-C stopping the **supervisor** while the pipeline kept burning compute — an orphan was
+    reproduced by pid. Both were caught in review and fixed before merge: the child's pgid is
+    published into `status.json` and `cancel_run` reaps it, and the executor terminates the group
+    on `BaseException` before re-raising. **Cancel timing changed as a result:** `wait_seconds`
+    is now spent once **per process group**, so cancelling a watchdog run can take up to **2×**
+    as long — deliberately documented rather than restructured (cancel is a rare admin action).
+  - **Small by design.** `self_heal.py` is **unchanged**; the CLI builds the watchdog through the
+    existing `Executor` seam (one production line), so all 38 test injection sites keep working
+    untouched. Stdlib only (`subprocess`, `os`, `signal`, `threading`, `time`, `pathlib`) — no
+    new dependency, no `models.py` change, no verdict/exit-code/signing contract change.
+    **D4: the settings are deliberately NOT persisted to `LaunchManifest`** — a stall is a
+    property of the machine and its I/O, not of the analysis, and baking a timeout into a
+    reproducible manifest would make replay depend on the original host's speed. Consequence:
+    `rerun`/`resume` do **not** re-enable the watchdog; the flags exist on `run` only.
+  - **Honest limits, stated as limits.** (1) **Push, not demand-pull:** no design partner asked
+    for it and **no real Contig run has ever been observed to hang** — the architectural gap was
+    documented, the **frequency is unmeasured**, and nothing here claims otherwise. (2) The
+    **1-hour window is reasoned, not calibrated** — no measurement of real inter-heartbeat gaps
+    exists; the observed idle seconds, the window, and which surfaces were silent ride in the
+    stall message as the field instrument that can later replace the guess. (3) **No real
+    Nextflow anywhere in CI:** the terminate mechanics *are* exercised against **real child
+    processes** (a hanging child terminated with exit code asserted `-15`, explicitly `!= 137`;
+    a SIGTERM-ignoring child SIGKILLed after the grace; Ctrl-C leaving no orphan; the executor's
+    **real** `run.log` bytes fed through the shipped `diagnose_failure`) — but what a SIGTERMed
+    **Nextflow** returns and writes into `trace.txt`, and whether `-resume` re-runs a SIGKILLed
+    task rather than treating a partial output as cached, are **reasoned** and remain for the
+    manual pre-merge gate. (4) **The accuracy move is partly self-graded** — we made reachable a
+    class whose fixture we wrote; it evidences a closed taxonomy gap, **not** that the watchdog
+    helps a real user. (5) **A failing observer degrades to "no progress observed"**, so a buggy
+    *injected* observer could get a HEALTHY run terminated after enough polls where it previously
+    crashed loudly; the shipped `read_heartbeat` catches every `OSError` so this is theoretical
+    today, but it is a **real semantic loss recorded as a trade, not a free win** (a timeout means
+    the filesystem is wedged — evidence about the run; an exception means the observer is broken —
+    **no** evidence about the run). (6) `proc.wait()` after SIGKILL is **unbounded** on a child
+    wedged in uninterruptible sleep; `lifecycle._terminate_process_group` has the same
+    pre-existing exposure. (7) `poll_interval` is a **sleep, not a deadline** — a slow observation
+    extends the effective period rather than being subtracted from it. (8) **Nextflow is the
+    tested scope:** the seam sits above the engine branch, so the mechanism applies to Snakemake
+    for free via `run.log` liveness alone — **untested**, not advertised as support, not silently
+    refused. **Deferred:** window calibration on real runs, a stall-specific escalation, a
+    dashboard surface, per-task stall detection, and **on-by-default operation** — whose revisit
+    trigger is committed: the first real false-positive report keeps it off, N real stalls
+    recovered makes it worth reconsidering. Test-first. Plan/PRD under
+    `docs/planning/stall-watchdog-no-progress/`.
+
 - **`contig extract-claims <paper.txt|md> --out <draft.json>` — the C8 paper-claim extraction
   slice named as deferred in every prior C8 slice (`CAPABILITY_ROADMAP.md:1073`;
   `CHANGELOG.md` slice-3/4/5/6 deferral lists).** Slices 1–7 (v0.40.0 → v0.48.0) built the whole

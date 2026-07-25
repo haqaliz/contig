@@ -3402,3 +3402,117 @@ def test_methods_rejects_a_missing_run(tmp_path):
 def test_methods_rejects_an_unsafe_run_id(tmp_path):
     result = runner.invoke(app, ["methods", "../etc", "--runs-dir", str(tmp_path)])
     assert result.exit_code != 0
+
+
+def test_run_registers_detect_stalls_and_stall_timeout_flags_with_defaults():
+    # Introspect the Click params directly (never scrape --help; it flakes under
+    # CI's no-TTY Rich rendering).
+    import typer
+
+    cmd = typer.main.get_command(app).commands["run"]
+    by_name = {p.name: p for p in cmd.params}
+    assert "--detect-stalls" in by_name["detect_stalls"].opts
+    assert by_name["detect_stalls"].default is False
+    assert "--stall-timeout" in by_name["stall_timeout"].opts
+    assert by_name["stall_timeout"].default == 3600.0
+
+
+def test_stall_timeout_without_detect_stalls_is_refused(tmp_path):
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "r", "--runs-dir", str(tmp_path / "runs"), "--stall-timeout", "120"],
+    )
+    assert result.exit_code != 0
+    assert "--detect-stalls" in result.output
+
+
+def test_stall_timeout_set_to_its_own_default_without_detect_stalls_is_still_refused(tmp_path):
+    # Discriminates get_parameter_source from a value-comparison shortcut: a
+    # naive `if stall_timeout != 3600.0 and not detect_stalls: refuse` would
+    # pass every OTHER test in this file (they all use a non-default value)
+    # while silently letting `--stall-timeout 3600` through unrefused here.
+    # Do not delete this as "redundant" with the --stall-timeout 120 case above
+    # -- it pins the mechanism, not just the outcome.
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "r3", "--runs-dir", str(tmp_path / "runs"), "--stall-timeout", "3600"],
+    )
+    assert result.exit_code != 0
+    assert "--detect-stalls" in result.output
+
+
+def test_detect_stalls_with_nonpositive_stall_timeout_is_refused(tmp_path):
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "r", "--runs-dir", str(tmp_path / "runs"),
+         "--detect-stalls", "--stall-timeout", "0"],
+    )
+    assert result.exit_code != 0
+
+    result_negative = runner.invoke(
+        app,
+        ["run", "--run-id", "r2", "--runs-dir", str(tmp_path / "runs"),
+         "--detect-stalls", "--stall-timeout", "-5"],
+    )
+    assert result_negative.exit_code != 0
+
+
+def test_detect_stalls_selects_the_watchdog_executor(tmp_path, monkeypatch):
+    watchdog_calls = []
+
+    def fake_make_watchdog_executor(*, stall_timeout_sec):
+        watchdog_calls.append(stall_timeout_sec)
+        return _fake_run_executor(TRACE_RUN_OK, GOOD_MQC)
+
+    default_calls = {"n": 0}
+
+    def spy_default_executor(cmd, trace_path):
+        default_calls["n"] += 1
+        return _fake_run_executor(TRACE_RUN_OK, GOOD_MQC)(cmd, trace_path)
+
+    monkeypatch.setattr("contig.cli.make_watchdog_executor", fake_make_watchdog_executor)
+    monkeypatch.setattr("contig.cli.default_executor", spy_default_executor)
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "ws", "--runs-dir", str(tmp_path / "runs"),
+         "--detect-stalls", "--stall-timeout", "42"],
+    )
+    assert result.exit_code == 0, result.output
+    assert watchdog_calls == [42.0]
+    assert default_calls["n"] == 0  # default_executor must not run when detect_stalls is on
+
+
+def test_without_detect_stalls_the_default_executor_is_used_untouched(tmp_path, monkeypatch):
+    watchdog_calls = []
+
+    def fake_make_watchdog_executor(*, stall_timeout_sec):
+        watchdog_calls.append(stall_timeout_sec)
+        return _fake_run_executor(TRACE_RUN_OK, GOOD_MQC)
+
+    monkeypatch.setattr("contig.cli.make_watchdog_executor", fake_make_watchdog_executor)
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "nows", "--runs-dir", str(tmp_path / "runs")],
+    )
+    assert result.exit_code == 0, result.output
+    assert watchdog_calls == []  # the factory is never touched when the flag is off
+
+
+def test_detect_stalls_and_stall_timeout_are_not_persisted_to_launch_json(tmp_path, monkeypatch):
+    # D4: a stall is a property of the machine/its I/O, not of the analysis --
+    # baking a timeout into a reproducible manifest would make replay depend on
+    # the original host's speed. Deliberate omission.
+    monkeypatch.setattr(
+        "contig.cli.make_watchdog_executor",
+        lambda *, stall_timeout_sec: _fake_run_executor(TRACE_RUN_OK, GOOD_MQC),
+    )
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "lj", "--runs-dir", str(tmp_path / "runs"),
+         "--detect-stalls", "--stall-timeout", "17"],
+    )
+    assert result.exit_code == 0, result.output
+    raw = (tmp_path / "runs" / "lj" / "launch.json").read_text()
+    assert "detect_stalls" not in raw
+    assert "stall_timeout" not in raw
