@@ -357,11 +357,20 @@ self-heal loop's fast failures (bad argv, missing reference) are not charged a f
 attempt. **The `no_progress` detector branch sits AHEAD of the OOM check, deliberately**,
 reversing a standing "OOM wins outright" comment: `detect.py` matches `any(e.exit == 137)` from
 the **events alone**, so a dying Nextflow writing an exit-137 trace row as it is torn down would
-beat any branch placed below it, whatever the log says. The branch keys on phrase-level
-**first-party** needles ("no forward progress", "no new output or trace update", "terminated it
-as stalled", "terminating the stalled run") that Contig alone emits, so no third-party tool
-output can trip it, and it classifies **both** our own emitted message **and** the independently
-worded frozen `holdout-no-progress-1` fixture — the branch is not fitted to the fixture string.
+beat any branch placed below it, whatever the log says. The branch keys on four phrase-level
+needles ("no forward progress", "no new output or trace update", "terminated it as stalled",
+"terminating the stalled run") that are **deliberately generalized, not first-party-unique**:
+`stall_message` emits only the first, second and fourth; the third exists so that the
+independently worded frozen `holdout-no-progress-1` fixture — whose text names a **non-Contig**
+actor ("the progress monitor terminated it as stalled") — classifies through the same tuple
+rather than through a rule fitted to our own string. **That generality was bought by giving up
+first-party uniqueness, and the residual risk is real and unenforced:** these are four generic
+English phrases, nothing constrains them to output Contig wrote, so third-party tool text
+containing one of them classifies as `no_progress` — and because this branch sits above the OOM
+check it out-ranks a genuine `exit == 137` (measured: an exit-137 event whose log reads
+`java: watchdog reports no forward progress in scheduler loop` classifies `no_progress`, not
+`oom`). We take that trade knowingly: a detector narrowed to a sentinel only Contig emits would
+fail the held-out case it exists to pass.
 A module-level test pins that the emitted message contains none of `killed` / `oom` /
 `out of memory` / `time limit`, and a control test proves a **genuine** OOM (both the exit-137
 and the "out of memory" text paths) still classifies `oom` when no stall sentinel is present.

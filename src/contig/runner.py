@@ -749,6 +749,13 @@ def make_watchdog_executor(
                 # the user's compute. Kill first, then let the exception continue.
                 _terminate_child_group(proc, grace_sec)
                 raise
+            finally:
+                # Both exits from supervision leave a dead child behind: the
+                # normal return has waited on it, and the interrupt path has just
+                # killed it. Either way the published pgid stops naming anything
+                # this run owns, so it is dropped here rather than left for the
+                # next attempt to overwrite (see _clear_child_pgid).
+                _clear_child_pgid(run_dir)
 
     return _watchdog_executor
 
@@ -816,9 +823,7 @@ def _publish_child_pgid(run_dir: Path, pid: int) -> None:
     `contig cancel` reaps the group of the pid it finds in status.json, which is
     contig's OWN pid; that only worked because the child shared contig's group.
     Spawning into a new session removes it from that group, so the child's pgid
-    has to be published for `cancel_run` to reap it too. Purely telemetry for
-    another command: a missing, unreadable, or unwritable status.json is warned
-    about and never allowed to fail the run.
+    has to be published for `cancel_run` to reap it too.
     """
     try:
         pgid = os.getpgid(pid)
@@ -826,20 +831,51 @@ def _publish_child_pgid(run_dir: Path, pid: int) -> None:
         # The child is already gone, so there is no live group to cancel and
         # nothing worth recording; a recycled pgid would be worse than none.
         return
+    _write_child_pgid(run_dir, pgid)
+
+
+def _clear_child_pgid(run_dir: Path) -> None:
+    """Drop `child_pgid` from status.json now that no detached child is alive.
+
+    The key means exactly one thing: there is a detached child running RIGHT NOW.
+    `_publish_child_pgid` already refuses to record an already-dead child for the
+    reason above; leaving the key behind once the child exits reintroduces the
+    same hazard from the other end. Nothing else clears it in time: self_heal's
+    retry branches fall through to the next attempt without rewriting
+    status.json, so a dead pgid would survive until the next attempt republishes,
+    and a `contig cancel` landing in that window on a host that has wrapped
+    `pid_max` could signal an unrelated process group.
+    """
+    _write_child_pgid(run_dir, None)
+
+
+def _write_child_pgid(run_dir: Path, pgid: int | None) -> None:
+    """Merge `child_pgid` into status.json, or drop the key when `pgid` is None.
+
+    Read-modify-write, never a fresh dict: status.json belongs to self_heal, and
+    the run's own state/pid must survive either edit. Purely telemetry for another
+    command: a missing, unreadable, or unwritable status.json is warned about and
+    never allowed to fail the run.
+    """
     path = run_dir / "status.json"
     try:
         existing = json.loads(path.read_text())
     except (OSError, ValueError) as exc:
-        logger.warning("could not read %s to record child_pgid: %s", path, exc)
+        logger.warning("could not read %s to update child_pgid: %s", path, exc)
         return
     if not isinstance(existing, dict):
         logger.warning("%s is not a JSON object; not recording child_pgid", path)
         return
-    existing["child_pgid"] = pgid
+    if pgid is None:
+        if "child_pgid" not in existing:
+            return  # nothing to clear; leave the file (and its mtime) alone
+        del existing["child_pgid"]
+    else:
+        existing["child_pgid"] = pgid
     try:
         path.write_text(json.dumps(existing))
     except OSError as exc:
-        logger.warning("could not write %s to record child_pgid: %s", path, exc)
+        logger.warning("could not write %s to update child_pgid: %s", path, exc)
 
 
 def _terminate_child_group(proc: subprocess.Popen, grace_sec: float) -> None:
@@ -851,16 +887,18 @@ def _terminate_child_group(proc: subprocess.Popen, grace_sec: float) -> None:
     grace window is never SIGKILLed, and a group that is already gone is fine --
     there is simply nothing left to reap.
     """
-    # OSError, not just ProcessLookupError, and deliberately the same net as
-    # _publish_child_pgid casts: "the child is already gone" is the case that
-    # actually happens, but any other OSError means we cannot name the group
-    # either, and there is nothing useful to do with that but move on.
-    try:
-        pgid = os.getpgid(proc.pid)
-    except OSError:
+    # An already-reaped child has no group left to signal, and its pid is free to
+    # be handed to an unrelated process the moment it is reaped -- so this must be
+    # checked BEFORE naming any group. It is reachable: the BaseException handler
+    # can run after `proc.wait()` has already returned.
+    if proc.returncode is not None:
         return
+    # `proc.pid` IS the group id: the child was spawned with start_new_session=True,
+    # which makes it a session (and therefore process-group) leader, so pgid == pid
+    # by construction. Looking it up with os.getpgid would buy nothing and would
+    # add a second window in which the pid could have been recycled.
     try:
-        os.killpg(pgid, signal.SIGTERM)
+        os.killpg(proc.pid, signal.SIGTERM)
     except ProcessLookupError:
         return
     try:
@@ -869,7 +907,7 @@ def _terminate_child_group(proc: subprocess.Popen, grace_sec: float) -> None:
     except subprocess.TimeoutExpired:
         pass
     try:
-        os.killpg(pgid, signal.SIGKILL)
+        os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
         return
 

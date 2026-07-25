@@ -488,30 +488,114 @@ def test_run_log_is_truncated_so_a_stale_verdict_cannot_leak_into_the_next_attem
     assert "attempt 2 output" in log_text
 
 
+_ORIGINAL_STATUS = {
+    "run_id": "run-1",
+    "state": "running",
+    "pid": 4242,
+    "started_at": "2026-07-25T00:00:00+00:00",
+    "finished_at": None,
+}
+
+
+def _write_status_json(tmp_path):
+    """Lay down the status.json self_heal would have written before the run."""
+    status_path = tmp_path / "status.json"
+    status_path.write_text(json.dumps(_ORIGINAL_STATUS))
+    return status_path
+
+
+def _status_snapshotting_observer(status_path, snapshots: list):
+    """A silent observer that copies status.json on every poll.
+
+    `child_pgid` is only meaningful WHILE the child is alive, so a test that
+    asserts on it has to read the file from inside the supervision loop -- the
+    observer is the seam that runs there.
+    """
+
+    def _observe(run_dir, artifact_path) -> Heartbeat:
+        try:
+            snapshots.append(json.loads(status_path.read_text()))
+        except (OSError, ValueError):
+            pass
+        return _hb()
+
+    return _observe
+
+
 def test_child_pgid_is_merged_into_existing_status_json(tmp_path):
     # D2's other half: detaching the child removes it from the group `contig
     # cancel` reaps, so the child's own pgid has to be published -- WITHOUT
     # clobbering the keys _write_status already put there.
-    status_path = tmp_path / "status.json"
-    original = {
-        "run_id": "run-1",
-        "state": "running",
-        "pid": 4242,
-        "started_at": "2026-07-25T00:00:00+00:00",
-        "finished_at": None,
-    }
-    status_path.write_text(json.dumps(original))
+    status_path = _write_status_json(tmp_path)
+    snapshots: list = []
+
+    assert (
+        _healthy_executor(observer=_status_snapshotting_observer(status_path, snapshots))(
+            _pgid_reporting_child(), tmp_path / "trace.txt"
+        )
+        == 0
+    )
+
+    assert snapshots, "the watchdog never polled while the child was alive"
+    live = snapshots[0]
+    for key, value in _ORIGINAL_STATUS.items():
+        assert live[key] == value, f"{key} was clobbered"
+    # The recorded pgid is really the child's, and really a NEW group -- not the
+    # supervisor's, which is what killpg must never be pointed at.
+    child_reported_pgid = int((tmp_path / "run.log").read_text().split()[0])
+    assert live["child_pgid"] == child_reported_pgid
+    assert live["child_pgid"] != os.getpgid(0)
+
+
+def test_child_pgid_is_cleared_once_the_child_exits(tmp_path):
+    # `child_pgid` means exactly one thing: a detached child is alive RIGHT NOW.
+    # _publish_child_pgid already refuses to record a dead child's group because
+    # "a recycled pgid would be worse than none"; leaving the key behind after
+    # the child exits reintroduces that same hazard from the other end. The
+    # self-heal retry branches do not rewrite status.json between attempts, so a
+    # stale pgid survives until the next attempt republishes -- and a `contig
+    # cancel` landing in that window on a host that has wrapped pid_max would
+    # signal an unrelated process group.
+    status_path = _write_status_json(tmp_path)
 
     assert _healthy_executor()(_pgid_reporting_child(), tmp_path / "trace.txt") == 0
 
     status = json.loads(status_path.read_text())
-    for key, value in original.items():
+    assert "child_pgid" not in status, "a dead child's pgid was left behind"
+    for key, value in _ORIGINAL_STATUS.items():
         assert status[key] == value, f"{key} was clobbered"
-    # The recorded pgid is really the child's, and really a NEW group -- not the
-    # supervisor's, which is what killpg must never be pointed at.
-    child_reported_pgid = int((tmp_path / "run.log").read_text().split()[0])
-    assert status["child_pgid"] == child_reported_pgid
-    assert status["child_pgid"] != os.getpgid(0)
+
+
+def test_child_pgid_is_cleared_when_the_supervisor_is_interrupted(tmp_path):
+    # The other exit from the supervision loop. Ctrl-C kills the child on the way
+    # out (see the orphaning test above), so the pgid it published is just as dead
+    # as after a normal exit and must not outlive it.
+    status_path = _write_status_json(tmp_path)
+    log_path = tmp_path / "run.log"
+    executor = make_watchdog_executor(
+        stall_timeout_sec=3600.0,
+        observer=_silent_observer(),
+        clock=_stepping_clock(1.0),
+        sleeper=_sleeper_raising_once(log_path, "ready", KeyboardInterrupt()),
+        poll_interval=0.5,
+        grace_sec=1.0,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        executor(
+            [
+                sys.executable,
+                "-c",
+                "import os, time; print('ready', os.getpid(), flush=True);"
+                " time.sleep(60)",
+            ],
+            tmp_path / "trace.txt",
+        )
+
+    status = json.loads(status_path.read_text())
+    assert "child_pgid" not in status, "the interrupt path left a dead pgid behind"
+    for key, value in _ORIGINAL_STATUS.items():
+        assert status[key] == value, f"{key} was clobbered"
 
 
 def test_missing_status_json_does_not_fail_the_run(tmp_path, caplog):

@@ -18,8 +18,11 @@ All notable changes to Contig are recorded here. The format follows
   `FailureClass` literal, and had a frozen held-out fixture — but **no branch of
   `diagnose_failure` had ever emitted it**.
   - **Off by default, refused-not-ignored.** `--detect-stalls` defaults to `False`;
-    `--stall-timeout` defaults to **3600 s**. With the flag absent the executor is the
-    unmodified `default_executor` and no new code path runs. `--stall-timeout` passed **without**
+    `--stall-timeout` defaults to **3600 s**. With the flag absent the **executor** is the
+    unmodified `default_executor` and no new execution path runs (the detector's new needle scan
+    is separate: it runs on every `diagnose_failure` call either way, which is the point of it —
+    a `no_progress` log classifies whether or not this run was supervised). `--stall-timeout`
+    passed **without**
     `--detect-stalls` exits non-zero naming the flag; since `3600.0` is both the default and a
     legal explicit value, that check reads Click's **`get_parameter_source`**, not the value —
     pinned by a test that passes the default *explicitly* and asserts refusal (a
@@ -45,9 +48,14 @@ All notable changes to Contig are recorded here. The format follows
   - **The `no_progress` detector branch sits AHEAD of the OOM check, deliberately**, reversing a
     standing "OOM wins outright" comment: OOM matches `any(e.exit == 137)` from the **events
     alone**, so a dying Nextflow's exit-137 trace row would beat any branch below it whatever the
-    log said. It keys on phrase-level **first-party** needles Contig alone emits, and classifies
-    **both** our emitted message and the independently worded frozen `holdout-no-progress-1`
-    fixture — not fitted to the fixture string. Tests pin that the emitted message contains none
+    log said. It keys on four phrase-level needles that are **deliberately generalized, not
+    first-party-unique**: `stall_message` emits three of them, and the fourth ("terminated it as
+    stalled") is there so the independently worded frozen `holdout-no-progress-1` fixture — whose
+    text names a **non-Contig** actor — classifies through the same tuple instead of through a
+    rule fitted to our own string. **First-party uniqueness was traded away for that generality,
+    and the cost is real and unenforced:** third-party tool output containing one of these generic
+    phrases classifies as `no_progress`, and from above the OOM check it out-ranks a genuine
+    `exit == 137`. Tests pin that the emitted message contains none
     of `killed`/`oom`/`out of memory`/`time limit`, and that a **genuine** OOM (exit-137 *and*
     text paths) still classifies `oom`. `propose_patches` gains a `no_progress` →
     `kind="retry"`, `risk="safe"` patch: the loop already passes `-resume`, so the retry reuses

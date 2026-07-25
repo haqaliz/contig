@@ -200,8 +200,13 @@ def stall_message(
 ) -> str:
     """The single source of the `no_progress` sentinel text.
 
-    The detector keys on the phrase-level needles here ("contig watchdog", "no
-    forward progress"). It must NOT contain "killed", "oom", "out of memory", or
+    Three of `detect._NO_PROGRESS_NEEDLES` live in this string: "no forward
+    progress", "no new output or trace update", and "terminating the stalled
+    run". A reword must keep at least one of them or the run stops classifying as
+    `no_progress`. The "contig watchdog" prefix is NOT a needle — it is for the
+    human reading run.log, and the detector never looks for it (the fourth needle
+    matches the independently worded held-out fixture instead; see `detect.py`).
+    The message must NOT contain "killed", "oom", "out of memory", or
     "time limit" — those are the OOM and walltime detector branches' own needles
     (`detect.py`), and OOM must win outright on `exit == 137` regardless of what
     a dying Nextflow also wrote to `trace.txt` (see D6 in the plan). A module-level

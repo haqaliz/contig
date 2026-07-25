@@ -137,25 +137,25 @@ def cancel_run(runs_dir: str | Path, run_id: str, *, wait_seconds: float = 2.0) 
     # child must die before its supervisor, so the pipeline never outlives the
     # process that would otherwise clean up after it.
     #
-    # child_pgid can legitimately be absent even on a run this watchdog is
-    # actively supervising, not just on a run predating it: self_heal's
-    # _write_status (self_heal.py:207-234) writes a fresh status dict rather
-    # than merging, so every state-transition write between retry attempts
-    # clobbers the key. That window never overlaps a live child -- those
-    # writes all happen after run_pipeline has returned, and the next
-    # attempt's executor republishes a fresh child_pgid before its own child
-    # runs -- so treating "absent" as "nothing extra to reap" is correct for
-    # every cause, not merely a back-compat shim for pre-watchdog runs.
+    # child_pgid is written while a detached child is running and removed once it
+    # is not, so "absent" means "nothing detached to reap" for every cause, not
+    # merely a back-compat shim for runs predating the watchdog. Two things
+    # remove it: the executor clears the key itself the moment the child is
+    # reaped (runner.py::_clear_child_pgid), and self_heal's _write_status
+    # (self_heal.py:207-234) writes a fresh status dict rather than merging, so
+    # every state-transition write between attempts drops it as well. Neither is
+    # relied on to cover for the other: the retry branches do NOT all call
+    # _write_status before continuing (the auto-approve and safe-patch paths
+    # both fall straight through to the next attempt), which is exactly why the
+    # executor clears it at the source.
     #
-    # The mirror case -- present but STALE -- also happens: self_heal's
-    # auto_approve retry branch (self_heal.py:1041-1063), unlike the other two
-    # retry branches, never calls _write_status before its `continue`, so the
-    # PREVIOUS attempt's dead child_pgid lingers in status.json until the next
-    # attempt's executor overwrites it. Still safe: nothing detached is alive
-    # in that window (anything run synchronously in between, e.g. an index
-    # build, is undetached and reaped via the `pid` path below), and reaping a
-    # stale pgid is exactly what _terminate_process_group's ProcessLookupError
-    # handling is for.
+    # Best-effort, not a guarantee: contig being SIGKILLed between spawning a
+    # child and clearing the key leaves the value behind with no chance to clean
+    # up. A pgid that is merely GONE is harmless to signal -- that is what
+    # _terminate_process_group's ProcessLookupError handling is for -- but one
+    # that has been RECYCLED names an unrelated process group, and no error
+    # handling here can tell the two apart. That is the hazard the eager clear
+    # exists to keep rare.
     child_pgid = status.get("child_pgid")
     if _is_real_pid(child_pgid):
         _terminate_process_group(child_pgid, wait_seconds)

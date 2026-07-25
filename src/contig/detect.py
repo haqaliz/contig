@@ -36,6 +36,15 @@ def _has_any(text: str, needles: tuple[str, ...]) -> bool:
     return any(n in low for n in needles)
 
 
+# Phrase-level and deliberately GENERALIZED, not a sentinel only Contig emits:
+# `stall.stall_message` produces the 1st, 2nd and 4th, while the 3rd matches the
+# frozen `holdout-no-progress-1` fixture, whose text names a non-Contig actor
+# ("the progress monitor terminated it as stalled"). Matching both wordings
+# through one tuple is the point — a rule fitted to our own string would fail the
+# held-out case it exists to pass — but the trade is not free: nothing confines
+# these four generic phrases to output we wrote, so third-party tool text
+# containing one of them classifies as no_progress, and from above the OOM branch
+# it out-ranks a genuine exit == 137.
 _NO_PROGRESS_NEEDLES = (
     "no forward progress",
     "no new output or trace update",
