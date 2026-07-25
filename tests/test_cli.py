@@ -743,6 +743,22 @@ def test_rerun_registers_detect_stalls_and_stall_timeout_flags_with_defaults():
     assert by_name["stall_timeout"].default == 3600.0
 
 
+def test_rerun_stall_flag_validation_precedes_manifest_lookup_even_on_reorder(tmp_path):
+    # Argument validation is cheap, deterministic, and about the user's own
+    # input, so it must run BEFORE any filesystem work (the manifest lookup).
+    # A run id that does not exist at all still must be refused for the flag
+    # mistake, not for the missing manifest -- otherwise the user is sent to
+    # debug the wrong problem. Pins the ordering so a future change that moves
+    # manifest lookup ahead of validation is caught here, not by inspection.
+    result = runner.invoke(
+        app,
+        ["rerun", "nonexistent", "--runs-dir", str(tmp_path / "runs"), "--stall-timeout", "3600"],
+    )
+    assert result.exit_code != 0
+    assert "--detect-stalls" in result.output
+    assert "No launch manifest" not in result.output
+
+
 def test_rerun_errors_when_launch_manifest_missing(tmp_path):
     result = runner.invoke(app, ["rerun", "ghost", "--runs-dir", str(tmp_path)])
     assert result.exit_code != 0

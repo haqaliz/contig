@@ -762,6 +762,12 @@ def rerun(
     manifest is never trusted blindly), and dispatches an identical run via the
     same path `run` uses, with a re-defaulted outdir/work_dir. Prints the new id.
     """
+    # Argument validation is cheap, deterministic, and about the caller's own
+    # input -- it runs before any filesystem work (the manifest lookup below),
+    # so a flag mistake is reported as a flag mistake even for a run id that
+    # does not exist at all, matching `run` and `resume`.
+    _validate_stall_flags(ctx, detect_stalls=detect_stalls, stall_timeout=stall_timeout)
+
     manifest_path = Path(runs_dir) / run_id / "launch.json"
     if not manifest_path.exists():
         typer.echo(f"No launch manifest for run {run_id!r} in {runs_dir}.", err=True)
@@ -782,8 +788,6 @@ def rerun(
     if not _is_safe_run_id(target_run_id):
         typer.echo(f"Invalid run id: {target_run_id!r}", err=True)
         raise typer.Exit(code=1)
-
-    _validate_stall_flags(ctx, detect_stalls=detect_stalls, stall_timeout=stall_timeout)
 
     typer.echo(f"Reproducing {run_id} as {target_run_id}")
     _dispatch_run(
