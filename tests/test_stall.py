@@ -262,6 +262,49 @@ def test_observe_with_deadline_returns_all_none_heartbeat_when_no_previous_and_b
     )
 
 
+def test_observe_with_deadline_returns_previous_when_observer_raises():
+    # A failed observation and a timed-out observation are the same fact: "no
+    # progress observed". An observer that raises (e.g. a future non-stat
+    # observer, or Path.stat() raising ValueError on an embedded null byte —
+    # not an OSError) must degrade honestly like the timeout path, not crash
+    # the watchdog that is supposed to be protecting a healthy run.
+    previous = _hb(trace_size=42)
+
+    def raising_observer(run_dir, artifact_path):
+        raise ValueError("boom")
+
+    hb = observe_with_deadline(
+        raising_observer,
+        run_dir=None,
+        artifact_path=None,
+        previous=previous,
+        deadline_sec=5.0,
+    )
+
+    assert hb == previous
+
+
+def test_observe_with_deadline_returns_all_none_heartbeat_when_no_previous_and_observer_raises():
+    def raising_observer(run_dir, artifact_path):
+        raise ValueError("boom")
+
+    hb = observe_with_deadline(
+        raising_observer,
+        run_dir=None,
+        artifact_path=None,
+        previous=None,
+        deadline_sec=5.0,
+    )
+
+    assert hb == Heartbeat(
+        trace_mtime=None,
+        trace_size=None,
+        nflog_mtime=None,
+        nflog_size=None,
+        runlog_size=None,
+    )
+
+
 def test_stall_message_never_contains_oom_or_time_limit_needles():
     # These substrings would collide with the OOM/time-limit detector branches
     # (detect.py), which must win outright on their own evidence. A future

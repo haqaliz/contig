@@ -1,13 +1,19 @@
-"""Pure stall decision over heartbeat fingerprints (heartbeat watchdog, no_progress).
+"""Stall decision over heartbeat fingerprints (heartbeat watchdog, no_progress).
 
 A run that is alive keeps touching its output surfaces: `trace.txt` grows a row
 per completed task, `.nextflow.log` grows continuously, `run.log` (Contig's own
 capture of the child's stdout/stderr) grows whenever the child writes. A `stall`
-is the absence of any of that motion for longer than a timeout. This module
-knows nothing about processes, signals, or the filesystem — it only compares two
-fingerprints and a clock. The observer that stat()s the real files to build a
-`Heartbeat` (off-thread, with a stat-deadline so a wedged NFS mount reads as "no
-progress" rather than hanging) lives in the executor wiring, not here.
+is the absence of any of that motion for longer than a timeout.
+
+Two parts live here. The decision core (`Heartbeat`, `changed`, `evaluate_stall`,
+`stall_message`) is pure — it only compares two fingerprints and a clock, and
+knows nothing about processes, signals, threads, or timing. The observer
+(`read_heartbeat`, `observe_with_deadline`) is the part that actually touches
+the filesystem: it `stat()`s the real surfaces off-thread, with a deadline, so a
+wedged NFS mount reads as "no progress" rather than hanging the watchdog (D1).
+This module still knows nothing about processes or signals — spawning,
+terminating, and polling on a cadence are the executor's job (Task 4), not
+this one's.
 
 Deliberately honest about what a heartbeat can and cannot know: a surface that
 has never existed and one that vanished are both `None`, and the two are
@@ -148,32 +154,45 @@ def observe_with_deadline(
     we stop waiting and keep `previous` (or an all-`None` `Heartbeat` when there
     is no previous yet), which reads as "no progress observed" — the honest
     interpretation, since a filesystem that cannot answer `stat()` is not one on
-    which the pipeline is observably progressing.
+    which the pipeline is observably progressing. The very first call has no
+    `previous` to fall back on, so a mount that is already wedged at process
+    start gets one free "no progress" poll before stall accounting begins —
+    every poll after that compares against the same all-`None` fallback, so
+    `idle_sec` starts accumulating honestly from the second poll on.
 
     The thread itself is not cancelled and may leak for the life of the wedged
     read. That is acceptable specifically because it is a daemon thread: daemon
     threads never block interpreter exit, so a permanently wedged read cannot
     hang `contig` — it just never contributes its result.
+
+    If `observer` raises instead of hanging, that is the same fact as a
+    timeout — "no progress observed" — not a reason to crash the watchdog
+    that is supposed to be protecting a healthy run: `Exception` (never
+    `BaseException`, so `KeyboardInterrupt`/`SystemExit` still propagate) is
+    caught inside the thread and degrades the same way a timeout does.
     """
     result: list[Heartbeat] = []
 
     def _observe() -> None:
-        result.append(observer(run_dir, artifact_path))
+        try:
+            result.append(observer(run_dir, artifact_path))
+        except Exception:
+            pass
 
     thread = threading.Thread(target=_observe, daemon=True)
     thread.start()
     thread.join(deadline_sec)
-    if thread.is_alive():
-        if previous is None:
-            return Heartbeat(
-                trace_mtime=None,
-                trace_size=None,
-                nflog_mtime=None,
-                nflog_size=None,
-                runlog_size=None,
-            )
-        return previous
-    return result[0]
+    if not thread.is_alive() and result:
+        return result[0]
+    if previous is None:
+        return Heartbeat(
+            trace_mtime=None,
+            trace_size=None,
+            nflog_mtime=None,
+            nflog_size=None,
+            runlog_size=None,
+        )
+    return previous
 
 
 def stall_message(
