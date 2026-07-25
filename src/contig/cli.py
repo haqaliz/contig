@@ -293,6 +293,52 @@ def plan(
         typer.echo(f"  ⚠ {warning}")
 
 
+_DETECT_STALLS_HELP = (
+    "Terminate a hung run once its heartbeat shows no forward progress for "
+    "--stall-timeout seconds, so self-heal classifies it no_progress and "
+    "retries with -resume. Off by default."
+)
+_STALL_TIMEOUT_HELP = (
+    "Seconds of no forward progress before --detect-stalls terminates the "
+    "run (default: 1 hour). Requires --detect-stalls; refused otherwise."
+)
+
+
+def _validate_stall_flags(
+    ctx: typer.Context, *, detect_stalls: bool, stall_timeout: float
+) -> None:
+    """Refuse an incoherent --detect-stalls / --stall-timeout pairing.
+
+    Shared by `run`, `rerun`, and `resume` so the two refusals -- --stall-timeout
+    without the gate flag, and --detect-stalls with a non-positive timeout --
+    behave identically everywhere the flags are offered.
+
+    --stall-timeout is meaningless without --detect-stalls to act on it.
+    Refusing here -- rather than silently ignoring it -- matters because a
+    caller who passes --stall-timeout and sees a success would reasonably
+    believe they set the watchdog window (the slice-7 `--rev` posture:
+    refused, not ignored). `stall_timeout` has a non-None default (3600.0,
+    itself a legal explicit value), so "was it passed?" cannot be read off
+    the value -- it requires the Click parameter source.
+    """
+    stall_timeout_source = ctx.get_parameter_source("stall_timeout")
+    stall_timeout_was_set = (
+        stall_timeout_source is not None and stall_timeout_source.name == "COMMANDLINE"
+    )
+    if stall_timeout_was_set and not detect_stalls:
+        typer.echo(
+            "--stall-timeout requires --detect-stalls; pass --detect-stalls to "
+            "enable the watchdog, or drop --stall-timeout.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if detect_stalls and stall_timeout <= 0:
+        typer.echo(
+            f"--stall-timeout must be positive (got {stall_timeout}).", err=True
+        )
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def run(
     ctx: typer.Context,
@@ -321,23 +367,8 @@ def run(
     allow_reference_mismatch: bool = typer.Option(False, "--allow-reference-mismatch", help="Proceed even if the FASTA and GTF use disjoint contig naming (almost always a mistake)."),
     auto_approve: bool = typer.Option(False, "--auto-approve", help="Apply gated patches without waiting (non-interactive/CI)."),
     approval_timeout: float = typer.Option(1800, "--approval-timeout", help="Seconds to wait for a human approval before stopping."),
-    detect_stalls: bool = typer.Option(
-        False,
-        "--detect-stalls",
-        help=(
-            "Terminate a hung run once its heartbeat shows no forward progress for "
-            "--stall-timeout seconds, so self-heal classifies it no_progress and "
-            "retries with -resume. Off by default."
-        ),
-    ),
-    stall_timeout: float = typer.Option(
-        3600.0,
-        "--stall-timeout",
-        help=(
-            "Seconds of no forward progress before --detect-stalls terminates the "
-            "run (default: 1 hour). Requires --detect-stalls; refused otherwise."
-        ),
-    ),
+    detect_stalls: bool = typer.Option(False, "--detect-stalls", help=_DETECT_STALLS_HELP),
+    stall_timeout: float = typer.Option(3600.0, "--stall-timeout", help=_STALL_TIMEOUT_HELP),
     notify: str = typer.Option(None, "--notify", help="Webhook URL to POST run lifecycle events to (http/https)."),
     fail_on_verdict: bool = typer.Option(False, "--fail-on-verdict", help="Exit non-zero if the run's verdict is FAIL (opt-in; WARN/UNVERIFIED do not). Default off."),
 ) -> None:
@@ -348,29 +379,7 @@ def run(
     checksums every input into the provenance. Without --input it runs nf-core's
     bundled test profile.
     """
-    # --stall-timeout is meaningless without --detect-stalls to act on it.
-    # Refusing here -- rather than silently ignoring it -- matters because a
-    # caller who passes --stall-timeout and sees a success would reasonably
-    # believe they set the watchdog window (the slice-7 `--rev` posture:
-    # refused, not ignored). `stall_timeout` has a non-None default (3600.0,
-    # itself a legal explicit value), so "was it passed?" cannot be read off
-    # the value -- it requires the Click parameter source.
-    stall_timeout_source = ctx.get_parameter_source("stall_timeout")
-    stall_timeout_was_set = (
-        stall_timeout_source is not None and stall_timeout_source.name == "COMMANDLINE"
-    )
-    if stall_timeout_was_set and not detect_stalls:
-        typer.echo(
-            "--stall-timeout requires --detect-stalls; pass --detect-stalls to "
-            "enable the watchdog, or drop --stall-timeout.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-    if detect_stalls and stall_timeout <= 0:
-        typer.echo(
-            f"--stall-timeout must be positive (got {stall_timeout}).", err=True
-        )
-        raise typer.Exit(code=1)
+    _validate_stall_flags(ctx, detect_stalls=detect_stalls, stall_timeout=stall_timeout)
     _dispatch_run(
         run_id=run_id,
         pipeline=pipeline,
@@ -740,9 +749,12 @@ def _dispatch_run(
 
 @app.command()
 def rerun(
+    ctx: typer.Context,
     run_id: str = typer.Argument(..., help="The run to reproduce (reads its launch.json)."),
     runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
     new_run_id: str = typer.Option(None, "--new-run-id", help="Identifier for the reproduced run (generated if omitted)."),
+    detect_stalls: bool = typer.Option(False, "--detect-stalls", help=_DETECT_STALLS_HELP),
+    stall_timeout: float = typer.Option(3600.0, "--stall-timeout", help=_STALL_TIMEOUT_HELP),
 ) -> None:
     """Reproduce a past run from its launch.json under a fresh run id.
 
@@ -750,6 +762,12 @@ def rerun(
     manifest is never trusted blindly), and dispatches an identical run via the
     same path `run` uses, with a re-defaulted outdir/work_dir. Prints the new id.
     """
+    # Argument validation is cheap, deterministic, and about the caller's own
+    # input -- it runs before any filesystem work (the manifest lookup below),
+    # so a flag mistake is reported as a flag mistake even for a run id that
+    # does not exist at all, matching `run` and `resume`.
+    _validate_stall_flags(ctx, detect_stalls=detect_stalls, stall_timeout=stall_timeout)
+
     manifest_path = Path(runs_dir) / run_id / "launch.json"
     if not manifest_path.exists():
         typer.echo(f"No launch manifest for run {run_id!r} in {runs_dir}.", err=True)
@@ -793,6 +811,8 @@ def rerun(
         max_cpus=manifest.max_cpus,
         max_attempts=manifest.max_attempts,
         allow_reference_mismatch=manifest.allow_reference_mismatch,
+        detect_stalls=detect_stalls,
+        stall_timeout=stall_timeout,
     )
 
 
@@ -2133,8 +2153,11 @@ def watch(
 
 @app.command()
 def resume(
+    ctx: typer.Context,
     run_id: str = typer.Argument(..., help="The cancelled or interrupted run to resume."),
     runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+    detect_stalls: bool = typer.Option(False, "--detect-stalls", help=_DETECT_STALLS_HELP),
+    stall_timeout: float = typer.Option(3600.0, "--stall-timeout", help=_STALL_TIMEOUT_HELP),
 ) -> None:
     """Resume a cancelled or interrupted run: re-run the same id with Nextflow -resume.
 
@@ -2145,6 +2168,7 @@ def resume(
     if not _is_safe_run_id(run_id):
         typer.echo(f"Invalid run id: {run_id!r}", err=True)
         raise typer.Exit(code=1)
+    _validate_stall_flags(ctx, detect_stalls=detect_stalls, stall_timeout=stall_timeout)
     try:
         resumable_state(runs_dir, run_id)
     except ResumeError as exc:
@@ -2189,6 +2213,8 @@ def resume(
         max_attempts=manifest.max_attempts,
         allow_reference_mismatch=manifest.allow_reference_mismatch,
         resume=True,
+        detect_stalls=detect_stalls,
+        stall_timeout=stall_timeout,
     )
 
 
