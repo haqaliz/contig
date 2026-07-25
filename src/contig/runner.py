@@ -15,11 +15,12 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
-from typing import Callable
+from typing import BinaryIO, Callable
 
 
 logger = logging.getLogger(__name__)
@@ -640,6 +641,12 @@ _STALL_POLL_INTERVAL_SEC = 30.0
 # `lifecycle._terminate_process_group`'s ladder.
 _STALL_GRACE_SEC = 5.0
 
+# The granularity at which the poll wait is taken. The watchdog sleeps in slices
+# this long so it can notice a child that exited early instead of charging the
+# run a full poll interval of dead latency; 0.1s is far below any poll interval
+# and far above the cost of a no-op wakeup.
+_STALL_WAKE_SLICE_SEC = 0.1
+
 # How long one heartbeat read may take before the watchdog gives up on it and
 # keeps the previous fingerprint (D1). A read that blocks longer than this is a
 # filesystem that cannot answer stat() -- which is itself "no progress".
@@ -691,48 +698,116 @@ def make_watchdog_executor(
                 # group, and killpg on our own group would kill the supervisor).
                 start_new_session=True,
             )
-            _publish_child_pgid(run_dir, proc.pid)
+            try:
+                _publish_child_pgid(run_dir, proc.pid)
 
-            previous: Heartbeat | None = None
-            last_change_at = clock()
-            while proc.poll() is None:
-                sleeper(poll_interval)
-                if proc.poll() is not None:
-                    break
-                current = observe_with_deadline(
-                    observer, run_dir, trace_path, previous, stat_deadline_sec
-                )
-                now = clock()
-                decision = evaluate_stall(
-                    previous, current, last_change_at, now, stall_timeout_sec
-                )
-                if changed(previous, current):
-                    last_change_at = now
-                previous = current
-                if not decision.stalled:
-                    continue
-                # Write the verdict BEFORE killing, and flush it: this line is the
-                # detector's only evidence that the run was stalled rather than
-                # merely crashed. Buffered and lost, the feature degrades silently
-                # to a tool_crash misdiagnosis.
-                log.write(
-                    (
+                previous: Heartbeat | None = None
+                last_change_at = clock()
+                while proc.poll() is None:
+                    _pause_between_polls(proc, poll_interval, sleeper)
+                    if proc.poll() is not None:
+                        break
+                    current = observe_with_deadline(
+                        observer, run_dir, trace_path, previous, stat_deadline_sec
+                    )
+                    now = clock()
+                    decision = evaluate_stall(
+                        previous, current, last_change_at, now, stall_timeout_sec
+                    )
+                    if changed(previous, current):
+                        last_change_at = now
+                    previous = current
+                    if not decision.stalled:
+                        continue
+                    # Write the verdict BEFORE killing: it is the detector's only
+                    # evidence that the run was stalled rather than merely crashed,
+                    # and losing it degrades the diagnosis to tool_crash. But the
+                    # write is BOUNDED and its outcome ignored -- run.log sits in
+                    # the run dir, which on the wedged-mount stall (D1) is the very
+                    # filesystem that has stopped answering. Killing the run is the
+                    # primary job; the message is evidence that improves it.
+                    _write_stall_message(
+                        log,
                         stall_message(
                             decision.idle_sec, stall_timeout_sec, decision.silent_surfaces
-                        )
-                        + "\n"
-                    ).encode()
-                )
-                log.flush()
-                _terminate_child_group(proc, grace_sec)
-                break  # terminate at most once per invocation
+                        ),
+                        stat_deadline_sec,
+                    )
+                    _terminate_child_group(proc, grace_sec)
+                    break  # terminate at most once per invocation
 
-            # Returned unchanged: a signalled child is -15/-9, which is non-zero,
-            # so run_pipeline raises PipelineExecutionError and the existing
-            # diagnosis path runs with no new plumbing.
-            return proc.wait()
+                # Returned unchanged: a signalled child is -15/-9, which is non-zero,
+                # so run_pipeline raises PipelineExecutionError and the existing
+                # diagnosis path runs with no new plumbing.
+                return proc.wait()
+            except BaseException:
+                # The one place BaseException is right: KeyboardInterrupt and
+                # SystemExit are exactly the escapes that matter here. The child is
+                # in its own session (D2), so the terminal's Ctrl-C never reaches
+                # it -- without this, interrupting a supervised run would stop the
+                # supervisor and leave Nextflow, its JVM and its containers burning
+                # the user's compute. Kill first, then let the exception continue.
+                _terminate_child_group(proc, grace_sec)
+                raise
 
     return _watchdog_executor
+
+
+def _pause_between_polls(
+    proc: subprocess.Popen,
+    poll_interval: float,
+    sleeper: Callable[[float], None],
+    slice_sec: float = _STALL_WAKE_SLICE_SEC,
+) -> None:
+    """Wait up to `poll_interval` before the next heartbeat, waking early on exit.
+
+    Sleeping the whole interval blind would charge every run up to a full poll
+    interval of dead latency after its child has already exited -- immaterial on a
+    long run, but the self-heal loop's fast failures (bad argv, missing reference)
+    would pay it on every attempt. So the wait is taken in short slices and
+    abandoned as soon as the child is gone. Slicing rather than `proc.wait(timeout)`
+    keeps the injected `sleeper` the real seam: a test that supplies its own
+    sleeper still controls every pause this loop takes.
+    """
+    remaining = poll_interval
+    while remaining > 0 and proc.poll() is None:
+        step = min(slice_sec, remaining)
+        sleeper(step)
+        remaining -= step
+
+
+def _write_stall_message(log: BinaryIO, message: str, deadline_sec: float) -> bool:
+    """Append the watchdog's verdict to the open run.log, bounded by a deadline.
+
+    Returns True if the write landed. The write happens in a **daemon** thread for
+    the same reason the heartbeat read does (D1): run.log lives in the run dir, so
+    on the wedged-mount stall it is the very filesystem that has stopped answering,
+    and `write`/`flush` against a hard-mounted unresponsive NFS blocks
+    uninterruptibly. A blocked write must never stop the kill -- the caller ignores
+    the result and terminates regardless -- but on a healthy filesystem (the common
+    case) this returns in microseconds, so the message still lands BEFORE the child
+    is signalled, which is the ordering the detector depends on.
+    """
+    done = threading.Event()
+
+    def _write() -> None:
+        try:
+            log.write((message + "\n").encode())
+            log.flush()
+        except Exception as exc:  # noqa: BLE001 -- evidence is never worth the run
+            logger.warning("could not write the stall verdict to run.log: %s", exc)
+        finally:
+            done.set()
+
+    threading.Thread(target=_write, daemon=True).start()
+    if done.wait(deadline_sec):
+        return True
+    logger.warning(
+        "stall verdict did not reach run.log within %ss (blocked write); "
+        "terminating the run anyway",
+        deadline_sec,
+    )
+    return False
 
 
 def _publish_child_pgid(run_dir: Path, pid: int) -> None:
@@ -776,9 +851,13 @@ def _terminate_child_group(proc: subprocess.Popen, grace_sec: float) -> None:
     grace window is never SIGKILLed, and a group that is already gone is fine --
     there is simply nothing left to reap.
     """
+    # OSError, not just ProcessLookupError, and deliberately the same net as
+    # _publish_child_pgid casts: "the child is already gone" is the case that
+    # actually happens, but any other OSError means we cannot name the group
+    # either, and there is nothing useful to do with that but move on.
     try:
         pgid = os.getpgid(proc.pid)
-    except ProcessLookupError:
+    except OSError:
         return
     try:
         os.killpg(pgid, signal.SIGTERM)

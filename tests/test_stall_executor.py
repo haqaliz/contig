@@ -12,14 +12,25 @@ heartbeat observer are injected, so nothing waits a real timeout, and every test
 is bounded by a child that either exits on its own or is killed.
 """
 
+import inspect
 import json
 import logging
 import os
 import signal
 import sys
+import threading
 import time
 
-from contig.runner import default_executor, make_watchdog_executor
+import pytest
+
+from contig.detect import diagnose_failure
+from contig.models import TaskEvent
+from contig.runner import (
+    _write_stall_message,
+    default_executor,
+    make_watchdog_executor,
+    run_pipeline,
+)
 from contig.stall import Heartbeat
 
 # A child that will never finish on its own: the thing a stall watchdog exists
@@ -71,6 +82,39 @@ def _observer_waiting_for(log_path, needle: str, timeout: float = 5.0):
         return _hb()
 
     return _observe
+
+
+def _sleeper_raising_once(log_path, needle: str, exc: BaseException, timeout: float = 5.0):
+    """A sleeper that waits for `needle` in the log, then raises `exc`.
+
+    Simulates the operator hitting Ctrl-C mid-supervision, at a point where the
+    child is demonstrably up (it has printed) so the test can assert on its fate.
+    """
+
+    def _sleep(_seconds: float) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                if needle in log_path.read_text():
+                    break
+            except OSError:
+                pass
+            time.sleep(0.01)
+        raise exc
+
+    return _sleep
+
+
+def _assert_process_gone(pid: int, timeout: float = 5.0) -> None:
+    """Wait (briefly) for `pid` to disappear, failing if it is still around."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.01)
+    raise AssertionError(f"process {pid} is still alive; the run was orphaned")
 
 
 def _stepping_clock(step: float):
@@ -161,6 +205,89 @@ def test_stalled_child_is_terminated_and_leaves_the_message_in_run_log(
     assert sent == [signal.SIGTERM]
 
 
+def test_keyboard_interrupt_kills_the_child_instead_of_orphaning_it(tmp_path):
+    # start_new_session takes the child out of contig's process group, so the
+    # terminal's Ctrl-C no longer reaches it. Without this handling, interrupting
+    # a supervised run stops the SUPERVISOR and leaves Nextflow, its JVM and its
+    # containers burning the user's compute -- the exact harm this slice exists
+    # to prevent, arriving through a different door.
+    log_path = tmp_path / "run.log"
+    executor = make_watchdog_executor(
+        stall_timeout_sec=3600.0,
+        observer=_silent_observer(),
+        clock=_stepping_clock(1.0),
+        sleeper=_sleeper_raising_once(log_path, "ready", KeyboardInterrupt()),
+        # Non-zero, so the pause (and therefore the interrupt) actually happens:
+        # a zero interval means "no pause", and the sleeper is never consulted.
+        poll_interval=0.5,
+        grace_sec=1.0,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        executor(
+            [
+                sys.executable,
+                "-c",
+                "import os, time; print('ready', os.getpid(), flush=True);"
+                " time.sleep(60)",
+            ],
+            tmp_path / "trace.txt",
+        )
+
+    _assert_process_gone(int(log_path.read_text().split()[1]))
+
+
+def test_stall_message_write_gives_up_when_the_log_write_blocks():
+    # run.log lives in the run dir -- on a wedged NFS mount, the same mount whose
+    # silence is what the watchdog just diagnosed. Writing the verdict must not be
+    # able to block the kill, so the write is bounded exactly like the heartbeat
+    # read is (D1).
+    blocked = threading.Event()
+
+    class WedgedLog:
+        def write(self, data):
+            blocked.wait()  # never returns within the deadline
+
+        def flush(self):
+            pass
+
+    try:
+        started = time.monotonic()
+        landed = _write_stall_message(WedgedLog(), "verdict", 0.05)
+        elapsed = time.monotonic() - started
+    finally:
+        blocked.set()  # release the abandoned daemon thread
+
+    assert landed is False
+    assert elapsed < 2.0, "a wedged write held the watchdog past its deadline"
+
+
+def test_child_is_killed_even_when_the_verdict_never_reaches_the_log(
+    tmp_path, monkeypatch
+):
+    # Fault injection at the write seam: the verdict is lost (wedged mount), and
+    # the run must STILL be terminated. Killing is the primary job; the message
+    # is evidence that improves the diagnosis.
+    monkeypatch.setattr(
+        "contig.runner._write_stall_message", lambda log, message, deadline_sec: False
+    )
+    sent = _killpg_spy(monkeypatch)
+    executor = make_watchdog_executor(
+        stall_timeout_sec=60.0,
+        observer=_silent_observer(),
+        clock=_stepping_clock(1000.0),
+        sleeper=lambda _seconds: None,
+        poll_interval=0.0,
+        grace_sec=1.0,
+    )
+
+    returncode = executor(HANGING_CHILD, tmp_path / "trace.txt")
+
+    assert returncode == -signal.SIGTERM
+    assert sent == [signal.SIGTERM]
+    assert "contig watchdog" not in (tmp_path / "run.log").read_text()
+
+
 def test_normally_exiting_child_keeps_its_own_exit_code_and_is_never_signalled(
     tmp_path, monkeypatch
 ):
@@ -187,6 +314,30 @@ def test_normally_exiting_child_keeps_its_own_exit_code_and_is_never_signalled(
     assert "hello" in log_text
     assert "contig watchdog" not in log_text
     assert sent == []
+
+
+def test_early_exit_is_noticed_without_waiting_out_the_poll_interval(tmp_path):
+    # Real sleeper, production-sized 30s poll interval, child gone in milliseconds.
+    # A blind sleep-then-poll loop would not notice until t=30s, and the self-heal
+    # loop's fast failures (bad argv, missing reference) would pay that per
+    # attempt. This test uses wall-clock time deliberately -- the latency IS the
+    # behavior under test.
+    executor = make_watchdog_executor(
+        stall_timeout_sec=3600.0,
+        observer=_silent_observer(),
+        clock=_stepping_clock(1.0),
+        sleeper=time.sleep,
+        poll_interval=30.0,
+    )
+
+    started = time.monotonic()
+    returncode = executor(
+        [sys.executable, "-c", "import sys; sys.exit(4)"], tmp_path / "trace.txt"
+    )
+    elapsed = time.monotonic() - started
+
+    assert returncode == 4
+    assert elapsed < 5.0, f"waited {elapsed:.1f}s for a child that exited immediately"
 
 
 def test_observer_reporting_change_never_terminates(tmp_path, monkeypatch):
@@ -312,6 +463,31 @@ def _healthy_executor(**overrides):
     return make_watchdog_executor(**kwargs)
 
 
+def test_run_log_is_truncated_so_a_stale_verdict_cannot_leak_into_the_next_attempt(
+    tmp_path,
+):
+    # Every attempt starts from an empty run.log, exactly as default_executor's
+    # "wb" does. High consequence if it regresses: self-heal retries the SAME run
+    # dir with -resume, so attempt 1's verdict left in place would make the
+    # detector re-diagnose no_progress off a stale line and burn the entire repair
+    # budget on a run that never stalled again.
+    log_path = tmp_path / "run.log"
+    log_path.write_text(
+        "contig watchdog: no forward progress for 3600s (attempt 1)\n"
+        "some older output from attempt 1\n"
+    )
+
+    returncode = _healthy_executor()(
+        [sys.executable, "-c", "print('attempt 2 output')"], tmp_path / "trace.txt"
+    )
+
+    assert returncode == 0
+    log_text = log_path.read_text()
+    assert "attempt 1" not in log_text
+    assert "contig watchdog" not in log_text
+    assert "attempt 2 output" in log_text
+
+
 def test_child_pgid_is_merged_into_existing_status_json(tmp_path):
     # D2's other half: detaching the child removes it from the group `contig
     # cancel` reaps, so the child's own pgid has to be published -- WITHOUT
@@ -367,6 +543,50 @@ def test_unparseable_status_json_is_warned_about_and_left_untouched(tmp_path, ca
     assert any("child_pgid" in record.getMessage() for record in caplog.records)
 
 
-def test_default_executor_is_still_the_plain_one():
-    # Guard the seam: the watchdog is additive, default_executor is untouched.
-    assert default_executor.__name__ == "default_executor"
+def test_the_bytes_the_watchdog_writes_really_diagnose_as_no_progress(
+    tmp_path, monkeypatch
+):
+    # The end-to-end coupling, made intentional rather than incidental: take the
+    # ACTUAL run.log the executor left behind and hand it to the SHIPPED detector.
+    # Everything in between (the message wording, the needles, the branch order)
+    # is free to be refactored as long as this holds.
+    _killpg_spy(monkeypatch)
+    executor = make_watchdog_executor(
+        stall_timeout_sec=60.0,
+        observer=_silent_observer(),
+        clock=_stepping_clock(1000.0),
+        sleeper=lambda _seconds: None,
+        poll_interval=0.0,
+        grace_sec=1.0,
+    )
+
+    returncode = executor(HANGING_CHILD, tmp_path / "trace.txt")
+
+    # Killed before Nextflow could write a trace, so there are no events at all --
+    # the plan's first edge case. The message alone has to carry the diagnosis.
+    diagnosis = diagnose_failure([], (tmp_path / "run.log").read_text())
+    assert diagnosis.failure_class == "no_progress"
+    assert diagnosis.confidence == 0.9
+    assert diagnosis.evidence, "the verdict line itself must be the evidence"
+    assert returncode != 0  # so run_pipeline raises and this diagnosis is reached
+
+
+def test_a_genuine_oom_is_unaffected_by_the_watchdog_branch(tmp_path):
+    # The control for the test above: exit 137 with no watchdog line still reads
+    # as OOM. Our own kill reports -9/-15 and can never forge 137, so a real
+    # out-of-memory kill keeps its diagnosis.
+    diagnosis = diagnose_failure(
+        [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=137)],
+        "Command error:\n  .command.sh: line 9: Killed\n",
+    )
+    assert diagnosis.failure_class == "oom"
+
+
+def test_run_pipeline_still_defaults_to_the_plain_executor():
+    # Guard the seam from both ends: the watchdog is opt-in, so the default
+    # executor `run_pipeline` uses must remain default_executor (Task 6 flips it
+    # per-run, never here), and the factory must return something with exactly
+    # the Executor shape `(cmd, trace_path)`.
+    assert inspect.signature(run_pipeline).parameters["executor"].default is default_executor
+    watchdog = make_watchdog_executor(stall_timeout_sec=60.0)
+    assert list(inspect.signature(watchdog).parameters) == ["cmd", "trace_path"]
