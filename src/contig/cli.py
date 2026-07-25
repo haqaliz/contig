@@ -138,6 +138,7 @@ from contig.runner import (
     default_fetcher,
     default_index_builder,
     default_installer,
+    make_watchdog_executor,
 )
 from contig.samplesheet import (
     fastq_paths,
@@ -294,6 +295,7 @@ def plan(
 
 @app.command()
 def run(
+    ctx: typer.Context,
     run_id: str = typer.Option(..., "--run-id", help="Identifier for this run."),
     pipeline: str = typer.Option("nf-core/rnaseq", "--pipeline", help="Pipeline to run (Nextflow engine)."),
     assay: str = typer.Option(None, "--assay", help="Assay key override; needed when two assays share a pipeline (e.g. somatic vs germline sarek). Defaults to the pipeline's registered assay."),
@@ -319,6 +321,23 @@ def run(
     allow_reference_mismatch: bool = typer.Option(False, "--allow-reference-mismatch", help="Proceed even if the FASTA and GTF use disjoint contig naming (almost always a mistake)."),
     auto_approve: bool = typer.Option(False, "--auto-approve", help="Apply gated patches without waiting (non-interactive/CI)."),
     approval_timeout: float = typer.Option(1800, "--approval-timeout", help="Seconds to wait for a human approval before stopping."),
+    detect_stalls: bool = typer.Option(
+        False,
+        "--detect-stalls",
+        help=(
+            "Terminate a hung run once its heartbeat shows no forward progress for "
+            "--stall-timeout seconds, so self-heal classifies it no_progress and "
+            "retries with -resume. Off by default."
+        ),
+    ),
+    stall_timeout: float = typer.Option(
+        3600.0,
+        "--stall-timeout",
+        help=(
+            "Seconds of no forward progress before --detect-stalls terminates the "
+            "run (default: 1 hour). Requires --detect-stalls; refused otherwise."
+        ),
+    ),
     notify: str = typer.Option(None, "--notify", help="Webhook URL to POST run lifecycle events to (http/https)."),
     fail_on_verdict: bool = typer.Option(False, "--fail-on-verdict", help="Exit non-zero if the run's verdict is FAIL (opt-in; WARN/UNVERIFIED do not). Default off."),
 ) -> None:
@@ -329,6 +348,29 @@ def run(
     checksums every input into the provenance. Without --input it runs nf-core's
     bundled test profile.
     """
+    # --stall-timeout is meaningless without --detect-stalls to act on it.
+    # Refusing here -- rather than silently ignoring it -- matters because a
+    # caller who passes --stall-timeout and sees a success would reasonably
+    # believe they set the watchdog window (the slice-7 `--rev` posture:
+    # refused, not ignored). `stall_timeout` has a non-None default (3600.0,
+    # itself a legal explicit value), so "was it passed?" cannot be read off
+    # the value -- it requires the Click parameter source.
+    stall_timeout_source = ctx.get_parameter_source("stall_timeout")
+    stall_timeout_was_set = (
+        stall_timeout_source is not None and stall_timeout_source.name == "COMMANDLINE"
+    )
+    if stall_timeout_was_set and not detect_stalls:
+        typer.echo(
+            "--stall-timeout requires --detect-stalls; pass --detect-stalls to "
+            "enable the watchdog, or drop --stall-timeout.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if detect_stalls and stall_timeout <= 0:
+        typer.echo(
+            f"--stall-timeout must be positive (got {stall_timeout}).", err=True
+        )
+        raise typer.Exit(code=1)
     _dispatch_run(
         run_id=run_id,
         pipeline=pipeline,
@@ -355,6 +397,8 @@ def run(
         allow_reference_mismatch=allow_reference_mismatch,
         auto_approve=auto_approve,
         approval_timeout=approval_timeout,
+        detect_stalls=detect_stalls,
+        stall_timeout=stall_timeout,
         notify=notify,
         fail_on_verdict=fail_on_verdict,
     )
@@ -412,6 +456,8 @@ def _dispatch_run(
     resume: bool = False,
     auto_approve: bool = False,
     approval_timeout: float = 1800,
+    detect_stalls: bool = False,
+    stall_timeout: float = 3600.0,
     notify: str | None = None,
     fail_on_verdict: bool = False,
 ) -> None:
@@ -658,7 +704,15 @@ def _dispatch_run(
             input_paths=input_paths,
             runs_dir=runs_dir,
             run_id=run_id,
-            executor=default_executor,
+            # The only production line whose behavior changes with --detect-stalls:
+            # off (the default) is byte-identical to before -- default_executor,
+            # untouched. On, a watchdog wraps the child so a hung run gets
+            # terminated and the detector can classify it no_progress.
+            executor=(
+                make_watchdog_executor(stall_timeout_sec=stall_timeout)
+                if detect_stalls
+                else default_executor
+            ),
             index_builder=default_index_builder,
             params=params or None,
             max_attempts=max_attempts,
