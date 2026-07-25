@@ -31,9 +31,12 @@ def _write_status(runs_dir, run_id, state, pid, child_pgid=None):
         "started_at": "2026-06-22T00:00:00+00:00",
         "finished_at": None,
     }
-    # Only set the key when a caller actually wants one: a run written by any
-    # prior version (or any non-watchdog run) has no child_pgid key at all,
-    # not a null one -- that absence is exactly the back-compat shape we pin.
+    # Only set the key when a caller actually wants one: a status.json with no
+    # child_pgid key at all (not a null one) is the shape we pin. That is not
+    # only a pre-watchdog/non-watchdog run -- self_heal._write_status writes a
+    # fresh dict rather than merging, so a *current* watchdog run also has no
+    # child_pgid key in the window between a state-transition write and the
+    # next attempt's executor republishing it (see cancel_run's comment).
     if child_pgid is not None:
         payload["child_pgid"] = child_pgid
     (d / "status.json").write_text(json.dumps(payload))
@@ -164,9 +167,14 @@ def test_cancel_reaps_child_group_before_run_group(tmp_path, monkeypatch):
 
 
 def test_cancel_without_child_pgid_behaves_as_before(tmp_path, monkeypatch):
-    # Back-compat: a status.json with no child_pgid key (every run written by
-    # every prior version, and every non-watchdog run) reaps only the run's
-    # own group, exactly as it did before this feature existed.
+    # Back-compat: a status.json with no child_pgid key reaps only the run's
+    # own group, exactly as it did before this feature existed. This is not
+    # only "a run from before the watchdog existed" -- self_heal._write_status
+    # writes a fresh dict rather than merging, so a live watchdog run's own
+    # state-transition writes (between attempts, after run_pipeline has
+    # already returned and no child is alive) also clobber the key. Either
+    # way there is nothing beyond pid's group to reap, so one code path
+    # covering both is correct, not a coincidence.
     _write_status(tmp_path, "r", "running", pid=4321)
     killed = []
     monkeypatch.setattr(os, "killpg", lambda pgid, sig: killed.append(pgid))

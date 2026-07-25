@@ -117,9 +117,17 @@ def cancel_run(runs_dir: str | Path, run_id: str, *, wait_seconds: float = 2.0) 
 
     # Child group first, then the run's own (D2): the watchdog's detached
     # child must die before its supervisor, so the pipeline never outlives the
-    # process that would otherwise clean up after it. Absent for every run
-    # written before the watchdog existed -- that back-compat case is a no-op
-    # here, exactly like it was before this branch existed.
+    # process that would otherwise clean up after it.
+    #
+    # child_pgid can legitimately be absent even on a run this watchdog is
+    # actively supervising, not just on a run predating it: self_heal's
+    # _write_status (self_heal.py:207-234) writes a fresh status dict rather
+    # than merging, so every state-transition write between retry attempts
+    # clobbers the key. That window never overlaps a live child -- those
+    # writes all happen after run_pipeline has returned, and the next
+    # attempt's executor republishes a fresh child_pgid before its own child
+    # runs -- so treating "absent" as "nothing extra to reap" is correct for
+    # every cause, not merely a back-compat shim for pre-watchdog runs.
     child_pgid = status.get("child_pgid")
     if isinstance(child_pgid, int):
         _terminate_process_group(child_pgid, wait_seconds)
