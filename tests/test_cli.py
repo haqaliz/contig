@@ -3426,6 +3426,21 @@ def test_stall_timeout_without_detect_stalls_is_refused(tmp_path):
     assert "--detect-stalls" in result.output
 
 
+def test_stall_timeout_set_to_its_own_default_without_detect_stalls_is_still_refused(tmp_path):
+    # Discriminates get_parameter_source from a value-comparison shortcut: a
+    # naive `if stall_timeout != 3600.0 and not detect_stalls: refuse` would
+    # pass every OTHER test in this file (they all use a non-default value)
+    # while silently letting `--stall-timeout 3600` through unrefused here.
+    # Do not delete this as "redundant" with the --stall-timeout 120 case above
+    # -- it pins the mechanism, not just the outcome.
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "r3", "--runs-dir", str(tmp_path / "runs"), "--stall-timeout", "3600"],
+    )
+    assert result.exit_code != 0
+    assert "--detect-stalls" in result.output
+
+
 def test_detect_stalls_with_nonpositive_stall_timeout_is_refused(tmp_path):
     result = runner.invoke(
         app,
