@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-07-25T01:50:07.552494+00:00",
-  "scenario_count": 8,
-  "corpus_sha": "51658f2e3d1a166158721b071c8d5c27f0a247397d3f48e5437c38486def0db1",
+  "timestamp": "2026-07-28T20:02:52.306551+00:00",
+  "scenario_count": 9,
+  "corpus_sha": "0fa5472c9a6dbe1726c9a2e1a1a7e6c3f3932e9511b331db0697e33ce5c6325d",
   "outcome_match_rate": 1.0,
-  "recovery_rate": 0.625,
+  "recovery_rate": 0.6666666666666666,
   "per_class": {
     "oom": {
       "matched": 1,
@@ -34,6 +34,11 @@
       "matched": 1,
       "total": 1,
       "rate": 1.0
+    },
+    "qc_anomaly": {
+      "matched": 1,
+      "total": 1,
+      "rate": 1.0
     }
   },
   "covered_classes": [
@@ -41,6 +46,7 @@
     "missing_index",
     "no_progress",
     "oom",
+    "qc_anomaly",
     "time_limit",
     "tool_crash"
   ],
