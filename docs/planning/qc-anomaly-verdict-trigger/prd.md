@@ -2,7 +2,7 @@
 
 **Slug:** `qc-anomaly-verdict-trigger` · **Branch:** `feat/qc-anomaly-verdict-trigger/aliz`
 **Capability:** C6 (eval flywheel) × C2 (self-heal breadth) — the verify↔self-heal link
-**Date:** 2026-07-28 · **Status:** awaiting review gate
+**Date:** 2026-07-28 · **Status:** ✅ SHIPPED — merged to `master` 2026-07-29 (`0901362`)
 **Inputs:** `docs/planning/_card/issue.md` (brief), `understanding.md` (Phase-2 dig, 4 agents)
 
 ---
