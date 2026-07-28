@@ -67,10 +67,24 @@ def _heal(tmp_path, executor, **over):
     return self_heal_run(**kwargs)
 
 
+# Tripped by the self-limiting executors below. A green run gives the loop
+# nothing to retry -- the trigger falls through to finalize -- so an unscripted
+# extra invocation is the signature of it re-entering the run loop. Worth
+# guarding explicitly: every fresh attempt re-trips the trigger, so the defect
+# would otherwise surface as a test that hangs rather than one that fails.
+RE_ENTERED_LOOP = "trigger re-entered the run loop; it must never retry"
+
+
 def _green_qc_fail_executor(trace=TRACE_OK):
-    """An executor whose run exits 0 and leaves a call set that FAILs QC."""
+    """An executor whose run exits 0 and leaves a call set that FAILs QC.
+
+    Self-limiting: this scenario scripts exactly one run.
+    """
+    state = {"n": 0}
 
     def executor(cmd, trace_path):
+        state["n"] += 1
+        assert state["n"] == 1, RE_ENTERED_LOOP
         _write(trace_path, trace, "ok", empty_vcf=True)
         return 0
 
@@ -87,9 +101,16 @@ def _heal_over_record(monkeypatch, tmp_path, *, events, qc_results):
     a germline run (variant_count is always computable). Stating the record here
     tests the predicate directly; the real `_discover_qc` path is exercised by
     the tests above and by the frozen heal scenario.
+
+    Self-limiting on the same terms as the executors above: this seam replaces
+    run_pipeline, so the executor's own guard never sees these runs and the
+    count has to live here instead.
     """
+    state = {"n": 0}
 
     def fake_run_pipeline(**kwargs):
+        state["n"] += 1
+        assert state["n"] == 1, RE_ENTERED_LOOP
         return RunRecord(
             run_id=kwargs["run_id"],
             pipeline=kwargs["pipeline"],
@@ -266,6 +287,9 @@ def test_trigger_fires_once_on_the_attempt_that_finally_succeeded(tmp_path):
 
     def executor(cmd, trace_path):
         state["n"] += 1
+        # Two runs are scripted here (the OOM and the retry that fixes it), so
+        # unlike the single-run helper above this one trips on the third.
+        assert state["n"] <= 2, RE_ENTERED_LOOP
         if state["n"] == 1:
             _write(trace_path, TRACE_OOM, "Process killed: out of memory (exit 137)")
             return 1
