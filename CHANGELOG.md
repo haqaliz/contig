@@ -8,6 +8,42 @@ All notable changes to Contig are recorded here. The format follows
 
 ### Added
 
+- **Tumor/normal swapped-pair smell test — cross-column VAF corroboration for a somatic
+  swap, mislabel, or contamination** (capability C4 follow-on, closing the deferred
+  "cross-column swapped-pair smell test" item named by both the v0.14.0 VAF-plausibility
+  slice and the v0.34.0 Strelka2-native VAF slice). Contig's somatic verdict has so far
+  read VAF only from the **tumor** column of the run's Mutect2 VCF; a tumor/normal sample
+  swap, sheet mislabel, or heavy tumor-in-normal contamination runs to "success" and passes
+  every existing check, because the tumor-VAF band looks plausible even when the somatic
+  signal is actually sitting in the normal. A new `normal_median_vaf` metric now reads the
+  **NORMAL** column of the same Mutect2 VCF: an implausibly high median VAF there means the
+  somatic signal is where it shouldn't be — a possible tumor/normal swap, mislabel, or
+  contamination.
+  - **A `##normal_sample=` column resolver**, mirroring the shipped `##tumor_sample=`
+    resolver in `verification/somatic_plausibility.py`: parses the header, matches it to a
+    `#CHROM` column, and **never guesses** a column — a missing header or unmatched name
+    resolves to `None`, never a positional guess.
+  - **One WARN-capped `normal_median_vaf` rule** on the existing `SOMATIC_PLAUSIBILITY_PACK`
+    (`warn_above: 0.30` only — no `warn_below`, no `fail_*`; a low normal VAF is the healthy
+    expected case, and the 0.30 band is an uncalibrated engineering default), evaluated by a
+    new `evaluate_swap_plausibility()` over a `by_metric` dict containing only this key — the
+    same isolation trick the v0.34.0 Strelka2 slice used — so it never re-emits the pack's
+    other rules (`median_vaf`, `somatic_variant_count`, `strelka_median_vaf`).
+  - **Wired into the somatic `_discover_qc` gate** on the already-located Mutect2 VCF (no
+    re-glob), immediately alongside the existing tumor-VAF evaluator.
+  - **Honest contract, identical to every sibling C3/C4 plausibility slice.** At most WARN,
+    never FAIL, never changes the `contig run`/`verify` exit code. UNVERIFIED (never a false
+    pass) when the normal column is unresolvable (no `##normal_sample=` header, or no
+    matching `#CHROM` column) or no normal VAF is derivable from any record; no Mutect2 VCF
+    at all → silent skip (structural QC already owns a genuinely-missing output). No new
+    dependency, model, `FailureClass`, or reproduce-contract change; stdlib only. Test-first
+    with synthetic two-column VCF fixtures — **no real nf-core/sarek or GATK run in CI**.
+    Research-use corroboration only, never a clinical/cancer verdict. **Deferred:** FAIL
+    severity and real-cohort band calibration; a directional tumor-vs-normal ratio/delta
+    metric; panel-of-normals / germline-resource reference wiring; a Strelka2-native normal
+    VAF (this slice is Mutect2-only, matching the tumor `median_vaf` it extends); and a
+    dashboard "corroborated by" surface for the swap signal.
+
 - **`contig run --detect-stalls [--stall-timeout SECONDS]` — an opt-in heartbeat stall
   watchdog, and the first time the `no_progress` failure class is reachable by the detector
   (C2, with C6 headroom).** Contig could only diagnose a run that **exits**. `default_executor`

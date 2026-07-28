@@ -78,7 +78,10 @@ from contig.verification.somatic_concordance import (
     evaluate_somatic_concordance_from_run,
     select_caller_vcfs,
 )
-from contig.verification.somatic_plausibility import evaluate_somatic_plausibility
+from contig.verification.somatic_plausibility import (
+    evaluate_somatic_plausibility,
+    evaluate_swap_plausibility,
+)
 from contig.verification.strelka_vaf import evaluate_strelka_vaf_plausibility
 from contig.verification.run_qc import evaluate_run_qc
 from contig.verification.sex_plausibility import evaluate_sex_plausibility
@@ -371,6 +374,14 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
             )
             if mutect2 is not None:
                 results.extend(evaluate_somatic_plausibility(mutect2))
+                # Tumor/normal swap smell test (swap-verdict, C4 follow-on):
+                # reads the same Mutect2 VCF's NORMAL column (##normal_sample=)
+                # for an implausibly high median VAF -- the somatic signal
+                # sitting in the normal, which points at a swapped/mislabeled/
+                # heavily contaminated pair. WARN-capped (no fail_*) and
+                # UNVERIFIED-when-unresolvable, so it can never change the
+                # exit code or silently drop.
+                results.extend(evaluate_swap_plausibility(mutect2))
             else:
                 results.append(
                     QCResult(

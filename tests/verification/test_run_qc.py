@@ -508,6 +508,50 @@ def test_somatic_no_vcf_at_all_skips_silently(tmp_path):
     assert not any(c == "somatic_vaf_plausibility" for c in checks)
 
 
+# --- Tumor/normal swap smell test auto-wiring (swap-verdict Phase 3) -----------
+
+_SOMATIC_HEADER_WITH_NORMAL = (
+    "##fileformat=VCFv4.2\n"
+    "##tumor_sample=TUMOR\n"
+    "##normal_sample=NORMAL\n"
+    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tNORMAL\tTUMOR\n"
+)
+# Normal FORMAT AF ~0.45 on every record -- a swapped/mislabeled/heavily
+# contaminated normal (the somatic signal is in the normal column).
+_SWAPPED_SOMATIC_ROWS = [
+    ("chr1", 100, "A", "G", "0/1:0.30:14,6:20"),
+    ("chr1", 200, "C", "T", "0/1:0.40:12,8:20"),
+]
+
+
+def _write_swapped_somatic_vcf_gz(path):
+    """A gzipped Mutect2-style VCF whose NORMAL column carries high VAF."""
+    body = "".join(
+        f"{c}\t{p}\t.\t{r}\t{al}\t.\tPASS\t.\tGT:AF:AD:DP\t0/0:0.45:9,11:20\t{t}\n"
+        for (c, p, r, al, t) in _SWAPPED_SOMATIC_ROWS
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(gzip.compress((_SOMATIC_HEADER_WITH_NORMAL + body).encode()))
+    return path
+
+
+def test_discover_qc_includes_swap_check_and_stays_warn_capped(tmp_path):
+    # A somatic run whose Mutect2 VCF's normal column carries an implausibly
+    # high median VAF yields one WARN normal_median_vaf:NORMAL check, and the
+    # overall verdict never exceeds WARN -- the check is WARN-capped (no
+    # fail_*), so it can never change the run's exit code.
+    run_dir = tmp_path / "run"
+    vcf = run_dir / "results" / "variant_calling" / "mutect2" / "T_vs_N" / "x.vcf.gz"
+    _write_swapped_somatic_vcf_gz(vcf)
+
+    results = _discover_qc(run_dir, assay="somatic_variant_calling")
+
+    swap = [r for r in results if r.check.startswith("normal_median_vaf")]
+    assert len(swap) == 1
+    assert swap[0].status == "warn"
+    assert overall_verdict(results) != "fail"
+
+
 # --- Somatic Strelka2-vs-Mutect2 concordance auto-wiring (site-overlap Phase 2) --
 #
 # Reuses the somatic manifest's globbed *.vcf.gz list, exactly as VAF

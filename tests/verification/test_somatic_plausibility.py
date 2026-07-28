@@ -10,7 +10,10 @@ import gzip
 import pytest
 
 from contig.verification.somatic_plausibility import (
+    _normal_column_index,
+    _normal_sample_name,
     evaluate_somatic_plausibility,
+    evaluate_swap_plausibility,
     somatic_metrics,
 )
 
@@ -18,10 +21,12 @@ _TUMOR = "TUMOR"
 _NORMAL = "NORMAL"
 
 
-def _header(tumor=_TUMOR, normal=_NORMAL, tumor_line=True, extra=()):
+def _header(tumor=_TUMOR, normal=_NORMAL, tumor_line=True, normal_line=False, extra=()):
     lines = ["##fileformat=VCFv4.2"]
     if tumor_line:
         lines.append(f"##tumor_sample={tumor}")
+    if normal_line:
+        lines.append(f"##normal_sample={normal}")
     lines.extend(extra)
     # column order: NORMAL then TUMOR, to prove we select by name not position
     lines.append(
@@ -180,6 +185,50 @@ def test_gzip_supported(tmp_path):
     assert gz_m.median_vaf == pytest.approx(0.30)
 
 
+# --- swap-verdict Phase 1: normal-column resolver -------------------------------
+
+
+def test_normal_column_index_found():
+    # ``##normal_sample=NORMAL`` + a #CHROM line with NORMAL then TUMOR columns
+    # -> NORMAL resolves to index 9 (the first sample column).
+    header = _header(normal_line=True).splitlines(keepends=True)
+
+    assert _normal_column_index(header) == 9
+
+
+def test_normal_column_index_none_when_no_normal_sample_header():
+    # No ``##normal_sample=`` line -> never guess a column -> None.
+    header = _header(normal_line=False).splitlines(keepends=True)
+
+    assert _normal_column_index(header) is None
+
+
+def test_normal_column_index_none_when_name_not_in_chrom_columns():
+    # ``##normal_sample=NORMAL`` present, but the #CHROM line's sample columns
+    # don't include "NORMAL" -> None (never a positional guess).
+    lines = [
+        "##fileformat=VCFv4.2",
+        "##tumor_sample=TUMOR",
+        "##normal_sample=NORMAL",
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tOTHER\tTUMOR",
+    ]
+    header = [line + "\n" for line in lines]
+
+    assert _normal_column_index(header) is None
+
+
+def test_normal_sample_name_returns_header_value():
+    header = _header(normal_line=True).splitlines(keepends=True)
+
+    assert _normal_sample_name(header) == _NORMAL
+
+
+def test_normal_sample_name_none_when_header_absent():
+    header = _header(normal_line=False).splitlines(keepends=True)
+
+    assert _normal_sample_name(header) is None
+
+
 # --- Phase 2: WARN-capped rule pack + plausibility evaluator --------------------
 
 
@@ -288,6 +337,17 @@ def test_sample_label_is_tumor_name(tmp_path):
     assert any(r.check == "median_vaf:TUMOR" for r in results)
 
 
+def test_tumor_path_emits_no_normal_median_vaf_check(tmp_path):
+    # evaluate_somatic_plausibility (the tumor path) shares SOMATIC_PLAUSIBILITY_PACK
+    # with the swap evaluator's normal_median_vaf rule, but never computes that
+    # metric -- lock in that it never emits a normal_median_vaf check either.
+    vcf = _write(tmp_path / "a.vcf", _header(), _recs_with_af(0.30, 12))
+
+    results = evaluate_somatic_plausibility(vcf)
+
+    assert not any(r.check.startswith("normal_median_vaf") for r in results)
+
+
 def test_sample_label_falls_back_when_unidentifiable(tmp_path):
     # No ##tumor_sample= header -> tumor unidentifiable -> label "sample".
     recs = [_rec("chr1", 100, "A", "G", "0/1:0.30:14,6:20")]
@@ -355,3 +415,127 @@ def test_pon_short_flag_recognized(tmp_path):
     results = evaluate_somatic_plausibility(vcf)
 
     assert _pon_check(results).status == "pass"
+
+
+# --- swap-verdict Phase 2: normal-column VAF swap smell test -------------------
+
+
+def _recs_with_normal_af(af, n, start_pos=100):
+    """n biallelic records; normal AF == af, tumor AF fixed at 0.30 (irrelevant here)."""
+    return [
+        _rec(
+            "chr1", start_pos + i, "A", "G", "0/1:0.30:14,6:20",
+            normal_fmt=f"0/0:{af}:10,0:10",
+        )
+        for i in range(n)
+    ]
+
+
+def _swap_check(results):
+    matches = [r for r in results if r.check.startswith("normal_median_vaf")]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def test_swap_check_correct_pair_passes(tmp_path):
+    # Normal FORMAT VAFs ~0 (a correctly-paired normal) -> one
+    # normal_median_vaf:NORMAL check, status pass.
+    header = _header(normal_line=True)
+    vcf = _write(tmp_path / "a.vcf", header, _recs_with_normal_af(0.0, 12))
+
+    results = evaluate_swap_plausibility(vcf)
+
+    check = _swap_check(results)
+    assert check.check == "normal_median_vaf:NORMAL"
+    assert check.status == "pass"
+
+
+def test_swap_check_high_normal_warns(tmp_path):
+    # Normal FORMAT VAFs ~0.45 (somatic signal is in the normal) -> WARN, and
+    # the message names the swap/mislabel/contamination possibility.
+    header = _header(normal_line=True)
+    vcf = _write(tmp_path / "a.vcf", header, _recs_with_normal_af(0.45, 12))
+
+    results = evaluate_swap_plausibility(vcf)
+
+    check = _swap_check(results)
+    assert check.status == "warn"
+    assert "swap" in check.message.lower()
+    assert "mislabel" in check.message.lower()
+    assert "contamination" in check.message.lower()
+
+
+def test_swap_check_unverified_when_no_normal_sample_header(tmp_path):
+    # No ##normal_sample= header -> normal column unresolvable -> one
+    # unverified check, value None (never a false pass, never dropped).
+    header = _header(normal_line=False)
+    vcf = _write(tmp_path / "a.vcf", header, _recs_with_normal_af(0.0, 12))
+
+    results = evaluate_swap_plausibility(vcf)
+
+    check = _swap_check(results)
+    assert check.status == "unverified"
+    assert check.value is None
+
+
+def test_swap_check_unverified_when_normal_column_has_no_derivable_vaf(tmp_path):
+    # ##normal_sample= present and resolves a column, but that column's FORMAT
+    # yields no derivable VAF (GT only, no AF/AD/DP) -> unverified, not pass.
+    header = _header(normal_line=True)
+    recs = [
+        _rec("chr1", 100, "A", "G", "0/1", normal_fmt="0/0", fmt="GT"),
+    ]
+    vcf = _write(tmp_path / "a.vcf", header, recs)
+
+    results = evaluate_swap_plausibility(vcf)
+
+    check = _swap_check(results)
+    assert check.status == "unverified"
+    assert check.value is None
+
+
+def test_swap_check_isolation_emits_only_normal_median_vaf(tmp_path):
+    # evaluate_swap_plausibility emits ONLY the normal_median_vaf check --
+    # never re-emits median_vaf/somatic_variant_count/strelka_median_vaf, even
+    # though all four share SOMATIC_PLAUSIBILITY_PACK.
+    header = _header(normal_line=True)
+    vcf = _write(tmp_path / "a.vcf", header, _recs_with_normal_af(0.0, 12))
+
+    results = evaluate_swap_plausibility(vcf)
+
+    checks = {r.check.split(":")[0] for r in results}
+    assert checks == {"normal_median_vaf"}
+
+
+def test_swap_check_gzip_supported(tmp_path):
+    header = _header(normal_line=True)
+    recs = _recs_with_normal_af(0.0, 12)
+    plain = _write(tmp_path / "a.vcf", header, recs)
+    gz = tmp_path / "a.vcf.gz"
+    with gzip.open(gz, "wt") as fh:
+        fh.write(header + "".join(recs))
+
+    plain_results = evaluate_swap_plausibility(plain)
+    gz_results = evaluate_swap_plausibility(gz)
+
+    assert _swap_check(gz_results).status == _swap_check(plain_results).status
+    assert _swap_check(gz_results).value == pytest.approx(_swap_check(plain_results).value)
+
+
+def test_swap_check_band_boundary(tmp_path):
+    # normal median AF exactly 0.30 -> PASS; just above 0.30 -> WARN. Pins the
+    # warn_above semantics (value < bound is fine, value > bound warns).
+    header = _header(normal_line=True)
+
+    at_bound = _write(
+        tmp_path / "at.vcf", header, _recs_with_normal_af(0.30, 12)
+    )
+    above_bound = _write(
+        tmp_path / "above.vcf", header, _recs_with_normal_af(0.31, 12, start_pos=500)
+    )
+
+    at_results = evaluate_swap_plausibility(at_bound)
+    above_results = evaluate_swap_plausibility(above_bound)
+
+    assert _swap_check(at_results).status == "pass"
+    assert _swap_check(above_results).status == "warn"

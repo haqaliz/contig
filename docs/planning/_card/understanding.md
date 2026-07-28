@@ -1,227 +1,111 @@
-# Understanding — feat stall-watchdog-no-progress (Phase 2 dig)
+# Understanding — feat somatic-swapped-pair (C4 tumor/normal swap smell test)
+
+Phase-2 deep-dig note. Grounded in a full code map (path:line cited inline), verified by
+reading `src/contig/verification/somatic_plausibility.py`, `strelka_vaf.py`,
+`somatic_concordance.py`, `rule_pack.py`, `runner.py`, and the somatic test fixtures.
 
 ## What the work is really asking
 
-Contig can only diagnose a run that **exits**. A run that **hangs** — a deadlocked tool, a
-wedged network mount, a container that never makes progress — is invisible: `default_executor`
-(`src/contig/runner.py:602`) is a blocking `subprocess.run`, so nothing observes a run in
-flight, and the process sits there burning the user's compute until a human notices.
+Today the somatic verdict's biological axis reads VAF **only from the tumor column** of the
+Mutect2 VCF. A tumor/normal **sample swap** (or a mislabeled pair, or heavy tumor-in-normal
+contamination) completes, passes structural + tumor-VAF QC, and returns a biologically
+inverted result — the researcher reports the normal's germline as the tumor's somatic
+mutations. This slice adds one WARN-capped plausibility metric that reads the **normal
+column** and fires when it carries a signal it shouldn't, catching the swap before the
+result is trusted.
 
-This slice adds the missing observer: a **heartbeat watchdog** that watches the run's own
-`trace.txt` while it runs, terminates the run when it has made no forward progress for a
-configured period, writes an honest stall message to `run.log`, and lets the existing
-detect → diagnose → patch → retry loop classify it as `no_progress` and retry with `-resume`.
+## The central design fork (resolve in the PRD interview)
 
-`no_progress` is the **last designed-but-unbuilt entry in the detector taxonomy**:
-`docs/technical/ARCHITECTURE.md:203` specifies it ("heartbeat watchdog: no new tasks for N
-minutes"), the `FailureClass` literal exists (`src/contig/models.py:278`), the frozen held-out
-corpus already contains a case for it (`detector_corpus_holdout.jsonl:12`) — and no branch of
-`diagnose_failure` has ever emitted it (`src/contig/cli.py:2603` says so in as many words).
+The map shows the tumor half is a clean template, but the *shape of the smell metric* is a
+real decision:
 
----
+- **(A — recommended) `normal_median_vaf` with a `warn_above` band only.** Median VAF over
+  the **normal** column at the same biallelic Mutect2 records the tumor metric already
+  scans. In a correct pair the normal VAF at somatic sites is ~0; an implausibly high normal
+  VAF is exactly the swap / mislabel / contamination smell. **Why this shape:** it mirrors
+  the shipped `median_vaf` machinery verbatim (reuse `_vaf_from_sample` on the normal index),
+  needs **no lower bound** (a low normal VAF is the healthy expected case — no warn_below),
+  degrades to UNVERIFIED cleanly when the normal column can't be resolved, and avoids the
+  division-by-~0 edge a ratio has (the *healthy* case has normal median ≈ 0, so a
+  tumor/normal ratio blows up precisely when everything is fine). One metric, uncalibrated
+  `warn_above`, honest.
+- **(B) A directional `tumor_vs_normal` delta/ratio.** WARN when normal median VAF ≥ tumor
+  median VAF (inverted). More explicitly "a swap," but the ratio/delta is calibration-
+  sensitive and has the div-by-0 edge above; the inversion it catches is a strict subset of
+  what (A)'s warn_above catches. Higher complexity, not obviously more catch.
 
-## Affected areas (mapped)
+Recommendation to carry into the interview: **(A)**. It's the minimal, honest, WARN-capped
+signal that reuses the shipped pattern and needs the least calibration.
 
-### The execution path — where the watchdog goes
+The brief also mentions "a tumor column that looks germline-clonal at ~0.5/1.0." Note the
+shipped `median_vaf` rule already has `warn_above: 0.95` (`rule_pack.py:300-305`), so a
+tumor VAF near 1.0 is *already* flagged; a ~0.5 clonal tumor is legitimately common and not
+a reliable swap signal. So the net-new, defensible signal is the **normal-column VAF**, not
+a new tumor-side rule.
 
-`run_pipeline` (`runner.py:879`) builds the command and calls the seam:
+## Affected code (confirmed by the map)
 
-```python
-cmd, artifact_path, parse_events = _build_engine_run(...)   # runner.py:894
-returncode = executor(cmd, artifact_path)                   # runner.py:901
-```
+- **New parser needed — `##normal_sample=` resolver.** No `src/` code parses
+  `##normal_sample=` today (grep: every somatic hit reads only `##tumor_sample=` /
+  literal `TUMOR`). Must add a `_normal_column_index()` mirroring
+  `somatic_plausibility.py:_tumor_column_index` (`:59-78`) and `_tumor_sample_name`
+  (`:191-196`), with the **same never-guess→UNVERIFIED discipline**: no `##normal_sample=`
+  header or no matching `#CHROM` column → `None` → one honest `unverified` QCResult, never a
+  positional guess.
+- **VAF derivation reused as-is.** `_vaf_from_sample()` (`somatic_plausibility.py:86-119`,
+  FORMAT `AF` else `AD_alt/DP`) and `_biallelic()` (`:81-83`) apply unchanged to the normal
+  column — only the column index differs. `_read_somatic` (`:122-163`) can be generalized or
+  a sibling reader added for the normal index.
+- **New rule on the existing pack.** Add `normal_median_vaf` to `SOMATIC_PLAUSIBILITY_PACK`
+  (`rule_pack.py:296-328`), `warn_above` only (uncalibrated default, e.g. 0.30 — flag as
+  uncalibrated), **no `fail_*`**, no `warn_below`. Pack stays unregistered in `_RULE_PACKS`.
+- **Emit via the `by_metric` trick (v0.34.0 Strelka precedent).** New evaluator
+  `evaluate_swap_plausibility(vcf, sample=None)` builds `by_metric = {"normal_median_vaf":
+  value}` and calls shared `evaluate(...)` so ONLY that rule fires — the existing
+  `median_vaf`/`somatic_variant_count`/`strelka_median_vaf` rules are never re-emitted
+  (`evaluate()` skips absent metric keys, `rule_pack.py:474-475`; pattern:
+  `strelka_vaf.py:244-252`). Emits `normal_median_vaf:<NORMAL>`.
+- **Runner wiring.** Slot the new evaluator into the existing
+  `if assay == "somatic_variant_calling":` block (`runner.py:337-407`), after the Mutect2
+  plausibility call (`:354`), on the **already-globbed** `mutect2` VCF. Reuse
+  `select_caller_vcfs(run_dir, vcfs)` (`somatic_concordance.py:164-211`, already called at
+  `runner.py:387`) — do not re-glob.
+- **UNVERIFIED-vs-skip.** "Cannot compute" (no normal column, no derivable normal VAF) →
+  `QCResult(status="unverified", value=None, kind="metric")` (never a skip that reads as
+  pass, `somatic_plausibility.py:264-276`). No Mutect2 VCF at all → silent skip (structural
+  QC owns a missing output; matches the `if vcfs:` gate at `runner.py:340`).
 
-**The key finding: `artifact_path` IS `run_dir/trace.txt`** for Nextflow (`runner.py:842-846`),
-and `-with-trace <artifact_path>` is already on the argv (`runner.py:793-806`). So the executor
-seam **already receives the heartbeat file the watchdog needs**. `Executor =
-Callable[[list[str], Path], int]` (`runner.py:567`) does **not** have to change — the stall
-timeout can be bound by a **factory** that returns an `Executor` closure, exactly the way tests
-already inject fakes.
+## The one real risk to pin FIRST (the caveat)
 
-After the executor returns, everything downstream already works for a terminated run:
-`run_pipeline` captures the partial trace into a `RunRecord` and raises
-`PipelineExecutionError` on a non-zero exit (`runner.py:903-928`), and `self_heal_run` catches
-it and calls `diagnose_failure(events, log_text)` where `log_text` is `run.log` +
-task errors (`self_heal.py:997-999`). **A watchdog-terminated run needs no new plumbing to
-reach the detector** — it just has to leave a message in `run.log`.
+**`##normal_sample=` is unverified in this codebase.** Real GATK Mutect2 emits it symmetric
+to `##tumor_sample=`, but no code and no fixture here confirms the exact spelling. First dig
+task: confirm the header spelling against a real sarek 3.5.1 Mutect2 header (or the
+`##normal_sample=` GATK doc). The honest fallback (UNVERIFIED when the header/column is
+absent or unparseable) absorbs a wrong guess — a stripped/re-headed VCF simply degrades,
+never false-passes. `_pon_status` (`:199-221`) already models this degradation posture.
 
-### Retry semantics — already correct
+## Test approach (fixtures already model NORMAL)
 
-`self_heal.py:981` passes `resume=resume or attempt > 1`, so **every retry already gets
-Nextflow `-resume`**. A stall retry therefore resumes cached completed tasks instead of
-restarting from zero. This makes retry-on-stall cheap and makes `risk="safe"` defensible.
+`tests/verification/test_somatic_plausibility.py` helpers already write a NORMAL-then-TUMOR
+`#CHROM` column with a fully-populated normal FORMAT (`_header`/`_rec`/`_write`, `:21-41`;
+`_rec` default `normal_fmt="0/0:0.0:10,0:10"`). The only gap: `_header` writes
+`##tumor_sample=` but not `##normal_sample=` — extend it (or use the existing `extra=()`
+hook) to inject the normal header. Inline-VCF-to-`tmp_path` pattern, `.gz` supported
+(`test_gzip_supported`, `:166-173`). No mocks, no tool exec, no real sarek run in CI.
 
-### Process termination — precedent exists
+## Guardrail check (CLAUDE.md)
 
-`src/contig/lifecycle.py:69-90` `_terminate_process_group(pid, wait_seconds)` already does
-SIGTERM → wait → SIGKILL over a process group, used by `cancel_run`. The comment
-(`lifecycle.py:72-74`) notes runs are spawned detached so `pgid == pid`, and that killing the
-group "reaps the Nextflow launcher and its Java/tool children together".
+Squarely Layer 2 (verify) — "make every verdict harder to fool." Reads a small VCF already
+on the user's compute (no raw-read egress). WARN-capped, research-use corroboration, never a
+clinical/cancer verdict. No new dependency, `FailureClass`, model, or reproduce-contract
+change. Gets better as models adjudicate ambiguous swap cases. No Layer-1 drift.
 
-**Open question (see below):** the watchdog holds a `Popen` handle, not a detached pid. Killing
-only the launcher risks orphaning Nextflow's Java/tool children. Spawning with
-`start_new_session=True` and reusing `killpg` is the likely answer, but it changes Ctrl-C
-signal delivery for the foreground case, and that trade needs a decision.
+## Open questions for the interview
 
-### Live progress reading — reusable
-
-`src/contig/progress.py` already reads a **live, in-flight** run's `trace.txt` for `contig
-status` / `contig watch`: `read_progress()` returns a `ProgressSnapshot` with
-`tasks_completed`, `tasks_running`, `submitted` (`progress.py:118-166`). It keys on
-`COMPLETED` / `RUNNING` statuses, which proves Nextflow's trace carries in-flight rows, not
-just terminal ones. The stall fingerprint should be derived the same way rather than inventing
-a second trace reader. `parse_trace_file` / `parse_resource_usage_file`
-(`src/contig/events.py:101,140`) are the existing parsers; the peak-RSS slice established the
-precedent of parsing the run's **own partial trace** at heal-decision time.
-
-### Configuration precedent
-
-`--approval-timeout` (`cli.py:321`, a `float` of seconds, default 1800) plumbs
-CLI → `_dispatch_run` (`cli.py:414`) → `self_heal_run` (`self_heal.py:943`). A `--stall-timeout`
-mirrors it exactly. Resource ceilings (`CEILING_MEMORY_GB` / `CEILING_TIME_H`, threaded as
-`resource_ceiling`, `self_heal.py:959`) are the precedent for a bounded, overridable constant.
-
-### The detector
-
-`propose_patches` (`src/contig/repair.py:14`) needs a `no_progress` branch. The closest
-precedents are `container_pull_failed` and `download_failed`, both `kind="retry"`,
-`operation={"retry": True}`, `risk="safe"` (`repair.py:36-55,127-136`) — transient failures
-where re-running is the fix.
-
----
-
-## ⚠️ The load-bearing hazard: detector branch shadowing
-
-This is the finding that most shapes the design.
-
-`diagnose_failure` (`detect.py:39`) checks **OOM first, deliberately and unconditionally**:
-
-```python
-oom_exit = any(e.exit == 137 for e in events)
-oom_lines = _matching_lines(log_text, ("out of memory", "outofmemoryerror", "killed", "oom"))
-if oom_exit or oom_lines:      # detect.py:41-47
-```
-
-Two independent ways a naive watchdog gets **misclassified as `oom`**:
-
-1. **The word "killed"** appearing anywhere in `run.log`. A message like "watchdog killed the
-   stalled run" is classified OOM, not `no_progress`.
-2. **`exit == 137` on any trace row.** If the watchdog SIGKILLs and a child tool's task lands
-   in the trace with exit 137, the OOM branch fires on the events alone — *regardless of what
-   the log says*.
-
-So the slice must: (a) word the stall message to avoid `killed`/`oom`/`out of memory`/`time
-limit`; (b) prefer SIGTERM (exit 143) over SIGKILL wherever possible and verify what the trace
-records; and (c) decide where the `no_progress` branch sits. Placing it **before** OOM is
-arguably correct — Contig's own watchdog message is a first-party fact about what Contig did,
-strictly more reliable than a text heuristic over third-party tool output — but it reverses a
-deliberate "OOM wins outright" comment, so it is a decision that must be made explicitly and
-tested both ways.
-
-The fallback today is `tool_crash` when any task failed (`detect.py:341-350`), which is exactly
-what `holdout-no-progress-1` currently scores as.
-
----
-
-## The honesty problem: false-positive stalls
-
-A stall is **indistinguishable from a legitimately long single task** by trace inactivity
-alone. STAR `genomeGenerate`, a large WGS alignment, or a slow container pull can each emit no
-new trace row for hours. If the timeout is too aggressive, the watchdog kills real work.
-
-Mitigations to settle in the PRD:
-
-- The timeout must be **generous by default** and user-configurable.
-- **Whether it is on at all by default** is the central product decision. Off-by-default
-  (opt-in `--stall-timeout`) can never destroy legitimate work but delivers no unattended
-  benefit unless asked for; on-by-default with a very large timeout raises unattended
-  completion but risks terminating a legitimate long-running task. Note the mitigating fact
-  that a retry `-resume`s, so the cost of a false positive is bounded (lost work on the
-  in-flight task only) rather than catastrophic.
-- The fingerprint should count **all** trace activity (row count, status transitions, mtime),
-  not just newly-COMPLETED tasks, so a run that is slowly progressing through a long task is
-  less likely to look dead.
-- Retrying a *deterministic* hang just re-hangs; the bounded `max_attempts` budget (default 3)
-  and an honest `gave_up` outcome must be the backstop. A stall that recurs is not "recovered".
-
----
-
-### Executor seam blast radius — small
-
-There is exactly **one production wiring site**: `cli.py:661` (`executor=default_executor` in
-`_dispatch_run`). The other references are `self_heal.py:979` (pass-through),
-`heal.py:122` (`_scripted_executor`, the heal-guard's scripted seam), and
-`cli.py:1003` (`default_command_executor`, the unrelated `reproduce` seam). Tests inject
-executors in **38 places**, all fakes — none of which break if the seam signature is preserved
-and the watchdog is introduced as a factory returning an `Executor`.
-
-## Eval / corpus blast radius
-
-- `src/contig/data/detector_corpus_holdout.jsonl:12` — `holdout-no-progress-1` currently
-  MISSES as `tool_crash`. Making the class reachable should flip it.
-- `src/contig/data/holdout_history.jsonl` — held-out accuracy has been **flat at 0.846 (11/13)
-  across 6 recorded points, v0.22.0 → v0.48.0**. This slice should move it to ~0.923, leaving
-  only `qc_anomaly` unreachable. The committed baseline must be **deliberately refrozen**.
-- `src/contig/data/heal_scenarios.jsonl` — 7 scenarios over 5 classes. Schema confirmed
-  (verbatim `oom-heal`): `scenario_id`, `description`, `source`, `expected_class`, `attempts[]`
-  (`{status, exit, log_text}` per attempt), `auto_approve`, `poll_decision`,
-  `resource_ceiling`, `index_builder_result`, `max_attempts`, `assay`, `expected_recovered`,
-  `expected_outcome`. A `no_progress` scenario is straightforward — **but its first attempt
-  must not use `exit: 137` nor an OOM-flavoured `log_text`**, or it will be classified `oom`
-  (the `oom-heal` scenario uses exactly `exit 137` + `"Process killed: out of memory"`).
-- `src/contig/cli.py:2603` — the heal-guard docstring names `no_progress` as structurally
-  unreachable; it must be updated when this ships, or the docs lie.
-- **Both baselines pin a `corpus_sha`** — `holdout_baseline.json` (`corpus_size: 13`,
-  `accuracy: 0.8461…`, `contig_version: 0.22.0`) and `heal_baseline.json` (`scenario_count: 7`,
-  `outcome_match_rate: 1.0`, `recovery_rate: 0.571…`, `covered_classes` array of 5,
-  `contig_version: 0.21.0`). Adding a scenario changes the sha → a loud mismatch warning until
-  the baseline is deliberately refrozen with `--update-baseline`. `covered_classes` must gain
-  `no_progress`.
-- **Tests that will move:** `tests/test_eval_holdout.py`, `tests/test_heal_scenarios.py`,
-  `tests/test_heal_guard.py`, `tests/test_cli_heal_guard.py`, `tests/test_guard_trend.py`,
-  `tests/test_snapshot_history.py` — plus `tests/test_detect.py` and `tests/test_repair.py` for
-  the new branch. The detector-corpus training set (`detector_corpus.jsonl`) should gain a
-  `no_progress` case too, seeded like every prior class.
-- **Release procedure (`RELEASING.md:10-20`):** the trend is grown deliberately at release
-  time via `contig eval-guard --snapshot` / `heal-guard --snapshot`, whose updated
-  `*_history.jsonl` files ride the release commit; CI never writes history. So the order is:
-  ship the code → refreeze the baselines as a deliberate act in this PR → snapshot at release.
-
----
-
-## Ambiguities / open questions for the PRD
-
-1. **Default on or off?** (the central product decision — see above.)
-2. **What is the default timeout?** ARCHITECTURE says "N minutes"; real bioinformatics tasks
-   run for hours. A default in minutes would be wrong.
-3. **SIGTERM vs SIGKILL, and process-group handling.** Does the watchdog `Popen` need
-   `start_new_session=True` to reap Nextflow's children, and what does that cost for Ctrl-C?
-   What exit code does a SIGTERMed Nextflow actually return, and what does it write into the
-   trace? (Cannot be observed in CI — see below.)
-4. **Is retry-on-stall `safe` or `needs_confirmation`?** Retry is cheap because of `-resume`,
-   which argues `safe`; but a hang may be deterministic, which argues for a human.
-5. **Does this apply to Snakemake?** `_build_engine_run` (`runner.py:812`) has a second engine
-   path whose artifact is `stats.json`, not `trace.txt`. Nextflow-only is the honest scope
-   (matching the peak-RSS and walltime slices, both Nextflow-only), but it must be stated.
-6. **Where does the watchdog decision live?** A pure function (the `resource_sizing.py` mould)
-   is required for CI testability; the `Popen` + poll loop around it cannot be exercised in CI.
-7. **Does the stall message belong in `run.log` only, or also on the `RepairStep.detail`?**
-   The walltime slice's "field instrument" precedent suggests recording the observed idle time
-   so the default timeout can later be calibrated against real runs.
-
-## Honest limits this slice will have to state
-
-- **No real Nextflow in CI.** The watchdog's decision function can be fully unit-tested with an
-  injected clock and on-disk trace fixtures, but the `Popen`/terminate path — and therefore the
-  *actual* exit code and trace contents of a SIGTERMed Nextflow run — is **reasoned, not
-  observed**, and needs a manual gate. This is the same posture as the `Fetcher`/`Installer`
-  seams (`runner.py:567-586`).
-- A watchdog proves **inactivity**, not **deadlock**. It cannot distinguish a hung tool from a
-  slow one; it only enforces a policy the user configured.
-
-## Strategic check (CLAUDE.md)
-
-Squarely **Layer 2** — run / self-heal, the execution-reliability moat. No Layer-1 workflow
-authoring, no wet-lab or clinical dependency, no new runtime dependency (stdlib `subprocess`,
-`time`, `os`). It raises the ROADMAP Phase 1 headline metric (unattended completion,
-`docs/ROADMAP.md:109`) and adds a labeled corpus class, which is moat #2.
+1. Metric shape: confirm **(A) `normal_median_vaf` warn_above-only** vs (B) a directional
+   ratio. (Recommend A.)
+2. The uncalibrated `warn_above` default value (0.30? — flag as an engineering default, not
+   validated).
+3. Metric/label naming: `normal_median_vaf:<NORMAL>` — confirm.
+4. Reader: generalize `_read_somatic` to take a column index, or add a sibling normal reader?
+   (Implementation detail — likely generalize.)

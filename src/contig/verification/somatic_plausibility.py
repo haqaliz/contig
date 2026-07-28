@@ -91,6 +91,28 @@ def _tumor_column_index(header_lines: list[str]) -> int | None:
     return None
 
 
+def _normal_column_index(header_lines: list[str]) -> int | None:
+    """Find the normal sample's column index from the VCF header.
+
+    Reads ``##normal_sample=<name>`` then locates <name> among the sample
+    columns of the ``#CHROM`` line (index >= 9). Returns None if either the
+    header line or the name's column is absent (never guess a column).
+    """
+    normal_name: str | None = None
+    chrom_cols: list[str] | None = None
+    for line in header_lines:
+        if line.startswith("##normal_sample="):
+            normal_name = line[len("##normal_sample="):].strip()
+        elif line.startswith("#CHROM"):
+            chrom_cols = line.rstrip("\n").split("\t")
+    if normal_name is None or chrom_cols is None:
+        return None
+    for idx in range(9, len(chrom_cols)):
+        if chrom_cols[idx] == normal_name:
+            return idx
+    return None
+
+
 def _biallelic(ref: str, alt: str) -> bool:
     """True for a biallelic record (no comma in ALT); indels allowed."""
     return "," not in alt
@@ -176,6 +198,71 @@ def _read_somatic(vcf_path: str | os.PathLike) -> tuple[list[float], int, int | 
     return vafs, count, tumor_idx
 
 
+def _read_normal(vcf_path: str | os.PathLike) -> tuple[list[float], int, int | None]:
+    """Stream a somatic VCF; return (normal VAFs, considered count, normal col index).
+
+    Mirrors ``_read_somatic`` exactly, but resolves the NORMAL column via
+    ``_normal_column_index`` (``##normal_sample=``) instead of the tumor's
+    ``##tumor_sample=``. Kept as its own streaming pass -- rather than a
+    shared helper -- so the shipped tumor path (``_read_somatic``) stays
+    byte-identical.
+    """
+    header_lines: list[str] = []
+    normal_idx: int | None = None
+    resolved = False
+    vafs: list[float] = []
+    count = 0
+
+    with _open_text(vcf_path) as fh:
+        for line in fh:
+            if line.startswith("#"):
+                header_lines.append(line)
+                if line.startswith("#CHROM"):
+                    normal_idx = _normal_column_index(header_lines)
+                    resolved = True
+                continue
+            if not resolved:
+                normal_idx = _normal_column_index(header_lines)
+                resolved = True
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            cols = line.split("\t")
+            if len(cols) < 5:
+                continue
+            ref, alt = cols[3], cols[4]
+            if not _biallelic(ref, alt):
+                continue
+            count += 1
+            if normal_idx is None or len(cols) < 9 or normal_idx >= len(cols):
+                continue
+            fmt_keys = cols[8].split(":")
+            sample_fields = cols[normal_idx].split(":")
+            vaf = _vaf_from_sample(fmt_keys, sample_fields)
+            if vaf is not None:
+                vafs.append(vaf)
+    return vafs, count, normal_idx
+
+
+def normal_median_vaf(
+    vcf_path: str | os.PathLike,
+) -> tuple[float | None, str | None]:
+    """Median VAF over the normal column, and the resolved normal sample name.
+
+    Uses the same biallelic record set and the same ``_vaf_from_sample``
+    derivation (FORMAT ``AF``, else ``AD_alt / DP``) as the tumor
+    ``somatic_metrics``, just read from the NORMAL column instead. median is
+    None when no record yielded a normal VAF (including an unidentifiable
+    normal column). The name is the ``##normal_sample=`` header value when
+    the column resolved, else None (never a guessed label).
+    """
+    vafs, _count, normal_idx = _read_normal(vcf_path)
+    median = statistics.median(vafs) if vafs else None
+    header_lines = _header_lines(vcf_path)
+    name = _normal_sample_name(header_lines) if normal_idx is not None else None
+    return median, name
+
+
 def somatic_metrics(vcf_path: str | os.PathLike) -> SomaticMetrics:
     """Compute median_vaf and variant_count from a somatic VCF's tumor column.
 
@@ -206,6 +293,14 @@ def _tumor_sample_name(header_lines: list[str]) -> str | None:
     for line in header_lines:
         if line.startswith("##tumor_sample="):
             return line[len("##tumor_sample="):].strip()
+    return None
+
+
+def _normal_sample_name(header_lines: list[str]) -> str | None:
+    """Return the ``##normal_sample=`` name, or None if the header is absent."""
+    for line in header_lines:
+        if line.startswith("##normal_sample="):
+            return line[len("##normal_sample="):].strip()
     return None
 
 
@@ -316,5 +411,80 @@ def evaluate_somatic_plausibility(
             kind="metric",
         )
     )
+
+    return results
+
+
+def evaluate_swap_plausibility(
+    vcf_path: str | os.PathLike, sample: str | None = None
+) -> list[QCResult]:
+    """Evaluate the normal-column swap plausibility rule, capped at WARN.
+
+    Computes the ``normal_median_vaf`` (see ``normal_median_vaf``) over the
+    NORMAL column of the Mutect2 somatic VCF, then runs it through the shared
+    ``rule_pack.evaluate()`` against ``SOMATIC_PLAUSIBILITY_PACK`` -- the same
+    pack the tumor ``evaluate_somatic_plausibility`` and Strelka2
+    ``evaluate_strelka_vaf_plausibility`` use -- so band logic and
+    "<check>:<sample>" naming stay single-sourced across all three callers.
+
+    ``evaluate()`` skips any rule whose metric key is absent from the sample
+    dict it is given (see rule_pack.evaluate), so the ``by_metric`` dict
+    passed here contains ONLY ``normal_median_vaf``. That means this call
+    emits exactly the ``normal_median_vaf`` rule and never re-emits
+    ``median_vaf``/``somatic_variant_count``/``strelka_median_vaf``, even
+    though all four share ``SOMATIC_PLAUSIBILITY_PACK``.
+
+    A correctly-paired normal has ~0 VAF at somatic sites; an implausibly
+    high normal VAF means the somatic signal is in the normal -- a
+    tumor/normal swap, a mislabel, or heavy contamination. ``evaluate()``
+    builds its own message from the pack's "check"/"metric"/"status" fields
+    and ignores the pack's "message" field, so the swap/mislabel/
+    contamination framing is added here by wrapping each returned result's
+    message, mirroring ``evaluate_strelka_vaf_plausibility``'s "Strelka2: "
+    prefix.
+
+    A ``None`` median (no ``##normal_sample=`` header, the named sample not
+    among the ``#CHROM`` columns, or no record yielding a usable normal
+    FORMAT) is not silently skipped: it produces one explicit "unverified"
+    QCResult (no severity, so it can never read as a pass), mirroring
+    ``evaluate_somatic_plausibility``'s and
+    ``evaluate_strelka_vaf_plausibility``'s None-handling.
+
+    The sample label is ``sample`` if given, else the resolved
+    ``##normal_sample=`` name, else ``"sample"``.
+    """
+    median, normal_name = normal_median_vaf(vcf_path)
+    label = sample or normal_name or "sample"
+
+    by_metric = {"normal_median_vaf": median}
+    computable = {
+        metric: value for metric, value in by_metric.items() if value is not None
+    }
+
+    results = [
+        result.model_copy(
+            update={
+                "message": (
+                    "normal-sample VAF (high => possible tumor/normal swap, "
+                    f"mislabel, or contamination): {result.message}"
+                )
+            }
+        )
+        for result in evaluate({label: computable}, SOMATIC_PLAUSIBILITY_PACK)
+    ]
+
+    if median is None:
+        results.append(
+            QCResult(
+                check=f"normal_median_vaf:{label}",
+                status="unverified",
+                message=(
+                    f"{label}: normal_median_vaf could not be computed "
+                    "(no normal column found, or no derivable normal VAF)"
+                ),
+                value=None,
+                kind="metric",
+            )
+        )
 
     return results
