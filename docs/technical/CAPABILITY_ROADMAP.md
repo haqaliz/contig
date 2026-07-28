@@ -323,6 +323,121 @@ real gzip/hand-crafted-BGZF fixtures; no real nf-core/sarek or samtools run in C
 (declined for plain-uncompressed); `safe`-vs-gated auto-approval; a `heal-guard` scenario
 for the new class; and the `resolve_reference` `--fasta`/`--gtf` coupling quirk this slice
 tolerates rather than fixes.
+**Shipped (heartbeat stall watchdog — the `no_progress` slice — Unreleased):** the first
+handling for a run that **never exits**. `default_executor` is a blocking `subprocess.run`, so
+nothing observed a run in flight: a hang — a deadlocked tool, a wedged network mount, a
+container stuck on a socket — never returned, never raised `PipelineExecutionError`, and never
+reached the detector. It sat there consuming the user's compute until a human noticed, which is
+the failure mode most directly opposed to the ROADMAP's unattended-completion metric. An
+**opt-in** watchdog now supervises the child: `--detect-stalls` (default **off**) plus
+`--stall-timeout` (seconds, default **3600**). `--stall-timeout` without `--detect-stalls` is
+**refused, not silently ignored** (the C8 slice-7 `--rev` posture); because `3600.0` is both the
+default and a legal explicit value, "was it passed?" is read off Click's
+**`get_parameter_source`**, not off the value — pinned by a test that passes the default
+*explicitly* and asserts refusal, which a value-comparison implementation would fail while
+passing every other test in the diff. **A composite heartbeat, so a healthy-but-slow run is
+never touched:** the run counts as alive if **any** of `trace.txt` (mtime+size),
+`.nextflow.log` (mtime+size), or `run.log` (size) moved since the last poll, and a stall
+requires **all three** silent for the whole window — a trace-only signal goes dark for the
+entire duration of any single long task, which would make a legitimate 14-hour WGS alignment a
+false positive. The decision is a **pure** function (`stall.py::evaluate_stall`, in the
+`resource_sizing.py` mould) over two fingerprints, an injected clock, and the timeout — no
+subprocess, no sleeping, no filesystem — and a non-positive timeout **can never stall**, so a
+mis-wired watchdog fails safe. **The observer cannot be hung by the failure it detects:**
+`stat()` against a hard-mounted unresponsive NFS blocks in uninterruptible sleep, and a wedged
+mount is a headline stall cause, so the read runs in a **daemon** thread under a 5 s deadline
+and a missed deadline keeps the previous fingerprint — which reads as "no progress observed".
+The run.log verdict write is bounded the same way, since it lands on the same possibly-wedged
+mount. **Termination:** `Popen(start_new_session=True)`, poll, and on a stall write the verdict
+to `run.log` **before** killing (it is the detector's only evidence that the run stalled rather
+than merely crashed), then SIGTERM → 5 s grace → SIGKILL over the child's **process group** —
+Nextflow's JVM and tool children, not just the launcher — **at most once per attempt**. The
+30 s poll wait is taken in short slices and abandoned the moment the child exits, so the
+self-heal loop's fast failures (bad argv, missing reference) are not charged a full interval per
+attempt. **The `no_progress` detector branch sits AHEAD of the OOM check, deliberately**,
+reversing a standing "OOM wins outright" comment: `detect.py` matches `any(e.exit == 137)` from
+the **events alone**, so a dying Nextflow writing an exit-137 trace row as it is torn down would
+beat any branch placed below it, whatever the log says. The branch keys on three phrase-level
+needles — "no forward progress", "no new output or trace update", "terminating the stalled run" —
+**every one of them a phrase `stall_message` itself emits**, pinned by a test so no future needle
+can be added that Contig never writes. What makes the branch **generalize** is not a needle
+written for the corpus but the fact that **our own wording is ordinary English**: the
+independently authored frozen `holdout-no-progress-1` fixture, whose text credits a **non-Contig**
+actor ("the progress monitor terminated it as stalled"), hits two of our three needles
+**verbatim** and classifies through exactly the rule our own message does. That is the strongest
+available evidence the rule is not fitted to our string. (A fourth needle, "terminated it as
+stalled", was carried for a while on the belief that the fixture needed it; it was **dropped as
+redundant** once measurement showed the fixture classifies without it, removing the most generic
+phrase in the tuple at zero cost to classification.) **First-party uniqueness is nonetheless
+given up, and the residual risk is real and unenforced:** phrases generic enough for an
+independent author to hit are generic enough for a third-party tool to emit, nothing constrains
+them to output Contig wrote, so foreign text containing one classifies as `no_progress` — and
+because this branch sits above the OOM check it out-ranks a genuine `exit == 137` (measured: an
+exit-137 event whose log reads `java: watchdog reports no forward progress in scheduler loop`
+classifies `no_progress`, not `oom`). We take that trade knowingly, and keep the tuple as small
+as the shipped fixtures allow, because every phrase in it is false-positive surface charged
+against **every** diagnosis Contig makes.
+A module-level test pins that the emitted message contains none of `killed` / `oom` /
+`out of memory` / `time limit`, and a control test proves a **genuine** OOM (both the exit-137
+and the "out of memory" text paths) still classifies `oom` when no stall sentinel is present.
+`propose_patches` gains a `no_progress` → `kind="retry"`, `risk="safe"` patch: `self_heal_run`
+already passes `-resume`, so the retry reuses cached tasks, is bounded by `--max-attempts`, and
+ends in an honest `gave_up` rather than a dressed-up recovery. **A regression this slice caused
+and then fixed, recorded because it is exactly the harm the feature exists to prevent, entering
+by a different door:** detaching the child into its own session (necessary so the watchdog can
+`killpg` the pipeline without killing Contig itself) silently removed it from the group
+`contig cancel` reaps, and left Ctrl-C stopping the *supervisor* while the pipeline kept burning
+compute — an orphaned child was reproduced empirically, by pid. Both were caught in review and
+fixed before merge: the child's pgid is published into `status.json` and `cancel_run` reaps it,
+and the executor terminates the group on `BaseException` before re-raising. **Wiring, small by
+design:** `self_heal.py` is **unchanged** — the CLI builds the watchdog through the existing
+`Executor` seam (one production line), so all 38 test injection sites keep working untouched,
+and with the flag absent the executor is the unmodified `default_executor`. **D4 — the settings
+are deliberately NOT persisted to `LaunchManifest`:** a stall is a property of the machine and
+its I/O, not of the analysis, and baking a timeout into a reproducible manifest would make
+replay depend on the original host's speed. Because the settings are runtime-only rather than
+replayed from the manifest, they have to be passed again on each invocation — so a **follow-on
+slice** put the same two flags on `rerun` and `resume` behind one shared validator, since the
+most natural gesture after a stall (`contig resume <id>`) had otherwise run *without* the
+watchdog. All three commands validate identically and **before** any filesystem work, so a flag
+mistake reports the flag mistake rather than a missing manifest. **Honest limits, stated as
+limits:** (1) this is **push, not demand-pull** — no design partner asked for it and **no real
+Contig run has ever been observed to hang**; the architectural gap was documented
+(`ARCHITECTURE.md:203`, the `FailureClass` literal, a frozen held-out fixture), but the
+**frequency is unmeasured** and nothing here claims otherwise. (2) The **1-hour default window
+is reasoned, not calibrated** — no measurement of real inter-heartbeat gaps exists; the observed
+idle seconds, the configured window, and which surfaces were silent ride in the stall message as
+the field instrument that can later replace the guess with data. (3) **No real Nextflow anywhere
+in CI.** The terminate mechanics *are* genuinely exercised against **real child processes**
+(a hanging child is terminated and its exit code asserted `-15`, explicitly `!= 137`; a
+SIGTERM-ignoring child is SIGKILLed after the grace; a Ctrl-C leaves no orphan; the executor's
+**real** run.log bytes are fed through the shipped `diagnose_failure`) — but what a SIGTERMed
+**Nextflow** returns, and what it writes into `trace.txt` for in-flight tasks, is **reasoned**
+and remains for the manual pre-merge gate, as does whether `-resume` correctly re-runs a
+SIGKILLed task rather than treating a partial output as cached. (4) **The accuracy move is
+partly self-graded:** we made reachable a class whose fixture we wrote. It evidences that a
+documented taxonomy gap closed; it is **not** evidence that the watchdog helps a real user, and
+the two must not be conflated. (5) **A failing observer degrades to "no progress observed"** —
+so a buggy *injected* observer can get a HEALTHY run terminated after enough polls, where
+previously it crashed loudly. The shipped `read_heartbeat` catches every `OSError`, so this is
+theoretical today, but it is a **real semantic loss recorded as a trade, not a free win**: a
+timeout means the filesystem is wedged (evidence *about the run*), while an exception means the
+observer is broken (**no** evidence about the run), and collapsing them discards that
+distinction. (6) `proc.wait()` after SIGKILL is **unbounded** on a child wedged in
+uninterruptible sleep; `lifecycle._terminate_process_group` carries the same pre-existing
+exposure. (7) `poll_interval` is a **sleep, not a deadline** — a slow observation extends the
+effective period rather than being subtracted from it (immaterial at 30 s against a 1 h window).
+(8) **Cancel timing changed:** `wait_seconds` is now spent once **per process group**, so
+cancelling a watchdog run can take up to **2×** as long; deliberately not restructured (cancel
+is a rare admin action), only documented. (9) **Nextflow is the tested scope.** The seam sits
+above the engine branch in `_build_engine_run`, so the mechanism applies to Snakemake for free
+via `run.log` liveness alone — that is **untested and must not be advertised as support**, and
+is not silently refused either. **Deferred / revisit trigger:** calibrating the window on real
+runs; a stall-specific escalation (widen the window per attempt, or give up after two stalls at
+the same point) — no precedent to reuse; a dashboard surface; per-task stall detection
+(Nextflow owns task-level retry); and **on-by-default operation**, whose revisit trigger is
+committed: the first real report of a false positive keeps it off/loosens it, N real stalls
+recovered makes it worth reconsidering.
 **Deferred to later C2 slices:** bwa-mem2 **build/redirect** (detection shipped v0.11.0;
 build blocked until a live trigger exists) and the classic-vs-mem2 aligner-mismatch heal;
 classic-BWA index build/redirect (needs a supported `bwa index` target, e.g. sarek
@@ -366,14 +481,16 @@ corpus; repair success-rate analytics gain new classes.
 
 ---
 
-## C3. Biological-plausibility verification  ·  SHIPPED v0.3.0 (germline) + RNA-seq slice (v0.6.0) + single-cell ingestion slice (Unreleased) + germline sex-check slice (Unreleased) + RNA-seq mapping-composition slice (Unreleased) + germline variant-count slice (Unreleased)
+## C3. Biological-plausibility verification  ·  SHIPPED v0.3.0 (germline) + RNA-seq slice (v0.6.0) + single-cell ingestion slice (Unreleased) + germline sex-check slice (Unreleased) + RNA-seq mapping-composition slice (Unreleased) + germline variant-count slice (Unreleased) + germline plausibility FAIL-severity slice (Unreleased) + somatic empty-call-set FAIL floor slice (Unreleased; the remaining VAF/RNA-seq FAIL bands **declined by design** — see below) + RNA-seq plausibility ingestion fix slice (Unreleased; `duplication_rate` corrected to its real MultiQC key/unit, shipped informational-only — no band)
 
 **Shipped (germline slice) in v0.3.0.** The germline plausibility rules (Ti/Tv and
 het/hom ratios) already existed in `VARIANT_RULE_PACK` but were dormant because
 their metrics were never ingested. `verification/variant_metrics.py` now computes
 `ts_tv` and `het_hom` from the run's VCF and feeds them to the verdict on a path
-independent of MultiQC, capped at WARN (corroboration, not a clinical claim), with
-`unverified` when a ratio is uncomputable.
+independent of MultiQC, originally capped at WARN (corroboration, not a clinical
+claim), with `unverified` when a ratio is uncomputable. (Ti/Tv and het/hom have
+since gained gross-implausibility FAIL bands — see the germline plausibility
+FAIL-severity slice below.)
 
 **Shipped (RNA-seq slice, Unreleased).** The plausibility axis now extends to bulk
 RNA-seq: a `RNASEQ_PLAUSIBILITY_PACK` with two WARN-capped checks — `duplication_rate`
@@ -383,9 +500,15 @@ metric is absent from the run's ingested MultiQC, wired into `_discover_qc` gate
 `assay == "rnaseq"`. Metric slugs/bands are best-effort and uncalibrated; the
 UNVERIFIED-when-absent guarantee absorbs a wrong/missing slug. **Deferred:**
 gene-body-coverage evenness (needs a new RSeQC compute path), doublet rate
-(single-cell), coverage-from-VCF, multi-sample, and FAIL severity until
-the bands are calibrated on real data. (The **sex-check** and **mapping-composition**
-slices have since shipped — see below.)
+(single-cell), coverage-from-VCF, and multi-sample. **FAIL severity for this pack is
+settled, not deferred: declined by design** — every RNA-seq metric has a legitimate protocol
+occupying its extreme (deep/high-input libraries legitimately exceed 90% duplication;
+total-RNA / ribo-depletion legitimately retains rRNA), so "extreme" and "unusual protocol"
+are the same number, and no amount of calibration separates them; and both of this pack's
+slugs are still `# slug unverified` — they have never once resolved against a real
+`nf-core/rnaseq` MultiQC report, so a band there would be severity on code that has never
+fired. Full reasoning in the somatic empty-call-set FAIL floor slice below. (The
+**sex-check** and **mapping-composition** slices have since shipped — see below.)
 
 **Shipped (RNA-seq mapping-composition slice, Unreleased).** The RNA-seq axis now catches
 where reads fall relative to gene annotation — the gDNA-contamination / failed-enrichment
@@ -405,8 +528,14 @@ intentional denominators; the nested TSS/TES windows never summed) — via a new
 Same contract as every C3 slice: at most WARN, never FAIL, never changes the exit code;
 omit-never-guess on uncomputable metrics; a located-but-unparseable artifact →
 `rnaseq_composition_qc:<sample>` **UNVERIFIED**; no artifact → silent skip. **Deferred:**
-gene-body-coverage evenness (non-default RSeQC module), FAIL severity until calibrated on
-real human RNA-seq, cross-sample aggregation, and a dashboard card.
+gene-body-coverage evenness (non-default RSeQC module), cross-sample aggregation, and a
+dashboard card. **FAIL severity for this pack is settled, not deferred: declined by design** —
+nuclear / FFPE / 3'-biased libraries are legitimately intron-dominated and non-model annotation
+legitimately leaves most tags unassigned, so here too "extreme" and "unusual protocol" are the
+same number; and the one genuinely broken case, `unassigned_fraction == 1.0`, is already caught
+more honestly by `RNASEQ_RULE_PACK`'s `assignment_rate fail_below: 40` on the did-it-run tier —
+a second FAIL would be redundant, not new signal. Full reasoning in the somatic empty-call-set
+FAIL floor slice below.
 
 **Shipped (germline sex-check slice, Unreleased).** The verdict now catches
 sex-chromosome **discordance**. A new `verification/sex_plausibility.py` infers
@@ -442,14 +571,125 @@ an `int`, so unlike the two ratios it is always computable. One WARN-only
 `evaluate_variant_plausibility` by adding it to `_PLAUSIBILITY_CHECKS`/`by_metric`, so it
 rides the **existing** germline plausibility gate (no `runner`/`_discover_qc` edit) and
 emits `variant_count:<sample>` with `expected_range` `[10, 20000000]` alongside the two
-ratios. Same contract as every C3 slice: at most WARN, never FAIL, never changes the exit
-code. The always-int count means a **real 0 rides the band as a WARN and never routes into
-the `ts_tv`/`het_hom` UNVERIFIED branch** (an empty call set is not mistaken for "nothing
-to check"); no VCF at all → silent skip (structural QC owns a missing output). Verdict-only:
-no new module, provenance record, `FailureClass`, model, or dashboard card. **Deferred:**
-FAIL severity and band calibration on real cohorts, capture-aware bands (panel/WES/WGS
-differ by orders of magnitude), per-sample multi-sample counts, a dashboard card, and the
-C6 fold-in.
+ratios. Contract as shipped in this slice: at most WARN, never changes the exit
+code — though the germline plausibility FAIL-severity slice below later gives
+`variant_count` a `fail_below: 1` empty-call-set floor (an empty set becomes FAIL, a
+strictly stronger signal than the prior WARN). The always-int count means a **real 0 rides
+the band and never routes into the `ts_tv`/`het_hom` UNVERIFIED branch** (an empty call set
+is not mistaken for "nothing to check"); no VCF at all → silent skip (structural QC owns a
+missing output). Verdict-only: no new module, provenance record, `FailureClass`, model, or
+dashboard card. **Deferred:** band calibration on real cohorts, capture-aware bands
+(panel/WES/WGS differ by orders of magnitude), per-sample multi-sample counts, a dashboard
+card, and the C6 fold-in.
+
+**Shipped (germline plausibility FAIL-severity slice, Unreleased).** The germline
+plausibility axis gains its **first FAIL severity**: `ts_tv_ratio` (`fail_below 1.2` /
+`fail_above 3.6`), `het_hom_ratio` (`fail_below 1.0` / `fail_above 3.0`), and
+`variant_count` (`fail_below 1` only — no `fail_above`; the `warn_above 20_000_000` upper
+bound stays a soft WARN ceiling) now drive `record.verdict` → **FAIL** on a
+grossly-implausible germline call set (a noise-level Ti/Tv ~0.5, or an empty/near-empty
+call set — now FAIL, not the prior WARN). The WARN bands are unchanged, so a legitimate WGS
+(Ti/Tv ~2.0, het/hom ~1.5) or WES (Ti/Tv ~3.0–3.3) run stays PASS/WARN and never
+false-FAILs. Pure data change to the three `VARIANT_RULE_PACK` dicts — the scorer
+(`_status_for`), evaluator, verdict reducer (`overall_verdict`), report, provenance, and
+dashboard consume it unchanged. The bands are **WES-safe gross-implausibility engineering
+tripwires** (same honesty tier as `mean_coverage fail_below`), **not** a clinical or
+biological claim. **Verdict-only (at the time of this slice):** the `contig run`/`verify`
+exit code was unchanged — no QC verdict, including pre-existing FAIL packs like
+`mean_coverage`, moved the exit code; wiring that is a deliberate, separately-scoped
+follow-on. *(Update: that CLI exit-code wiring has since shipped as the opt-in
+`--fail-on-verdict` flag on `contig run`/`verify` — a FAIL verdict exits `1` when the flag
+is set, WARN/UNVERIFIED/PASS stay `0`; the **default** exit code remains unchanged, so this
+slice's "verdict-only" claim holds unless a caller opts in.)* This slice left FAIL severity
+for the sibling plausibility packs deferred; *(update: that item is now **settled, not
+pending** — the somatic empty-call-set floor below shipped the one band that could be
+derived honestly, and the somatic-VAF and RNA-seq bands are **declined by design**, with
+reasons. The annotation pack (C7 M3) and the sex-check axis remain WARN-only and are not
+covered by that decision.)* **Deferred:** capture-type-aware (WGS/WES/panel) bands and
+tighter band calibration on real cohorts (the WES-safe bands are deliberately gross-only).
+
+**Shipped (somatic empty-call-set FAIL floor slice, Unreleased) — and the rest declined by
+design.** The germline slice above left "FAIL severity for the somatic/RNA-seq/composition
+packs" open; a dig proved that item was **one line of ship and the rest a will-not-do**, so
+it is settled here rather than deferred a sixth time (it had been re-deferred across the
+germline v0.3.0, RNA-seq v0.6.0, somatic-VAF, composition, and variant-count slices).
+**Shipped:** `somatic_variant_count` gains `fail_below: 1` — a somatic run with no biallelic
+records called (almost always an empty or truncated call set) now FAILs the verdict, the
+failure `--fail-on-verdict` (v0.36.0) previously could not catch on this assay. The band's
+shape and rationale mirror the germline `variant_count` floor; the counted population
+differs, since `somatic_variant_count` counts biallelic records only while germline
+`variant_count` counts distinct sites including multiallelic ones. The escalation is the
+narrowest possible: `warn_below: 10` is unchanged, so 1–9 records still
+WARN and only the exactly-zero case moves. There is deliberately **no `fail_above`** — a
+hypermutator (MSI-high, POLE-mutant) or a WGS tumor legitimately exceeds the soft `100000`
+ceiling. It is an engineering tripwire ("an empty call set is a broken run"), the same tier
+as `mean_coverage fail_below`, **not** a biological or clinical claim.
+**Declined by design — these are not waiting on calibration, and no amount of calibration
+would fix them:**
+- **Somatic VAF (`median_vaf`, `strelka_median_vaf`):** germline Ti/Tv could ship FAIL bands
+  because its expected value is *physically constrained* (~2.0 WGS, ~3.0–3.3 WES) with noise
+  at a *distinguishable* ~0.5. A tumor VAF has no such structure — its expected value is a
+  function of **purity and clonality, which the engine never observes** (no purity estimate,
+  no ploidy, no copy-number, no target type). A low median VAF is legitimate science
+  (low-purity tumor, subclonal population), so any `fail_below` would FAIL a real sample.
+  `strelka_median_vaf` adds a second, independent reason: the tier1 ratio is arithmetically
+  bounded to [0,1] given non-negative tier counts — which the VCF spec guarantees — since
+  `strelka_vaf.py:95-98,121-124` reject `denom <= 0` and the numerator is one of the two
+  summands. A `fail_above: 1.0` is therefore **dead code for every real input**.
+- **`pon_applied`:** structurally unbandable — a 3-state string from a header search, not a
+  numeric metric, emitted with `value=None` and never entering `evaluate()` at all (it is
+  appended alongside the pack's results, not routed through it, so no band on it could ever
+  fire). PON absence is also a legitimate configuration Contig itself does not wire.
+- **RNA-seq (`RNASEQ_PLAUSIBILITY_PACK`, `RNASEQ_COMPOSITION_PACK`):** two independent
+  blockers, though the *engineering* one has since narrowed to a single metric. *Biology:*
+  every metric has a legitimate protocol occupying its extreme — deep/high-input libraries
+  legitimately exceed 90% duplication, total-RNA/ribo-depletion legitimately retains rRNA,
+  nuclear/FFPE/3' libraries are legitimately intron-dominated, non-model annotation
+  legitimately leaves most tags unassigned. "Extreme" and "unusual protocol" are the same
+  number, and the packs see no prep or annotation-quality signal that separates them — this
+  reason stands alone and needs no engineering support. *Engineering (now `percent_rRNA`
+  only):* at the time this record was first written, both `percent_duplication` and
+  `percent_rRNA` were absent from the repo's only real-shaped MultiQC report — FAIL severity
+  on a metric that never arrives is severity on dead code. **The RNA-seq plausibility
+  ingestion fix slice (below) removes half of that claim:** `duplication_rate` was keyed on
+  the wrong case (`percent_duplication` vs MultiQC's actual `PERCENT_DUPLICATION`) and banded
+  on the wrong unit (0–100 vs Picard's true 0–1 fraction) — a data bug, not an absent metric —
+  and now resolves against every real report that ran Picard MarkDuplicates. It no longer
+  qualifies for the "dead code" argument, so its declined band rests on the biology reason
+  alone, which now also covers WARN, not just FAIL: the fix shipped `duplication_rate`
+  **informational-only, with no band at all** (a deep/high-input library legitimately exceeds
+  90% duplication, so even a WARN would flag a legitimate protocol). `percent_rRNA`
+  (`rule_pack.py:337`, still commented "slug unverified") keeps the full engineering
+  argument — it genuinely has no default machine-readable source in `nf-core/rnaseq` (see the
+  ingestion fix slice below for the research). *Also:* the one genuinely broken composition
+  case, `unassigned_fraction == 1.0`, is already caught more honestly by `RNASEQ_RULE_PACK`'s
+  `assignment_rate fail_below: 40` on the did-it-run tier — a second FAIL is redundant, not
+  new signal.
+The decision is recorded in the pack comments (`rule_pack.py`) as well as here, so the reason
+travels with the code. **Known caveat (disclosed, not fixed):** `verdict` is a
+`@computed_field` serialized into the signed canonical payload, so re-verifying an affected
+old bundle re-reduces the verdict under the new band and its Ed25519 signature no longer
+matches. The blast radius is only bundles whose verdict actually flips — empty somatic call
+sets, i.e. broken runs — and it is a pre-existing property of any rule-pack edit, inherited
+unchanged from v0.35.0. **Accepted, eyes open:** a legitimately mutation-free targeted panel
+would FAIL (the engine has no target-type signal; `--fail-on-verdict` is opt-in, and the
+revisit trigger is the first real-world report of one). **Honest limit:** no real nf-core/sarek
+run in CI — the floor catches a failure that is *reasoned* (a truncated/crashed Mutect2 step
+yields 0 records) rather than *observed*, with the germline sibling as the existence proof.
+**Surfaced here, then fixed (see the RNA-seq plausibility ingestion fix slice below):** at
+the time this record was first written, `RNASEQ_PLAUSIBILITY_PACK` was **dormant, not a
+silent no-op** — `evaluate_rnaseq_plausibility` already emitted an explicit `unverified`
+result per absent metric per sample (four on the repo's own demo fixture) on every real
+rnaseq run. That is *not* the single-cell/methylseq defect class: those packs ran through
+the bare `evaluate()`, which silently **skips** a metric it can't find, producing no result
+at all — dormant but honest is a different failure mode from silent. Only half of the live
+defect matched that class, too: `duplication_rate`'s wrong key/unit was a pure data bug — the
+key was reachable in MultiQC all along, misspelled by case, with a live unit ambiguity on top
+(the pack declared 0–100 while Picard's native `PERCENT_DUPLICATION` is a 0–1 fraction) — so
+no dedicated parser was needed, unlike the single-cell/methylseq fixes below. `percent_rRNA`
+is the metric that genuinely matches the single-cell defect class (no default
+machine-readable source in `nf-core/rnaseq` at all), and it remains unfixed and out of scope
+(see the ingestion fix slice below).
 
 **Shipped (single-cell ingestion slice, Unreleased).** The single-cell (`scrnaseq`)
 assay already had a biological pack (`SCRNASEQ_RULE_PACK`: recovered cells, median
@@ -467,6 +707,86 @@ machine-readable artifact; no HTML scraping). The dead `pct_reads_mito` check wa
 FAIL bands were kept (consistent with the sibling did-it-run packs). **Deferred:** a
 structured QCatch-JSON recognizer for the default simpleaf path, and mitochondrial-fraction
 / doublet-rate plausibility (need a downstream scanpy/scDblFinder step).
+
+**Shipped (RNA-seq plausibility ingestion fix slice, Unreleased).** The RNA-seq slice above
+shipped `duplication_rate` keyed on `percent_duplication`, banded `warn_above: 80.0` on a
+declared 0–100 scale — and it had never once fired on a real `nf-core/rnaseq` run, for two
+compounding reasons, not one. MultiQC republishes Picard MarkDuplicates' own field name
+verbatim as **`PERCENT_DUPLICATION`** (uppercase); `qc_ingest.py`'s general-stats merge
+(`qc_ingest.py:14-22`) is an exact-key match with no case normalization, so the lowercase slug
+missed forever. And Picard's own javadoc is explicit that the value is "the fraction of
+mapped sequence that is marked as duplicate" — a raw **0–1** fraction, with no `x100` anywhere
+in its formula, despite the "PERCENT" in its name; a 70%-duplicated sample reads `0.707214`,
+not `70.0`. Fixing the key alone would have been worse than the bug: an unrescaled fraction
+against the old 0–100 band would have silently PASSed every real report. `duplication_rate`
+now keys `PERCENT_DUPLICATION` and carries `"unit": "fraction"`; the check ships
+**informational-only — no band at all** (see below), so it always PASSes when present and
+in range. A new guard in `rnaseq_plausibility.py` (any rule carrying `"unit": "fraction"`)
+refuses a value present-but-outside-`[0,1]` as `unverified` rather than rescaling it — `0.5`
+is ambiguous between "50%" and "0.5%," and refusing beats guessing — so a wrong key was
+already safe (unverified) and a wrong unit is now safe too: **every known way for this check
+to be wrong degrades to honest, never a silent lie.** `_expected_range` (`rule_pack.py:554`)
+previously assumed every check had a `warn_below`/`warn_above` and rendered the literal string
+`">= None"` for a band-less rule; it now returns `None` for a check with neither bound, which
+`duplication_rate` is the repo's first rule to exercise. The fabricated
+`percent_duplication: 95.0` test fixture — a shape nf-core never emits — was re-pointed to a
+realistic `PERCENT_DUPLICATION: 0.707214` one; that fixture is why a green suite masked a
+dead check for six releases (v0.6.0 through v0.37.0): it proved the wiring, never the
+ingestion. `rrna_contamination` is untouched.
+
+**The band: declined by design, not pending calibration.** `duplication_rate` ships with no
+WARN or FAIL band at all, per the pack's own docstring: a deep/high-input library
+legitimately exceeds 90% duplication, so *any* band — not just FAIL — would flag a legitimate
+protocol as a problem. A band becomes justifiable only if real per-protocol duplication
+distributions are collected, or the pack gains a library-prep/input-amount signal that could
+separate "deep library" from "broken library"; neither exists today.
+
+**Honest limit (reasoned, not observed — same tier as the somatic FAIL floor's disclosure).**
+The corrected key and unit are read from MultiQC's and Picard's own source, not from an
+observed run: **no real `nf-core/rnaseq multiqc_data.json` exists in this repo** to confirm
+against — `demo/sample-run`'s is synthetic (`demo/make_sample_run.py:59,105` hand-writes
+`uniquely_mapped_percent`/`percent_assigned`/`total_reads` only, no `PERCENT_DUPLICATION` key
+at all). The `[0,1]` guard is what makes that acceptable: if the reasoning is wrong in either
+direction, the check degrades to `unverified` rather than scoring a mis-keyed or mis-scaled
+value as a false PASS. MarkDuplicates is also legitimately absent under
+`--with_umi`/`--skip_markduplicates`; that no-key path already reports `unverified`, not a
+false pass.
+
+**Deferred/known debt, named:**
+- **`rrna_contamination`'s `percent_rRNA` remains a guessed slug** — researched, and there is
+  genuinely no default machine-readable rRNA source in `nf-core/rnaseq`: SortMeRNA is off by
+  default (`remove_ribo_rna = false`); featureCounts biotype QC depends entirely on the user's
+  GTF carrying a `gene_biotype` attribute, is silently skipped when absent (common for NCBI
+  GTFs), and even when it runs emits per-biotype **counts** as custom content, not a
+  general-stats percentage; and its artifact name is **unconfirmed for 3.26.0**, since the
+  workflow appears refactored since the name was last observed. Recommended follow-on: drop
+  the check, or build a dedicated parser that degrades to `unverified` rather than keep a
+  guessed slug in place.
+- **`runner.py:412`'s `multiqc is not None` gate:** a run with **no MultiQC report at all**
+  makes both RNA-seq plausibility checks vanish rather than reporting `unverified` — the
+  composition gate (`runner.py:428`) correctly gates on assay alone, so this is a real,
+  pre-existing honesty gap, deferred rather than fixed here.
+- **Informational checks are now verdict-neutral — SHIPPED (Unreleased).** Resolved by an
+  additive `QCResult.informational` marker (default `False`, back-compat like `QCKind`) plus
+  an `overall_verdict` that reduces over the non-informational results only. The design fork
+  as originally posed ("add a verdict-neutral status, *or* exclude band-less rules from
+  `overall_verdict`") was drawn on the wrong axis: `QCResult` carried no band information, so
+  the reducer could not identify a band-less rule either way — both options needed a new
+  field, so the orthogonal marker (not a fifth `QCStatus` value, which would have rippled
+  through the persisted vocabulary and five TS `Record<>` maps) was chosen. Two corrections
+  the build surfaced, recorded so the record is true:
+  - **The set was undercounted.** The item claimed `duplication_rate` was "the only band-less
+    rule" and treated `gene_symbol_concordance`/`x_het_ratio` as a footnote — but those two,
+    plus a third (`gene_overlap`, then undocumented), are informational by a *different*
+    mechanism (hardcoded always-pass, not band-less config). So "decide before a **second**
+    band-less rule lands" had already been missed by three. All four are now marked, and a
+    test enumerates the set so a fifth is a deliberate act.
+  - **The motivating example does not flip.** A `PERCENT_DUPLICATION`-only RNA-seq report was
+    said to "reduce to `pass` with nothing biological verified" — but the parenthetical
+    "(already reduced to `pass` via `min_sample_count`)" was the real story: `min_sample_count`
+    is an asserting check that floors every RNA-seq run at `pass`, so this slice does **not**
+    change that run's verdict. The slice is defensive (the invariant is now true and guarded),
+    not a closed false-pass class. See CHANGELOG "Honest scope".
 
 Deepen the verdict scientifically with **assay-aware sanity checks** that encode
 what a biologically reasonable result looks like, beyond generic QC thresholds.
@@ -497,7 +817,7 @@ distributions and flag implausible-but-completed runs for review.
 
 ---
 
-## C4. New assay, depth-first: somatic variant calling  ·  SHIPPED v0.13.0 (intake→launch→verify) + VAF plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased) + Strelka2-native VAF slice (Unreleased) + swapped-pair smell-test slice (Unreleased)
+## C4. New assay, depth-first: somatic variant calling  ·  SHIPPED v0.13.0 (intake→launch→verify) + VAF plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased) + Strelka2-native VAF slice (Unreleased) + empty-call-set FAIL floor slice (Unreleased; VAF FAIL bands **declined by design**) + swapped-pair smell-test slice (Unreleased)
 
 **Shipped (slice 1) in v0.13.0.** A somatic (tumor–normal) assay is now on the engine end
 to end: a `somatic_variant_calling` registry entry + routing served by `nf-core/sarek`
@@ -516,16 +836,20 @@ axis (C3-style, so the assay is no longer structural-only). A new
 (median tumor allele fraction over biallelic records — FORMAT `AF`, else `AD_alt/DP`; tumor
 identified by the `##tumor_sample=` header, never a guessed column), `somatic_variant_count`
 (a deliberately wide band), and `pon_applied` (panel-of-normals presence from the GATK
-command header). Both metric bands are **WARN-capped** in a new `SOMATIC_PLAUSIBILITY_PACK`
+command header). Both metric bands shipped **WARN-capped** in a new `SOMATIC_PLAUSIBILITY_PACK`
 (uncalibrated defaults, no `fail_*`); every uncomputable path — no derivable VAF, an
 unidentifiable tumor column, no GATK header — is **UNVERIFIED, never a false pass**. The
 Mutect2 VCF is selected by a path component below the run dir; a VCF present but non-Mutect2
 yields one honest UNVERIFIED, and no VCF skips silently. The second-somatic-caller
 **concordance hook** (C1-style — Strelka2 vs Mutect2) has since **shipped** (see C1, somatic
-slice). **Deferred to follow-on slices:** FAIL severity until bands are calibrated on real
-data; a cross-column swapped-pair smell test (since **shipped**, see below); and
-panel-of-normals / germline-resource reference wiring for a real Mutect2 somatic run (today
-the verification runs against injected fixtures).
+slice). *(Update: `somatic_variant_count` has since gained a `fail_below: 1` empty-call-set
+floor — see the FAIL-floor slice below. The **VAF** bands stay WARN-capped, no longer as a
+deferral but as a **decision**: a tumor VAF's expected value is a function of purity and
+clonality that the engine never observes, so any `fail_below` would FAIL a legitimate
+low-purity or subclonal sample. `pon_applied` is structurally unbandable — a 3-state string,
+not a numeric metric.)* **Deferred to follow-on slices:** a cross-column swapped-pair smell
+test (since **shipped**, see below); and panel-of-normals / germline-resource reference wiring
+for a real Mutect2 somatic run (today the verification runs against injected fixtures).
 
 **Shipped (Strelka2-native VAF slice — Unreleased).** The deferred "Strelka2-native VAF
 (tier-count derivation — non-Mutect2 VCFs degrade to UNVERIFIED)" item above has since
@@ -536,31 +860,54 @@ tier1({ALT}U))` over `AU`/`CU`/`GU`/`TU`; indel: `tier1(TIR) / (tier1(TAR) + tie
 column name (Strelka2 emits no `##tumor_sample=` header). It fires **alongside** — not instead
 of — Mutect2's `median_vaf`, as independent cross-caller corroboration of tumor VAF, riding the
 same WARN-capped `SOMATIC_PLAUSIBILITY_PACK` band and wired via the same `select_caller_vcfs`
-locator the concordance hook uses. **Still deferred (at the time):** FAIL severity + real-cohort
-band calibration, the cross-column swapped-pair smell test (since **shipped**, see below), and
-panel-of-normals / germline-resource reference wiring.
+locator the concordance hook uses. **Still deferred (at the time):** the cross-column
+swapped-pair smell test (since **shipped**, see below), and panel-of-normals /
+germline-resource reference wiring — unchanged from the slice above. *(Update: this metric's WARN cap is now **declined by design**, not deferred. Beyond
+inheriting `median_vaf`'s purity/clonality reason, a `fail_above: 1.0` here would be dead code
+for every real input — the tier1 ratio is arithmetically bounded to [0,1] given non-negative
+tier counts, which the VCF spec guarantees (`strelka_vaf.py:95-98,121-124` reject
+`denom <= 0`, and the numerator is one of the two summands).)*
+
+**Shipped (empty-call-set FAIL floor slice, Unreleased).** `somatic_variant_count` gains
+`fail_below: 1`, so a somatic run with **no biallelic records called** (almost always a
+truncated or crashed Mutect2 step yielding an empty call set, though a VCF whose calls are
+all multiallelic would also read `0`) now FAILs the verdict instead of WARNing — the germline
+equivalent of that exact failure already FAILed, and under `--fail-on-verdict` (v0.36.0) the
+somatic run previously still exited `0`. `warn_below: 10` is unchanged, so 1–9 records still
+WARN and only the exactly-zero case escalates; there is deliberately **no `fail_above`** (a
+hypermutator or WGS tumor legitimately exceeds the soft `100000` ceiling). An engineering
+tripwire, not a biological or clinical claim. The durable half of the slice is the
+**declined-by-design** record for every other proposed band — see C3, which carries the full
+reasoning, the signature caveat, and the accepted risks.
 
 **Shipped (swapped-pair smell-test slice — Unreleased).** The deferred "cross-column
-swapped-pair smell test" has since **shipped**: a `normal_median_vaf` metric reads the median
-VAF over the **NORMAL** column of the same Mutect2 VCF (same biallelic record set and
-`_vaf_from_sample` derivation as the tumor `median_vaf`, only the column index differs). A new
-`##normal_sample=` header resolver in `somatic_plausibility.py` mirrors the shipped
-`##tumor_sample=` resolver — never a positional guess; a missing header or unmatched name
-resolves to `None`. One WARN-capped `normal_median_vaf` rule rides the same
-`SOMATIC_PLAUSIBILITY_PACK` (`warn_above: 0.30` only, no `warn_below`/`fail_*` — a low normal
-VAF is the healthy expected case), evaluated by a new `evaluate_swap_plausibility()` over a
-`by_metric` dict containing only this key, so it never re-emits the pack's other rules
-(the same `by_metric`-isolation trick the Strelka2-native slice used). Wired into the somatic
-`_discover_qc` gate on the already-located Mutect2 VCF (no re-glob), immediately alongside the
-tumor-VAF evaluator. Honest contract identical to every sibling slice: at most WARN, never
-FAIL, never changes the exit code; UNVERIFIED (never a false pass) when the normal column is
-unresolvable or no normal VAF is derivable; no Mutect2 VCF → silent skip. No new dependency,
-model, `FailureClass`, or reproduce-contract change; stdlib only; test-first with synthetic
-fixtures, **no real nf-core/sarek or GATK run in CI**. **Deferred:** FAIL severity and
-real-cohort band calibration; a directional tumor-vs-normal ratio/delta metric; panel-of-normals
-/ germline-resource reference wiring; a Strelka2-native normal VAF (this slice is Mutect2-only,
-matching the tumor `median_vaf` it extends); and a dashboard "corroborated by" surface for the
-swap signal.
+swapped-pair smell test" named by both slices above has since **shipped**: a
+`normal_median_vaf` metric reads the median VAF over the **NORMAL** column of the same Mutect2
+VCF (same biallelic record set and `_vaf_from_sample` derivation as the tumor `median_vaf`,
+only the column index differs). A new `##normal_sample=` header resolver in
+`somatic_plausibility.py` mirrors the shipped `##tumor_sample=` resolver — never a positional
+guess; a missing header or unmatched name resolves to `None`. One WARN-capped
+`normal_median_vaf` rule rides the same `SOMATIC_PLAUSIBILITY_PACK` (`warn_above: 0.30` only,
+no `warn_below`/`fail_*` — a low normal VAF is the healthy expected case), evaluated by a new
+`evaluate_swap_plausibility()` over a `by_metric` dict containing only this key, so it never
+re-emits the pack's other rules (the same `by_metric`-isolation trick the Strelka2-native
+slice used). Wired into the somatic `_discover_qc` gate on the already-located Mutect2 VCF (no
+re-glob), immediately alongside the tumor-VAF evaluator. Honest contract identical to every
+sibling slice: at most WARN, never FAIL, never changes the exit code; UNVERIFIED (never a
+false pass) when the normal column is unresolvable or no normal VAF is derivable; no Mutect2
+VCF → silent skip. **What it does and does not catch, stated honestly:** a high normal-column
+VAF is a *smell*, not a swap determination — a true tumor/normal swap, a sheet mislabel, and
+heavy tumor-in-normal contamination all produce the same number, so the message names all
+three and asserts none. It is also **not** the whole swap surface: a genuinely swapped pair
+often *depletes* the PASS call set (Mutect2 filters true somatic sites as germline once the
+tumor is passed as the normal), and that shape is already caught by `somatic_variant_count`'s
+`fail_below: 1` floor above — this metric's yield is the intermediate case those two miss. No
+new dependency, model, `FailureClass`, or reproduce-contract change; stdlib only; test-first
+with synthetic fixtures, **no real nf-core/sarek or GATK run in CI**. **Deferred:** FAIL
+severity and real-cohort band calibration; a directional tumor-vs-normal ratio/delta metric;
+panel-of-normals / germline-resource reference wiring; a Strelka2-native normal VAF (this
+slice is Mutect2-only, matching the tumor `median_vaf` it extends); and a dashboard
+"corroborated by" surface for the swap signal.
 
 The original framing, for reference: add one assay end to end rather than several
 shallowly. Recommended:
@@ -671,7 +1018,8 @@ deliberate act; loud non-failing warnings on sha/detector mismatch; an improveme
 nudge. The committed baseline is honestly **0.833 (10/12)** — `qc_anomaly` and
 `no_progress` are currently structurally unreachable by `diagnose_failure` (no rule
 branch emits them), a deliberate gap that leaves headroom for the nudge to fire once
-those rules exist. **Honest scope, unchanged from the PRD:** this slice guards the
+those rules exist. *(Superseded in part: `no_progress` became reachable in the
+heartbeat-stall-watchdog slice — see "Both guards moved" below. `qc_anomaly` has not.)* **Honest scope, unchanged from the PRD:** this slice guards the
 **labeled failure-class detector corpus only**. **Pending follow-on slices (at the
 time):** folding the unlabeled C1 concordance / C3 plausibility corroboration
 signals and repair-loop (whole self-heal) accuracy into one number (the "fold
@@ -704,7 +1052,38 @@ structurally unreachable, and the wider failure-class catalog (container,
 download, disk, permission, missing-reference families) has no scenario yet.
 Wired into CI immediately after `eval-guard`. **Still pending:** folding the
 unlabeled C1/C3 corroboration signals into one eval number, and a
-held-out-accuracy trend over corpus/loop versions.
+held-out-accuracy trend over corpus/loop versions. *(Superseded in part:
+`no_progress` is now covered — see below; `qc_anomaly` is still unreachable.)*
+
+**Both guards moved for the first time (heartbeat stall watchdog slice — Unreleased).**
+The C2 stall-watchdog slice above made `no_progress` emittable by the `rules` detector,
+and both C6 guards recorded it. **`eval-guard`: held-out accuracy 0.846 → 0.923**
+(11/13 → 12/13) against a deliberately refrozen `holdout_baseline.json` — the held-out
+file itself was **not edited**, so its `corpus_sha` is unchanged and the guard reported
+*improved*, not *regressed*. That number had been **flat across all six recorded trend
+points, v0.22.0 → v0.48.0** (`holdout_history.jsonl`), with `holdout-no-progress-1`
+misclassified as `tool_crash` every single time; the per-class table moved for the right
+reason (`tool_crash` predicted 3 → 2 — the `no_progress` case no longer falling through
+the catch-all), independently verified rather than inferred from the headline.
+**`heal-guard`: `covered_classes` 5 → 6** (`no_progress` added), over 8 frozen scenarios
+instead of 7, with **outcome-match still 1.0** and `recovery_rate` 5/8 = 0.625 reported
+alongside as the informational-only sub-metric it has always been. The new
+`no-progress-heal` scenario avoids both traps by construction: exit **143** (not 137) and
+a real watchdog-shaped `log_text` with no OOM needles, so it cannot pass by accident.
+**`qc_anomaly` remains the one structurally unreachable class** — this slice did not
+close it and must not be read as having done so; its honest trigger is the verdict
+object, not log text (QC runs at `_finalize`, not as a pipeline step), so it needs its
+own slice. **The accuracy gain is partly self-graded and is not oversold:** we made
+reachable a class whose held-out fixture we wrote ourselves. It is legitimate evidence
+that a documented taxonomy gap closed, and nothing more. Refreezing also exposed a latent
+invariant bug in the snapshot-history tests — both the detector and heal seed tests
+asserted that history line 0 (the v0.22.0 seed) still equals the *current* baseline, which
+only ever held because no refreeze had changed accuracy. History is append-only and must
+never be rewritten, so the **tests** were corrected (some recorded trend point must match
+the baseline on accuracy/outcome-match + `corpus_sha`; `contig_version` dropped from the
+cross-check, since `--snapshot` stamps the current version without touching the baseline
+and tying them would turn master red at the very next release). The heal sibling carried
+the identical latent bug and was fixed in the same round.
 
 **Eval data captured:** this *is* the capture loop; it closes over all the above.
 
@@ -841,17 +1220,540 @@ ever. See [`../planning/variant-annotation-assay/prd.md`](../planning/variant-an
 
 ---
 
+## C8. Reproduce & verify *existing published* work  ·  first slice SHIPPED v0.40.0 + output-locator slice 1.5 SHIPPED v0.41.0 + environment-resurrection slice 2 SHIPPED (Unreleased) + TSV/CSV table-locator slice 3 SHIPPED (Unreleased) + stdout/log pattern-locator slice 4 SHIPPED (Unreleased) + notebook (`.ipynb`) locator slice 5 SHIPPED (Unreleased) + freshness guard extended to **all** binding surfaces SHIPPED (Unreleased) + remote `https://` git-URL intake slice 6 SHIPPED (Unreleased) + `--rev` revision pinning slice 7 SHIPPED (Unreleased) + checkout-tree hash slice 8 SHIPPED (Unreleased) + paper-claim extraction (`contig extract-claims`) SHIPPED (Unreleased)  ·  M7+
+
+Point the shipped run → self-heal → verify → reproduce engine at a **third-party,
+already-published** bioinformatics repository (a paper + its code/data) and report which of
+the paper's stated numbers, tables, and figures **actually regenerate** — ending in a signed,
+re-runnable verdict, exactly like a first-party run. This is not a new assay; it is the same
+Layer-2 engine turned around to face *other people's* published analyses.
+
+**Shipped (first slice — walking skeleton, v0.40.0).** `contig reproduce <repo> --run "<cmd>"
+--claims <file>` runs a repo's script and reports a **per-claim** verdict — `REPRODUCED` /
+`WITHIN-TOLERANCE` / `DIVERGED` / `UNVERIFIED` — over **scalar numeric** claims, ending in a
+signed, re-runnable bundle. A new `verification/reproduce.py` (`load_claims`/`classify`/
+`run_reproduction`/`reduce_reproduction`) + `ClaimResult`/`ReproduceRecord` models drive it;
+classification **reuses `benchmark._relative_delta`** (`|Δ| ≤ 1e-9` → REPRODUCED, else
+`rel_delta ≤ tolerance` → WITHIN-TOLERANCE, else DIVERGED; non-finite / missing / non-zero-exit →
+UNVERIFIED, never a false pass). The regenerated value is bound from a repo-written flat
+`results.json` `{claim_id: value}`. The record is signed by the **existing generic**
+`_maybe_write_signature` (no fork, no `RunRecord` pollution) when `CONTIG_SIGNING_KEY` is set, plus
+a `reproduce.json` invocation manifest; `runner.default_command_executor(cmd, cwd)` runs the script
+in the repo dir. `--fail-on-diverged` is an opt-in exit-code gate. **Honest scope:** research-use,
+computation-vs-numbers only (never the paper's conclusions), no raw-read egress; slice 1
+reproduces **cooperative** repos (those that emit `results.json`) and degrades an uncooperative one
+to UNVERIFIED; test-first, **no real third-party repo or network in CI**. **Deferred:** the
+claim-level output-locator to read numbers out of a repo as-is (slice 1.5 — now **shipped**, see
+below); **environment resurrection** (`ModuleNotFoundError` → install → retry, reusing C2) (slice
+2); paper-parsing to extract claims; **figure/plot and table-cell claims** (see the correction
+below); remote `<doi|url>`; a dashboard card; and the C6 eval fold-in.
+
+**Shipped (output-locator — slice 1.5, v0.41.0).** A claim may now carry an optional locator
+`{"from": <repo-relative JSON file>, "path": <expression>}` naming where its number already lives
+in the repo's own **structured JSON** output, instead of requiring the repo to hand-write a flat
+Contig-shaped `results.json`. This is the exact slice the slice-1 review gate named as what turns
+`contig reproduce` from a fixtures/cooperative-repo demo into a tool that reads **real, unmodified
+cloned repos** — the "externally-credible" step. A new pure stdlib walker
+(`verification/reproduce.py::resolve_pointer` + `_parse_path`) — dotted segments + `[n]` list
+indices, leading `$.`/`$` tolerated, strict dict/list `isinstance` guards, **never raises** (any
+unresolved/malformed step → `None`) — resolves the value; `run_reproduction` branches so a located
+claim binds from its own file (parsed once, cached per run) and classifies through the **unchanged**
+`classify`, while a locator-less claim keeps the byte-identical slice-1 flat lookup (mixed files
+allowed). Every locator failure — missing/unparseable/non-UTF-8 `from` file, unresolved `path`,
+non-numeric target **including a numeric *string* (strictly UNVERIFIED, never coerced)**, bool, or
+non-finite — is `UNVERIFIED`, never a false pass, never `DIVERGED`. Safety: an escaping/absolute
+`from` is refused at the CLI **before any run** (exit non-zero, no record) reusing the `--results`
+containment guard, and the engine defensively never reads outside the repo. No new dependency
+(stdlib-only holds); no model/verdict/exit-code contract change; `claims_sha256` already covers the
+locators. **JSON only** this slice — stdout/CSV/notebook/figure numbers still degrade to UNVERIFIED
+honestly. **Deferred:** slice 2 (environment resurrection) and everything after it (unchanged from
+the slice-1 list above). Test-first (walker → `load_claims` → engine → CLI); deterministic; no real
+repo or network in CI.
+
+**Shipped (environment resurrection — slice 2, Unreleased).** The load-bearing piece: `contig
+reproduce` can now recover a repo that *doesn't run yet* because it's missing a Python dependency —
+the dominant reproduction-failure class (`ModuleNotFoundError` / `ImportError` + installs are ~76%
+of failures). A new **opt-in `--allow-install` flag** (off by default) turns a first run that exits
+non-zero with a `No module named 'X'` message into a bounded **detect → install → retry-once**
+self-heal that reuses the C2 machinery. A new pure `detect_missing_module` extracts the missing
+top-level package (case-insensitive, `sklearn.utils` → `sklearn`, charset-validated
+`^[A-Za-z0-9._-]+$`); a new injected installer seam (`runner.Installer` + `default_installer` +
+`_pip_install_argv`, mirroring `IndexBuilder`) runs a **fixed** argv `[sys.executable, "-m", "pip",
+"install", <module>]` (no shell, no interpolation); the run retries exactly once and the claims
+re-classify against the retried run's fresh output. **Bounded** (one install + one retry, no loop, no
+second-module chase → provable termination) and **honest on every unresolved path** (flag off, no
+module, install fails, retry fails → all `UNVERIFIED`, never a false reproduce; import-name ≠
+package-name mismatches like `cv2` → `opencv-python` fail the install and degrade honestly). Off by
+default the behavior is byte-identical to slice 1.5; the flag gates all network + environment
+mutation. The heal is recorded on an additive `ReproduceRecord.repair_history: list[RepairStep]`
+(default `[]`, pre-slice-2 bundles load unchanged) — `Diagnosis(failure_class="missing_dependency")`,
+a new literal kept **reproduce-local** (deliberately *not* wired into the shared `diagnose_failure`,
+so the C6 eval-guard held-out baseline is unmoved, confirmed at 84.6%), plus `Patch(kind="env",
+operation={"install": <module>})` — surfaced as a one-line `env-repair` note and round-tripped
+through the signed bundle; `exit_code` reflects the final (retried) run. To see the error text, the
+reproduce command-executor seam widened from `int` to `(exit_code, combined_output)`
+(`default_command_executor` now captures combined stdout+stderr); the Nextflow `Executor`/`IndexBuilder`
+seams are untouched. No new runtime dependency (injected installer). Test-first with a scripted
+executor + scripted installer — **no real repo, network, or pip in CI**. **Deferred:** import→package
+alias map, iterative multi-module resolution, version pinning from a traced execution, venv
+isolation. Plan/PRD under `docs/planning/reproduce-env-resurrection/`.
+
+**Shipped (TSV/CSV output-locator — slice 3, Unreleased).** Slice 1.5 could only bind a claim's
+observed value from a repo's **structured JSON** output; but in bioinformatics the numbers a paper
+reports overwhelmingly live in **tabular** output — DESeq2 results tables, count matrices,
+feature/stat tables — as `.tsv`/`.csv` (often gzipped), against which every claim degraded to
+`UNVERIFIED`. A claim's locator may now also carry `{"from": <repo-relative .tsv/.csv[.gz] file>,
+"column": <name|int>, "row": <int|{key:val}>, "header"?: bool, "delimiter"?: str}`, naming a cell
+the same way the JSON locator names a `path`. Two addressing modes: named (header column name +
+a `{key: value}` row match) and positional (integer column + integer row, `header: false`), 0-based
+like the JSON locator's `[n]`. A new pure stdlib table reader
+(`verification/reproduce.py::_read_table` + `resolve_cell`, siblings of the JSON walker) reads
+`.tsv`/`.csv` via `csv.reader`, is gzip-transparent (`.tsv.gz`/`.csv.gz`), and is index-safe on any
+shape — ragged rows, empty files, header-only tables, directory paths, non-UTF-8 files — **never
+raising**; `_resolve_delimiter` infers the delimiter from the extension (an explicit `delimiter`
+always overrides). `load_claims` validates the table shape structurally, pre-run: exactly one of
+`{path}` xor `{column, row}`, `column`/`row`/`delimiter`/`header` type/shape rules, and a
+`row`-object or string `column` **requires** `header: true` — every contradiction is a load-time
+`ClaimsError` (exit non-zero, nothing written), never a silent misread. `run_reproduction`
+dispatches on the locator's type to a new `_observe_table_located` (sibling of `_observe_located`)
+reusing the same containment guard and a per-run parse cache (`_table_cache` — a table `from` is
+parsed **at most once per run** even across several claims on the same file); the resolved cell is
+`float()`-parsed after `.strip()` and feeds the **unchanged** `classify`. **The deliberate
+divergence from the JSON rule: a numeric-string cell is the normal, valid case** (every table cell
+is a string by construction) — `"30.4"` classifies here, unlike the JSON locator's
+strict-UNVERIFIED numeric string. Every unresolved/ambiguous address is `UNVERIFIED`, never
+`DIVERGED`: missing/dir/non-UTF-8/unparseable `from`; absent or duplicate header column name;
+column/row index out of range; a ragged row shorter than the addressed column; a `row`-key match
+with **0 or more than 1** hits (never an arbitrary pick, the count is named in the message); an
+unparseable or non-finite cell. Safety and reuse are unchanged: a table claim's `from` flows
+through the same `.source` field the CLI containment loop and the engine's defense-in-depth guard
+already check — **no new code was needed there**; `classify`/`ClaimResult`/`ReproduceRecord`/
+bundle/signing/`--fail-on-diverged` all reused as-is, **no `models.py` change**, `claims_sha256`
+already covers the new claim fields. Stdlib-only (`csv`+`gzip`, both already stdlib) — no new
+dependency. **Deferred:** multi-key/predicate row match, column ranges, regex; notebook
+(`.ipynb`) numeric extraction; paper-parsing; figure/plot & table-image claims
+(still hard-blocked — no plot-hash, stdlib-only); remote `<doi|url>`; dashboard card; C6 eval
+fold-in. Test-first (pure reader → engine dispatch → CLI containment/e2e); deterministic; **no
+real repo or network in CI** (on-disk fixture `.tsv`/`.csv`/`.tsv.gz` tables). Plan/PRD under
+`docs/planning/reproduce-tsv-csv-locator/`.
+
+**Shipped (stdout/log pattern locator — slice 4, Unreleased).** Slices 1.5 and 3 both required the
+repo to write its numbers into a **structured file** (JSON or a TSV/CSV table). A large share of
+published analysis scripts do not: they `print()` the headline number or append it to a `.log`, and
+write no JSON and no table at all — so every claim against them degraded to `UNVERIFIED`. A claim
+may now carry `{"pattern": <Python regex>}`, optionally with `{"from": <repo-relative text/log
+file>}`. **Two addressing modes:** `pattern` **without** `from` matches the run's own captured
+combined **stdout+stderr** (text the engine already held, until now read only by
+`detect_missing_module` and the diagnosis evidence); `pattern` **with** `from` matches that
+repo-relative file. `PatternLocator(source: str | None, pattern: str)` carries both — `source is
+None` **is** the stdout mode, and the field is named `source` deliberately so the file case reuses
+every existing `.source` code path. A new pure stdlib `resolve_match` (sibling of
+`resolve_pointer`/`resolve_cell`) finds **all** non-overlapping matches via `re.finditer`, returns
+the raw captured **string**, and **never raises**. **Capture selection: group 1 if the pattern has
+capturing groups, else the whole match** (a named group is group 1 too); flags are **inline**
+(`(?i)`/`(?m)`/`(?s)`) — no `flags`, `group`, or `occurrence` key this slice. **Ambiguity is never
+guessed:** 0 or >1 matches is `UNVERIFIED` with the **count named**, never an arbitrary first-match
+pick; a group 1 that did not participate in the match (`(?:x)?(y)?z` against `"z"`) — the one shape
+that would otherwise crash a caller on `float(None)` — degrades with its own message and test.
+Matching is bounded at **8 MiB** (`_MAX_MATCH_BYTES`), text over the cap being `UNVERIFIED` naming
+the size rather than a silently truncated search (which could report a false "0 matches"); **this
+is a ReDoS input bound, not a memory guard** — in file mode the size is `stat()`ed **before** any
+read so an oversized log is never loaded, but in stdout mode `default_command_executor` already
+buffers the whole output through `subprocess.PIPE` uncapped, a **pre-existing upstream** issue this
+slice neither creates nor solves. `load_claims` validates structurally, pre-run: `pattern` must be
+a non-empty string and **must compile** (`re.error` → `ClaimsError`, exit non-zero, **nothing
+written**), and the xor became a **three-way** exclusion — exactly one of `path`, `column`+`row`,
+or `pattern`, with `pattern` plus **any** table field (`column`/`row`/`header`/`delimiter`)
+rejected rather than silently ignored. `pattern` is the first locator legal **without** `from`, so
+the orphan guard was relaxed for `pattern` only; a bare `path`/table field without `from` stays an
+error. The dispatch head became an explicit `isinstance` chain (the old unguarded `else` would have
+routed the new type into the JSON reader and raised `AttributeError`), calling a new
+`_observe_pattern_located` that reuses the same containment guard and a per-run read cache
+(`_text_cache`). Because the observers are closures over `run_output` and are only called *after*
+the `--allow-install` retry rebinds it, a stdout claim binds the **retried** run's output for free —
+no new mechanism. A **numeric-string capture is the normal, valid case** (the slice-3 rule, not the
+slice-1.5 strict JSON rule): it is `.strip()`ed, `float()`-parsed, and if finite feeds the
+**unchanged** `classify`; unparseable or non-finite is `UNVERIFIED`. Safety and reuse hold: a file
+`from` flows through the same CLI pre-run refusal and engine `relative_to(repo_root)` guard, a
+`from`-less claim touches the filesystem **not at all**, and the one CLI change is the stdout-mode
+skip (`claim.locator.source is None`) that keeps the containment loop from joining a `None`.
+`classify`/`ClaimResult`/`ReproduceRecord`/bundle/signing/`--fail-on-diverged` reused as-is, **no
+`models.py` change**, stdlib-only (`re`, already imported) — no new dependency. **Honest limits:** a
+regex binds to **output formatting**, not a data structure, making this the **weakest locator
+shipped** — mitigated not by cleverness but by the verdict contract (a non-match is `UNVERIFIED`
+naming the count, **never `DIVERGED`**, so formatting drift can never be misread as a failed
+reproduction); and the engine short-circuits every claim to `UNVERIFIED` on a non-zero exit
+*before* any locator runs, so a stdout pattern reads **successful runs only**. **Deferred:**
+`occurrence: first|last` and a `group` override (gated on a counted post-merge experiment over 5
+real repos), a `flags` array, notebook (`.ipynb`) extraction, regex over binary files, persisting
+matched output on the record, paper-parsing, remote `<doi|url>`, dashboard card, C6 eval fold-in;
+figure/plot & table-image claims stay hard-blocked (no plot-hash, stdlib-only). Test-first (schema →
+pure resolver → engine dispatch → CLI containment/e2e); deterministic; **no real repo, network, or
+pip in CI** (scripted executors + on-disk fixture logs). Plan/PRD under
+`docs/planning/reproduce-stdout-log-locator/`.
+
+**Shipped (notebook `.ipynb` locator — slice 5, Unreleased).** Slices 1.5/3/4 read a repo's JSON,
+TSV/CSV, or free-text output; none could read a **Jupyter notebook** — the very medium the C8
+problem statement is built on (of 27,271 biomedical-paper notebooks only ~3.2% reproduced;
+Samuel & Mietchen 2024). Against a `.ipynb` every claim degraded to `UNVERIFIED`. A claim may now
+carry `{"from": <.ipynb>, "cell": <int | {"contains": <source substring>}>, "pattern": <regex>}`.
+**Cell addressing mirrors `TableLocator.row`:** an int indexes the full `cells` array
+(JSON-faithful, out of range → UNVERIFIED naming the count), or `{"contains": s}` selects the one
+cell whose `source` contains `s` (survives reordering, needs no repo edit — unlike a tags scheme);
+**0-or->1 → UNVERIFIED with the count named**, never a pick. **Output text = stdout streams +
+`text/plain`, in output order** (a new pure stdlib `resolve_notebook_cell_text`, sibling of the JSON
+walker / table reader / regex resolver, never-raising); **`stderr` and `error` tracebacks are
+excluded** so a progress bar or traceback can't be the match surface. `pattern` is **required** and
+the capture reuses slice-4's unchanged `resolve_match`; a numeric-string capture is the normal case
+(slice-3/4 rule). **The load-bearing piece is an mtime freshness guard:** a committed notebook holds
+the *authors'* stored outputs, so reading them would report a false `REPRODUCED` — the exact failure
+the verdict contract prevents, and one a committed notebook *always* presents. The undecidable
+"executed vs committed" question is replaced by the decidable one Contig needs — *was this file
+rewritten by **this** run?* A notebook resolves only when its **mtime ≥ the run start** (stamped
+once before the first run, not re-stamped on an `--allow-install` retry; no fudge tolerance),
+checked **before** any parse; otherwise UNVERIFIED naming the staleness. The guard is
+**non-bypassable** — a notebook claim with no run-start raises rather than silently passing.
+**Honest limit:** it proves *rewritten*, not *recomputed* (a `--run` of `cp committed.ipynb out.ipynb`
+passes while computing nothing) — it closes the dominant honest hole, not an adversarial self-deceit,
+the same boundary slice 1's "re-runnable" drew. `load_claims` went **four-way** (`path` xor
+`column`+`row` xor `pattern` xor `cell`+`pattern`), rejecting a `cell` with `path`/table fields
+pre-run (exit non-zero, nothing written); a `pattern`+`from` claim without `cell` stays a
+byte-identical slice-4 `PatternLocator`. Containment, the 8 MiB size bound, a per-run
+`_notebook_cache`, `classify`/`ClaimResult`/`ReproduceRecord`/bundle/signing/`--fail-on-diverged`
+all reused — **no `models.py` change**, stdlib-only, **no `nbformat`/`jupyter` dependency**.
+**Deferred:** notebook-specific size bound (8 MiB is tight for embedded figures),
+~~extending the freshness guard to the JSON/table locators~~ (**now shipped — see the paragraph
+below; this slice's "guard scope is deliberately inconsistent … belongs in its own slice" is
+CLOSED**), `metadata.tags`/multi-key/regex cell matching, non-text
+outputs, plus the standing C8 list (paper-parsing, remote `<doi|url>`, dashboard card, C6 fold-in);
+figures stay hard-blocked. Test-first (pure extractor → schema → engine + guard → CLI e2e);
+deterministic (fixture `.ipynb`, `os.utime` mtimes, injected `run_started_at`, scripted executors);
+**no real repo, notebook execution, network, or pip in CI**. Plan/PRD under
+`docs/planning/reproduce-notebook-locator/`.
+
+**Shipped (freshness guard — all binding surfaces, Unreleased).** Slice 5 shipped the mtime
+freshness guard for the **notebook locator only** and recorded the inconsistency as a known gap
+("the freshness guard is notebook-only … the JSON/table locators keep the same stale-artifact
+hole, a separate slice"; the slice-5 PRD's R2 said the same). **That gap is now closed, and this
+paragraph is the record that R2 is DONE.** The gap was the strongest remaining false-pass in C8: a
+repo that **commits its outputs** — a checked-in `results.json`, `de.tsv`, `metrics.json`, or
+`run.log` — reported `REPRODUCED` for a computation that never ran, because the engine read the
+*authors'* stored numbers and compared them to the *authors'* published claim, so the comparison
+always matched. **All four remaining disk-reading paths are now guarded:** the JSON `path` locator
+(slice 1.5), the TSV/CSV `column`/`row` table locator (slice 3), the **file-mode** `pattern`
+locator (slice 4), and the flat `--results` `results.json` read (slice 1 — the **oldest** instance
+of the bug and the one **every "cooperative repo" uses**). One shared nested helper
+`_require_fresh(resolved, noun, label)` in `run_reproduction` returns an UNVERIFIED message when
+the artifact's mtime predates `run_started_at`, and it fires **before the file is parsed** and
+before the parse enters the per-run cache (`_json_cache`/`_table_cache`/`_text_cache`), so a stale
+artifact is never read for content; the notebook observer (slice 5) now routes through the **same**
+helper instead of a second inline copy — `_require_fresh` takes an optional `mtime=` so a caller
+holding a `stat()` result can pass it in, letting the notebook branch keep its single `stat()` and
+its size-check-before-freshness ordering with identical wording (no notebook test changed).
+**The stdout-mode pattern locator (`pattern` with no `from`) is exempt by
+construction, not by oversight** — it binds the run's own captured combined stdout+stderr, touches
+no filesystem, and cannot be stale; recorded so nobody later bolts a meaningless mtime check onto
+text with no file behind it. **Non-bypassable:** there is **no opt-out flag**, and an **unstamped**
+run start **raises** rather than degrading (a `None` meaning "guard off" would silently disable a
+false-pass guard exactly where it is needed). A path that cannot be `stat()`'d is **not** a
+freshness failure — the caller's existing missing/unreadable message still wins, so no pre-existing
+error was pre-empted; and a **stale-but-valid `results.json`** reports the freshness message, never
+the pre-existing "missing or unparseable" wording (the file parses fine — it is merely stale, and
+the old wording would send a user to debug a syntax error that does not exist). The guard
+**follows symlinks** deliberately, and the mechanism is `Path.stat()`'s `follow_symlinks=True`
+**default**, *not* a `resolve()` call — the locator observers do `resolve()`, but the flat
+`--results` path is plain `repo_path / results_path` and is never resolved, yet follows symlinks
+just the same, so the *target's* mtime decides everywhere. `follow_symlinks=False` must never be
+introduced (a prohibition now written into `_require_fresh`'s docstring): statting the link itself
+would let a `ln -s` created during the run mark ancient content "fresh", turning real staleness
+into a false pass. One consistent message stem — *"was not rewritten by
+this run (mtime predates run start)"* — across all five guarded surfaces makes staleness greppable
+and countable **without new telemetry**; a structured `ClaimResult` field was deliberately deferred
+(it would cost a `models.py` change this slice otherwise avoids). **Honest limits, stated not
+softened:** it proves *rewritten*, not *recomputed* — a `--run` of `cp committed.json out.json`, a
+bare `touch`, or a restored cache passes while computing nothing, so this closes the dominant
+**honest** hole, not adversarial self-deceit (the same boundary slices 1 and 5 drew); there is
+**no fudge tolerance, deliberately** — on a coarse-mtime filesystem a genuinely regenerated file
+can report an mtime marginally before the run start and yield a **false UNVERIFIED**, accepted
+because a false UNVERIFIED is honest and recoverable while a false REPRODUCED is not, and because
+a tolerance is exactly the size of the hole it opens; **clock skew is a distinct cause with the
+same symptom** (the stamp is `time.time()` on the orchestrating host while an mtime may be written
+over NFS/SMB by a machine with a different clock — same posture, recorded separately so a future
+debugger is not sent to the wrong explanation); and there is an **accepted behavior change** — a
+legitimate run that does not rewrite an artifact (a `make`/`snakemake` target already up to date, a
+repo writing into a timestamped output dir, or a `--run` executing only the final step of a
+multi-step analysis while the claim addresses an earlier artifact) now reports `UNVERIFIED` where
+it previously bound a value; that was a deliberate product decision (strict, no opt-out), whose
+**revisit trigger is the first real repo where a legitimately-reproducing run is blocked**.
+**Base rate unverified:** we do **not** know what share of published repos commit their outputs —
+no such number was measured and none is cited; the case rests on the defect being **possible and
+silent**. (The ~3.2%-of-27,271-notebooks figure above is a *reproduction* rate, **not** a
+committed-artifact rate, and is not evidence here.) Scope: the CLI already stamped the run start
+once before the first run and does **not** re-stamp it on an `--allow-install` retry, so **no CLI
+signature change and no new flag** were needed — only the `reproduce` docstring, which now states
+the requirement once for all locator forms and `--results` and names the stdout exemption. **No
+`models.py` change**, no new claim-file syntax, no new dependency, stdlib-only (`Path.stat()`).
+Test-first (per surface: stale-with-an-exactly-matching-value → UNVERIFIED, fresh → still
+REPRODUCED, missing run-start → raises; plus stdout-mode-needs-no-freshness, symlink-follows-target,
+and retry-written artifacts). The four "fresh" controls stamp the artifact at **exactly** the run
+start, pinning the `>=` boundary (a coarse-granularity filesystem truncates mtime to the second, so
+`mtime == run_start` is precisely what a real run lands on), and the four missing-file cases assert
+the freshness wording is **absent** while each surface's own missing/unreadable message is intact,
+pinning "un-`stat()`-able is not a freshness failure". Determinism, precisely: the
+**guard-specific** tests are decided purely by `os.utime`-set mtimes against a fixed 1970-era
+synthetic run start, while the ~40 **pre-existing** located/table/pattern tests pass the guard
+because a file written at real wall-clock time has an mtime far past that 1970-era stamp. **No real
+repo, network, or pip in CI.** **Known debt carried, not introduced by this slice:** the flat
+`--results` read catches only `json.JSONDecodeError`, so a **non-UTF-8 `results.json` raises
+`UnicodeDecodeError` out of `run_reproduction`** rather than degrading to `UNVERIFIED`; the three
+locator observers already handle it (they catch `(ValueError, OSError)`, which covers
+`UnicodeDecodeError`), making the flat path the lone outlier. Fixing it is a behavior change
+needing its own test and is out of scope for a freshness slice.
+
+**Shipped (remote intake — slice 6, Unreleased).** Every slice above assumed the user had already
+cloned the paper's repo and could point `contig reproduce` at a local directory — so the bundle's
+`repo` field was a **local path that means nothing to anyone else**, and the verdict was not
+attributable to a revision. `contig reproduce <https-url> --allow-fetch` now closes that: the repo
+is shallow-cloned (`git clone --depth 1 -- <url> <dest>`) into `<runs-dir>/<reproduce_id>/source/`,
+`HEAD` is resolved, and the 40-hex commit is recorded on two **additive** `ReproduceRecord` fields,
+`source_url`/`source_commit` (both default `None`; `reproduce.json` emits **both keys
+unconditionally**, `null` for a local run, so a consumer never needs a `.get()` dance). The
+record's `repo` holds the **URL**, never the per-run checkout path — a scratch path under someone's
+runs directory is meaningless to a reader, while URL + commit is the portable pin that makes a
+reproduction claim checkable by a third party. **`--allow-fetch` is off by default** and a URL
+without it is refused naming the flag: like `--allow-install` it gates a side effect the user may
+not want (it reaches the **network** and writes a checkout under `--runs-dir`), and the two flags
+are independent — neither implies the other. **Classification is pure and ordered, refusing before
+anything is written:** a leading `-` is refused **first and unconditionally**, ahead of all scheme
+parsing (an argument like `--upload-pack=…` reaching git as an *option* rather than the repo
+positional is a remote-code-execution shape, so no scheme or path pattern can be crafted to bypass
+it); then `https://` is accepted **verbatim, unnormalized** (it becomes provenance); then a DOI
+(`doi:…` or bare `10.<digits>/…`) is refused **naming DOI explicitly** so a pasted DOI gets the
+real reason instead of "No such repo directory: 10.1234/xyz"; then `http`/`ssh`/`git`/`file`/git's
+arbitrary-command `ext::`/scp-like `git@host:path` are refused naming `https://`; everything else
+is a local path exactly as before. The `--` terminator in the clone argv is a **second line of
+defence**, not cosmetic. **The pin is validated, never scavenged:** `git rev-parse HEAD`'s output
+is stripped and matched with `fullmatch` against 40-hex — not searched for a SHA-shaped substring —
+so a multi-line output (the fetcher merges stderr into stdout, since git's stderr is the only
+useful clone diagnostic) is **refused outright**; a fabricated pin is worse than no pin. Every
+failure path (bad URL, failed clone, failed `rev-parse`, unvalidated SHA, non-empty destination)
+exits non-zero with **no bundle and no leftover directory**, with cleanup scoped to what the call
+created (`<id>/source` always; its parent only if this call created it, so a caller's pre-existing
+directory is never deleted out from under it). **The clone happens BEFORE the run-start freshness
+stamp, and that ordering is load-bearing:** a `git clone` writes *every* file at clone time, so
+stamping first would make every author-committed artifact look freshly written by this run and
+**silently disable the guard above on exactly the repos it exists for** — real, published,
+third-party ones. Verified by mutation (invert the ordering and
+`test_committed_results_file_in_a_fetched_checkout_stays_unverified` flips from `unverified` to
+`reproduced`); any future refactor of this command's preamble must preserve it. **The checkout is
+evidence, not attestation:** `_maybe_write_signature` signs the **record** only — the `source/`
+tree is unsigned and unhashed and can be modified afterwards with nothing detecting it, so **the
+commit SHA is the attested fact and `source/` is a convenience copy for inspection**; hashing the
+tree is deliberately a separate slice. **Caveat for signing users, disclosed not fixed:** because
+`canonical_record_bytes` is `record.model_dump(mode="json")` (`signing.py:63`) and includes every
+field, a **pre-slice-6 signed reproduce bundle no longer verifies** — it still *loads* (both fields
+default to `None`, tested) but its canonical payload now carries two extra `null` keys. Verified
+empirically. Same shape as the somatic FAIL-floor slice's `verdict` disclosure, with one honest
+difference: **that blast radius was only bundles whose verdict flips; this is *every* signed
+reproduce bundle** (signing is opt-in via `CONTIG_SIGNING_KEY`, which bounds it — not a reason to
+soften it). Not fixed because canonicalizing with `exclude_none` would change `RunRecord`'s bytes
+too and break **every** existing signature — strictly worse; pinned instead by
+`test_pre_slice_6_signature_over_a_record_without_source_fields_no_longer_verifies`. **Honest
+limits:** **no real git, network, or repo in CI** — the `Fetcher` seam is injected everywhere
+(mirroring `Executor`/`IndexBuilder`/`Installer`) and the real `default_fetcher` is asserted on for
+**argv shape only, never executed** — so the slice is **reasoned and unit-tested, not observed: no
+real clone has been performed**, and the go/no-go is a post-merge manual smoke test (clone one
+small real public repo, confirm the SHA is recorded and that a repo with committed outputs reports
+`UNVERIFIED`) that **has not been run yet**; and **bundle-local checkouts are never pruned**, so the
+runs directory grows. No new dependency (stdlib `subprocess`/`shutil`; `git` needed only on the
+remote path). **Still deferred:** DOI resolution (explicitly out of scope, refused with a message
+saying so), hashing or signing the checkout tree, private-repo credentials, submodules, and
+checkout pruning. (`--rev`/tag/branch selection was deferred here and **shipped in slice 7**,
+below, which retires this slice's RISK-5. Hashing the checkout tree was likewise deferred here
+and is **shipped in slice 8**, below, closing this paragraph's own "hashing the tree is
+deliberately a separate slice" disclosure.)
+
+**Shipped (revision pinning — slice 7, Unreleased).** `--rev <sha|tag|branch>` makes a remote
+reproduction **replayable** rather than merely attributable, retiring slice 6's RISK-5: until now
+**nothing in the product consumed `source_commit`**, and the clone was always `--depth 1` of
+whatever `HEAD` happened to be at fetch time — so re-running after the authors pushed silently
+reproduced a *different* revision than the bundle attested to, with no error. With `--rev`, a
+targeted fetch (`git init` / `remote add origin --` / `fetch --depth 1 origin -- <rev>` /
+`checkout --detach FETCH_HEAD`, all cwd'd to the destination) replaces the clone. **The mechanism
+is the ruling slice 6 left open** ("`--depth 1 --branch <ref>` **or** a targeted fetch"): they are
+not equivalent — `--branch` accepts a tag or branch **only and rejects a raw SHA**, and a raw SHA
+is the input that matters most since it is exactly what `source_commit` contains. Verified against
+real git that one targeted fetch resolves a full SHA, a tag, and a branch. **A requested full SHA
+must equal the resolved one** or the run refuses — a pin that is not what was asked for is worse
+than no pin — while a tag/branch has nothing to compare against. `--rev` requires a URL **and**
+`--allow-fetch`; with a local repo it is **refused, not ignored**. **An abbreviated SHA is refused
+up front** naming the full form (git cannot fetch one, and a 7-hex string is a *valid refname* so
+the refname rules would not catch it). **A remote refusing fetch-by-commit is an honest refusal**
+naming `uploadpack.allowReachableSHA1InWant` and suggesting a tag/branch — a full-clone fallback
+was **declined by design** (it can pull gigabytes unasked), with the first blocked real repo as the
+revisit trigger. Validation is pure and ordered with a **leading `-` refused first and
+unconditionally** (the RCE shape), plus `--` terminators verified to be accepted by `git remote
+add` and `git fetch`. **The requested ref lands in the UNSIGNED `reproduce.json` as
+`requested_rev`** (additive `write_reproduce_bundle` parameter) and **not** on the record: a new
+signed field would have re-broken **every v0.47.0 signed reproduce bundle**, a second break in two
+releases — so existing signatures still verify (asserted, not assumed), at the stated cost that a
+tag/branch requested-ref is **not attested**. Without `--rev` the clone path is **byte-identical**
+to slice 6 (its whole test file passes untouched), and the fetch still precedes the run-start
+freshness stamp — **verified by mutation**, which kills both slices' ordering tests. **Honest
+limits:** fetch-by-bare-commit depends on **server policy** that **CI cannot observe** (the
+validating experiment used the permissive local transport and proves client mechanics only);
+tag/branch have no such dependency; no real git, network, or repo in CI; the manual gate — now
+carrying slice 6's never-run checklist too — remains the only real validation. No new dependency.
+Plan/PRD under `docs/planning/reproduce-rev-pin/`.
+
+**Shipped (paper-claim extraction — Unreleased).** Slices 1–7 built the whole verify/locator/
+bundle spine, but the user still had to **hand-author the claims file** — the last manual step
+between a published paper and a checkable reproduction, and exactly the "paper-parsing to extract
+claims" item every prior C8 slice deferred. `contig extract-claims <paper.txt|md> --out
+<draft.json>` now turns a paper's **plain text/markdown** into a **draft** claims file the user
+reviews and completes. It is claims-file **input generation** only — it does **not** touch
+`run_reproduction`, `classify`, `ClaimResult`, `ReproduceRecord`, the bundle, signing, or any exit
+code (the whole reproduce suite is untouched). A **deterministic stdlib-only core** (a new
+`verification/claim_extraction.py`, never raises) extracts **named-metric + number** claims from a
+curated metric vocabulary joined to a number by a connective within a bounded window; percentages
+keep the **raw** value with `unit="%"` (never ÷100 — the human reconciles scale), inequalities are
+skipped (`p < 0.001` is not a point value), ids are a deterministic per-file metric slug, duplicates
+collapse on `(metric, value)`, and the nearer metric owns a shared number (precision over recall).
+An **optional env-gated LLM assist** (`extract_with_llm`) mirrors the shipped `llm`-detector seam
+exactly — gated on the reused `detect._selected_provider()`, a single lazy-SDK/network touch point
+tests monkeypatch, a defensive prose-tolerant reply parser that swallows every error into `[]`, and
+`merge_claims` with the core winning; importing the module pulls **no** provider SDK, the real seam
+is **shape-asserted only** in CI (fake `anthropic`/`openai` in `sys.modules`) and **never executed**
+(a documented manual pre-merge gate runs it once), and no key is logged. **The load-bearing
+invariant:** the command round-trips its draft through the **unchanged `load_claims`** before
+committing `--out` (temp → `os.replace`; a `ClaimsError` is an internal error, exit non-zero,
+nothing written), so it never emits a draft the reproduce path would reject. The draft is
+**locator-less by design** (`id`/`value`/`tolerance` only — the paper gives the value, not where it
+lives in the repo, so inventing a locator would be dishonest; the user adds it during review), with
+a companion **`<out>.review.md` sidecar** carrying per-claim value/unit/origin/source-sentence and
+the workflow guidance the JSON can't. Honest on every boundary: missing/oversized (> 8 MiB,
+`stat()`ed first)/non-UTF-8 input, `--out` == input, or an existing `--out` without `--force` all
+exit non-zero with nothing written; an empty extraction writes `[]` + a "no claims found" sidecar
+and exits **0**; `--no-llm` forces core-only; flags asserted by Click-param introspection, not
+`--help` scraping. Because extraction only ever produces a draft the user reviews, and any
+unreviewed/wrong claim degrades to `UNVERIFIED` at reproduce time, it can be imperfect **without
+ever manufacturing a false `REPRODUCED`**. **Deferred:** PDF/DOI/paper-fetching, locator inference,
+figure/plot & table-image claims (still hard-blocked — no plot-hash, stdlib-only), a dashboard card,
+and the C6 eval fold-in. Stdlib-only core (`re`); the provider SDK is a lazy optional import — no new
+dependency; no real LLM/network/PDF/repo in CI. Plan/PRD under `docs/planning/reproduce-paper-claims/`.
+
+**Shipped (checkout-tree hash — slice 8, Unreleased).** Closes the gap slice 6 disclosed in its
+own words above ("hashing the tree is deliberately a separate slice"): a remote (`--allow-fetch`)
+reproduce run now records a deterministic content hash of the fetched `source/` checkout, so the
+bundle attests *which bytes* produced the verdict, not only *which commit* was nominally fetched.
+A new pure, stdlib-only `compute_tree_sha256(root)` (`bundle.py`, next to
+`compute_output_checksums`) walks with `os.walk(followlinks=False)`, prunes any directory
+component named `.git` (any depth) and any symlinked directory, keys each regular non-symlink
+file by its POSIX-relative path with `sha256_file` as the value, folds the sorted
+`f"{relpath}\0{hexdigest}\n"` lines (NUL delimiter), and returns the hex SHA-256 of that UTF-8
+blob — published so a third party can recompute it byte-for-byte without git or Contig's source.
+A missing/non-directory root or any `OSError` reading a file returns `None` for the whole digest,
+never a partial or fabricated one. **Computed pre-run and remote-only:** right after `fetch_repo`
+succeeds and before the `run_started_at` freshness stamp, over `repo_path`, so neither an
+`--allow-install` retry nor the run's own writes into the checkout can change the recorded value;
+a local repo-path run records `None`. **Signed:** the new additive
+`ReproduceRecord.source_tree_sha256: str | None = None` rides the existing
+`canonical_record_bytes` signature unchanged; `reproduce.json` gains an unsigned echo, emitted
+unconditionally like `source_url`/`source_commit`. **What it adds over `source_commit` — stated
+honestly:** for a full-SHA pin the commit already binds the tree, so a re-clone plus
+`git rev-parse HEAD` proves much the same thing; the marginal value is the `--rev` tag/branch case
+slice 7 left "not attested", git-free verification (no git or network needed to recompute), and
+groundwork for the deferred local-path and shipped-`source/` hashing. **Honest limits:** it
+attests bytes present/rewritten at hash time, not that they were *scientifically* recomputed
+(same boundary as the freshness guard); and it attests the commit↔tree linkage verifiable by
+re-clone, deliberately **not** the bundle's post-run `source/` copy (which gains the run's own
+outputs after the hash is taken — a distinct, deferred feature). **Caveat for signing users, the
+third disclosed signature break, not fixed:** the new signed field changes
+`canonical_record_bytes`, so a pre-slice-8 signed reproduce bundle still *loads* but no longer
+*verifies* — after slice 6's `source_url`/`source_commit` and the somatic FAIL-floor's `verdict`,
+bounded to opt-in `CONTIG_SIGNING_KEY` signers, pinned by
+`test_pre_slice_8_signature_over_a_record_without_tree_hash_no_longer_verifies`. Unlike every
+prior C8 slice, the core of this one is **fully CI-observable** — real fixture trees on disk, no
+injected-seam reasoning required — only the CLI-remote wiring rides the `Fetcher` seam. No new
+dependency (stdlib `hashlib`/`os`). **Still deferred:** local-path checkout hashing, hashing the
+bundle's `source/` copy as shipped (post-run), paper-parsing, figure/plot claims, DOI resolution,
+private-repo credentials, submodules, checkout pruning, dashboard card, C6 fold-in. Plan/PRD under
+`docs/planning/reproduce-checkout-hash/`.
+
+**Correction to the build surface below (verified against the code, 2026-07-18):** the sentence
+"reuses the existing float-tolerance / plot-hash / seed-aware diffing" was only one-third true.
+The **float-tolerance** compare is real (`benchmark._relative_delta`) and is reused; **plot-hash
+does not exist anywhere in the repo**, and adding perceptual-image-hashing would break the
+deliberate stdlib-only dependency contract (`pydantic`/`typer`/`cryptography` only); **seed-aware
+diffing** is not a named mechanism (the closest thing is a tolerance band absorbing run-to-run
+noise). That is the hard technical reason **figure/plot claims are out of scope** until a
+deliberate dependency decision — not a preference.
+
+**Why it is moat.** Two compounding wins, both already prized by the ROADMAP:
+- **The strongest quantified pain of the whole verification thesis.** Of **27,271**
+  biomedical-paper notebooks, only **~879 (~3.2%)** reproduced the original result
+  (Samuel & Mietchen, *GigaScience* 2024); Pimentel's 1.4M-notebook study finds **~4%**
+  reproduce their own outputs; the best agent scores **21%** on CORE-Bench (code+data
+  *provided*). CODECHECK proves the demand exists but is done **by hand**. No tool parses a
+  paper to extract every numeric claim and aligns it to a *generated* artifact.
+- **The cheapest acquisition channel we have (Principle #5).** "I ran 50 published papers'
+  code — here is how many reproduced, and why" is Biostars / r/bioinformatics / nf-core
+  reputation in a bottle, and a free, viral top-of-funnel that feeds paying Layer-2 usage.
+
+A better base model makes the claim-extraction and the environment-resurrection *better*,
+never redundant — the verdict and the reproduce guarantee are the durable part.
+
+**What we build:**
+- **Environment resurrection (the load-bearing piece).** Reconstruct a runnable environment
+  for an *uncooperative* existing repo from a **traced real execution** (observed imports /
+  loaded versions), not a trusted manifest — ModuleNotFoundError / ImportError + dependency
+  installs are ~76% of reproduction failures. Reuses and extends C2's self-heal and the
+  container/pin machinery.
+- **Claim-to-artifact alignment.** Parse the paper (or a claims file) for numeric
+  claims — a reported statistic, a table cell, a figure — and semantically diff each against
+  the regenerated artifact with the existing float-tolerance / plot-hash / seed-aware diffing.
+- **A per-claim verdict** (`REPRODUCED` / `WITHIN-TOLERANCE` / `DIVERGED` / `UNVERIFIED`) and a
+  signed, re-runnable bundle — the same honesty contract as every verdict (UNVERIFIED is never
+  rendered as reproduced).
+- A **`contig reproduce <repo|doi>`** surface (CLI + dashboard card), community-facing and free.
+
+**Acceptance (test-first):** a synthetic repo whose script regenerates a known figure/number
+yields a `REPRODUCED` verdict per claim; a deliberately drifted dependency or altered constant
+yields `DIVERGED` with the exact claim and the observed-vs-stated values named; a repo with an
+unresolvable environment yields `UNVERIFIED`, never a false reproduce. **The acceptance suite stays
+deterministic and offline** — every network-touching seam (`Installer`, `Fetcher`) is injected, and
+no test performs a real install or clone. That is now a statement about **CI**, not about the
+command: as of the `--allow-install` (slice 2) and `--allow-fetch` (slice 6) flags, `contig
+reproduce` **can** reach the network when the user opts in. Both are off by default, so the default
+invocation still touches nothing beyond the local repo — but "no network" is a property of the test
+harness and of the defaults, not an absolute property of the command.
+
+**Eval data captured:** every reproduction attempt (the environment-repair chain, the
+per-claim diff outcome) is a labeled corpus case — a whole new, publicly-sourced stream of
+failure-and-fix data feeding C6.
+
+**Dependencies:** builds on C2 (self-heal / environment repair), C5 (input-data integrity),
+C6 (eval flywheel), and the shipped reproduce bundle. Verify-and-reproduce only.
+
+**Guardrail:** we report whether the *computation* reproduces the paper's stated numbers; we
+never issue a scientific judgement on whether the paper's *conclusions* are correct. No
+raw-data egress — runs on the user's / CI compute; only hashes and claim diffs leave the box.
+
+---
+
 ## Sequencing summary
 
 | ID | Capability | Window | Leverage |
 |----|-----------|--------|----------|
 | C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) + somatic slice (Unreleased) + single-cell slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap + somatic auto `somatic_site_overlap` PASS-site Jaccard, Mutect2 vs Strelka2, no user input + single-cell `--concordance-sc-counts` pseudobulk gene-level Spearman/fraction-agreeing over a stdlib `.mtx` triplet loader + single-cell **autorun** `--concordance-sc-counts-auto` running STARsolo behind an injectable seam, turnkey; single-cell cluster-stability deferred) |
-| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; per-contig alias harmonization (mito `M`↔`MT` + GRCh38 scaffold seed) shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); peak-RSS-informed OOM memory scaling shipped (Unreleased, honest two-tier: own-peak → blind fallback; sibling rescue deferred); walltime-informed `time_limit` scaling shipped (Unreleased, floored at blind — censored realtime, tail-only win + field instrument); **input-format-conversion class's first slice shipped (Unreleased): bgzip'd (non-BGZF) reference FASTA self-heal, sarek-scoped (rnaseq immune by construction), stream-decompress to uncompressed `.fa` + retry; CRAM↔BAM conversion is the deferred second half**; bwa-mem2/classic-BWA build+redirect, assembly-signature + exhaustive per-assembly alias completeness pending) | Unattended-completion rate, corpus fuel |
-| C3 | Biological-plausibility verification | SHIPPED v0.3.0 (germline) + RNA-seq (v0.6.0) + single-cell ingestion (Unreleased) + germline sex-check (Unreleased) + RNA-seq mapping-composition (Unreleased) + germline variant-count (Unreleased) | Verdict gets smarter about biology (germline Ti/Tv, het/hom, sex-check, variant-count band; RNA-seq dup/rRNA + exonic/intronic/unassigned read-composition from RSeQC read_distribution; single-cell cell-QC now *fires* via STARsolo/Cell Ranger ingestion — was a dormant no-op; gene-body-coverage/mito/doublet deferred) |
-| C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased) + Strelka2-native VAF slice (Unreleased) + swapped-pair smell-test slice (Unreleased); FAIL severity + PON reference wiring deferred | Breadth, depth-first, new corpus |
+| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; per-contig alias harmonization (mito `M`↔`MT` + GRCh38 scaffold seed) shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); peak-RSS-informed OOM memory scaling shipped (Unreleased, honest two-tier: own-peak → blind fallback; sibling rescue deferred); walltime-informed `time_limit` scaling shipped (Unreleased, floored at blind — censored realtime, tail-only win + field instrument); **input-format-conversion class's first slice shipped (Unreleased): bgzip'd (non-BGZF) reference FASTA self-heal, sarek-scoped (rnaseq immune by construction), stream-decompress to uncompressed `.fa` + retry; CRAM↔BAM conversion is the deferred second half**; **opt-in heartbeat stall watchdog shipped (Unreleased): `--detect-stalls`/`--stall-timeout` (default 3600 s, OFF by default) supervise the child over a composite `trace.txt`/`.nextflow.log`/`run.log` heartbeat, terminate a stalled run's process group, and make `no_progress` reachable by the detector for the first time — honest limits: never observed on a real run, uncalibrated window, no real Nextflow in CI, Nextflow-only, not persisted to the launch manifest (D4)**; bwa-mem2/classic-BWA build+redirect, assembly-signature + exhaustive per-assembly alias completeness, stall-window calibration + on-by-default pending) | Unattended-completion rate, corpus fuel |
+| C3 | Biological-plausibility verification | SHIPPED v0.3.0 (germline) + RNA-seq (v0.6.0) + single-cell ingestion (Unreleased) + germline sex-check (Unreleased) + RNA-seq mapping-composition (Unreleased) + germline variant-count (Unreleased) + germline plausibility FAIL-severity (Unreleased) + somatic empty-call-set FAIL floor (Unreleased) + RNA-seq plausibility ingestion fix (Unreleased) | Verdict gets smarter about biology (germline Ti/Tv, het/hom, sex-check, variant-count band — germline Ti/Tv, het/hom, and variant-count now **FAIL** on gross implausibility via WES-safe bands; somatic `variant_count` now **FAILs** on an empty call set; a FAIL verdict reaches the exit code only under the opt-in `--fail-on-verdict`; RNA-seq `duplication_rate` now correctly keyed to MultiQC's `PERCENT_DUPLICATION`/a 0-1 fraction — informational-only, no band by design — after never once firing under its old wrong key/unit; `rRNA` remains a guessed slug, WARN-capped; + exonic/intronic/unassigned read-composition from RSeQC read_distribution; single-cell cell-QC now *fires* via STARsolo/Cell Ranger ingestion — was a dormant no-op; gene-body-coverage/mito/doublet deferred; **somatic-VAF and RNA-seq FAIL severity declined by design, not deferred** — tumor VAF's expectation depends on unobserved purity/clonality, and every RNA-seq extreme is a legitimate protocol; annotation-pack FAIL severity is a separate C7 item, still deferred) |
+| C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased) + Strelka2-native VAF slice (Unreleased) + empty-call-set FAIL floor (Unreleased — `somatic_variant_count fail_below: 1`; **VAF/PON FAIL bands declined by design, not deferred**: tumor VAF depends on unobserved purity/clonality, `strelka_median_vaf` is bounded to [0,1] so a ceiling is dead code, `pon_applied` is a non-numeric 3-state string) + swapped-pair smell-test slice (Unreleased — `normal_median_vaf`, the median VAF over the Mutect2 VCF's NORMAL column via a new never-guessing `##normal_sample=` resolver, WARN-capped at `warn_above: 0.30`, UNVERIFIED-when-unresolvable; a *smell*, not a determination — swap, mislabel, and tumor-in-normal contamination give the same number and the message names all three; the call-set-depleting form of a swap is already covered by the `fail_below: 1` floor); PON reference wiring deferred | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
-| C6 | Eval flywheel as a continuous loop | M6 (detector held-out guard slice 1 SHIPPED, Unreleased — honestly 0.833/10:12, two classes structurally unreachable; repair-loop outcome-match guard slice 2 SHIPPED, Unreleased — honestly 1.0/7:7, 5 classes covered; both wired into CI; folding C1/C3 signals + held-out-accuracy trend pending) | Compounding accuracy from real runs |
+| C6 | Eval flywheel as a continuous loop | M6 (detector held-out guard slice 1 SHIPPED, Unreleased — shipped honestly at 0.833/10:12, two classes structurally unreachable; repair-loop outcome-match guard slice 2 SHIPPED, Unreleased — shipped honestly at 1.0/7:7, 5 classes covered; both wired into CI; **both guards moved for the first time in the C2 stall-watchdog slice (Unreleased): eval-guard 0.846 → 0.923 (12/13), flat across all six recorded trend points v0.22.0 → v0.48.0 until now, and heal-guard covered classes 5 → 6 with outcome-match still 1.0 over 8 scenarios — partly self-graded (we wrote the fixture for the class we made reachable), and `qc_anomaly` remains the sole unreachable class**; folding C1/C3 signals + held-out-accuracy trend pending) | Compounding accuracy from real runs |
 | C7 | Research-use variant annotation & prioritization | M1 + M2 + M3 + M4 + M5 surface+provenance SHIPPED (Unreleased) — germline structural verify + provenance, somatic annotation gate, annotation plausibility (both assays), VEP-vs-SnpEff concordance (both assays: `consequence_concordance` WARN-capped + `gene_symbol_concordance` informational, auto in the verdict, both VCF layouts, annotator-version provenance pair), M5 "corroborated by" line across text/HTML report + `contig methods` + dashboard (reads M4 results, never recomputes) + `AnnotationProvenance.db_version` cache/build token (VEP `cache=` / SnpEff genome) rendered and round-tripped through reproduce with pre-M5 back-compat; **M5 C6 eval fold-in still DEFERRED** (blocked on labeling design) (germline+somatic `annotation_present`/`annotation_complete` structural checks via `VARIANT_ASSAYS`, `AnnotationProvenance` tool+cache/build capture, `--tools …,vep` enablement on both assays, `annotation_real_fraction`/`annotation_consequence_distribution` plausibility checks, all WARN-capped/UNVERIFIED-when-absent; live run may still need a VEP/SnpEff cache Contig does not yet wire — absent annotation degrades to UNVERIFIED, never a false pass; verify-only, prioritization deferred) | Disease-research breadth on-thesis, new corpus; run+verify annotation, never a clinical verdict |
+
+| C8 | Reproduce & verify *existing published* work | first slice SHIPPED v0.40.0 + output-locator slice 1.5 SHIPPED v0.41.0 + env-resurrection slice 2 SHIPPED (Unreleased) + TSV/CSV table-locator slice 3 SHIPPED (Unreleased) + stdout/log pattern-locator slice 4 SHIPPED (Unreleased) + notebook (`.ipynb`) locator slice 5 SHIPPED (Unreleased) + freshness guard across **all** binding surfaces SHIPPED (Unreleased) + remote `https://` git-URL intake slice 6 SHIPPED (Unreleased) + `--rev` revision pinning slice 7 SHIPPED (Unreleased) + checkout-tree hash slice 8 SHIPPED (Unreleased) + paper-claim extraction (`contig extract-claims`) SHIPPED (Unreleased) · M7+ | Turns the engine on third-party papers (repo+claims → per-claim `REPRODUCED`/`WITHIN-TOLERANCE`/`DIVERGED`/`UNVERIFIED`); strongest quantified pain (~3.2% of 27,271 notebooks reproduce), a free viral community-trust channel, and a new publicly-sourced corpus stream. **Shipped:** `contig reproduce <repo> --run --claims` walking skeleton — scalar per-claim verdict reusing `benchmark._relative_delta`, values bound from a repo-written `results.json`, signed re-runnable bundle via the generic signer, `--fail-on-diverged`; cooperative-repos-only, UNVERIFIED-when-unresolved, no real repo/network in CI. **+ Output-locator (slice 1.5):** a claim may carry `{"from": <repo JSON>, "path": "$.a.b[0]"}` to read numbers out of a repo's own **structured JSON as-is** (a new stdlib dotted+`[n]` `resolve_pointer` walker that never raises; located claims classify through the unchanged core; numeric-string strictly UNVERIFIED; escaping `from` refused pre-run + engine never reads outside the repo; JSON-only, full back-compat, no new dep). **+ Environment resurrection (slice 2):** opt-in `--allow-install` (off by default) turns a first run failing on `No module named 'X'` into a bounded detect→install→retry-once self-heal reusing C2 — pure `detect_missing_module` (charset-guarded top-level pkg) + injected `Installer` seam (fixed `pip install` argv, no shell), one install + one retry (provable termination), every unresolved path UNVERIFIED (never a false reproduce), heal recorded on additive `ReproduceRecord.repair_history` (`missing_dependency` literal kept reproduce-local so the C6 eval-guard baseline is unmoved), executor seam widened `int`→`(exit_code, output)`, no new dep, no real pip/network in CI. **+ TSV/CSV table locator (slice 3):** a claim may also carry `{"from": <repo .tsv/.csv[.gz]>, "column": <name|int>, "row": <int|{key:val}>, "header"?, "delimiter"?}` to read a **tabular** cell — DESeq2/count-matrix/feature-table output — via a new stdlib `_read_table`+`resolve_cell` reader (gzip-transparent, index-safe, never raises) and a per-run parse cache; a numeric-string cell is the normal, valid case here (unlike the JSON rule) and classifies through the unchanged core; row-key 0-or-many matches, ragged rows, duplicate/absent header names, and unparseable/non-finite cells all degrade to UNVERIFIED, never DIVERGED; reuses the JSON locator's containment guard, signer, bundle, and exit contract as-is, no `models.py` change, no new dep. **+ stdout/log pattern locator (slice 4):** a claim may also carry `{"pattern": <regex>}` — with `from` it matches a repo-relative text/log file, **without** `from` it matches the run's own captured stdout+stderr — so repos that merely `print()` their headline number become checkable at all; a new pure stdlib `resolve_match` (never raises) takes group 1 if the pattern has groups else the whole match, inline flags only, and is **strict on ambiguity** (0 or >1 matches → UNVERIFIED with the count named, never an arbitrary pick), with the non-participating-group shape (`float(None)` `TypeError`) guarded; matching is bounded at 8 MiB (a ReDoS input bound, not a memory guard — `default_command_executor` already buffers stdout uncapped upstream); `load_claims` compiles the regex pre-run (uncompilable → `ClaimsError`, nothing written) and the locator xor became three-way (`pattern` + any table field rejected, not silently ignored); the dispatch head became an explicit `isinstance` chain, the retried run's output binds for free via the observer closure, a numeric-string capture is the normal valid case (the slice-3 rule), a `from`-less claim never touches the filesystem, and the CLI containment loop gained only a `source is None` skip; no `models.py` change, no new dep. **Weakest locator shipped** — a regex binds to output formatting, so a non-match is UNVERIFIED, never DIVERGED, and a failed run still short-circuits before any locator. **+ Notebook (`.ipynb`) locator (slice 5):** a claim may also carry `{"from": <.ipynb>, "cell": <int|{"contains": s}>, "pattern": <regex>}` to bind a value out of a notebook cell's captured output (stdout streams + `text/plain`, in output order; `stderr`/tracebacks excluded), cell addressing mirroring `TableLocator.row` and capture reusing slice-4's `resolve_match`; introduced the **mtime freshness guard** so a committed notebook's stored outputs can never be read as a false REPRODUCED. **+ Freshness guard on all binding surfaces:** that guard now also covers the JSON locator, the TSV/CSV table locator, the file-mode pattern locator, and the flat `--results` read (slice 1's, the oldest instance and the one every cooperative repo uses) via one shared `_require_fresh` helper — a file whose mtime predates the run start is UNVERIFIED and is **never parsed**, closing the "repo commits its outputs → false REPRODUCED" hole; stdout-mode `pattern` is **exempt by construction** (no file to be stale); **non-bypassable** (no opt-out flag; an unstamped run start raises); an un-`stat()`-able path keeps the caller's missing/unreadable message; symlinks are followed deliberately; **honest limits:** it proves *rewritten*, not *recomputed* (a `cp`/`touch`/restored cache passes), there is **no fudge tolerance** and none will be added (coarse mtimes and clock skew can each yield a **false UNVERIFIED** — accepted, since a false UNVERIFIED is recoverable and a false REPRODUCED is not), and a legitimate run that does not rewrite an artifact (an up-to-date `make` target, a timestamped output dir, a final-step-only `--run`) now reports UNVERIFIED — a deliberate decision whose revisit trigger is the first real repo it blocks; the base rate of repos committing their outputs is **unmeasured and is not claimed**. No `models.py` change, no new dep, no CLI signature change. **+ Remote `https://` git-URL intake (slice 6):** the repo argument may now be an `https://` git URL behind opt-in `--allow-fetch` (off by default; a URL without it is refused naming the flag) — shallow `git clone --depth 1 -- <url>` into `<runs-dir>/<id>/source/`, `HEAD` resolved and recorded on additive `ReproduceRecord.source_url`/`source_commit` (both emitted unconditionally in `reproduce.json`, `null` for a local run), with `repo` holding the **URL** and never the per-run checkout path, so a bundle finally says *which revision of which repository* produced the verdict. Classification is pure and ordered — leading `-` refused **first and unconditionally** (an option reaching git instead of the repo positional is an RCE shape; `--` in the argv is a second line of defence), `https://` kept **verbatim** as provenance, DOI refused **naming DOI**, and `http`/`ssh`/`git`/`file`/`ext::`/scp-like refused naming `https://`. The pin is `fullmatch`ed against 40-hex on the whole stripped output (multi-line output refused, never scavenged for a SHA); every failure exits non-zero with **no bundle and no leftover directory**, cleanup scoped to what the call created. **The clone precedes the run-start stamp deliberately** — a clone writes every file at clone time, so stamping first would silently disable the freshness guard on exactly the published repos it exists for (verified by mutation). **The checkout is evidence, not attestation:** only the **record** is signed, so the commit SHA is the attested fact and `source/` is an unsigned convenience copy. **Caveat:** a pre-slice-6 **signed** reproduce bundle still loads but **no longer verifies** (the canonical payload gained two `null` keys) — every signed reproduce bundle, not just some; disclosed, pinned by a test, not fixed (an `exclude_none` canonicalization would break `RunRecord` signatures too). **Honest limits:** no real git/network/repo in CI (the `Fetcher` is injected; `default_fetcher` is asserted on for argv shape only) — **reasoned, not observed**, with the real-clone smoke test **not yet run**; `--rev` shipped in slice 7 below, so the pin is now **replayable**, not merely auditable; checkouts are never pruned. **+ `--rev` revision pinning (slice 7):** `--rev <sha|tag|branch>` makes the pin **replayable** (retiring slice 6's RISK-5) — a targeted fetch (`init`/`remote add`/`fetch --depth 1 <rev>`/`checkout --detach`) replaces the clone **only** when `--rev` is given, chosen over `clone --branch` because that rejects a raw SHA and a raw SHA is exactly what `source_commit` holds; a requested full SHA **must equal** the resolved one or the run refuses; an abbreviated SHA is refused up front (git cannot fetch one, and a 7-hex string is a *valid refname* the refname rules would miss); a remote refusing fetch-by-commit gets an honest refusal naming `uploadpack.allowReachableSHA1InWant`, **never** a silent full-clone fallback; `--rev` with a local repo is refused, not ignored; the requested ref lands in the **unsigned** `reproduce.json` as `requested_rev` so **every v0.47.0 signed bundle still verifies** (at the stated cost that a tag/branch ref is not attested); the no-`--rev` clone path stays byte-identical and the fetch still precedes the freshness stamp (**verified by mutation**). **Honest limit:** fetch-by-bare-commit depends on **server policy CI cannot observe**. **+ Checkout-tree hash (slice 8):** a remote (`--allow-fetch`) run now hashes the fetched `source/` checkout pre-run — right after fetch, before the freshness stamp, so an `--allow-install` retry or the run's own writes never change it — via a new stdlib `compute_tree_sha256` (`os.walk(followlinks=False)`, `.git` pruned at any depth, symlinks skipped, sorted `f"{relpath}\0{hexdigest}\n"` fold → `sha256`, published so a third party can recompute it byte-for-byte); records it as the new **signed** `ReproduceRecord.source_tree_sha256` (echoed unsigned in `reproduce.json`); local runs record `null`; a missing/non-dir root or unreadable file returns `None` for the whole digest, never fabricated or partial. Closes slice 6's self-disclosed "hashing the tree is deliberately a separate slice" gap. **Honest, not oversold:** for a full-SHA pin the commit already binds the tree, so the marginal value is the `--rev` tag/branch case slice 7 left unattested, git-free verification, and groundwork for the still-deferred local-path/shipped-tree hashing — not novelty for the full-SHA case. **Caveat:** the new signed field is the **third** disclosed signature break (after slice 6 and the somatic FAIL-floor) — a pre-slice-8 signed bundle still loads but no longer verifies, pinned by `test_pre_slice_8_signature_over_a_record_without_tree_hash_no_longer_verifies`. Fully CI-observable (real fixture trees, no injected-seam reasoning needed for the core). No new dep. **Deferred:** multi-key/predicate row match, `occurrence`/`group` selectors, a notebook-specific size bound, a structured staleness field on `ClaimResult`, **paper-claim extraction now shipped** (`contig extract-claims` — deterministic core + optional LLM assist, locator-less draft + review sidecar; PDF/DOI/locator-inference still deferred), figure/plot & table-cell(-image) claims (**plot-hash does not exist and can't be added without breaking the stdlib-only dep contract**), **DOI resolution** (`contig reproduce <doi>` — explicitly out of scope, refused with a message that says so), local-path & shipped-`source/` tree hashing, private-repo credentials, submodules, checkout pruning, dashboard card, C6 fold-in |
 
 **One-line mantra:** make every verdict harder to fool, recover more failures
 without a human, and let every run make the next verdict smarter.

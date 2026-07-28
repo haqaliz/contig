@@ -4,16 +4,18 @@ from __future__ import annotations
 
 from contig.models import (
     AnnotationProvenance,
+    ClaimResult,
     Diagnosis,
     ExecutionTarget,
     Patch,
     QCResult,
     ReferenceIdentity,
     RepairStep,
+    ReproduceRecord,
     RunRecord,
     TaskEvent,
 )
-from contig.report import render_run_report, render_run_report_html
+from contig.report import render_reproduction, render_run_report, render_run_report_html
 
 
 def _target() -> ExecutionTarget:
@@ -94,6 +96,35 @@ def test_report_lists_each_qc_result_with_status_and_value() -> None:
     assert "duplication" in report
     assert "WARN" in report
     assert "0.42" in report
+
+
+def test_report_marks_informational_qc_result_distinctly() -> None:
+    # An informational check (Task 1's QCResult.informational) supports nothing
+    # about the verdict; the text report must say so on its own line, and must
+    # not say so on a normal check's line.
+    record = RunRecord(
+        run_id="r1",
+        pipeline="rnaseq",
+        pipeline_revision="3.14.0",
+        target=_target(),
+        input_checksums={"reads.fastq": "abc"},
+        events=[TaskEvent(process="ALIGN", status="COMPLETED", exit=0)],
+        qc_results=[
+            QCResult(check="mapping_rate", status="pass", message="ok", value=0.97),
+            QCResult(
+                check="duplication_rate",
+                status="pass",
+                message="fyi",
+                value=0.71,
+                informational=True,
+            ),
+        ],
+    )
+    report = render_run_report(record)
+    mapping_line = next(l for l in report.splitlines() if "mapping_rate" in l)
+    dup_line = next(l for l in report.splitlines() if "duplication_rate" in l)
+    assert "informational" not in mapping_line
+    assert "informational" in dup_line
 
 
 def test_report_states_no_qc_when_empty() -> None:
@@ -269,6 +300,36 @@ def test_html_report_groups_structural_qc_checks() -> None:
     assert "structural" in html.lower()
 
 
+def test_html_report_marks_informational_qc_result_distinctly() -> None:
+    # Same discrimination as the text report, in the HTML QC table: the
+    # informational row carries the marker, the normal row does not.
+    record = RunRecord(
+        run_id="r-informational",
+        pipeline="nf-core/rnaseq",
+        pipeline_revision="3.26.0",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="STAR", status="COMPLETED", exit=0)],
+        qc_results=[
+            QCResult(check="mapping_rate", status="pass", message="ok", value=0.97, kind="metric"),
+            QCResult(
+                check="duplication_rate",
+                status="pass",
+                message="fyi",
+                value=0.71,
+                kind="metric",
+                informational=True,
+            ),
+        ],
+    )
+    html = render_run_report_html(record)
+    rows = html.split("<tr>")
+    mapping_row = next(r for r in rows if "mapping_rate" in r)
+    dup_row = next(r for r in rows if "duplication_rate" in r)
+    assert "informational" not in mapping_row
+    assert "informational" in dup_row
+
+
 def test_html_report_groups_concordance() -> None:
     # A concordance result is grouped under its own heading, apart from the
     # metric and structural tables.
@@ -404,6 +465,7 @@ def _gene_symbol_pass() -> QCResult:
         value=0.9,
         expected_range=None,
         kind="concordance",
+        informational=True,
     )
 
 
@@ -878,3 +940,67 @@ def test_render_explain_includes_verdict_reason_and_deciding_checks():
     assert "salmon_mapping_rate" in text
     assert "58.1" in text
     assert ">= 60.0" in text
+
+
+# --- render_reproduction surfaces env-repair (C8 slice 2, Task 4) ---------------
+
+
+def _claim_result(id_="auc", status="reproduced", claimed=0.9, observed=0.9,
+                   tolerance=0.05, delta=0.0):
+    return ClaimResult(
+        id=id_,
+        status=status,
+        claimed=claimed,
+        observed=observed,
+        tolerance=tolerance,
+        delta=delta,
+        message="ok",
+    )
+
+
+def _reproduce_record(repair_history=None):
+    return ReproduceRecord(
+        reproduce_id="rp_1",
+        repo="https://github.com/example/paper",
+        run_command="python eval.py",
+        claims_sha256="a" * 64,
+        claim_results=[_claim_result()],
+        exit_code=0,
+        created_at="2026-07-18T00:00:00Z",
+        repair_history=repair_history or [],
+    )
+
+
+def test_render_reproduction_shows_repair_note_when_repair_history_present():
+    record = _reproduce_record(
+        repair_history=[
+            RepairStep(
+                attempt=1,
+                diagnosis=Diagnosis(
+                    failure_class="missing_dependency",
+                    root_cause="missing Python module 'numpy'",
+                    evidence=["ModuleNotFoundError: No module named 'numpy'"],
+                    confidence=0.8,
+                ),
+                patch=Patch(
+                    kind="env",
+                    operation={"install": "numpy"},
+                    rationale="install numpy and retry",
+                    risk="needs_confirmation",
+                    expected_signal="run exits 0 after install",
+                ),
+                outcome="installed_and_retried",
+                detail="installed numpy; retry exited 0",
+            )
+        ]
+    )
+    text = render_reproduction(record)
+    assert "env-repair" in text
+    assert "numpy" in text
+    assert "installed_and_retried" in text
+
+
+def test_render_reproduction_omits_repair_note_when_repair_history_empty():
+    record = _reproduce_record(repair_history=[])
+    text = render_reproduction(record)
+    assert "env-repair" not in text

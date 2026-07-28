@@ -171,8 +171,12 @@ def _qc_clause(record: RunRecord) -> str:
             f" The run verdict was {verdict}: no quality-control check covered this "
             "run, so the result is not claimed as verified."
         )
+    # An informational check (Task 1's QCResult.informational) supports nothing
+    # about the verdict, so it is labelled inline rather than left to read as
+    # if it were one of the checks that decided "supported by" below.
     checks = ", ".join(
-        f"{qc.check} ({qc.status})" for qc in record.qc_results
+        f"{qc.check} ({qc.status}, informational)" if qc.informational else f"{qc.check} ({qc.status})"
+        for qc in record.qc_results
     )
     return (
         f" The run verdict was {verdict}, supported by the following "

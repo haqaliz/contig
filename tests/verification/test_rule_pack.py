@@ -1,3 +1,4 @@
+import contig.verification.rule_pack as rule_pack_module
 from contig.models import QCResult
 from contig.verification.rule_pack import (
     AMPLISEQ_RULE_PACK,
@@ -5,7 +6,9 @@ from contig.verification.rule_pack import (
     METHYLSEQ_RULE_PACK,
     RNASEQ_RULE_PACK,
     SCRNASEQ_RULE_PACK,
+    SOMATIC_PLAUSIBILITY_PACK,
     VARIANT_RULE_PACK,
+    _is_band_less,
     _status_for,
     evaluate,
     rule_pack_for,
@@ -53,6 +56,66 @@ def test_result_carries_value_and_expected_range():
     results = evaluate({"S1": {"uniquely_mapped_percent": 92.5}}, _single_check_pack())
     assert results[0].value == 92.5
     assert results[0].expected_range == ">= 60.0"
+
+
+def test_bandless_check_renders_expected_range_as_none_not_ge_none():
+    """A rule with neither warn_below nor warn_above must not render the
+    literal nonsense string '>= None' — expected_range must be honestly None."""
+    pack = [
+        {
+            "check": "reported_only",
+            "metric": "m",
+            "message": "a metric we report but deliberately never judge",
+        }
+    ]
+    results = evaluate({"S1": {"m": 42.0}}, pack)
+    assert len(results) == 1
+    assert results[0].status == "pass"
+    assert results[0].expected_range is None
+
+
+def test_expected_range_warn_below_only_renders_ge():  # regression lock
+    pack = [
+        {
+            "check": "bin_completeness",
+            "metric": "completeness",
+            "warn_below": 70.0,
+            "fail_below": 50.0,
+            "message": "CheckM bin completeness (percent of expected marker genes)",
+        }
+    ]
+    results = evaluate({"S1": {"completeness": 80.0}}, pack)
+    assert results[0].expected_range == ">= 70.0"
+
+
+def test_expected_range_warn_above_only_renders_le():  # regression lock
+    pack = [
+        {
+            "check": "bin_contamination",
+            "metric": "contamination",
+            "warn_above": 5.0,
+            "fail_above": 10.0,
+            "message": "CheckM bin contamination (percent marker duplication)",
+        }
+    ]
+    results = evaluate({"S1": {"contamination": 2.0}}, pack)
+    assert results[0].expected_range == "<= 5.0"
+
+
+def test_expected_range_both_bounds_renders_bracket_pair():  # regression lock
+    pack = [
+        {
+            "check": "ts_tv_ratio",
+            "metric": "ts_tv",
+            "fail_below": 1.2,
+            "warn_below": 1.8,
+            "warn_above": 2.4,
+            "fail_above": 3.6,
+            "message": "transition/transversion ratio of called variants",
+        }
+    ]
+    results = evaluate({"S1": {"ts_tv": 2.0}}, pack)
+    assert results[0].expected_range == "[1.8, 2.4]"
 
 
 def test_missing_metric_is_skipped():
@@ -175,13 +238,34 @@ def test_variant_rule_pack_non_empty_and_covers_ts_tv():
     assert "ts_tv" in metrics
 
 
-def test_variant_pack_ts_tv_and_het_hom_are_warn_only():
-    # The activated germline plausibility rules are WARN-capped in this slice: no
-    # FAIL band. mean_coverage is unchanged (it may keep its fail band).
+def test_variant_pack_ts_tv_and_het_hom_have_fail_bands():
+    # The germline plausibility rules now carry gross-implausibility FAIL bands
+    # (WES-safe engineering tripwires), on top of their existing WARN bands.
     by_check = {c["check"]: c for c in VARIANT_RULE_PACK}
-    for name in ("ts_tv_ratio", "het_hom_ratio"):
-        assert "fail_below" not in by_check[name]
-        assert "fail_above" not in by_check[name]
+    assert by_check["ts_tv_ratio"]["fail_below"] == 1.2
+    assert by_check["ts_tv_ratio"]["fail_above"] == 3.6
+    assert by_check["het_hom_ratio"]["fail_below"] == 1.0
+    assert by_check["het_hom_ratio"]["fail_above"] == 3.0
+
+
+def test_variant_count_has_fail_below_only():
+    # variant_count gains a hard floor (empty/near-empty call set FAILs) but keeps
+    # its upper bound a SOFT WARN ceiling: no fail_above.
+    by_check = {c["check"]: c for c in VARIANT_RULE_PACK}
+    assert by_check["variant_count"]["fail_below"] == 1
+    assert "fail_above" not in by_check["variant_count"]
+
+
+def test_germline_bands_are_well_ordered():
+    # Invariant (PRD R8): for every germline rule, the bounds that are present must
+    # be ordered fail_below <= warn_below <= warn_above <= fail_above.
+    for rule in VARIANT_RULE_PACK:
+        bounds = [
+            rule.get(key)
+            for key in ("fail_below", "warn_below", "warn_above", "fail_above")
+        ]
+        present = [b for b in bounds if b is not None]
+        assert present == sorted(present), f"{rule['check']!r} bands out of order"
 
 
 def test_rule_pack_for_known_assays():
@@ -527,11 +611,37 @@ def test_rnaseq_plausibility_pack_covers_duplication_and_rrna():
     assert "rrna_contamination" in checks
 
 
-def test_rnaseq_plausibility_pack_rules_have_warn_above():
+def test_rnaseq_plausibility_rrna_contamination_has_warn_above():
+    # rrna_contamination keeps its WARN-capped band; duplication_rate does not
+    # (see test_rnaseq_plausibility_duplication_rate_has_no_band) — the pack is
+    # deliberately mixed-severity now, not one shared warn_above policy.
     from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK
 
-    for rule in RNASEQ_PLAUSIBILITY_PACK:
-        assert "warn_above" in rule, f"{rule['check']!r} missing warn_above"
+    rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "rrna_contamination")
+    assert "warn_above" in rule
+
+
+def test_rnaseq_plausibility_duplication_rate_has_no_band():
+    # duplication_rate is informational-only: no warn_above/warn_below and no
+    # fail_* — see rule_pack.py's header for why a band would flag a
+    # legitimate deep/high-input protocol as broken.
+    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK
+
+    rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "duplication_rate")
+    assert "warn_above" not in rule
+    assert "warn_below" not in rule
+    assert "fail_above" not in rule
+    assert "fail_below" not in rule
+
+
+def test_rnaseq_plausibility_duplication_rate_declares_fraction_unit():
+    # The "unit": "fraction" key drives the [0, 1] range guard in
+    # evaluate_rnaseq_plausibility (a present-but-out-of-range value is
+    # refused as unverified, never rescaled).
+    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK
+
+    rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "duplication_rate")
+    assert rule["unit"] == "fraction"
 
 
 def test_rnaseq_plausibility_pack_rules_have_no_fail_keys():
@@ -543,26 +653,16 @@ def test_rnaseq_plausibility_pack_rules_have_no_fail_keys():
         assert "fail_above" not in rule, f"{rule['check']!r} has forbidden fail_above"
 
 
-def test_rnaseq_plausibility_duplication_below_band_is_pass():
+def test_rnaseq_plausibility_duplication_high_value_is_pass_not_warn():
+    # duplication_rate has no band (informational only): even a high, in-range
+    # fraction like 0.95 passes, it never warns. (The unit-range guard for a
+    # present-but-out-of-[0,1] value like 95.0 lives in
+    # evaluate_rnaseq_plausibility, not in _status_for, which only applies
+    # bounds a rule actually declares.)
     from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK, _status_for
 
     rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "duplication_rate")
-    assert _status_for(30.0, rule) == "pass"
-
-
-def test_rnaseq_plausibility_duplication_above_band_is_warn():
-    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK, _status_for
-
-    rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "duplication_rate")
-    assert _status_for(95.0, rule) == "warn"
-
-
-def test_rnaseq_plausibility_duplication_never_fails():
-    # Even a value far above the band must not return "fail" (WARN-cap guarantee).
-    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK, _status_for
-
-    rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "duplication_rate")
-    assert _status_for(99999.0, rule) != "fail"
+    assert _status_for(0.95, rule) == "pass"
 
 
 def test_rnaseq_plausibility_rrna_below_band_is_pass():
@@ -679,3 +779,179 @@ def test_rnaseq_composition_extreme_values_never_fail():
     results = evaluate({"WORST": sample}, RNASEQ_COMPOSITION_PACK)
     assert len(results) == 3
     assert all(r.status != "fail" for r in results)
+
+
+# --- somatic biological-plausibility pack: fail-floor / WARN-cap guarantees ----
+
+
+def test_somatic_variant_count_has_fail_below_only():
+    # somatic_variant_count gains a hard floor (an empty call set FAILs) but
+    # keeps its upper bound a SOFT, uncalibrated warn_above ceiling: a
+    # hypermutator (MSI-high, POLE-mutant) or a WGS tumor legitimately exceeds
+    # it, so a fail_above would false-FAIL real science.
+    by_check = {c["check"]: c for c in SOMATIC_PLAUSIBILITY_PACK}
+    assert by_check["somatic_variant_count"]["fail_below"] == 1
+    assert "fail_above" not in by_check["somatic_variant_count"]
+
+
+def test_somatic_bands_are_well_ordered():
+    # Invariant (PRD S1): for every somatic rule, the bounds that are present must
+    # be ordered fail_below <= warn_below <= warn_above <= fail_above.
+    for rule in SOMATIC_PLAUSIBILITY_PACK:
+        bounds = [
+            rule.get(key)
+            for key in ("fail_below", "warn_below", "warn_above", "fail_above")
+        ]
+        present = [b for b in bounds if b is not None]
+        assert present == sorted(present), f"{rule['check']!r} bands out of order"
+
+
+def test_somatic_vaf_rules_have_no_fail_keys():
+    # Deliberate guarantee, not an oversight: tumor VAF's expected value is a
+    # function of purity and clonality the code never observes, so no band can
+    # separate "broken" from "legitimately low" (a low-purity tumor or a
+    # subclonal population is real science, not a failed run). Unlike
+    # somatic_variant_count, these two rules must stay WARN-capped forever.
+    # strelka_median_vaf is additionally bounded to [0, 1] given non-negative
+    # tier counts, so a fail_above: 1.0 there would be provably dead code on
+    # top of being scientifically wrong.
+    by_check = {c["check"]: c for c in SOMATIC_PLAUSIBILITY_PACK}
+    for check in ("median_vaf", "strelka_median_vaf"):
+        rule = by_check[check]
+        assert "fail_below" not in rule, f"{check!r} has forbidden fail_below"
+        assert "fail_above" not in rule, f"{check!r} has forbidden fail_above"
+
+
+# --- band-less rules are informational (Task 4) --------------------------------
+#
+# A rule with NO warn/fail bounds at all can only ever return "pass" from
+# _status_for -- it asserts nothing, so it must be marked informational=True
+# (verdict-neutral). This is a DIFFERENT mechanism from Task 3's three
+# hardcoded-pass checks (x_het_ratio, gene_overlap, gene_symbol_concordance),
+# which are built directly by Python functions, not by evaluate() over a
+# rule-pack dict.
+#
+# THE TRAP: `_expected_range(check)` also returns None for a band-less rule,
+# which makes it look like a usable "asserts nothing" signal. It is not one --
+# `_expected_range` inspects ONLY warn_below/warn_above, so a rule with just
+# `fail_below` (no warn_*) ALSO renders no expected_range, yet it very much CAN
+# fail. The trap test below pins that a fail_below-only rule stays
+# informational=False and still fails.
+
+
+def test_fail_below_only_rule_is_not_informational_and_still_fails():
+    """THE TRAP, pinned: a rule with ONLY fail_below (no warn_below/warn_above/
+    fail_above) has no `_expected_range` either -- the same as a truly
+    band-less rule. But it CAN fail, so it must never be marked informational.
+    Keying `informational` off `_expected_range(check) is None` would make
+    this rule unfalsifiable, which is strictly worse than the bug Task 4
+    fixes.
+    """
+    pack = [
+        {
+            "check": "variant_count",
+            "metric": "variant_count",
+            "fail_below": 1,
+            "message": "number of distinct germline variant sites",
+        }
+    ]
+    below_floor = evaluate({"S1": {"variant_count": 0}}, pack)
+    assert below_floor[0].status == "fail"
+    assert below_floor[0].informational is False
+
+    above_floor = evaluate({"S1": {"variant_count": 500}}, pack)
+    assert above_floor[0].status == "pass"
+    assert above_floor[0].informational is False
+
+
+def test_band_less_rule_is_informational():
+    # No fail_below/fail_above/warn_below/warn_above at all -> can only ever
+    # return "pass" -> asserts nothing -> must be marked informational.
+    pack = [
+        {
+            "check": "reported_only",
+            "metric": "m",
+            "message": "a metric we report but deliberately never judge",
+        }
+    ]
+    results = evaluate({"S1": {"m": 42.0}}, pack)
+    assert results[0].status == "pass"
+    assert results[0].informational is True
+
+
+def test_rule_with_any_bound_is_not_informational():
+    # A rule that declares at least one bound can actually fail or warn, so it
+    # must not be marked informational -- even when the value in hand happens
+    # to land inside the band.
+    for bound_key, bound_value in (
+        ("fail_below", 1.0),
+        ("fail_above", 100.0),
+        ("warn_below", 1.0),
+        ("warn_above", 100.0),
+    ):
+        pack = [
+            {
+                "check": "some_check",
+                "metric": "m",
+                bound_key: bound_value,
+                "message": "has exactly one bound",
+            }
+        ]
+        results = evaluate({"S1": {"m": 50.0}}, pack)
+        assert results[0].informational is False, (
+            f"a rule with only {bound_key!r} must not be informational"
+        )
+
+
+def _all_rule_pack_lists():
+    """Every rule-pack list[dict] defined at module level in rule_pack.py.
+
+    Scans by name (``*_PACK``, singular) rather than hardcoding the list of
+    packs, so a newly added pack's band-less rules are caught automatically --
+    only the *expected informational set* below needs a deliberate update.
+    """
+    packs = []
+    for name in dir(rule_pack_module):
+        if not name.endswith("_PACK"):
+            continue
+        value = getattr(rule_pack_module, name)
+        if isinstance(value, list) and value and all(isinstance(r, dict) for r in value):
+            packs.append(value)
+    return packs
+
+
+def test_informational_check_set_is_exactly_four():
+    """R7 enumeration guard.
+
+    docs/technical/CAPABILITY_ROADMAP.md:663 said "decide before a second
+    band-less rule lands" -- prose did not enforce that deadline, and three
+    more checks landed informational anyway (Task 3's three hardcoded-pass
+    checks), alongside duplication_rate (Task 4's band-less rule pack entry).
+    This test IS the deadline, in code.
+
+    If this test fails because you added a FIFTH informational check: that
+    can be the right call, but it must be a deliberate act, not a silent
+    side effect. Update the expected set below and say, in the same commit,
+    why the new check can only ever assert nothing (no band is possible, or
+    it is hand-built as always-pass).
+    """
+    bandless_rule_pack_checks = {
+        rule["check"]
+        for pack in _all_rule_pack_lists()
+        for rule in pack
+        if _is_band_less(rule)
+    }
+    # The three hardcoded-pass checks (Task 3): built directly as Python
+    # QCResult(informational=True) calls, not evaluate()-over-a-dict, so a
+    # rule-pack scan cannot see them. Their modules:
+    #   x_het_ratio             -> verification/sex_plausibility.py
+    #   gene_overlap            -> verification/count_concordance.py
+    #   gene_symbol_concordance -> verification/annotation_concordance.py
+    hardcoded_pass_checks = {"x_het_ratio", "gene_overlap", "gene_symbol_concordance"}
+
+    assert bandless_rule_pack_checks | hardcoded_pass_checks == {
+        "duplication_rate",
+        "gene_symbol_concordance",
+        "x_het_ratio",
+        "gene_overlap",
+    }

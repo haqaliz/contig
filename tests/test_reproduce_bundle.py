@@ -1,0 +1,374 @@
+"""Tests for the signed reproduce bundle (C8 slice 1, Phase 3).
+
+Mirrors tests/test_bundle.py's conventions: no conftest, tmp_path, monkeypatch
+for the signing key env var. The load-bearing assertion is that
+`_maybe_write_signature` (imported unchanged from contig.bundle) signs a
+`ReproduceRecord` exactly as it signs a `RunRecord` -- its type hint says
+`RunRecord` but that is not runtime-enforced.
+"""
+
+import json
+
+import pytest
+
+from contig.bundle import _maybe_write_signature, load_reproduction, write_reproduce_bundle
+from contig.models import ClaimResult, Diagnosis, Patch, RepairStep, ReproduceRecord
+from contig.signing import canonical_sha256, generate_keypair, signing_available, verify_signature
+
+requires_signing = pytest.mark.skipif(
+    not signing_available(), reason="cryptography not installed"
+)
+
+
+def _claim(id_="c1", status="reproduced", claimed=0.9, observed=0.9, tolerance=0.02, delta=0.0):
+    return ClaimResult(
+        id=id_,
+        status=status,
+        claimed=claimed,
+        observed=observed,
+        tolerance=tolerance,
+        delta=delta,
+        message="ok",
+    )
+
+
+def _record() -> ReproduceRecord:
+    return ReproduceRecord(
+        reproduce_id="rp_1",
+        repo="https://github.com/example/paper",
+        run_command="python train.py --seed 0",
+        claims_sha256="a" * 64,
+        claim_results=[_claim()],
+        exit_code=0,
+        created_at="2026-07-18T00:00:00Z",
+        interpreter="cpython-3.12",
+        tool="contig",
+    )
+
+
+# --- _maybe_write_signature signs a ReproduceRecord unchanged -------------------
+
+
+@requires_signing
+def test_maybe_write_signature_signs_a_reproduce_record(tmp_path, monkeypatch):
+    private_key, public_key = generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+    record = _record()
+
+    _maybe_write_signature(record, tmp_path)
+
+    sidecar_path = tmp_path / "signature.json"
+    assert sidecar_path.is_file()
+    sidecar = json.loads(sidecar_path.read_text())
+    assert sidecar["algo"] == "ed25519"
+    assert sidecar["public_key"] == public_key
+    assert sidecar["signed_sha256"] == canonical_sha256(record)
+    assert verify_signature(record, sidecar["signature"], sidecar["public_key"]) is True
+
+
+@requires_signing
+def test_maybe_write_signature_verification_fails_for_tampered_reproduce_record(
+    tmp_path, monkeypatch
+):
+    private_key, public_key = generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+    record = _record()
+
+    _maybe_write_signature(record, tmp_path)
+
+    sidecar = json.loads((tmp_path / "signature.json").read_text())
+    tampered = record.model_copy(update={"exit_code": 1})
+    assert verify_signature(tampered, sidecar["signature"], sidecar["public_key"]) is False
+
+
+# --- write_reproduce_bundle ------------------------------------------------------
+
+
+def test_write_reproduce_bundle_writes_record_and_manifest_without_signing_key(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("CONTIG_SIGNING_KEY", raising=False)
+    record = _record()
+
+    json_path = write_reproduce_bundle(record, tmp_path)
+
+    assert json_path == tmp_path / "reproduce_record.json"
+    assert json_path.is_file()
+    assert (tmp_path / "reproduce.json").is_file()
+    assert not (tmp_path / "signature.json").exists()
+
+
+@requires_signing
+def test_write_reproduce_bundle_writes_signature_sidecar_when_key_is_set(tmp_path, monkeypatch):
+    private_key, public_key = generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+    record = _record()
+
+    write_reproduce_bundle(record, tmp_path)
+
+    sidecar = json.loads((tmp_path / "signature.json").read_text())
+    assert sidecar["public_key"] == public_key
+    assert verify_signature(record, sidecar["signature"], sidecar["public_key"]) is True
+
+
+def test_write_reproduce_bundle_creates_missing_dest_dir(tmp_path, monkeypatch):
+    monkeypatch.delenv("CONTIG_SIGNING_KEY", raising=False)
+    nested = tmp_path / "does" / "not" / "exist"
+    assert not nested.exists()
+
+    json_path = write_reproduce_bundle(_record(), nested)
+
+    assert json_path.is_file()
+    assert json_path.parent == nested
+
+
+def test_reproduce_manifest_carries_rerun_fields(tmp_path, monkeypatch):
+    monkeypatch.delenv("CONTIG_SIGNING_KEY", raising=False)
+    record = _record()
+
+    write_reproduce_bundle(record, tmp_path)
+
+    manifest = json.loads((tmp_path / "reproduce.json").read_text())
+    assert manifest["reproduce_id"] == record.reproduce_id
+    assert manifest["repo"] == record.repo
+    assert manifest["run_command"] == record.run_command
+    assert manifest["claims_sha256"] == record.claims_sha256
+    assert manifest["created_at"] == record.created_at
+
+
+# --- load_reproduction -----------------------------------------------------------
+
+
+def test_load_reproduction_round_trips_a_written_record(tmp_path, monkeypatch):
+    monkeypatch.delenv("CONTIG_SIGNING_KEY", raising=False)
+    original = _record()
+
+    json_path = write_reproduce_bundle(original, tmp_path)
+
+    loaded = load_reproduction(json_path.parent)
+    assert loaded == original
+
+
+def test_load_reproduction_missing_file_raises_clear_error(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        load_reproduction(tmp_path)
+
+
+# --- repair_history survives the bundle round-trip (C8 slice 2, Task 4) --------
+
+
+def _healed_record() -> ReproduceRecord:
+    record = _record()
+    return record.model_copy(
+        update={
+            "repair_history": [
+                RepairStep(
+                    attempt=1,
+                    diagnosis=Diagnosis(
+                        failure_class="missing_dependency",
+                        root_cause="missing Python module 'numpy'",
+                        evidence=["ModuleNotFoundError: No module named 'numpy'"],
+                        confidence=0.8,
+                    ),
+                    patch=Patch(
+                        kind="env",
+                        operation={"install": "numpy"},
+                        rationale="install numpy and retry",
+                        risk="needs_confirmation",
+                        expected_signal="run exits 0 after install",
+                    ),
+                    outcome="installed_and_retried",
+                    detail="installed numpy; retry exited 0",
+                )
+            ]
+        }
+    )
+
+
+def test_healed_record_repair_history_round_trips_through_the_bundle(tmp_path, monkeypatch):
+    monkeypatch.delenv("CONTIG_SIGNING_KEY", raising=False)
+    original = _healed_record()
+
+    json_path = write_reproduce_bundle(original, tmp_path)
+
+    loaded = load_reproduction(json_path.parent)
+    assert loaded == original
+    assert len(loaded.repair_history) == 1
+    assert loaded.repair_history[0].outcome == "installed_and_retried"
+    assert loaded.repair_history[0].patch.operation == {"install": "numpy"}
+
+
+@requires_signing
+def test_healed_record_signature_verifies(tmp_path, monkeypatch):
+    private_key, public_key = generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+    record = _healed_record()
+
+    write_reproduce_bundle(record, tmp_path)
+
+    sidecar = json.loads((tmp_path / "signature.json").read_text())
+    assert sidecar["public_key"] == public_key
+    assert verify_signature(record, sidecar["signature"], sidecar["public_key"]) is True
+
+
+def test_bundle_json_without_repair_history_still_loads_as_empty_list(tmp_path):
+    # Legacy bundle written before repair_history existed: no key in the JSON.
+    legacy_json = {
+        "reproduce_id": "rp_legacy",
+        "repo": "https://github.com/example/paper",
+        "run_command": "python train.py --seed 0",
+        "claims_sha256": "a" * 64,
+        "claim_results": [],
+        "exit_code": 0,
+        "created_at": "2026-07-18T00:00:00Z",
+        "interpreter": "cpython-3.12",
+        "tool": "contig",
+    }
+    (tmp_path / "reproduce_record.json").write_text(json.dumps(legacy_json))
+
+    loaded = load_reproduction(tmp_path)
+    assert loaded.repair_history == []
+
+
+# --- source_url / source_commit survive the bundle round-trip (Task 4) --------
+
+
+def _remote_record() -> ReproduceRecord:
+    record = _record()
+    return record.model_copy(
+        update={
+            "source_url": "https://github.com/example/paper.git",
+            "source_commit": "a" * 40,
+        }
+    )
+
+
+def test_remote_record_source_fields_round_trip_through_the_bundle(tmp_path, monkeypatch):
+    monkeypatch.delenv("CONTIG_SIGNING_KEY", raising=False)
+    original = _remote_record()
+
+    json_path = write_reproduce_bundle(original, tmp_path)
+
+    loaded = load_reproduction(json_path.parent)
+    assert loaded == original
+    assert loaded.source_url == "https://github.com/example/paper.git"
+    assert loaded.source_commit == "a" * 40
+
+
+def test_reproduce_manifest_carries_source_url_and_commit(tmp_path, monkeypatch):
+    monkeypatch.delenv("CONTIG_SIGNING_KEY", raising=False)
+    record = _remote_record()
+
+    write_reproduce_bundle(record, tmp_path)
+
+    manifest = json.loads((tmp_path / "reproduce.json").read_text())
+    assert manifest["source_url"] == record.source_url
+    assert manifest["source_commit"] == record.source_commit
+
+
+def test_reproduce_manifest_carries_null_source_fields_for_a_local_run(tmp_path, monkeypatch):
+    # Unconditional keys: always present, null for a local run -- a consumer can
+    # always do manifest["source_commit"] without a KeyError/.get() dance.
+    monkeypatch.delenv("CONTIG_SIGNING_KEY", raising=False)
+    record = _record()
+    assert record.source_url is None
+    assert record.source_commit is None
+
+    write_reproduce_bundle(record, tmp_path)
+
+    manifest = json.loads((tmp_path / "reproduce.json").read_text())
+    assert manifest["source_url"] is None
+    assert manifest["source_commit"] is None
+
+
+def test_local_record_source_fields_default_to_none_on_round_trip(tmp_path, monkeypatch):
+    monkeypatch.delenv("CONTIG_SIGNING_KEY", raising=False)
+    original = _record()
+
+    json_path = write_reproduce_bundle(original, tmp_path)
+
+    loaded = load_reproduction(json_path.parent)
+    assert loaded == original
+    assert loaded.source_url is None
+    assert loaded.source_commit is None
+
+
+def test_bundle_json_without_source_fields_still_loads_as_none(tmp_path):
+    # Pre-slice bundle: neither key exists in the JSON at all.
+    legacy_json = {
+        "reproduce_id": "rp_legacy",
+        "repo": "https://github.com/example/paper",
+        "run_command": "python train.py --seed 0",
+        "claims_sha256": "a" * 64,
+        "claim_results": [],
+        "exit_code": 0,
+        "created_at": "2026-07-18T00:00:00Z",
+        "interpreter": "cpython-3.12",
+        "tool": "contig",
+    }
+    (tmp_path / "reproduce_record.json").write_text(json.dumps(legacy_json))
+
+    loaded = load_reproduction(tmp_path)
+    assert loaded.source_url is None
+    assert loaded.source_commit is None
+
+
+# --- disclosed caveat: a pre-slice-6 SIGNED bundle no longer verifies ----------
+#
+# Adding source_url/source_commit is back-compatible for LOADING (the test above)
+# but NOT for a signature made before the fields existed. `canonical_record_bytes`
+# is `record.model_dump(mode="json")` (signing.py:63), which includes every field,
+# so today's canonical payload carries two extra null keys that the old signed
+# bytes never had. This test pins that as a KNOWN, DISCLOSED property rather than
+# a latent surprise -- if it ever starts passing, the canonical-payload contract
+# changed and the CHANGELOG's disclosure needs revisiting.
+
+
+def _pre_slice_6_canonical_bytes(record: ReproduceRecord) -> bytes:
+    """The canonical bytes this record would have produced before slice 6.
+
+    Rebuilt by dropping exactly the two fields slice 6 added (source_url,
+    source_commit) -- the rest of the canonicalization (sorted keys, compact
+    separators, UTF-8) is copied from `signing.canonical_record_bytes`. Later
+    slices (e.g. slice 8's source_tree_sha256) added more fields that this
+    helper does NOT drop, so for a `_record()` built today the "old" payload
+    still carries `source_tree_sha256: null` alongside the dropped keys' old
+    values -- it is not a byte-for-byte reproduction of an actual pre-slice-6
+    payload. That's fine here: the assertion below only needs the old and
+    fresh payloads to differ so the old signature fails to verify, not that
+    the old payload is historically exact.
+    """
+    payload = record.model_dump(mode="json")
+    old = {k: v for k, v in payload.items() if k not in ("source_url", "source_commit")}
+    assert set(payload) - set(old) == {"source_url", "source_commit"}
+    return json.dumps(old, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+@requires_signing
+def test_pre_slice_6_signature_over_a_record_without_source_fields_no_longer_verifies(
+    tmp_path, monkeypatch
+):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    private_key, public_key = generate_keypair()
+    record = _record()  # a local run: both new fields are None
+    assert record.source_url is None and record.source_commit is None
+
+    # Sign the bytes an older Contig would have produced for this same record.
+    old_signature = (
+        Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key))
+        .sign(_pre_slice_6_canonical_bytes(record))
+        .hex()
+    )
+
+    # The two extra null keys change the canonical payload, so the old signature
+    # does not verify -- even though nothing about the run itself changed.
+    assert verify_signature(record, old_signature, public_key) is False
+
+    # And the fresh signature over today's bytes does verify: the break is the
+    # payload shape, not the signing machinery.
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+    _maybe_write_signature(record, tmp_path)
+    sidecar = json.loads((tmp_path / "signature.json").read_text())
+    assert verify_signature(record, sidecar["signature"], sidecar["public_key"]) is True
+    assert sidecar["signature"] != old_signature

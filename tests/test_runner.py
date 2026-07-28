@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 import pytest
@@ -6,8 +7,10 @@ from contig.bundle import load_bundle
 from contig.models import ExecutionTarget
 from contig.runner import (
     PipelineExecutionError,
+    _pip_install_argv,
     build_nextflow_command,
     default_executor,
+    default_installer,
     read_run_log,
     run_pipeline,
 )
@@ -19,6 +22,25 @@ def test_default_executor_tees_stdout_and_stderr_to_run_log(tmp_path):
     assert rc == 0
     log = (tmp_path / "run.log").read_text()
     assert "to_out" in log and "to_err" in log
+
+
+def test_pip_install_argv_builds_fixed_command_for_numpy():
+    assert _pip_install_argv("numpy") == [sys.executable, "-m", "pip", "install", "numpy"]
+
+
+def test_pip_install_argv_builds_fixed_command_for_scikit_learn():
+    assert _pip_install_argv("scikit-learn") == [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "scikit-learn",
+    ]
+
+
+def test_default_installer_returns_process_exit_code_offline(tmp_path):
+    rc = default_installer([sys.executable, "-c", "raise SystemExit(0)"], tmp_path)
+    assert rc == 0
 
 
 def test_default_executor_returns_nonzero_exit(tmp_path):

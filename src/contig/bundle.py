@@ -7,12 +7,20 @@ that anchor it.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 from pathlib import Path
 
-from contig.models import AnnotationProvenance, ReferenceIdentity, RunRecord, SexInference, sha256_file
+from contig.models import (
+    AnnotationProvenance,
+    ReferenceIdentity,
+    ReproduceRecord,
+    RunRecord,
+    SexInference,
+    sha256_file,
+)
 from contig.verification.annotation_structural import _open_text
 from contig.verification.sex_plausibility import sex_signals
 from contig.verification.structural import manifest_for
@@ -60,6 +68,65 @@ def load_bundle(dest_dir: str | Path) -> RunRecord:
     """Reconstruct the RunRecord from ``dest_dir/run_record.json``."""
     json_path = Path(dest_dir) / "run_record.json"
     return RunRecord.model_validate_json(json_path.read_text())
+
+
+def write_reproduce_bundle(
+    record: ReproduceRecord, dest_dir: str | Path, *, requested_rev: str | None = None
+) -> Path:
+    """Serialize ``record`` to ``dest_dir/reproduce_record.json`` and return that path.
+
+    Also writes ``dest_dir/reproduce.json``, the small re-runnable manifest (repo +
+    run_command + claims_sha256 + source_url + source_commit + source_tree_sha256, no
+    absolute scratch paths -- mirrors LaunchManifest's discipline of omitting
+    scratch/outdir paths; for a remote run ``repo`` holds the URL and the local
+    checkout path is never persisted). ``source_url``/``source_commit``/
+    ``source_tree_sha256`` are emitted unconditionally -- present and ``null`` for a
+    local run -- so a consumer can always read the key without a ``.get()`` dance.
+    ``requested_rev`` -- the ``--rev`` the caller asked for, which for a tag or branch
+    is not recoverable from the resolved SHA -- is emitted the same way. It lives in
+    the manifest and NOT on the record deliberately: the manifest is unsigned
+    invocation metadata, so adding it breaks no existing signature, and the resolved
+    ``source_commit`` stays the attested fact. ``source_tree_sha256`` is the opposite
+    case: it is a field on ``record`` (see ``ReproduceRecord.source_tree_sha256``), so
+    it is part of the SIGNED canonical payload -- the manifest key here is just an
+    echo of that attested value, not a second source of truth. When
+    ``CONTIG_SIGNING_KEY`` is set, also writes a detached signature sidecar over the
+    record's canonical content, via the same ``_maybe_write_signature`` used for
+    RunRecord -- it only calls ``record.model_dump(mode="json")`` under the hood, so
+    it signs a ReproduceRecord exactly as it signs a RunRecord.
+    """
+    dest = Path(dest_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    json_path = dest / "reproduce_record.json"
+    json_path.write_text(record.model_dump_json(indent=2))
+    _maybe_write_signature(record, dest)
+
+    manifest = {
+        "reproduce_id": record.reproduce_id,
+        "repo": record.repo,
+        "run_command": record.run_command,
+        "claims_sha256": record.claims_sha256,
+        "created_at": record.created_at,
+        "source_url": record.source_url,
+        "source_commit": record.source_commit,
+        "source_tree_sha256": record.source_tree_sha256,
+        "requested_rev": requested_rev,
+    }
+    (dest / "reproduce.json").write_text(json.dumps(manifest, indent=2))
+
+    return json_path
+
+
+def load_reproduction(dir: str | Path) -> ReproduceRecord:
+    """Reconstruct the ReproduceRecord from ``dir/reproduce_record.json``.
+
+    Raises ``FileNotFoundError`` with a clear message when the file is absent
+    (mirrors workspace.load_run's discipline of failing clearly on a missing bundle).
+    """
+    json_path = Path(dir) / "reproduce_record.json"
+    if not json_path.is_file():
+        raise FileNotFoundError(f"no reproduce record at {json_path}")
+    return ReproduceRecord.model_validate_json(json_path.read_text())
 
 
 def compute_input_checksums(paths: list[str | Path]) -> dict[str, str]:
@@ -254,3 +321,50 @@ def compute_output_checksums(results_dir: str | Path) -> dict[str, str]:
         rel = path.relative_to(root).as_posix()
         checksums[rel] = sha256_file(path)
     return checksums
+
+
+def _raise(err: OSError) -> None:
+    """os.walk onerror callback: re-raise so a directory-listing error is never
+    silently swallowed (os.walk's default onerror=None would just skip the
+    unreadable subdir and yield fewer entries -- a partial, dishonest digest).
+    """
+    raise err
+
+
+def compute_tree_sha256(root: str | Path) -> str | None:
+    """Deterministic, stdlib-only digest of a checkout tree (C8 slice 8).
+
+    Walks ``root`` with ``os.walk(followlinks=False)``, pruning any directory
+    component named ``.git`` (at any depth) and any symlinked directory, so
+    the digest never crosses a repo boundary or leaves containment. For each
+    regular non-symlink file, folds ``f"{posix_relpath}\\0{sha256_file(path)}\\n"``
+    (NUL delimiter -- illegal in POSIX paths) into a sorted list, then returns
+    the hex SHA-256 of the UTF-8 concatenation. This exact algorithm is
+    published (CHANGELOG) so a third party can recompute it byte-for-byte.
+
+    Honest degradation: a missing or non-directory root, or any ``OSError``
+    while listing a directory or reading a file, returns ``None`` -- never a
+    partial or fabricated digest. ``os.walk``'s default ``onerror=None`` would
+    otherwise silently skip an unreadable subdirectory and yield fewer
+    entries, so an ``onerror`` callback re-raises into the ``except`` below.
+    """
+    base = Path(root)
+    if not base.is_dir():
+        return None
+    lines: list[str] = []
+    try:
+        for dirpath, dirnames, filenames in os.walk(base, followlinks=False, onerror=_raise):
+            # Prune .git dirs and symlinked dirs in place (os.walk honors edits).
+            dirnames[:] = [
+                d for d in dirnames if d != ".git" and not Path(dirpath, d).is_symlink()
+            ]
+            for name in filenames:
+                p = Path(dirpath, name)
+                if p.is_symlink() or not p.is_file():
+                    continue
+                rel = p.relative_to(base).as_posix()
+                lines.append(f"{rel}\0{sha256_file(p)}\n")
+    except OSError:
+        return None
+    blob = "".join(sorted(lines)).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()

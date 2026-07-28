@@ -449,3 +449,125 @@ def test_strict_keeps_strong_conda_signal_but_drops_the_loose_heuristic() -> Non
 def test_strict_keeps_unknown_when_no_task_failed() -> None:
     # No failing task and no signal: both detectors agree on unknown.
     assert diagnose_failure_strict([], "").failure_class == "unknown"
+
+
+# --- no_progress: stall watchdog termination (D6) -------------------------------
+
+
+def test_stall_watchdog_message_is_no_progress() -> None:
+    # Our own emitted sentinel (stall.py:stall_message) must classify as
+    # no_progress. No events: the watchdog kills the run out-of-band, before
+    # Nextflow itself ever reports a task failure.
+    from contig.stall import stall_message
+
+    log = stall_message(
+        idle_sec=1800.0, timeout_sec=1800.0, silent_surfaces=("trace.txt", ".nextflow.log", "run.log")
+    )
+    d = diagnose_failure([], log_text=log)
+    assert d.failure_class == "no_progress"
+
+
+def test_genuine_oom_exit_137_with_no_stall_text_is_still_oom() -> None:
+    # A5: no_progress must not shadow a real OOM. Exit 137, no stall wording.
+    events = [TaskEvent(process="ALIGN", status="FAILED", exit=137)]
+    d = diagnose_failure(events, log_text="process terminated")
+    assert d.failure_class == "oom"
+
+
+def test_genuine_oom_by_text_with_no_stall_text_is_still_oom() -> None:
+    # A5: same, but OOM is signalled by log text rather than the exit code.
+    events = [TaskEvent(process="ASSEMBLE", status="FAILED", exit=1)]
+    log = "java.lang.OutOfMemoryError: Java heap space"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "oom"
+
+
+def test_stall_message_with_incidental_exit_137_is_still_no_progress() -> None:
+    # D6: a dying Nextflow can write a trace row with exit 137 as it is torn
+    # down by the watchdog's SIGTERM/SIGKILL ladder. The first-party stall
+    # verdict must still win over that incidental exit code.
+    from contig.stall import stall_message
+
+    events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=137)]
+    log = stall_message(
+        idle_sec=1800.0, timeout_sec=1800.0, silent_surfaces=("trace.txt", ".nextflow.log", "run.log")
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "no_progress"
+
+
+def test_strict_leaves_no_progress_undemoted() -> None:
+    # no_progress is a high-confidence, first-party signal (0.9), not one of the
+    # two weak-evidence guesses strict steps back from; it must pass through.
+    from contig.stall import stall_message
+
+    log = stall_message(
+        idle_sec=1800.0, timeout_sec=1800.0, silent_surfaces=("trace.txt", ".nextflow.log", "run.log")
+    )
+    assert diagnose_failure_strict([], log_text=log).failure_class == "no_progress"
+
+
+def test_holdout_no_progress_fixture_classifies_as_no_progress() -> None:
+    # Verbatim log_text from src/contig/data/detector_corpus_holdout.jsonl,
+    # case_id "holdout-no-progress-1" (third-party wording, not ours) -- proves
+    # the needles are phrase-level, not fitted to stall.py's exact string. It
+    # matches on "no new output or trace update" and "no forward progress",
+    # BOTH of which it happens to share verbatim with our own message: the
+    # generalization is real, and it comes from our phrasing being ordinary
+    # English rather than from a needle written to catch this fixture.
+    events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=None)]
+    log = (
+        "Task produced no new output or trace update for 6 hours; the progress "
+        "monitor terminated it as stalled (no forward progress)."
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "no_progress"
+
+
+def test_every_no_progress_needle_is_one_the_watchdog_actually_emits() -> None:
+    # The needle tuple widens a branch that sits ABOVE the unconditional OOM
+    # check, so every phrase in it is false-positive surface charged against
+    # every diagnosis Contig ever makes. A needle our own message does not emit
+    # buys nothing to pay for that: it can only ever match somebody else's text.
+    # (One such needle, "terminated it as stalled", was carried for a while on
+    # the belief that the held-out fixture needed it. It did not -- the fixture
+    # hits two other needles verbatim -- so it was dropped.)
+    from contig.detect import _NO_PROGRESS_NEEDLES
+    from contig.stall import stall_message
+
+    emitted = stall_message(
+        idle_sec=5400.0,
+        timeout_sec=3600.0,
+        silent_surfaces=("trace.txt", ".nextflow.log", "run.log"),
+    ).lower()
+
+    unsourced = [n for n in _NO_PROGRESS_NEEDLES if n not in emitted]
+    assert not unsourced, (
+        f"needles the watchdog never emits, so they only match third-party text: {unsourced}"
+    )
+
+
+def test_every_shipped_no_progress_fixture_still_classifies() -> None:
+    # The safety net for narrowing the tuple: every no_progress text this repo
+    # ships -- the training corpus case, the frozen held-out case, and the
+    # heal-guard scenario -- has to keep classifying. eval-guard and heal-guard
+    # would both catch a regression here, but only at guard time; this fails in
+    # the unit suite, next to the tuple being edited.
+    import json
+    from pathlib import Path
+
+    data_dir = Path(__file__).resolve().parents[1] / "src" / "contig" / "data"
+    texts: dict[str, str] = {}
+    for name in ("detector_corpus.jsonl", "detector_corpus_holdout.jsonl"):
+        for line in (data_dir / name).read_text().splitlines():
+            case = json.loads(line)
+            if case.get("expected_class") == "no_progress":
+                texts[case["case_id"]] = case["log_text"]
+    for line in (data_dir / "heal_scenarios.jsonl").read_text().splitlines():
+        scenario = json.loads(line)
+        if scenario.get("expected_class") == "no_progress":
+            texts[scenario["scenario_id"]] = scenario["attempts"][0]["log_text"]
+
+    assert len(texts) >= 3, f"expected the three shipped no_progress texts, found {list(texts)}"
+    for case_id, log in texts.items():
+        assert diagnose_failure([], log_text=log).failure_class == "no_progress", case_id

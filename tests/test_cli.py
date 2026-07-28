@@ -24,6 +24,16 @@ GOOD_MQC = (
     '"S1":{"uniquely_mapped_percent":92.0,"percent_assigned":85.0,"total_reads":1000000.0},'
     '"S2":{"uniquely_mapped_percent":90.0,"percent_assigned":84.0,"total_reads":1100000.0}}]}'
 )
+FAIL_MQC = (  # uniquely_mapped_percent below fail_below (40.0) -> verdict FAIL
+    '{"report_general_stats_data":[{'
+    '"S1":{"uniquely_mapped_percent":30.0,"percent_assigned":85.0,"total_reads":1000000.0},'
+    '"S2":{"uniquely_mapped_percent":30.0,"percent_assigned":84.0,"total_reads":1100000.0}}]}'
+)
+WARN_MQC = (  # uniquely_mapped_percent in [40, 60) -> WARN, not FAIL
+    '{"report_general_stats_data":[{'
+    '"S1":{"uniquely_mapped_percent":50.0,"percent_assigned":85.0,"total_reads":1000000.0},'
+    '"S2":{"uniquely_mapped_percent":50.0,"percent_assigned":84.0,"total_reads":1100000.0}}]}'
+)
 TRACE_OK = (
     "task_id\thash\tnative_id\tname\tstatus\texit\tsubmit\tduration\trealtime\n"
     "1\tab/cd\t1\tFASTQC (S1)\tCOMPLETED\t0\t-\t-\t-\n"
@@ -142,6 +152,169 @@ def test_run_reports_failure_but_still_captures_bundle(tmp_path, monkeypatch):
     assert "FAIL" in result.output
     # the bundle was still written despite the failure
     assert (tmp_path / "rf" / "run_record.json").exists()
+
+
+def test_fail_mqc_fixture_actually_yields_fail_verdict(tmp_path, monkeypatch):
+    # Guardrail: confirm the FAIL_MQC fixture produces a completed run whose
+    # reduced verdict is FAIL (VERDICT: FAIL in the rendered report) before the
+    # exit-code tests below rely on it.
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_OK, FAIL_MQC))
+    result = runner.invoke(app, ["run", "--run-id", "fv", "--runs-dir", str(tmp_path)])
+    assert "FAIL" in result.output
+    rec = load_bundle(tmp_path / "fv")
+    assert rec.verdict == "fail"
+
+
+def test_run_fail_on_verdict_fails_on_fail_qc(tmp_path, monkeypatch):
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_OK, FAIL_MQC))
+    result = runner.invoke(
+        app, ["run", "--run-id", "fov", "--runs-dir", str(tmp_path), "--fail-on-verdict"]
+    )
+    assert result.exit_code == 1
+    assert "verdict is FAIL" in result.output
+
+
+def test_run_fail_on_verdict_passes_on_pass(tmp_path, monkeypatch):
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_OK, GOOD_MQC))
+    result = runner.invoke(
+        app, ["run", "--run-id", "pov", "--runs-dir", str(tmp_path), "--fail-on-verdict"]
+    )
+    assert result.exit_code == 0
+
+
+def test_run_fail_on_verdict_passes_on_warn(tmp_path, monkeypatch):
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_OK, WARN_MQC))
+    result = runner.invoke(
+        app, ["run", "--run-id", "wov", "--runs-dir", str(tmp_path), "--fail-on-verdict"]
+    )
+    assert result.exit_code == 0
+
+
+def test_run_fail_verdict_without_flag_is_zero(tmp_path, monkeypatch):
+    # The most important regression guard: the SAME FAIL fixture, no flag -> exit 0.
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_OK, FAIL_MQC))
+    result = runner.invoke(app, ["run", "--run-id", "nof", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+
+
+def test_run_incomplete_still_fails_with_flag(tmp_path, monkeypatch):
+    # A non-completing run already exits non-zero via .succeeded; the flag must not
+    # regress that (and must not double-fire — the .succeeded gate returns first).
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_FAIL))
+    result = runner.invoke(
+        app, ["run", "--run-id", "inc", "--runs-dir", str(tmp_path), "--fail-on-verdict"]
+    )
+    assert result.exit_code != 0
+
+
+# --- Phase 2: `contig verify --fail-on-verdict` ------------------------------------
+#
+# Mint a persisted, COMPLETED run whose reduced verdict is driven purely by its
+# qc_results (mirror of tests/verification/test_run_qc.py::_record_with). The verdict
+# gate reads the already-serialized record.verdict, so these fixtures never touch a
+# real pipeline. Optionally write a results/ dir with matching output_checksums so the
+# has-checksums (no-drift) verify path is exercised.
+def _write_verdict_run(runs_dir, run_id, qc_results, *, with_outputs=False):
+    run_dir = Path(runs_dir) / run_id
+    output_checksums = {}
+    if with_outputs:
+        from contig.bundle import compute_output_checksums
+
+        results = run_dir / "results"
+        results.mkdir(parents=True, exist_ok=True)
+        (results / "out.txt").write_text("verified output")
+        output_checksums = compute_output_checksums(results)
+    record = RunRecord(
+        run_id=run_id,
+        pipeline="nf-core/rnaseq",
+        pipeline_revision="3.26.0",
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_checksums={},
+        events=[TaskEvent(process="X", status="COMPLETED", exit=0)],
+        qc_results=qc_results,
+        output_checksums=output_checksums,
+    )
+    write_bundle(record, run_dir)
+    return run_dir
+
+
+_FAIL_QC = [QCResult(check="x", status="fail", message="m")]
+_WARN_QC = [QCResult(check="x", status="warn", message="m")]
+
+
+def test_verify_fail_on_verdict_no_checksums_fails(tmp_path):
+    # The sharp edge: no output_checksums is a `return 0` path today. A FAIL verdict
+    # + flag must convert it to exit 1.
+    _write_verdict_run(tmp_path, "vf", _FAIL_QC, with_outputs=False)
+    assert load_bundle(tmp_path / "vf").verdict == "fail"  # confirm fixture verdict
+    result = runner.invoke(
+        app, ["verify", "vf", "--runs-dir", str(tmp_path), "--fail-on-verdict"]
+    )
+    assert result.exit_code == 1
+    assert "verdict is FAIL" in result.output
+
+
+def test_verify_fail_on_verdict_has_checksums_no_drift_fails(tmp_path):
+    # FAIL verdict WITH matching output_checksums (no drift): verify_outputs reports
+    # ok, so only the verdict gate can make it non-zero.
+    _write_verdict_run(tmp_path, "vfc", _FAIL_QC, with_outputs=True)
+    assert load_bundle(tmp_path / "vfc").verdict == "fail"
+    result = runner.invoke(
+        app, ["verify", "vfc", "--runs-dir", str(tmp_path), "--fail-on-verdict"]
+    )
+    assert result.exit_code == 1
+    assert "verdict is FAIL" in result.output
+
+
+def test_verify_fail_on_verdict_json_fails_and_payload_unchanged(tmp_path):
+    # --json + flag: exit 1, but the payload is byte-identical to the no-flag payload
+    # (no `verdict` key added; N1 deferred).
+    _write_verdict_run(tmp_path, "vfj", _FAIL_QC, with_outputs=True)
+    without = runner.invoke(app, ["verify", "vfj", "--runs-dir", str(tmp_path), "--json"])
+    with_flag = runner.invoke(
+        app, ["verify", "vfj", "--runs-dir", str(tmp_path), "--json", "--fail-on-verdict"]
+    )
+    assert without.exit_code == 0
+    assert with_flag.exit_code == 1
+
+    def _payload(res):  # the JSON line on stdout (the reason goes to stderr)
+        line = next(ln for ln in res.output.splitlines() if ln.startswith("{"))
+        return json.loads(line)
+
+    payload_without = _payload(without)
+    payload_with = _payload(with_flag)
+    assert payload_with == payload_without  # payload unchanged
+    assert set(payload_with) == {"ok", "changed", "missing"}
+    assert "verdict" not in payload_with
+
+
+def test_verify_fail_on_verdict_warn_is_zero(tmp_path):
+    # WARN verdict, no drift, + flag -> exit 0 (only FAIL trips the gate).
+    _write_verdict_run(tmp_path, "vw", _WARN_QC, with_outputs=True)
+    assert load_bundle(tmp_path / "vw").verdict == "warn"
+    result = runner.invoke(
+        app, ["verify", "vw", "--runs-dir", str(tmp_path), "--fail-on-verdict"]
+    )
+    assert result.exit_code == 0
+
+
+def test_verify_unverified_with_flag_is_zero(tmp_path):
+    # UNVERIFIED (completed, no qc) + flag -> exit 0: the flag never converts
+    # "we couldn't check" into "it failed".
+    _write_verdict_run(tmp_path, "vu", [], with_outputs=False)
+    assert load_bundle(tmp_path / "vu").verdict == "unverified"
+    result = runner.invoke(
+        app, ["verify", "vu", "--runs-dir", str(tmp_path), "--fail-on-verdict"]
+    )
+    assert result.exit_code == 0
+
+
+def test_verify_fail_verdict_without_flag_is_zero(tmp_path):
+    # Default-unchanged guard: the SAME FAIL fixture, no flag -> exit 0.
+    _write_verdict_run(tmp_path, "vnf", _FAIL_QC, with_outputs=False)
+    assert load_bundle(tmp_path / "vnf").verdict == "fail"
+    result = runner.invoke(app, ["verify", "vnf", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
 
 
 def test_run_with_samplesheet_checksums_real_inputs(tmp_path, monkeypatch):
@@ -559,6 +732,33 @@ def test_rerun_generates_a_run_id_when_none_given(tmp_path, monkeypatch):
     assert new_ids[0] in result.output
 
 
+def test_rerun_registers_detect_stalls_and_stall_timeout_flags_with_defaults():
+    import typer
+
+    cmd = typer.main.get_command(app).commands["rerun"]
+    by_name = {p.name: p for p in cmd.params}
+    assert "--detect-stalls" in by_name["detect_stalls"].opts
+    assert by_name["detect_stalls"].default is False
+    assert "--stall-timeout" in by_name["stall_timeout"].opts
+    assert by_name["stall_timeout"].default == 3600.0
+
+
+def test_rerun_stall_flag_validation_precedes_manifest_lookup_even_on_reorder(tmp_path):
+    # Argument validation is cheap, deterministic, and about the user's own
+    # input, so it must run BEFORE any filesystem work (the manifest lookup).
+    # A run id that does not exist at all still must be refused for the flag
+    # mistake, not for the missing manifest -- otherwise the user is sent to
+    # debug the wrong problem. Pins the ordering so a future change that moves
+    # manifest lookup ahead of validation is caught here, not by inspection.
+    result = runner.invoke(
+        app,
+        ["rerun", "nonexistent", "--runs-dir", str(tmp_path / "runs"), "--stall-timeout", "3600"],
+    )
+    assert result.exit_code != 0
+    assert "--detect-stalls" in result.output
+    assert "No launch manifest" not in result.output
+
+
 def test_rerun_errors_when_launch_manifest_missing(tmp_path):
     result = runner.invoke(app, ["rerun", "ghost", "--runs-dir", str(tmp_path)])
     assert result.exit_code != 0
@@ -578,6 +778,94 @@ def test_rerun_rejects_manifest_input_that_no_longer_exists(tmp_path, monkeypatc
     sheet.unlink()
     result = runner.invoke(app, ["rerun", "gone", "--runs-dir", str(tmp_path / "runs")])
     assert result.exit_code != 0
+
+
+def test_rerun_stall_timeout_without_detect_stalls_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(app, ["run", "--run-id", "rr1", "--runs-dir", str(tmp_path / "runs")])
+    result = runner.invoke(
+        app,
+        ["rerun", "rr1", "--runs-dir", str(tmp_path / "runs"), "--new-run-id", "rr1copy",
+         "--stall-timeout", "120"],
+    )
+    assert result.exit_code != 0
+    assert "--detect-stalls" in result.output
+
+
+def test_rerun_stall_timeout_set_to_its_own_default_without_detect_stalls_is_still_refused(
+    tmp_path, monkeypatch
+):
+    # Same discriminating case as run's: --stall-timeout 3600 (the default value,
+    # passed explicitly) must still be refused, pinning get_parameter_source over
+    # a naive value comparison.
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(app, ["run", "--run-id", "rr2", "--runs-dir", str(tmp_path / "runs")])
+    result = runner.invoke(
+        app,
+        ["rerun", "rr2", "--runs-dir", str(tmp_path / "runs"), "--new-run-id", "rr2copy",
+         "--stall-timeout", "3600"],
+    )
+    assert result.exit_code != 0
+    assert "--detect-stalls" in result.output
+
+
+def test_rerun_detect_stalls_with_nonpositive_stall_timeout_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(app, ["run", "--run-id", "rr3", "--runs-dir", str(tmp_path / "runs")])
+    result = runner.invoke(
+        app,
+        ["rerun", "rr3", "--runs-dir", str(tmp_path / "runs"), "--new-run-id", "rr3copy",
+         "--detect-stalls", "--stall-timeout", "0"],
+    )
+    assert result.exit_code != 0
+
+
+def test_rerun_detect_stalls_selects_the_watchdog_executor(tmp_path, monkeypatch):
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(app, ["run", "--run-id", "rr4", "--runs-dir", str(tmp_path / "runs")])
+
+    watchdog_calls = []
+
+    def fake_make_watchdog_executor(*, stall_timeout_sec):
+        watchdog_calls.append(stall_timeout_sec)
+        return _fake_run_executor(TRACE_RUN_OK, GOOD_MQC)
+
+    default_calls = {"n": 0}
+
+    def spy_default_executor(cmd, trace_path):
+        default_calls["n"] += 1
+        return _fake_run_executor(TRACE_RUN_OK, GOOD_MQC)(cmd, trace_path)
+
+    monkeypatch.setattr("contig.cli.make_watchdog_executor", fake_make_watchdog_executor)
+    monkeypatch.setattr("contig.cli.default_executor", spy_default_executor)
+    result = runner.invoke(
+        app,
+        ["rerun", "rr4", "--runs-dir", str(tmp_path / "runs"), "--new-run-id", "rr4copy",
+         "--detect-stalls", "--stall-timeout", "42"],
+    )
+    assert result.exit_code == 0, result.output
+    assert watchdog_calls == [42.0]
+    assert default_calls["n"] == 0  # default_executor must not run when detect_stalls is on
+
+
+def test_rerun_without_detect_stalls_the_default_executor_is_used_untouched(tmp_path, monkeypatch):
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(app, ["run", "--run-id", "rr5", "--runs-dir", str(tmp_path / "runs")])
+
+    watchdog_calls = []
+
+    def fake_make_watchdog_executor(*, stall_timeout_sec):
+        watchdog_calls.append(stall_timeout_sec)
+        return _fake_run_executor(TRACE_RUN_OK, GOOD_MQC)
+
+    monkeypatch.setattr("contig.cli.make_watchdog_executor", fake_make_watchdog_executor)
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["rerun", "rr5", "--runs-dir", str(tmp_path / "runs"), "--new-run-id", "rr5copy"],
+    )
+    assert result.exit_code == 0, result.output
+    assert watchdog_calls == []  # the factory is never touched when the flag is off
 
 
 def _write_disjoint_reference(tmp_path):
@@ -1135,6 +1423,17 @@ def test_cancel_rejects_invalid_run_id(tmp_path):
     assert result.exit_code != 0
 
 
+def test_resume_registers_detect_stalls_and_stall_timeout_flags_with_defaults():
+    import typer
+
+    cmd = typer.main.get_command(app).commands["resume"]
+    by_name = {p.name: p for p in cmd.params}
+    assert "--detect-stalls" in by_name["detect_stalls"].opts
+    assert by_name["detect_stalls"].default is False
+    assert "--stall-timeout" in by_name["stall_timeout"].opts
+    assert by_name["stall_timeout"].default == 3600.0
+
+
 def test_resume_reruns_same_run_id_with_resume_flag(tmp_path, monkeypatch):
     import json
 
@@ -1163,6 +1462,98 @@ def test_resume_reruns_same_run_id_with_resume_flag(tmp_path, monkeypatch):
     assert "-resume" in seen["cmd"]
     # the SAME run id is reused (not a fresh one)
     assert (tmp_path / "runs" / "rsm" / "run_record.json").exists()
+
+
+def test_resume_detect_stalls_selects_the_watchdog_executor(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(app, ["run", "--run-id", "rswd", "--runs-dir", str(tmp_path / "runs")])
+    (tmp_path / "runs" / "rswd" / "status.json").write_text(
+        json.dumps({"run_id": "rswd", "state": "cancelled", "pid": 4321,
+                    "started_at": "2026-06-22T00:00:00+00:00", "finished_at": "2026-06-22T00:01:00+00:00"})
+    )
+
+    watchdog_calls = []
+
+    def fake_make_watchdog_executor(*, stall_timeout_sec):
+        watchdog_calls.append(stall_timeout_sec)
+        return _fake_run_executor(TRACE_RUN_OK, GOOD_MQC)
+
+    default_calls = {"n": 0}
+
+    def spy_default_executor(cmd, trace_path):
+        default_calls["n"] += 1
+        return _fake_run_executor(TRACE_RUN_OK, GOOD_MQC)(cmd, trace_path)
+
+    monkeypatch.setattr("contig.cli.make_watchdog_executor", fake_make_watchdog_executor)
+    monkeypatch.setattr("contig.cli.default_executor", spy_default_executor)
+    result = runner.invoke(
+        app,
+        ["resume", "rswd", "--runs-dir", str(tmp_path / "runs"),
+         "--detect-stalls", "--stall-timeout", "42"],
+    )
+    assert result.exit_code == 0, result.output
+    assert watchdog_calls == [42.0]
+    assert default_calls["n"] == 0  # default_executor must not run when detect_stalls is on
+
+
+def test_resume_without_detect_stalls_the_default_executor_is_used_untouched(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    runner.invoke(app, ["run", "--run-id", "rsnd", "--runs-dir", str(tmp_path / "runs")])
+    (tmp_path / "runs" / "rsnd" / "status.json").write_text(
+        json.dumps({"run_id": "rsnd", "state": "cancelled", "pid": 4321,
+                    "started_at": "2026-06-22T00:00:00+00:00", "finished_at": "2026-06-22T00:01:00+00:00"})
+    )
+
+    watchdog_calls = []
+
+    def fake_make_watchdog_executor(*, stall_timeout_sec):
+        watchdog_calls.append(stall_timeout_sec)
+        return _fake_run_executor(TRACE_RUN_OK, GOOD_MQC)
+
+    monkeypatch.setattr("contig.cli.make_watchdog_executor", fake_make_watchdog_executor)
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["resume", "rsnd", "--runs-dir", str(tmp_path / "runs")],
+    )
+    assert result.exit_code == 0, result.output
+    assert watchdog_calls == []  # the factory is never touched when the flag is off
+
+
+def test_resume_stall_timeout_without_detect_stalls_is_refused(tmp_path):
+    result = runner.invoke(
+        app,
+        ["resume", "ghost", "--runs-dir", str(tmp_path / "runs"), "--stall-timeout", "120"],
+    )
+    assert result.exit_code != 0
+    assert "--detect-stalls" in result.output
+
+
+def test_resume_stall_timeout_set_to_its_own_default_without_detect_stalls_is_still_refused(
+    tmp_path,
+):
+    # Same discriminating case as run's: --stall-timeout 3600 (the default value,
+    # passed explicitly) must still be refused, pinning get_parameter_source over
+    # a naive value comparison.
+    result = runner.invoke(
+        app,
+        ["resume", "ghost", "--runs-dir", str(tmp_path / "runs"), "--stall-timeout", "3600"],
+    )
+    assert result.exit_code != 0
+    assert "--detect-stalls" in result.output
+
+
+def test_resume_detect_stalls_with_nonpositive_stall_timeout_is_refused(tmp_path):
+    result = runner.invoke(
+        app,
+        ["resume", "ghost", "--runs-dir", str(tmp_path / "runs"),
+         "--detect-stalls", "--stall-timeout", "0"],
+    )
+    assert result.exit_code != 0
 
 
 def test_resume_refuses_a_finished_run(tmp_path, monkeypatch):
@@ -3229,3 +3620,117 @@ def test_methods_rejects_a_missing_run(tmp_path):
 def test_methods_rejects_an_unsafe_run_id(tmp_path):
     result = runner.invoke(app, ["methods", "../etc", "--runs-dir", str(tmp_path)])
     assert result.exit_code != 0
+
+
+def test_run_registers_detect_stalls_and_stall_timeout_flags_with_defaults():
+    # Introspect the Click params directly (never scrape --help; it flakes under
+    # CI's no-TTY Rich rendering).
+    import typer
+
+    cmd = typer.main.get_command(app).commands["run"]
+    by_name = {p.name: p for p in cmd.params}
+    assert "--detect-stalls" in by_name["detect_stalls"].opts
+    assert by_name["detect_stalls"].default is False
+    assert "--stall-timeout" in by_name["stall_timeout"].opts
+    assert by_name["stall_timeout"].default == 3600.0
+
+
+def test_stall_timeout_without_detect_stalls_is_refused(tmp_path):
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "r", "--runs-dir", str(tmp_path / "runs"), "--stall-timeout", "120"],
+    )
+    assert result.exit_code != 0
+    assert "--detect-stalls" in result.output
+
+
+def test_stall_timeout_set_to_its_own_default_without_detect_stalls_is_still_refused(tmp_path):
+    # Discriminates get_parameter_source from a value-comparison shortcut: a
+    # naive `if stall_timeout != 3600.0 and not detect_stalls: refuse` would
+    # pass every OTHER test in this file (they all use a non-default value)
+    # while silently letting `--stall-timeout 3600` through unrefused here.
+    # Do not delete this as "redundant" with the --stall-timeout 120 case above
+    # -- it pins the mechanism, not just the outcome.
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "r3", "--runs-dir", str(tmp_path / "runs"), "--stall-timeout", "3600"],
+    )
+    assert result.exit_code != 0
+    assert "--detect-stalls" in result.output
+
+
+def test_detect_stalls_with_nonpositive_stall_timeout_is_refused(tmp_path):
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "r", "--runs-dir", str(tmp_path / "runs"),
+         "--detect-stalls", "--stall-timeout", "0"],
+    )
+    assert result.exit_code != 0
+
+    result_negative = runner.invoke(
+        app,
+        ["run", "--run-id", "r2", "--runs-dir", str(tmp_path / "runs"),
+         "--detect-stalls", "--stall-timeout", "-5"],
+    )
+    assert result_negative.exit_code != 0
+
+
+def test_detect_stalls_selects_the_watchdog_executor(tmp_path, monkeypatch):
+    watchdog_calls = []
+
+    def fake_make_watchdog_executor(*, stall_timeout_sec):
+        watchdog_calls.append(stall_timeout_sec)
+        return _fake_run_executor(TRACE_RUN_OK, GOOD_MQC)
+
+    default_calls = {"n": 0}
+
+    def spy_default_executor(cmd, trace_path):
+        default_calls["n"] += 1
+        return _fake_run_executor(TRACE_RUN_OK, GOOD_MQC)(cmd, trace_path)
+
+    monkeypatch.setattr("contig.cli.make_watchdog_executor", fake_make_watchdog_executor)
+    monkeypatch.setattr("contig.cli.default_executor", spy_default_executor)
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "ws", "--runs-dir", str(tmp_path / "runs"),
+         "--detect-stalls", "--stall-timeout", "42"],
+    )
+    assert result.exit_code == 0, result.output
+    assert watchdog_calls == [42.0]
+    assert default_calls["n"] == 0  # default_executor must not run when detect_stalls is on
+
+
+def test_without_detect_stalls_the_default_executor_is_used_untouched(tmp_path, monkeypatch):
+    watchdog_calls = []
+
+    def fake_make_watchdog_executor(*, stall_timeout_sec):
+        watchdog_calls.append(stall_timeout_sec)
+        return _fake_run_executor(TRACE_RUN_OK, GOOD_MQC)
+
+    monkeypatch.setattr("contig.cli.make_watchdog_executor", fake_make_watchdog_executor)
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "nows", "--runs-dir", str(tmp_path / "runs")],
+    )
+    assert result.exit_code == 0, result.output
+    assert watchdog_calls == []  # the factory is never touched when the flag is off
+
+
+def test_detect_stalls_and_stall_timeout_are_not_persisted_to_launch_json(tmp_path, monkeypatch):
+    # D4: a stall is a property of the machine/its I/O, not of the analysis --
+    # baking a timeout into a reproducible manifest would make replay depend on
+    # the original host's speed. Deliberate omission.
+    monkeypatch.setattr(
+        "contig.cli.make_watchdog_executor",
+        lambda *, stall_timeout_sec: _fake_run_executor(TRACE_RUN_OK, GOOD_MQC),
+    )
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "lj", "--runs-dir", str(tmp_path / "runs"),
+         "--detect-stalls", "--stall-timeout", "17"],
+    )
+    assert result.exit_code == 0, result.output
+    raw = (tmp_path / "runs" / "lj" / "launch.json").read_text()
+    assert "detect_stalls" not in raw
+    assert "stall_timeout" not in raw

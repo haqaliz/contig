@@ -20,12 +20,16 @@ import { DetectorSelector } from "@/components/eval/detector-selector";
 import { DetectorCompare } from "@/components/eval/detector-compare";
 import { EvalView } from "@/components/eval/eval-view";
 import { EvalHistory } from "@/components/eval/eval-history";
+import { HoldoutHistory } from "@/components/eval/holdout-history";
+import { HealHistory } from "@/components/eval/heal-history";
 import { CoveragePanel } from "@/components/eval/coverage-panel";
 import { ClustersView } from "@/components/eval/clusters-view";
 import {
   DETECTOR_NAMES,
   getDetectorEval,
   getEvalHistory,
+  getHoldoutHistory,
+  getHealHistory,
   isDetectorName,
 } from "@/lib/runs";
 
@@ -43,9 +47,11 @@ export default async function EvalPage({
   // else falls back to the default so the page never shells an unknown name.
   const selected = isDetectorName(detector) ? detector : "rules";
 
-  const [report, history] = await Promise.all([
+  const [report, history, holdoutHistory, healHistory] = await Promise.all([
     getDetectorEval(selected),
     getEvalHistory(),
+    getHoldoutHistory(),
+    getHealHistory(),
   ]);
 
   const selector = (
@@ -88,6 +94,8 @@ export default async function EvalPage({
 
         <DetectorCompare history={history} />
         <EvalHistory history={history} />
+        <HoldoutHistory history={holdoutHistory} />
+        <HealHistory history={healHistory} />
 
         {/* Corpus insights (PRD contracts B, C): coverage and recurring failure
             modes read the corpus directly, so they render even when the live
@@ -103,6 +111,8 @@ export default async function EvalPage({
       <EvalView report={report} selector={selector} />
       <DetectorCompare history={history} />
       <EvalHistory history={history} />
+      <HoldoutHistory history={holdoutHistory} />
+      <HealHistory history={healHistory} />
 
       {/* Corpus insights (PRD contracts B, C): per-class coverage with thin-coverage
           flags, and the recurring failure clusters worst first. */}

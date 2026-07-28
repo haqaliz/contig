@@ -44,6 +44,1265 @@ All notable changes to Contig are recorded here. The format follows
     VAF (this slice is Mutect2-only, matching the tumor `median_vaf` it extends); and a
     dashboard "corroborated by" surface for the swap signal.
 
+- **`contig run --detect-stalls [--stall-timeout SECONDS]` — an opt-in heartbeat stall
+  watchdog, and the first time the `no_progress` failure class is reachable by the detector
+  (C2, with C6 headroom).** Contig could only diagnose a run that **exits**. `default_executor`
+  is a blocking `subprocess.run`, so nothing observed a run in flight: a **hang** — a deadlocked
+  tool, a wedged network mount, a container stuck on a socket — never returned, never raised
+  `PipelineExecutionError`, and never reached the detector; it just consumed the user's compute
+  until a human noticed. `no_progress` was named in `ARCHITECTURE.md:203`, carried in the
+  `FailureClass` literal, and had a frozen held-out fixture — but **no branch of
+  `diagnose_failure` had ever emitted it**.
+  - **Off by default, refused-not-ignored.** `--detect-stalls` defaults to `False`;
+    `--stall-timeout` defaults to **3600 s**. With the flag absent the **executor** is the
+    unmodified `default_executor` and no new execution path runs (the detector's new needle scan
+    is separate: it runs on every `diagnose_failure` call either way, which is the point of it —
+    a `no_progress` log classifies whether or not this run was supervised). `--stall-timeout`
+    passed **without**
+    `--detect-stalls` exits non-zero naming the flag; since `3600.0` is both the default and a
+    legal explicit value, that check reads Click's **`get_parameter_source`**, not the value —
+    pinned by a test that passes the default *explicitly* and asserts refusal (a
+    value-comparison implementation would pass every other test in the diff and fail that one).
+  - **A composite heartbeat, so a healthy-but-slow run is never touched.** Alive if **any** of
+    `trace.txt` (mtime+size), `.nextflow.log` (mtime+size), or `run.log` (size) moved since the
+    last poll; stalled only if **all three** stay silent for the whole window — a trace-only
+    signal goes dark for the entire duration of any single long task, which would make a
+    legitimate 14-hour WGS alignment a false positive. The decision is a **pure** function
+    (`stall.py::evaluate_stall`) over two fingerprints, an injected clock, and the timeout — no
+    subprocess, no sleeping, no filesystem — and a non-positive timeout **can never stall**.
+  - **The observer cannot be hung by the failure it detects.** `stat()` against a hard-mounted
+    unresponsive NFS blocks in uninterruptible sleep, and a wedged mount is a headline stall
+    cause, so the read runs in a **daemon** thread under a 5 s deadline; a missed deadline keeps
+    the previous fingerprint, which reads as "no progress observed". The `run.log` verdict write
+    is bounded the same way — it lands on the same possibly-wedged mount.
+  - **Termination.** `Popen(start_new_session=True)`, poll, and on a stall write the verdict to
+    `run.log` **before** killing (it is the detector's only evidence that the run stalled rather
+    than merely crashed), then SIGTERM → 5 s grace → SIGKILL over the child's **process group**
+    (Nextflow's JVM and tool children, not just the launcher), **at most once per attempt**. The
+    30 s poll wait is taken in short slices and abandoned the moment the child exits, so the
+    self-heal loop's fast failures are not charged a full interval each attempt.
+  - **The `no_progress` detector branch sits AHEAD of the OOM check, deliberately**, reversing a
+    standing "OOM wins outright" comment: OOM matches `any(e.exit == 137)` from the **events
+    alone**, so a dying Nextflow's exit-137 trace row would beat any branch below it whatever the
+    log said. It keys on three phrase-level needles, **every one of them a phrase `stall_message`
+    itself emits** (pinned by a test, so no needle can be added that Contig never writes). The
+    branch generalizes not because a needle was written for the corpus but because **our own
+    wording is ordinary English**: the independently authored frozen `holdout-no-progress-1`
+    fixture, whose text credits a **non-Contig** actor, hits two of the three **verbatim** and
+    classifies through exactly the rule our own message does. A fourth needle ("terminated it as
+    stalled") was carried on the belief the fixture needed it and has been **dropped as
+    redundant** — the fixture classifies without it, so it was pure added false-positive surface.
+    **First-party uniqueness is still given up, and the cost is real and unenforced:** phrases
+    generic enough for an independent author to hit are generic enough for a third-party tool to
+    emit, so foreign output containing one classifies as `no_progress`, and from above the OOM
+    check it out-ranks a genuine `exit == 137`. Tests pin that the emitted message contains none
+    of `killed`/`oom`/`out of memory`/`time limit`, and that a **genuine** OOM (exit-137 *and*
+    text paths) still classifies `oom`. `propose_patches` gains a `no_progress` →
+    `kind="retry"`, `risk="safe"` patch: the loop already passes `-resume`, so the retry reuses
+    cached tasks, bounded by `--max-attempts` and ending in an honest `gave_up`.
+  - **Both C6 guards moved for the first time.** `eval-guard` held-out accuracy **0.846 → 0.923**
+    (11/13 → 12/13), which had been **flat across all six recorded trend points, v0.22.0 →
+    v0.48.0**, with `holdout-no-progress-1` misclassified as `tool_crash` every time (the
+    held-out file itself is unedited, so its `corpus_sha` is unchanged and the guard reported
+    *improved*). `heal-guard` `covered_classes` **5 → 6**, over 8 frozen scenarios instead of 7,
+    outcome-match still **1.0**, recovery 5/8 informational. Both baselines refrozen as a
+    deliberate act. The new `no-progress-heal` scenario uses exit **143** (not 137) and a real
+    watchdog-shaped log with no OOM needles, so it cannot pass by accident. **`qc_anomaly`
+    remains the one structurally unreachable class** — this slice did not close it.
+  - **A regression this slice caused and then fixed, recorded rather than omitted.** Detaching
+    the child into its own session (necessary so the watchdog can `killpg` the pipeline without
+    killing Contig itself) silently removed it from the group `contig cancel` reaps, and left
+    Ctrl-C stopping the **supervisor** while the pipeline kept burning compute — an orphan was
+    reproduced by pid. Both were caught in review and fixed before merge: the child's pgid is
+    published into `status.json` and `cancel_run` reaps it, and the executor terminates the group
+    on `BaseException` before re-raising. **Cancel timing changed as a result:** `wait_seconds`
+    is now spent once **per process group**, so cancelling a watchdog run can take up to **2×**
+    as long — deliberately documented rather than restructured (cancel is a rare admin action).
+  - **Small by design.** `self_heal.py` is **unchanged**; the CLI builds the watchdog through the
+    existing `Executor` seam (one production line), so all 38 test injection sites keep working
+    untouched. Stdlib only (`subprocess`, `os`, `signal`, `threading`, `time`, `pathlib`) — no
+    new dependency, no `models.py` change, no verdict/exit-code/signing contract change.
+    **D4: the settings are deliberately NOT persisted to `LaunchManifest`** — a stall is a
+    property of the machine and its I/O, not of the analysis, and baking a timeout into a
+    reproducible manifest would make replay depend on the original host's speed. Because they are
+    runtime-only rather than replayed, they must be passed on each invocation — so the same two
+    flags were subsequently added to `rerun` and `resume` (below), the watchdog being most wanted
+    exactly when resuming a run that just stalled.
+- **`--detect-stalls` / `--stall-timeout` on `rerun` and `resume`, not just `run`.** The most
+  natural gesture after a stall — `contig resume <id>` — previously fell back to the `False`
+  default and re-ran **without** the watchdog. All three commands now share one
+  `_validate_stall_flags` helper (and shared help-text constants), so the two refusals behave
+  identically everywhere: `--stall-timeout` without `--detect-stalls` is refused naming the gate
+  flag, and a non-positive timeout under `--detect-stalls` is refused. The refusal still reads
+  Click's parameter **source**, never the value — `3600.0` is both the default and a legal
+  explicit value, so `--stall-timeout 3600` alone is refused too, and a test pins exactly that
+  case for each command because a naive `!= 3600.0` check would pass every other test. Validation
+  runs **before** any filesystem work on all three (`rerun` originally checked the manifest
+  first, so a flag mistake reported a missing manifest — fixed, with a regression test asserting
+  the manifest message is *absent*). Nothing else changed: `run`'s behavior and its existing
+  tests are untouched, and with the flag absent the executor is still the unmodified
+  `default_executor`.
+  - **Honest limits, stated as limits.** (1) **Push, not demand-pull:** no design partner asked
+    for it and **no real Contig run has ever been observed to hang** — the architectural gap was
+    documented, the **frequency is unmeasured**, and nothing here claims otherwise. (2) The
+    **1-hour window is reasoned, not calibrated** — no measurement of real inter-heartbeat gaps
+    exists; the observed idle seconds, the window, and which surfaces were silent ride in the
+    stall message as the field instrument that can later replace the guess. (3) **No real
+    Nextflow anywhere in CI:** the terminate mechanics *are* exercised against **real child
+    processes** (a hanging child terminated with exit code asserted `-15`, explicitly `!= 137`;
+    a SIGTERM-ignoring child SIGKILLed after the grace; Ctrl-C leaving no orphan; the executor's
+    **real** `run.log` bytes fed through the shipped `diagnose_failure`) — but what a SIGTERMed
+    **Nextflow** returns and writes into `trace.txt`, and whether `-resume` re-runs a SIGKILLed
+    task rather than treating a partial output as cached, are **reasoned** and remain for the
+    manual pre-merge gate. (4) **The accuracy move is partly self-graded** — we made reachable a
+    class whose fixture we wrote; it evidences a closed taxonomy gap, **not** that the watchdog
+    helps a real user. (5) **A failing observer degrades to "no progress observed"**, so a buggy
+    *injected* observer could get a HEALTHY run terminated after enough polls where it previously
+    crashed loudly; the shipped `read_heartbeat` catches every `OSError` so this is theoretical
+    today, but it is a **real semantic loss recorded as a trade, not a free win** (a timeout means
+    the filesystem is wedged — evidence about the run; an exception means the observer is broken —
+    **no** evidence about the run). (6) `proc.wait()` after SIGKILL is **unbounded** on a child
+    wedged in uninterruptible sleep; `lifecycle._terminate_process_group` has the same
+    pre-existing exposure. (7) `poll_interval` is a **sleep, not a deadline** — a slow observation
+    extends the effective period rather than being subtracted from it. (8) **Nextflow is the
+    tested scope:** the seam sits above the engine branch, so the mechanism applies to Snakemake
+    for free via `run.log` liveness alone — **untested**, not advertised as support, not silently
+    refused. **Deferred:** window calibration on real runs, a stall-specific escalation, a
+    dashboard surface, per-task stall detection, and **on-by-default operation** — whose revisit
+    trigger is committed: the first real false-positive report keeps it off, N real stalls
+    recovered makes it worth reconsidering. Test-first. Plan/PRD under
+    `docs/planning/stall-watchdog-no-progress/`.
+
+- **`contig extract-claims <paper.txt|md> --out <draft.json>` — the C8 paper-claim extraction
+  slice named as deferred in every prior C8 slice (`CAPABILITY_ROADMAP.md:1073`;
+  `CHANGELOG.md` slice-3/4/5/6 deferral lists).** Slices 1–7 (v0.40.0 → v0.48.0) built the whole
+  verify/locator/bundle spine, but the user still had to **hand-author the claims file** by
+  transcribing every number from the paper. This slice turns a paper's text into a **draft**
+  claims file the user reviews and completes — the step that makes `contig reproduce` turnkey on
+  a real published analysis rather than a maintainer demo. It is claims-file **input generation**
+  only: it does **not** touch `run_reproduction`, `classify`, `ClaimResult`, `ReproduceRecord`,
+  the bundle, signing, or any exit code (the entire reproduce suite is untouched and green).
+  - **A deterministic, stdlib-only core** (`verification/claim_extraction.py::extract_claims`,
+    **never raises**) extracts **named-metric + number** claims — a curated metric vocabulary
+    (AUC, accuracy, precision, recall, F1, sensitivity, specificity, Pearson/Spearman
+    correlation, R², MSE/RMSE/MAE, Dice, IoU, (log2) fold change, …) joined to a number by a
+    connective (`of`/`was`/`=`/`:`/`reached`/`achieved`) within a bounded window. Percentages
+    keep the **raw** value with `unit="%"` (never divided by 100 — the repo may emit `87` or
+    `0.87`, so the human reconciles the scale); **inequalities are skipped** (`p < 0.001` is not
+    a single reproducible value); ids are a deterministic metric slug uniquified per file
+    (`auc`, `auc_2`, …); duplicates collapse on `(metric, value)` file-wide; the nearer metric
+    owns a shared number (precision over recall). On a committed labeled fixture corpus the core
+    recovers 13/13 with zero spurious extras — the "obvious claim" bar, honestly, not a claim of
+    perfect extraction on arbitrary prose.
+  - **An optional, env-gated LLM assist** (`extract_with_llm`) mirrors the shipped `llm`-detector
+    seam exactly: gated on the **reused** `detect._selected_provider()` (`CONTIG_LLM_PROVIDER` +
+    `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`), unconfigured → a pure no-op so the deterministic core
+    stands alone; a single lazy-SDK/network touch point (`_llm_complete`) that tests monkeypatch;
+    a **defensive** reply parser that tolerates prose-wrapped JSON and **swallows every**
+    provider/network/parse/shape error into `[]` (never crashes the caller); and `merge_claims`
+    unions core+LLM deduped on `(metric, value)` with the **core winning**. Importing the module
+    pulls **no** provider SDK; the real seam is **shape-asserted only** in CI (a fake
+    `anthropic`/`openai` injected into `sys.modules`), **never executed** — a documented manual
+    pre-merge gate runs the real provider once. No API key is ever logged (pinned by a test).
+  - **The load-bearing invariant: we never emit a draft our own reproduce path would reject.**
+    The command round-trips the generated draft through the **unchanged `load_claims`** (temp
+    file → `os.replace` on success; a `ClaimsError` removes the temp and exits non-zero as an
+    internal error) before committing `--out`. The draft is **locator-less** by design
+    (`id`/`value`/`tolerance` only) — the paper gives the *value*, not *where it lives in the
+    repo's output*, so inventing a `from`/`path` locator would be dishonest; the user adds the
+    locator during review. A companion **`<out>.review.md` sidecar** carries the provenance the
+    JSON can't: per claim its value, unit, origin (`heuristic`/`llm`), and the **source
+    sentence**, plus the workflow header (add a locator; reconcile any `%` scale) — so the draft
+    JSON stays clean and schema-minimal while review stays informed.
+  - **Honest on every boundary.** A missing/unreadable/oversized (`> _MAX_MATCH_BYTES` = 8 MiB,
+    `stat()`ed before read)/non-UTF-8 input exits non-zero with **nothing written**; `--out`
+    equal to the input, or an existing `--out` without `--force`, is refused; an **empty**
+    extraction writes `[]` + a "no numeric claims found" sidecar and exits **0** (finding nothing
+    is not a failure). `--no-llm` forces core-only even when a provider is configured. Flag/arg
+    registration is asserted by introspecting the Click params, never by scraping `--help`.
+    Because extraction only ever produces a draft the user reviews, and any unreviewed/wrongly
+    extracted claim degrades to `UNVERIFIED` at reproduce time, extraction can be imperfect
+    **without ever manufacturing a false `REPRODUCED`**.
+  - **Honest scope / limits.** **Plain-text/markdown only** — no PDF parsing, no DOI resolution,
+    no paper *fetching* (network + parsing), all deferred. **No locator inference**, no
+    figure/plot or table-image claims (hard-blocked — no plot-hash, stdlib-only), no dashboard
+    surface, no C6 eval fold-in. Stdlib-only core (`re`); the provider SDK is a lazy optional
+    import inside the seam — no new runtime dependency. Test-first; **no real LLM, network, PDF,
+    or repo in CI**. Plan/PRD under `docs/planning/reproduce-paper-claims/`.
+
+- **`contig reproduce` now records a deterministic content hash of the fetched checkout tree,
+  closing the gap slice 6 disclosed in its own words: "hashing the tree is deliberately a
+  separate slice" (C8 slice 8).** Slices 6/7 recorded and pinned the resolved commit
+  (`source_commit`) but the `source/` checkout itself stayed unhashed and unsigned — modifiable
+  after the run with nothing detecting it. This slice attests the actual bytes checked out, not
+  only the nominal commit.
+  - **The algorithm is published so a third party can recompute it byte-for-byte, without git or
+    Contig's source.** `compute_tree_sha256(root)`: walk the tree with
+    `os.walk(followlinks=False)`; prune any directory component named `.git` (at any depth) and
+    any symlinked directory; for each regular, non-symlink file the key is its POSIX-relative
+    path and the value is its SHA-256; fold the lines `f"{relpath}\0{hexdigest}\n"` (NUL
+    delimiter — illegal in POSIX paths), **sorted** by that string; SHA-256 the UTF-8
+    concatenation; return the hex digest. A missing or non-directory root, or any `OSError` while
+    reading a file, returns `None` for the **whole** result — never a partial or fabricated
+    digest.
+  - **Scope: remote (`--allow-fetch`) runs only, taken pre-run.** The hash is computed right
+    after `fetch_repo` succeeds and before the `run_started_at` freshness stamp, over the
+    `source/` checkout — so neither an `--allow-install` retry nor anything the run itself writes
+    into the checkout can ever change the recorded digest. Local repo-path runs record
+    `source_tree_sha256: None`.
+  - **Signed.** `ReproduceRecord.source_tree_sha256: str | None = None` is additive and rides the
+    existing `canonical_record_bytes` signature — no change to the signing code itself.
+    `reproduce.json` gains an unsigned echo of the same value, emitted unconditionally (`null`
+    for a local run), matching how `source_url`/`source_commit` are emitted.
+  - **What it adds over `source_commit` — stated honestly, not oversold.** For a remote run
+    pinned by a **full SHA**, the git commit already cryptographically binds its tree, so
+    re-cloning and checking `git rev-parse HEAD` proves much the same thing; the tree hash is not
+    novel there. Its marginal, non-redundant value is: (a) the `--rev` **tag or branch** case
+    slice 7 explicitly left "not attested"; (b) **git-free verification** — an auditor can
+    recompute the digest from files alone, with no git and no network; and (c) groundwork for the
+    deferred local-path and shipped-`source/` hashing, where there is no commit at all.
+  - **Honest limits.** It attests the bytes present at hash time, not that they were
+    *scientifically* recomputed — the same boundary the freshness guard already draws (R1). And
+    it attests the commit↔tree linkage verifiable by re-clone; it deliberately does **not** make
+    the bundle's post-run `source/` copy self-checkable, since that copy gains the run's own
+    outputs *after* the hash is taken — hashing the shipped, post-run tree is a distinct, deferred
+    feature (R3).
+  - **Caveat for signing users — the third disclosed signature break, not fixed.** Adding a field
+    to the signed record changes `canonical_record_bytes`, so a pre-slice-8 **signed** reproduce
+    bundle still **loads** (the new field defaults to `None`, back-compat tested) but its
+    signature **no longer verifies**. This is the third consecutive break — after slice 6's
+    `source_url`/`source_commit` and the somatic empty-call-set slice's `verdict` — bounded to
+    opt-in `CONTIG_SIGNING_KEY` signers, and pinned by
+    `test_pre_slice_8_signature_over_a_record_without_tree_hash_no_longer_verifies` rather than
+    left latent.
+  - No new dependency (stdlib `hashlib`/`os` only).
+
+## [0.48.0] - 2026-07-23
+
+### Added
+
+- **`contig reproduce` now takes `--rev <sha|tag|branch>`, so a remote reproduction is
+  *replayable* and not merely attributable.** Slice 6 recorded `source_url`/`source_commit`
+  but nothing in the product read them back — the clone was always `--depth 1` of whatever
+  `HEAD` happened to be at fetch time, so re-running after the authors pushed silently
+  reproduced a **different revision** than the bundle attested to, with no error. This closes
+  the loop slice 6 left open and retires its RISK-5 ("the pin has no in-product consumer yet").
+  - **The surface.** `contig reproduce <https-url> --allow-fetch --rev <ref> --run "<cmd>"
+    --claims <file>` checks out the revision the caller named. `--rev` requires a URL **and**
+    `--allow-fetch`; passing it with a local repo path is **refused pre-run** rather than
+    silently ignored, because a caller who passes `--rev` and sees a success would reasonably
+    believe they had pinned a revision. A URL without `--allow-fetch` still hits the existing
+    slice-6 refusal naming that flag — the more actionable of the two problems — and the
+    precedence is pinned by a test.
+  - **A targeted fetch replaces the clone, and only when `--rev` is given.** `git init` /
+    `git remote add origin -- <url>` / `git fetch --depth 1 origin -- <rev>` /
+    `git checkout --detach FETCH_HEAD`, all run with the destination as cwd. Slice 6's PRD
+    left the mechanism open ("`--depth 1 --branch <ref>` **or** a targeted fetch"); this is the
+    ruling between them, and they are **not** equivalent: `--branch` accepts a tag or branch
+    **only and rejects a raw SHA** — and a raw SHA is the input that matters most, since it is
+    exactly what `source_commit` contains. Verified against real git that one targeted fetch
+    resolves a full SHA, a tag, **and** a branch. Without `--rev` the path is the **unchanged**
+    `git clone --depth 1`, byte-identical to slice 6 and pinned by leaving that slice's entire
+    test file untouched.
+  - **A requested full SHA must equal the resolved one.** After checkout, `git rev-parse HEAD`
+    is `fullmatch`ed as 40-hex exactly as before, and then — when `--rev` was a full SHA —
+    compared against it case-insensitively. A mismatch **refuses** rather than records: the
+    whole point of `--rev` is that the recorded commit is the requested one, and a pin that
+    isn't what was asked for is worse than no pin. A tag or branch has nothing to compare
+    against, so whatever resolved is recorded.
+  - **An abbreviated SHA is refused up front**, naming the full form. Verified against real
+    git: `git fetch --depth 1 origin -- <7-hex>` fails with `couldn't find remote ref`. Git
+    cannot fetch an abbreviated SHA at all, and because a 7-hex string is a **perfectly valid
+    refname** the refname rules would not catch it — the user would get an error that reads
+    like a typo'd branch name. Checked before the refname rules for exactly that reason.
+  - **A remote that refuses fetch-by-commit gets an honest refusal, never a silent fallback.**
+    When the fetch fails with git's `not our ref` / `upload-pack` shape, the message names the
+    likely cause — the remote may not enable `uploadpack.allowReachableSHA1InWant` — and says
+    to pass a tag or branch instead. A full-clone fallback was **deliberately declined**: it can
+    pull gigabytes without asking on exactly the large published repos this targets. Revisit
+    trigger: the first real repo a user hits that refuses fetch-by-SHA. An unrelated fetch
+    failure is never mislabelled with a cause it does not have (pinned by its own test).
+  - **`--rev` validation is pure and ordered, refusing before any I/O.** A leading `-` is
+    refused **first and unconditionally** — an option reaching `git fetch` in the ref position
+    is the same RCE shape the repo-argument classifier guards against, and checking it first
+    means no other shape, not even an otherwise-valid SHA, can bypass it. Then empty/whitespace,
+    then any whitespace or control character, then the full-SHA accept, then the short-SHA
+    refusal, then git's refname-invalid forms (`..`, `~`, `^`, `:`, `?`, `*`, `[`, `\`, leading
+    or trailing `/` or `.`, trailing `.lock`). A `--` terminator additionally rides in the argv
+    as a second line of defence, and `git remote add` and `git fetch` were **verified** to
+    accept it.
+  - **The requested ref is recorded in the UNSIGNED invocation manifest, deliberately.**
+    `reproduce.json` gains `requested_rev` (emitted unconditionally, `null` when `--rev` was
+    omitted, matching how `source_url`/`source_commit` are emitted); `write_reproduce_bundle`
+    gained an additive `requested_rev=None` parameter since the manifest is derived purely from
+    the record. There is **no `models.py` change and no new signed field**: adding one would
+    have re-broken signature verification for **every v0.47.0 signed reproduce bundle**, a
+    second break in two releases. So **every existing signed reproduce bundle still verifies**,
+    asserted explicitly rather than assumed. The trade is stated plainly: for a tag or branch
+    the requested ref is invocation metadata and is **not attested** — the resolved
+    `source_commit` remains the attested fact.
+  - **The fetch still precedes the run-start freshness stamp**, unchanged from slice 6 and for
+    the same reason: a checkout writes every file at checkout time, so stamping first would
+    silently disable the freshness guard on exactly the published repos it exists for. Verified
+    by **mutation** — moving the fetch below the stamp kills both this slice's ordering test and
+    slice 6's, and the tests were restored to green only by putting it back.
+  - **Every failure path exits non-zero with no bundle and no litter**: a bad `--rev`, any of the
+    four git steps failing, an unvalidated `rev-parse`, or a SHA mismatch. Cleanup stays scoped
+    exactly as slice 6 scoped it — the parent directory is removed only if **this call** created
+    it, so a failed fetch never deletes state the caller already owned.
+  - **Honest limits.** Fetching a bare commit depends on **server policy**
+    (`uploadpack.allowReachableSHA1InWant`); GitHub and GitLab enable it, many self-hosted
+    remotes do not, and **CI cannot observe this** — the local experiment that validated the
+    mechanism used the permissive local transport and proves *client* mechanics only. Tag and
+    branch `--rev` have no such dependency. As with every C8 slice there is **no real git,
+    network, or repo in CI** (the `Fetcher` is injected), so correctness here is reasoned and
+    unit-tested, not observed. **The manual real-network gate was RUN for this slice** (against
+    `octocat/Hello-World` and `octocat/Spoon-Knife`), carrying slice 6's never-run checklist as
+    well: a real bare-SHA fetch from GitHub records a pin matching the checked-out `HEAD`, a
+    branch resolves correctly, a bogus rev leaves no bundle, and a claim against a **committed**
+    file whose value *exactly* matches reports `UNVERIFIED` — with a positive control confirming
+    the guard still reports `REPRODUCED` when the run does rewrite the file. **The gate caught a
+    real defect:** GitHub returns `not our ref` for a nonexistent commit *and* for a policy
+    refusal, so the first R6 message misattributed a typo'd SHA to a server-policy problem; it
+    now names both causes and says to check the SHA first. No new
+    dependency (stdlib `subprocess` through the existing seam); `git` is required only on the
+    remote path, as already.
+
+## [0.47.0] - 2026-07-23
+
+### Added
+
+- **`contig reproduce` now accepts an `https://` git URL as its repo argument, behind an opt-in
+  `--allow-fetch`: it shallow-clones the repo into the run bundle, resolves `HEAD`, and records
+  the exact commit on the record as `source_commit`.** Until now reproducing a published paper
+  required the user to clone it themselves and then remember, by hand, which revision they had
+  checked out — so the bundle's `repo` field was a local path that meant nothing to anyone else
+  and the verdict was not attributable to a revision. With this slice the bundle says *which
+  revision of which repository produced this verdict*, which is what makes a reproduction claim
+  checkable by a third party at all.
+  - **The surface.** `contig reproduce <https-url> --allow-fetch --run "<cmd>" --claims <file>`
+    clones into `<runs-dir>/<reproduce_id>/source/` and runs there. `ReproduceRecord` gained two
+    additive fields, `source_url` and `source_commit` (both defaulting to `None`), and
+    `reproduce.json` emits **both keys unconditionally** — present and `null` for a local run —
+    so a consumer never needs a `.get()` dance. The record's `repo` holds the **URL**, never the
+    per-run checkout path: a scratch path under someone's runs directory is meaningless to a
+    reader, while URL + commit is the portable pin.
+  - **`--allow-fetch` is off by default and a URL without it is refused**, naming the flag. It is
+    the second flag on this command (after `--allow-install`) that gates a side effect the user
+    might not want: it reaches the **network** and writes a checkout under `--runs-dir`. The two
+    are independent — passing `--allow-fetch` does not enable installing, and vice versa (pinned
+    by a test).
+  - **Argument classification is pure, ordered, and refuses before anything is written.** A
+    leading `-` is refused **first, unconditionally**, ahead of any scheme parsing: an argument
+    like `--upload-pack=…` reaching git as an *option* rather than as the repo positional is a
+    remote-code-execution shape, and checking it first means no scheme or path pattern can be
+    crafted to slip past. Then `https://` (case-insensitive) is accepted **verbatim, unnormalized**
+    — it becomes part of a provenance record. Then a DOI (`doi:…` or a bare `10.<digits>/…`) is
+    refused **naming DOI explicitly**, so a pasted DOI gets the real reason instead of "No such
+    repo directory: 10.1234/xyz". Then any other URL-ish form — `http://`, `ssh://`, `git://`,
+    `file://`, git's arbitrary-command `ext::` transport, and the scp-like `git@host:path`
+    shorthand — is refused, naming `https://` as the accepted form. Everything else is a local
+    path, exactly as before. `git clone -- <url>` additionally passes a `--` terminator as a
+    **second line of defence** behind the leading-dash refusal.
+  - **The recorded commit is validated, never scavenged.** `git rev-parse HEAD`'s output is
+    `strip()`ed and then matched with `fullmatch` against a 40-hex pattern — *not* searched for a
+    SHA-shaped substring. The fetcher merges stderr into stdout (git's stderr is the only useful
+    diagnostic for a failed clone), so a warning line can ride alongside a real SHA; a multi-line
+    output is **refused outright**. A fabricated or partially-parsed pin is worse than no pin,
+    because the recorded commit is the entire point of the slice.
+  - **Every failure path exits non-zero with no bundle and no litter.** A bad URL, a failed clone,
+    a failed `rev-parse`, an unvalidated SHA, or a non-empty destination all refuse; anything
+    created by the attempt is removed. Cleanup is scoped to what the call created: `<id>/source`
+    is always removed, but its parent only if **this call** created it — if the caller already
+    owned that directory, a failed fetch must not delete it out from under them. A half-cloned or
+    empty directory left behind would look like a real run bundle to anything scanning the runs
+    directory.
+  - **The clone happens BEFORE the run-start freshness stamp — deliberately, and this is the
+    subtlest decision in the slice.** v0.46.0's guard marks any artifact whose mtime predates the
+    run start as `UNVERIFIED`, so a repo that **commits its outputs** cannot report a false
+    `REPRODUCED`. A `git clone` writes *every* file at clone time. Stamping first and cloning
+    second would therefore make every author-committed artifact look freshly written by this run
+    and **silently disable the guard on exactly the repos it matters most for** — real, published,
+    third-party ones. Verified by mutation: with the ordering inverted, the pinning test
+    `test_committed_results_file_in_a_fetched_checkout_stays_unverified` flips from `unverified`
+    to `reproduced`. The ordering is load-bearing, not incidental, and must survive any future
+    refactor of this command's preamble.
+  - **The checkout is evidence, not attestation.** `_maybe_write_signature` signs the **record**
+    only. The `source/` tree is **unsigned and unhashed**: it can be modified after the run with
+    nothing detecting it. **The commit SHA is the attested fact; `source/` is a convenience copy
+    for inspection.** Hashing the tree is deliberately a separate slice, and nothing in this
+    entry should be read as claiming the checkout is verified.
+  - **Caveat for signing users — a pre-slice-6 SIGNED reproduce bundle no longer verifies.
+    Disclosed, not fixed.** `canonical_record_bytes` is `record.model_dump(mode="json")`
+    (`signing.py:63`), which includes **every** field, so today's canonical payload carries two
+    extra `null` keys (`source_url`, `source_commit`) that an older bundle's signed bytes never
+    had. An old bundle still **loads** — both fields default to `None`, and that back-compat is
+    tested — but its Ed25519 signature **no longer matches**. Verified empirically, not assumed.
+    This is the same shape the somatic empty-call-set slice disclosed for `verdict`, with one
+    honest difference that must not be glossed: **that slice's blast radius was only bundles whose
+    verdict actually flips; this one is *every* signed reproduce bundle.** Signing is opt-in
+    (`CONTIG_SIGNING_KEY`), which bounds who is affected, but that is not a reason to soften the
+    statement. It is not fixed because the only clean fix — canonicalizing with `exclude_none` —
+    would change the canonical bytes for `RunRecord` too and break every existing signature in the
+    product, a strictly worse trade than a disclosed, additive break confined to reproduce
+    bundles. The behavior is **pinned by a test** rather than left latent:
+    `test_pre_slice_6_signature_over_a_record_without_source_fields_no_longer_verifies` in
+    `tests/test_reproduce_bundle.py` — if it ever starts passing, the canonical-payload contract
+    changed and this disclosure needs revisiting.
+  - **Honest limit — no real git, no network, no real repo in CI.** The `Fetcher` seam is injected
+    everywhere (mirroring `Executor`/`IndexBuilder`/`Installer`); the real `default_fetcher` is
+    asserted on for **argv shape only** and is never executed — so the *automated* evidence is
+    reasoned and unit-tested, not observed.
+  - **The manual smoke test WAS run, pre-merge, and it caught a real bug.** Against
+    `octocat/Hello-World` the clone succeeded, the recorded `source_commit`
+    (`7fd1a60b01f91b314f59955a4e4d4e80d8edf11d`) was confirmed equal to the repository's actual
+    upstream `HEAD`, and the claim reproduced. Against `octocat/Spoon-Knife` a claim bound to a
+    **committed** `styles.css` value that would have matched **exactly** (`384`) reported
+    `UNVERIFIED` — *"locator file 'styles.css' was not rewritten by this run (mtime predates run
+    start)"* — rather than a false `REPRODUCED`. That is the slice's central promise, now
+    **observed** rather than only reasoned.
+    - **The bug it caught:** `fetch_repo` passed the destination to `git clone` **relative**
+      while running with `dest.parent` as cwd, so git resolved it a second time —
+      `runs/<id>/source` became `runs/<id>/runs/<id>/source`, leaving the real destination an
+      empty non-repo that `git rev-parse` then failed in with *"not a git repository"*. The
+      CLI's default `--runs-dir runs` produces exactly that relative shape, so **every real
+      remote run would have failed**; it was invisible to the suite because every fixture test
+      passes an already-absolute `tmp_path`. `fetch_repo` now makes the destination absolute
+      before building anything from it (`.absolute()`, not `.resolve()` — prepending the cwd is
+      all that is needed, and resolving symlinks would change the path the caller gets back),
+      pinned by a regression test that fails against the pre-fix code. **This is the argument
+      for the manual gate, not against it:** a green suite proved the wiring, never the
+      invocation.
+  - **Honest limit — the pin is auditable, not yet replayable.** `--rev` is deferred, so **nothing
+    in the product consumes `source_commit`**: only a human can act on it (`git checkout <sha>`).
+    The clone is `--depth 1`, which is much faster on the large repos this targets and still
+    resolves a full 40-char SHA, but it means the checkout is HEAD-at-fetch-time and not a
+    revision the user chose. Do not read the recorded commit as making a run automatically
+    replayable; it makes it **attributable**.
+  - **Honest limit — bundle-local checkouts are not pruned.** Every fetched run leaves a full
+    checkout under its run directory, and nothing garbage-collects them; the runs directory grows.
+  - **Still deferred:** DOI resolution (explicitly out of scope — refused with a message that says
+    so), `--rev`/tag/branch selection, hashing or signing the checkout tree, private-repo
+    credentials, submodules, and checkout pruning. No new dependency (stdlib `subprocess` +
+    `shutil`); `git` itself is only required on the remote path. Test-first, and the local-path
+    behavior is unchanged and pinned by its own test.
+
+## [0.46.0] - 2026-07-23
+
+### Changed
+
+- **`contig reproduce`'s mtime freshness guard now covers EVERY binding path that reads a file
+  off disk — the JSON locator, the TSV/CSV table locator, the file-mode pattern locator, and the
+  flat `--results` `results.json` read — closing a silent false-`REPRODUCED` hole that had been
+  open since slice 1.** v0.45.0 shipped the guard for the notebook locator only and recorded the
+  gap in its own deferral list ("the freshness guard is notebook-only … the JSON/table locators
+  keep the same stale-artifact hole, a separate slice"). That gap was not cosmetic: a repo that
+  **commits its outputs** — a checked-in `results.json`, `de.tsv`, `metrics.json`, or `run.log` —
+  reported `REPRODUCED` for a computation that never ran, because the engine read the *authors'*
+  stored numbers and compared them to the *authors'* published claim. The comparison always
+  matched. The verdict contract exists to prevent exactly that failure, and the check that
+  prevents it now runs on all of them.
+  - **The four newly guarded surfaces.** (1) The JSON `path` locator (slice 1.5); (2) the TSV/CSV
+    `column`/`row` table locator (slice 3); (3) the **file-mode** pattern locator, `pattern` +
+    `from` (slice 4); and (4) the flat `--results` read (slice 1) — the **oldest** instance of the
+    bug and the one **every "cooperative repo" path uses**, so it was also the most reachable. All
+    four now route through one shared nested helper, `_require_fresh(resolved, noun, label)` in
+    `run_reproduction`, which returns an UNVERIFIED message when the artifact's mtime predates
+    `run_started_at` and `None` otherwise. In every case the guard fires **before the file is
+    parsed** and before the parse enters the per-run cache (`_json_cache`/`_table_cache`/
+    `_text_cache`), so a stale artifact is never read for content at all. The notebook observer
+    (slice 5) now routes through the **same** helper rather than keeping a second inline copy of
+    the rule: `_require_fresh` takes an optional `mtime=` so a caller that already holds a
+    `stat()` result can pass it in, which lets the notebook branch keep its single `stat()` and
+    its size-check-before-freshness ordering while sharing one implementation. Notebook message
+    wording and check ordering are byte-identical to v0.45.0; no notebook test changed.
+  - **The stdout-mode pattern locator is exempt by construction, not by oversight.** A `pattern`
+    with no `from` binds the run's **own captured combined stdout+stderr** (`run_output`), touches
+    the filesystem not at all, and therefore cannot be stale — there is no pre-existing artifact to
+    be fooled by. That is a correctness property of the mode, and it is stated here so it is not
+    later "fixed" by bolting a meaningless mtime check onto text that has no file behind it.
+  - **Non-bypassable by design.** There is **no opt-out flag**: a per-run escape hatch on a
+    false-pass guard is a request to be lied to, and the honest alternative (`UNVERIFIED` plus a
+    message naming the staleness) is already available for free. An **unstamped run start**
+    (`run_started_at is None`) **raises** rather than degrading to "guard off" — a `None` meaning
+    "skip the check" would silently disable a false-pass guard exactly where it is needed, so it is
+    treated as the programming error it is.
+  - **A file that cannot be `stat()`'d is NOT a freshness failure.** `_require_fresh` returns
+    `None` on `OSError`, so the caller's existing missing/unreadable branch still owns that message.
+    No pre-existing error message was pre-empted, and a user whose `from` path is simply wrong is
+    still told that, not told about mtimes.
+  - **A stale-but-valid `results.json` reports the freshness message, never the pre-existing
+    "missing or unparseable results" wording.** The file parses fine; it is merely stale. Reusing
+    the old wording would send a user to debug a JSON syntax error that does not exist. The
+    freshness branch is therefore checked before the parse and carries its own message onto every
+    claim.
+  - **The guard follows symlinks, deliberately.** The mechanism is `Path.stat()`'s
+    `follow_symlinks=True` **default**, so the **target's** mtime decides — *not* a `resolve()`
+    call: the four locator observers do `resolve()` their path, but the flat `--results` path is
+    plain `repo_path / results_path` and is never resolved, and it follows symlinks all the same.
+    `follow_symlinks=False` must never be introduced: statting the link itself would let a `ln -s`
+    created during the run mark ancient content "fresh" — turning real staleness into a false pass,
+    which is the one outcome this slice exists to remove. That prohibition is now stated in
+    `_require_fresh`'s docstring next to the `stat()` call itself.
+  - **One consistent message stem — "was not rewritten by this run (mtime predates run start)"** —
+    across all five guarded surfaces, differing only in the noun and the named path (`results
+    file`, `locator file`, `table`, `notebook`). Staleness is therefore greppable and countable
+    across bundles **without new telemetry**. A structured field on `ClaimResult` (e.g. a
+    `stale`/`reason` discriminator) was **deliberately deferred**: it would cost a `models.py`
+    change this slice otherwise avoids entirely, and the message stem is sufficient until something
+    actually consumes the distinction.
+  - **Honest limit — this proves *rewritten*, not *recomputed*.** A `--run` of
+    `cp committed.json out.json`, a bare `touch`, or a restored build cache passes the guard while
+    computing nothing. The undecidable question ("were these numbers recomputed?") is deliberately
+    replaced by the decidable one ("did THIS run rewrite this file?"). That closes the dominant
+    **honest** hole — a cooperative repo that ships its outputs — not an adversarial user deceiving
+    themselves, which is the same boundary slice 1's "re-runnable" and slice 5's notebook guard
+    already drew.
+  - **Honest limit — no fudge tolerance, deliberately.** The comparison is `mtime >= run_start`
+    with **zero slack**. On a coarse-mtime filesystem (or with a sub-second run) a genuinely
+    regenerated file can carry an mtime marginally *before* the stamped run start and report a
+    false `UNVERIFIED`. That is accepted: **a false UNVERIFIED is honest and recoverable; a false
+    REPRODUCED is neither.** A tolerance window is exactly the size of the hole it opens, so this
+    is recorded explicitly to stop it being "fixed" later by quietly widening the window.
+  - **Honest limit — clock skew is a distinct cause with the same symptom.** The run-start stamp is
+    `time.time()` on the **orchestrating host**, while an artifact's mtime may be written by a
+    **different machine** over NFS/SMB with a different clock. Posture is the same (accept the
+    false UNVERIFIED), but the cause is recorded separately so a future debugger chasing a spurious
+    "was not rewritten" is not sent to the filesystem-granularity explanation when the real answer
+    is two clocks.
+  - **Accepted behavior change, eyes open.** A *legitimate* run that does not rewrite an artifact
+    now reports `UNVERIFIED` where it previously bound a value: a `make`/`snakemake` target that is
+    already up to date, a repo that writes into a **timestamped output directory** while the claim
+    names a stable path, or a `--run` that executes only the final step of a multi-step analysis
+    while the claim addresses an earlier step's artifact. This is a deliberate product decision
+    (strict, no opt-out), not an unnoticed regression. **Revisit trigger:** the first real repo
+    where a legitimately-reproducing run is blocked by the guard — not a hypothetical.
+  - **Unverified base rate, stated as such.** We do **not** know what share of published repos
+    commit their outputs; no such number was measured and none is cited here. The case for this
+    slice rests on the defect being **possible and silent**, not on a frequency estimate. (The
+    ~3.2%-of-27,271-notebooks figure elsewhere in these notes is a *reproduction* rate, **not** a
+    committed-artifact rate, and must not be repurposed as evidence for how often repos ship their
+    outputs.)
+  - **Scope and reuse.** `contig reproduce`'s CLI already stamped the run start once before the
+    first run (shipped for the notebook slice, and **not** re-stamped on an `--allow-install`
+    retry — so an artifact written by either the first or the retried run passes, now pinned by a
+    test for `results.json` as well as for notebooks). This slice therefore needed **no CLI
+    signature change and no new flag** — only the `reproduce` docstring, which now states the
+    freshness requirement **once, for all locator forms and `--results`**, and names the stdout
+    exemption, instead of describing it as notebook-specific. **No `models.py` change**, **no new
+    dependency, stdlib-only** (`Path.stat()`), **no new claim-file syntax**, and no change to
+    `classify`/`ClaimResult`/`ReproduceRecord`/the signed bundle/`--fail-on-diverged`. Test-first:
+    per surface a stale-artifact-with-an-exactly-matching-value → `UNVERIFIED` case, a
+    fresh-artifact-still-`REPRODUCED` case, and a missing-run-start → raises case, plus the
+    stdout-mode no-freshness-needed case, a symlink-follows-the-target case, and the retry-written
+    artifact case. The four "fresh still reproduces" controls stamp the artifact at **exactly** the
+    run start, which pins the `>=` boundary (a coarse-granularity filesystem truncates mtime to the
+    second, so `mtime == run_start` is precisely the case a real run lands on); the four
+    missing-file cases assert the freshness message is **absent** and each surface's own
+    missing/unreadable wording is intact, pinning "un-`stat()`-able is not a freshness failure".
+    On determinism, precisely: the **guard-specific** tests are decided purely by `os.utime`-set
+    mtimes against a fixed 1970-era synthetic run start; the ~40 **pre-existing** located/table/
+    pattern tests pass the guard because a file written at real wall-clock time has an mtime far
+    past that 1970-era stamp. No real repo, network, or pip in CI.
+  - **Known debt, deliberately not fixed here (pre-existing, not introduced by this slice).** The
+    flat `--results` read catches only `json.JSONDecodeError`, so a **non-UTF-8 `results.json`
+    raises `UnicodeDecodeError` straight out of `run_reproduction` instead of degrading to
+    `UNVERIFIED`**. The three locator observers already handle this — they catch
+    `(ValueError, OSError)`, which covers `UnicodeDecodeError` — so the flat path is the lone
+    outlier. Fixing it is a behavior change that needs its own test, and it is out of scope for a
+    freshness slice; it is recorded here so it is not lost.
+
+## [0.45.0] - 2026-07-22
+
+### Added
+
+- **`contig reproduce` gains a Jupyter notebook (`.ipynb`) claim locator — the C8 slice 5
+  named as deferred-but-unblocked in the slice-3 and slice-4 deferral lists ("notebook
+  (`.ipynb`) numeric extraction").** Slices 1.5 (JSON), 3 (TSV/CSV) and 4 (stdout/log regex)
+  read a repo's structured or free-text output; none could read a **notebook**, the medium
+  the C8 problem statement is built on (of 27,271 biomedical-paper notebooks only ~3.2%
+  reproduced the original result — Samuel & Mietchen 2024; `docs/planning/reproduce-published-work/prd.md`).
+  Against a `.ipynb` every claim previously degraded to `UNVERIFIED`. A claim may now carry
+  `{"from": <repo-relative .ipynb>, "cell": <int | {"contains": <source substring>}>,
+  "pattern": <Python regex>}`, and `contig reproduce` binds the observed value out of the
+  addressed cell's output.
+  - **Cell addressing mirrors the shipped `TableLocator.row` duality exactly.** An **int**
+    indexes the notebook's full `cells` array (0-based, JSON-faithful — all cells, not
+    code-cells-only; out of range → `UNVERIFIED` naming the cell count). A
+    **`{"contains": <substring>}`** selects the one cell whose `source` contains that
+    substring — surviving cell reordering and needing **no repo modification** (unlike a
+    `metadata.tags` scheme, which would re-introduce the "cooperative repo" requirement
+    slice 1.5 existed to escape). **0 or >1 matching cells → `UNVERIFIED` with the count
+    named**, never an arbitrary pick (the shipped `resolve_cell` row-key and `resolve_match`
+    rules).
+  - **Output-text extraction: stdout streams + `text/plain`, in output order.** A new pure,
+    stdlib `resolve_notebook_cell_text` (sibling of `resolve_pointer`/`resolve_cell`/
+    `resolve_match`) concatenates, in `outputs` order, each `stream` output named `stdout`
+    and each `execute_result`/`display_data` `text/plain`. **`stderr` streams and `error`
+    tracebacks are excluded** — a progress bar or a traceback must never become the match
+    surface a headline number is read from. `source`/`text` are `str` **or** `list[str]` per
+    nbformat; both are handled (list joined with no separator). It **never raises** — a
+    non-dict document, a missing/non-list `cells`, a non-dict cell, a `text` that is neither
+    str nor list all degrade to `(None, reason)`.
+  - **`pattern` is required; capture reuses the shipped `resolve_match`.** The extracted cell
+    text is fed to slice-4's unchanged resolver, which supplies the capture rule (group 1 if
+    the pattern has groups, else the whole match) and the strict 0-or-many ambiguity guard.
+    One binding path, no new ambiguity rules. A numeric-string capture is the normal case
+    (the slice-3/4 rule, not slice-1.5's strict JSON rule): it is `.strip()`ed, `float()`-parsed,
+    and if finite feeds the unchanged `classify`; unparseable or non-finite → `UNVERIFIED`.
+  - **The load-bearing piece — an mtime freshness guard, so a committed notebook can never be
+    read as a false `REPRODUCED`.** A committed `.ipynb` already holds the *authors'* stored
+    outputs; reading those would verify what was *committed*, not what *regenerated* — the
+    exact false-pass the verdict contract exists to prevent, and one a committed notebook
+    *always* presents. The undecidable question ("executed vs committed" — `execution_count`
+    is non-null in any committed notebook) is replaced by the decidable one Contig actually
+    needs: **was this file rewritten by *this* run?** A notebook locator resolves only when
+    the file's **mtime is at or after the run's start**; otherwise `UNVERIFIED` naming the
+    staleness, checked **before** the file is even parsed. The run-start wall-clock is
+    captured **once, before the first run** (`time.time()` in the CLI, `run_started_at` on
+    `run_reproduction`), and is **not** re-stamped on an `--allow-install` retry, so a
+    notebook written by either the first or the retried run passes. Comparison is
+    `mtime >= run_start` with **no fudge tolerance** (a tolerance is exactly the size of the
+    hole it opens). The guard is **non-bypassable**: a notebook claim dispatched with no
+    run-start raises `ValueError` (a programming error, never a silent `UNVERIFIED`).
+    **Honest limit, stated not hidden:** the guard proves the notebook was *rewritten*, not
+    that its numbers were *recomputed* — a `--run` of `cp committed.ipynb out.ipynb` passes
+    it while computing nothing. It closes the dominant, honest hole (binding to the committed
+    notebook), not an adversarial user deceiving themselves — the same honesty boundary
+    slice 1's "re-runnable" drew.
+  - **`load_claims` validates the notebook shape structurally, pre-run.** The three-way
+    mutual exclusion (`path` xor `column`+`row` xor `pattern`) became **four-way**: a claim
+    with `cell` requires both `from` and `pattern`, and rejects `path` or **any** table field
+    (`column`/`row`/`header`/`delimiter`) — a contradiction is a load-time `ClaimsError`
+    (exit non-zero, **nothing written**: no run, no record, no bundle), never a silent
+    misread. `cell` must be a non-negative int (a `bool` is rejected) or a single-key
+    `{"contains": <non-empty string>}`. A `pattern`+`from` claim **without** `cell` stays a
+    byte-identical slice-4 `PatternLocator`; JSON and table locators are unchanged.
+  - **Reuse, honestly bounded.** Containment (the CLI pre-run `from` refusal + the engine's
+    `relative_to(repo_root)` guard), the 8 MiB `_MAX_MATCH_BYTES` size bound (`stat()`ed
+    before any read), a per-run parse cache (`_notebook_cache`), `classify`, `ClaimResult`,
+    `ReproduceRecord`, the signed bundle and `--fail-on-diverged` are all reused as-is — **no
+    `models.py` change**, stdlib-only (`json`/`re`/`os`/`time`), **no `nbformat` or `jupyter`
+    dependency**. **Deferred/known limits:** the 8 MiB bound is the shipped constant, tight
+    for a notebook carrying embedded base64 figures (a notebook-specific bound is a named
+    follow-on); the freshness guard is notebook-only (the JSON/table locators keep the same
+    stale-artifact hole, a separate slice); non-text outputs (images, HTML, widgets) and
+    figure/plot claims stay **hard-blocked** (no plot-hash, stdlib-only); notebook *execution*
+    is never done by Contig (the user's `--run` command does it); paper-parsing, remote
+    `<doi|url>`, a dashboard card, and the C6 eval fold-in are unchanged from the standing
+    C8 deferral list. Test-first (pure extractor → schema → engine dispatch + guard → CLI
+    e2e); deterministic (on-disk fixture `.ipynb`, `os.utime`-set mtimes, injected
+    `run_started_at`, scripted executors); **no real repo, notebook execution, network, or
+    pip in CI**. Plan/PRD under `docs/planning/reproduce-notebook-locator/`.
+
+## [0.44.0] - 2026-07-21
+
+### Added
+
+- **`contig reproduce` gains a stdout/log regex locator — the C8 slice 4 named as the next
+  unblocked step by the slice-3 entry directly below ("No stdout/log scraping…").** Slices 1.5
+  (v0.41.0) and 3 (v0.43.0) both required the repo to write its numbers into a **structured
+  file** — JSON or a TSV/CSV table. A large share of published analysis scripts do not: they
+  `print()` the headline number, or append it to a `.log`, and write no JSON and no table at
+  all. Against those repos every claim degraded to `UNVERIFIED` — honest, but a dead end. A
+  claim may now carry `{"pattern": <Python regex>}`, optionally with `{"from": <repo-relative
+  text/log file>}`, and `contig reproduce` binds the observed value straight out of free text.
+  - **Two addressing modes.** `pattern` **without** `from` matches against the run's own
+    captured combined **stdout+stderr** — the text the engine already holds, which until now was
+    read only by `detect_missing_module` and the diagnosis evidence. `pattern` **with** `from`
+    matches against that repo-relative text/log file. `PatternLocator(source: str | None,
+    pattern: str)` carries both; `source is None` **is** the stdout mode, and the field is named
+    `source` deliberately so the file case reuses every existing `.source` code path.
+  - **A new pure, stdlib resolver** (`verification/reproduce.py::resolve_match`, sibling of
+    `resolve_pointer`/`resolve_cell`): finds **all** non-overlapping matches with `re.finditer`,
+    returns the raw captured **string**, and **never raises** — an oversized text, an
+    uncompilable pattern, an ambiguous match count, or a non-participating capture group all
+    return `(None, reason)`.
+  - **Capture selection: group 1 if the pattern has capturing groups, else the whole match.**
+    A named group `(?P<v>…)` is group 1 too. There is no `group`, `occurrence`, or `flags` key
+    this slice — **inline flags** (`(?i)`, `(?m)`, `(?s)`) are the supported and documented
+    mechanism, since Python compiles them straight from the pattern string and they need zero
+    schema surface.
+  - **Ambiguity is never guessed.** A pattern matching **0 or more than 1** times is
+    `UNVERIFIED` with the **count named in the message** — never an arbitrary first-match pick.
+    A script that prints its metric every epoch is therefore unverified until the user anchors
+    the pattern (`(?m)^Final AUC: …$`); that is the deliberate strict rule, not a gap.
+  - **The non-participating-group guard.** A group 1 that did not participate in the match
+    (`(?:x)?(y)?z` against `"z"`) yields `None` from `match.group(1)` — the one input shape that
+    would otherwise crash the caller on `float(None)` with a `TypeError`. It degrades to
+    `UNVERIFIED` with its own message and its own test.
+  - **A bounded 8 MiB match input (`_MAX_MATCH_BYTES`) — honestly framed as a ReDoS input
+    bound, NOT a memory guard.** Text over the cap is `UNVERIFIED` naming the size and the cap,
+    **never a silently truncated search** (which could report "0 matches" for a pattern that
+    does match past the cut). In **file** mode the size is checked via `stat()` **before** any
+    read, so an oversized log is never pulled into memory — there the cap is a genuine read
+    bound. In **stdout** mode it is not: `runner.default_command_executor` already buffers the
+    entire run output through `subprocess.PIPE` with **no cap**, so an enormous stdout is a
+    **pre-existing upstream** memory issue this slice neither creates nor solves; the cap there
+    bounds only how much text a regex is run over. Recorded explicitly so the limit is not later
+    removed as "pointless". No regex execution timeout is attempted — not achievable
+    stdlib-only, single-threaded — and a pattern comes from the same claims file as `--run`,
+    which already executes an arbitrary command.
+  - **`load_claims` validates the pattern shape structurally, pre-run.** `pattern` must be a
+    non-empty string and **must compile** — an `re.error` is a `ClaimsError` naming the claim
+    and the regex error, so a malformed regex exits non-zero with **nothing written**: no run,
+    no record, no bundle. The existing xor became a **three-way mutual exclusion**: a claim sets
+    exactly one of `path` (JSON), `column`+`row` (table), or `pattern`. `pattern` together with
+    **any** table field (`column`, `row`, `header`, `delimiter`) is rejected — a table key has
+    no meaning for a regex locator, and accepting it would be a silent misread of the claim's
+    intent. `pattern` is the **first** locator that is legal **without** `from`, so the orphan
+    guard was relaxed for `pattern` only: a `path`/`column`/`row`/`header`/`delimiter` without
+    `from` stays a `ClaimsError`, unchanged.
+  - **`run_reproduction`'s dispatch head became an explicit `isinstance` chain.** It was
+    `if TableLocator: … else: _observe_located(…)` — an unguarded fallback that would have
+    routed a `PatternLocator` into the JSON reader and raised `AttributeError` on the missing
+    `.path`. A new `_observe_pattern_located` (sibling of `_observe_table_located`) reuses the
+    same containment guard and a per-run read cache (`_text_cache`, keyed by resolved path — a
+    log `from` is read **at most once per run** even across several pattern claims on it).
+  - **The retried run's output is bound for free.** The observers are closures over
+    `run_output` and are only ever called *after* the `--allow-install` retry rebinds it, so a
+    stdout claim automatically observes the **retried** run's output, never the failed first
+    run's. No new mechanism — asserted by a scripted-executor test and stated in the docstring.
+  - **A numeric-string capture is the normal, valid case** — the slice-3 table rule, deliberately
+    unlike the slice-1.5 strict-UNVERIFIED JSON rule, because a regex capture is a string by
+    construction. The capture is `.strip()`ed and `float()`-parsed; a non-parsing (`"NA"`) or
+    non-finite (`inf`/`nan`) capture is `UNVERIFIED`, never coerced, never guessed. The finite
+    float feeds the **unchanged** `classify`.
+  - **Safety and reuse, unchanged.** A **file**-mode pattern claim's `from` flows through the
+    same CLI pre-run containment refusal and the same engine `resolved.relative_to(repo_root)`
+    defense-in-depth guard the JSON and table locators already use; an escaping/absolute `from`
+    is refused **before any run**, and one reaching the engine directly degrades to `UNVERIFIED`
+    with the file **never read**. The one new line the CLI needed is the **stdout-mode skip**
+    (`if claim.locator is None or claim.locator.source is None: continue`) — without it the
+    containment loop would have raised `TypeError` joining a `None` source. A `from`-less
+    pattern claim touches the filesystem **not at all**. `classify`, `ClaimResult`,
+    `ReproduceRecord`, bundle writing, signing, `render_reproduction` and `--fail-on-diverged`
+    are all reused as-is — **no `models.py` change**; `claims_sha256` already covers the new
+    `pattern` key since it hashes the claims-file bytes. Stdlib-only (`re`, already imported) —
+    no new dependency.
+  - **Honest scope / limits (recorded, not glossed).** A regex binds to **output formatting**,
+    not to a data structure — a repo changing `print(f"AUC={x}")` to `print(f"AUC: {x}")` breaks
+    the claim — so this is the **weakest locator shipped**. The mitigation is not cleverness but
+    the verdict contract: a non-match is `UNVERIFIED` naming the count, **never `DIVERGED`**, so
+    a formatting drift can never be misread as a failed reproduction. The engine also
+    short-circuits every claim to `UNVERIFIED` on a non-zero exit *before* any locator runs, so
+    a stdout pattern reads **successful runs only** — it cannot scrape numbers out of a crashed
+    run (consistent with every other locator, whose files aren't read either, but worth stating
+    so it isn't reported as a bug). Deferred: an `occurrence: first|last` selector and a `group`
+    override (gated on a counted post-merge experiment over 5 real repos), a `flags` array
+    (inline flags cover it), notebook (`.ipynb`) numeric extraction, regex over binary files,
+    persisting the matched output on the record (would need a `models.py` change), paper-parsing,
+    remote `<doi|url>`, a dashboard card, the C6 eval fold-in. Figure/plot and table-image claims
+    remain **hard-blocked** (no plot-hash exists; perceptual image hashing would break the
+    stdlib-only dependency contract). Test-first (schema → pure resolver → engine dispatch → CLI
+    containment/e2e), deterministic, **no real repo, network, or pip in CI** — scripted executors
+    returning canned `(exit_code, output)` tuples plus on-disk fixture logs in `tmp_path`.
+
+## [0.43.0] - 2026-07-21
+
+### Added
+
+- **`contig reproduce` gains a TSV/CSV table cell locator — the C8 slice 3 named as "the next
+  step" by both prior locator slices.** Slice 1.5 (v0.41.0) could only bind a claim's observed
+  value from a repo's **structured JSON** output; but in bioinformatics the numbers a paper
+  reports overwhelmingly live in **tabular** output — DESeq2 results tables, count matrices,
+  feature/stat tables — as `.tsv`/`.csv` (often gzipped). Against those repos every claim
+  degraded to `UNVERIFIED`. A claim's locator may now also carry `{"from": <repo-relative
+  .tsv/.csv[.gz] file>, "column": <name|int>, "row": <int|{key:val}>, "header"?: bool,
+  "delimiter"?: str}` — naming a cell the same way the JSON locator names a `path` — so
+  `contig reproduce` reads numbers straight out of real, unmodified tabular output.
+  - **Two addressing modes.** Named: a header column name + a `{key: value}` row match
+    (`row: {"gene_id": "ENSG…"}`, `column: "log2FoldChange"`). Positional: an integer column
+    index + integer row index with `header: false`. Indices are 0-based, matching the JSON
+    locator's `[n]` list indices.
+  - **A new pure, stdlib table reader** (`verification/reproduce.py::_read_table` +
+    `resolve_cell`, siblings of the JSON walker): `_read_table` reads `.tsv`/`.csv` via
+    `csv.reader` and is gzip-transparent (`.tsv.gz`/`.csv.gz` via stdlib `gzip`, text mode,
+    utf-8); `resolve_cell` resolves column-then-row against parsed rows and is index-safe on any
+    shape — ragged rows, empty files, header-only tables, directory paths, non-UTF-8 files — and
+    **never raises**. `_resolve_delimiter` infers `\t` for `.tsv`/`.tab` and `,` for `.csv`
+    (stripping one trailing `.gz` first); an explicit `delimiter` always overrides the extension.
+  - **`load_claims` validates the table shape structurally, pre-run.** `from` must carry
+    exactly one of `{path}` (JSON) or `{column, row}` (table) — mixing them, or a table field
+    without `from`, is a `ClaimsError` (exit non-zero, nothing written). `column` must be a
+    non-empty string or non-negative int; `row` a non-negative int or a single-key
+    `{str: str}` object; `delimiter` a single character; `header` a bool. A `row`-object or a
+    string `column` **requires** `header: true` (a header names the key column) — the
+    combination with `header: false` is rejected at load, not silently misread. An
+    unrecognized extension (`.txt`) with no explicit `delimiter` is also a load-time
+    `ClaimsError`, never a silent wrong-delimiter parse.
+  - **`run_reproduction` dispatches on the locator's type** (`isinstance(claim.locator,
+    TableLocator)`) to a new `_observe_table_located`, a sibling of the JSON `_observe_located`
+    reusing the exact same containment guard, per-run parse cache (`_table_cache`, keyed by
+    resolved path — a table `from` is parsed **at most once per run** even when several claims
+    address different cells of it), and UNVERIFIED plumbing. The resolved cell string is
+    `float()`-parsed after `.strip()`; the finite float feeds the **unchanged** `classify` →
+    `REPRODUCED`/`WITHIN-TOLERANCE`/`DIVERGED`.
+  - **The deliberate divergence from the JSON rule: a numeric-string cell is the normal, valid
+    case.** Every table cell is a string by construction, so `"30.4"` classifies as the observed
+    value here — unlike the JSON locator, where a numeric string is strictly `UNVERIFIED`. A
+    cell that doesn't `float()`-parse (empty, `"NA"`, `"1,024"`, `"1.5%"`) or parses to a
+    non-finite value (`nan`/`inf`) is `UNVERIFIED`, never coerced, never guessed.
+  - **No false reproduce, ever.** Every unresolved/ambiguous address is `UNVERIFIED`, never
+    `DIVERGED`: a missing/dir/non-UTF-8/unparseable `from`; an absent or duplicate header
+    column name; a column/row index out of range; a ragged row shorter than the addressed
+    column; a `row`-key match with **0 or more than 1** hits (0-or-many-matches is treated as
+    ambiguous, never an arbitrary pick — the count is named in the message). Key-column compare
+    is exact on the `.strip()`ed cell string.
+  - **Safety and reuse, unchanged.** A table claim's `from` flows through the same `.source`
+    field the CLI containment loop and the engine's defense-in-depth guard already check
+    (`cli.py`'s pre-run escape/absolute-path rejection, and the engine's own
+    `resolved.relative_to(repo_root)` guard) — no new code was needed there; an escaping/
+    absolute `from` is refused **before any run**, and a path that reaches the engine directly
+    degrades to `UNVERIFIED` with the file **never read**. `classify`, `ClaimResult`,
+    `ReproduceRecord`, bundle writing, signing, `--fail-on-diverged` are all reused as-is — **no
+    `models.py` change**; `claims_sha256` already covers the new claim fields since they're part
+    of the claims-file bytes. Stdlib-only (`csv` + `gzip`, both already stdlib) — no new
+    dependency.
+  - **Honest scope / limits (recorded, not glossed).** Single key-column equality only this
+    slice — no multi-key/predicate row match, no column ranges, no regex. No stdout/log
+    scraping, no notebook (`.ipynb`) numeric extraction. Figure/plot and table-image claims
+    remain hard-blocked (no plot-hash exists; adding perceptual-image-hashing would break the
+    stdlib-only dependency contract). No paper-parsing, no remote `<doi|url>`, no dashboard
+    card, no C6 eval fold-in — all deferred to later slices. Test-first (pure reader → engine
+    dispatch → CLI containment/e2e), deterministic, **no real repo or network in CI** — tests use
+    on-disk fixture `.tsv`/`.csv`/`.tsv.gz` tables written to `tmp_path`, mirroring the JSON
+    locator's test discipline.
+
+## [0.42.0] - 2026-07-19
+
+### Added
+
+- **`contig reproduce` gains opt-in environment resurrection — the C8 slice 2 that lets it reproduce
+  repos that don't run yet.** Slices 1 (v0.40.0) and 1.5 (v0.41.0) could only issue a verdict on a
+  repo whose script already ran; an uncooperative repo that exits non-zero on a missing Python
+  dependency just degraded every claim to `UNVERIFIED`. `ModuleNotFoundError` / `ImportError` +
+  dependency installs are the dominant reproduction-failure class (~76%), and the roadmap named
+  environment resurrection the "load-bearing" piece of C8. It now ships as a bounded, opt-in
+  self-heal that reuses the C2 machinery.
+  - **New `--allow-install` flag on `contig reproduce` (off by default).** When set, a first run that
+    exits non-zero with a `No module named 'X'` message triggers **detect → install → retry once**:
+    a new pure `verification/reproduce.py::detect_missing_module` extracts the missing top-level
+    package (case-insensitive, `sklearn.utils` → `sklearn`, charset-validated `^[A-Za-z0-9._-]+$`);
+    a new injected installer seam (`runner.Installer` + `runner.default_installer` +
+    `_pip_install_argv`, mirroring the `IndexBuilder` seam) runs a **fixed** argv
+    `[sys.executable, "-m", "pip", "install", <module>]` (no shell, no interpolation); the run is
+    retried exactly once and the claims re-classify against the retried run's fresh output. **Off by
+    default the behavior is byte-identical to before** — the flag gates all network + environment
+    mutation, and its help text says so.
+  - **Honest on every unresolved path.** Flag off, no module detected, install fails, or the retry
+    still fails → all claims `UNVERIFIED`, **never a false reproduce**. Bounded to exactly one
+    install + one retry (provable termination — even a *second* missing module on the retried output
+    is not chased). Import-name ≠ package-name mismatches (`cv2` → `opencv-python`) simply fail the
+    install and degrade to `UNVERIFIED` (a curated alias map is a deferred follow-on).
+  - **The resurrection is recorded and reproducible.** `ReproduceRecord` gains an additive
+    `repair_history: list[RepairStep]` (default `[]`, so pre-slice-2 bundles load unchanged); a
+    successful or attempted heal appends one `RepairStep` (`Diagnosis(failure_class="missing_dependency")`
+    — a new literal kept **reproduce-local**, deliberately *not* wired into the shared
+    `diagnose_failure` detector so the C6 eval-guard held-out baseline is unaffected — plus
+    `Patch(kind="env", operation={"install": <module>})`), surfaced as a one-line `env-repair` note
+    in `contig show`/the rendered report and round-tripped through the signed bundle. The record's
+    `exit_code` reflects the final (retried) run.
+  - **To surface the error text, the reproduce command-executor seam widened from `int` to
+    `(exit_code, combined_output)`** (`runner.default_command_executor` now captures combined
+    stdout+stderr); the Nextflow `Executor`/`IndexBuilder` seams are untouched. No new runtime
+    dependency (the installer is an injected seam); research-use, computation-vs-numbers only, no
+    raw-read egress; test-first with a scripted executor + scripted installer — **no real repo,
+    network, or pip in CI**. **Deferred:** import→package alias map, iterative multi-module
+    resolution, version pinning from a traced execution, venv isolation, and the TSV/CSV locator
+    (the named next step).
+
+## [0.41.0] - 2026-07-18
+
+### Added
+
+- **`contig reproduce` gains a claim-level output-locator — the C8 slice-1.5 that makes reproduce
+  read *uncooperative* repos as-is.** The v0.40.0 walking skeleton bound every claim's observed
+  value from one flat, Contig-shaped `results.json` (`{claim_id: value}`) the third-party repo had
+  to hand-write — so it only reproduced repos you modify (or synthetic fixtures). A claim may now
+  carry an **optional locator** `{"from": <repo-relative JSON file>, "path": <expression>}` naming
+  where its number already lives in the repo's own structured output — so `contig reproduce` reads
+  numbers out of **real, unmodified cloned repos that emit JSON**. This is exactly the piece the
+  reproduce PRD's review gate named as what makes the tool "externally credible."
+  - **A new pure, stdlib JSON path walker** (`verification/reproduce.py::resolve_pointer`, with
+    `_parse_path`): dotted segments + `[n]` list indices, a leading `$.`/`$` tolerated
+    (`$.model.auc`, `model.auc`, `samples[0].mean_cov`, `[0].name` for a top-level list). It walks
+    nested `dict`/`list` from parsed JSON with strict `isinstance` guards (a key only on a dict, an
+    index only on a list; `bool` never treated as an index) and **never raises** — any unresolved
+    step (missing key, index out of range, wrong container, malformed expression) returns `None`,
+    the repo's omit-never-guess idiom. No JSONPath/regex dependency; the runtime dep set
+    (`pydantic`/`typer`/`cryptography`) is unchanged.
+  - **Value-binding branches on the locator, verdict core untouched.** In `run_reproduction`, a
+    claim **with** a locator is bound from `repo/<from>` at `<path>` (files parsed once and cached
+    per run) and classified by the **unchanged** `classify`/`benchmark._relative_delta`; a claim
+    **without** one keeps the slice-1 flat-`results` id lookup byte-for-byte. A claims file may mix
+    located and flat claims. `ClaimResult`/`ReproduceRecord`, signing, and the `--fail-on-diverged`
+    exit contract are reused as-is (no model change); `claims_sha256` already covers the locators
+    since they are part of the claims-file bytes.
+  - **Honest degradation preserved end-to-end — every locator failure is `UNVERIFIED`, never a
+    false pass, never `DIVERGED`:** a missing `from` file, unparseable/non-UTF-8 JSON, an unresolved
+    `path`, or a target that is non-numeric — **including a numeric *string* like `"0.91"`, which is
+    strictly UNVERIFIED, not coerced** — bool, or non-finite (`NaN`/`inf`). Each carries a specific
+    message. A non-zero script exit still short-circuits every claim to `UNVERIFIED` (unchanged).
+  - **Safety: no read outside the repo.** An escaping or absolute `from` is refused at the CLI
+    **before any run** (exit non-zero, **no** record written), reusing the same
+    `(repo/from).resolve().relative_to(repo.resolve())` containment guard as `--results`; and if such
+    a path reaches the engine directly it degrades to `UNVERIFIED` with the outside file **never
+    opened** (defense-in-depth, `.resolve()` also defeating symlink escapes). No raw-data egress —
+    only hashes + claim diffs leave the box.
+  - **Honest scope / limits (recorded, not glossed).** Research-use, computation-vs-numbers only —
+    never a judgement on the paper's conclusions. **Structured JSON only** this slice: repos that
+    emit numbers only to stdout, CSV/TSV, notebooks, or figures still degrade to `UNVERIFIED` — the
+    win is "reads repos that emit structured JSON," not "reads any repo." **Deferred:** a TSV/CSV
+    locator (the named next step); environment resurrection (slice 2); paper-parsing; figure/plot &
+    table-cell claims (still blocked — no plot-hash exists and adding perceptual-image hashing would
+    break the stdlib-only dep contract); remote `<doi|url>`; a dashboard card; the C6 eval fold-in.
+    Test-first (walker → `load_claims` → engine binding → CLI guard), deterministic, **no real
+    third-party repo or network in CI** (scripted executor + on-disk fixture outputs).
+
+## [0.40.0] - 2026-07-18
+
+### Added
+
+- **`contig reproduce` — the first slice of capability C8 (reproduce & verify *third-party
+  published* work).** The shipped run→verify→reproduce engine is turned around to face *other
+  people's* analyses: `contig reproduce <repo> --run "<cmd>" --claims <file>` runs a repo's script
+  and reports, **per stated numeric claim**, whether the computation regenerates it — ending in a
+  signed, re-runnable bundle. This is a **deliberately narrow walking skeleton** (the durable
+  surface + verdict contract); the hard environment-resurrection piece is slice 2.
+  - **Per-claim verdict, four honest states.** Each claim resolves to `REPRODUCED` /
+    `WITHIN-TOLERANCE` / `DIVERGED` / `UNVERIFIED` via a new `verification/reproduce.py`
+    (`load_claims` / `classify` / `run_reproduction` / `reduce_reproduction`) and two new models
+    (`ClaimResult`, `ReproduceRecord`). Classification **reuses** `benchmark._relative_delta`
+    (the repo's only real tolerance compare): `|Δ| ≤ 1e-9` → REPRODUCED, else `rel_delta ≤
+    tolerance` → WITHIN-TOLERANCE, else → DIVERGED; a DIVERGED/WITHIN-TOLERANCE message names
+    observed-vs-stated and the delta. **`UNVERIFIED` is never rendered as reproduced** — a missing
+    `results.json` key, a non-numeric or non-finite (`NaN`/`inf`) observed value, or a non-zero
+    script exit yields UNVERIFIED, never a false pass.
+  - **Value binding.** The repo's script writes a flat `results.json` `{claim_id: value}`; the
+    comparator joins each claim on its id. A claim absent from `results.json` is UNVERIFIED; extra
+    keys are ignored.
+  - **Signed, re-runnable bundle for free.** A `ReproduceRecord` is written to
+    `<runs-dir>/<reproduce_id>/reproduce_record.json` and **signed by the existing generic
+    `_maybe_write_signature`** (it signs any pydantic record via `model_dump(mode="json")` — no
+    fork, no `RunRecord` pollution) when `CONTIG_SIGNING_KEY` is set, alongside a `reproduce.json`
+    manifest (repo, command, claims sha256) capturing the invocation. A new
+    `runner.default_command_executor(cmd, cwd)` runs the script **in the repo dir** (distinct from
+    `default_executor`, whose second arg is a trace-file path run in its parent).
+  - **Exit codes.** A completed, well-formed invocation exits `0` regardless of claim outcomes;
+    opt-in `--fail-on-diverged` exits non-zero when any claim DIVERGED (default unchanged). A
+    malformed claims file (bad JSON, duplicate id, non-positive tolerance, non-numeric value)
+    aborts non-zero **before any record is written**.
+  - **Honest scope / explicit limits (recorded, not glossed).** Research-use; whether the
+    *computation* reproduces the stated *numbers*, **never** a judgement on the paper's
+    conclusions; no raw-data egress (only hashes + claim diffs). Slice 1 reproduces
+    **cooperative** repos — ones that emit a `results.json` — so an uncooperative repo degrades
+    honestly to UNVERIFIED; the claim-level output-locator (read numbers out of a repo as-is) and
+    **environment-resurrection** (self-heal `ModuleNotFoundError` → install → retry) are slice
+    1.5 / slice 2. **Scalar numeric claims only:** figure/plot and table-cell claims are out of
+    scope — see the roadmap correction below. Test-first (models → engine → bundle → CLI);
+    deterministic; **no real third-party repo or network in CI** (a scripted executor writes a
+    canned `results.json`); `created_at`/`reproduce_id` are passed into the pure core, never
+    wall-clock inside it.
+  - **Corrected `docs/technical/CAPABILITY_ROADMAP.md` C8**, which promised to reuse "existing
+    float-tolerance / **plot-hash** / seed-aware diffing." Verified against the code: the
+    float-tolerance compare is real and reused; **plot-hash does not exist anywhere**, and adding
+    perceptual-image-hashing would break the deliberate stdlib-only dependency contract
+    (`pydantic`/`typer`/`cryptography`); "seed-aware diffing" is not a named mechanism. That is the
+    hard technical reason figures are deferred, now recorded so the reason travels with the code.
+
+## [0.39.0] - 2026-07-17
+
+### Changed
+
+- **Informational QC checks are now verdict-neutral: a check that cannot fail no longer
+  counts as evidence for a `pass`** (capability C3 follow-on; the item
+  `CAPABILITY_ROADMAP.md` had flagged as "the strongest follow-on candidate here"). A new
+  additive `QCResult.informational` field (default `False`; old records deserialize
+  unchanged, exactly as `QCKind` does) marks a check that asserts nothing, and
+  `overall_verdict` now reduces over the **non-informational** results only — a result set
+  of only informational and/or `unverified` checks reduces to `unverified`, never `pass`.
+  Four checks are marked, spanning the two mechanisms by which a check could only ever
+  pass: `duplication_rate` (a band-less rule-pack rule, detected by the absence of all four
+  bound keys — *not* by a null expected-range, which a `fail_below`-only rule also has while
+  remaining able to FAIL) and the three hardcoded-always-pass checks `gene_symbol_concordance`,
+  `x_het_ratio`, and `gene_overlap`. A test enumerates the exact informational set, so a
+  fifth such check cannot land silently — the durable form of the roadmap's "decide before a
+  second band-less rule lands", which prose had already failed to hold (three had landed).
+- **`x_het_ratio` now reports `unverified` when the chrX heterozygosity ratio could not be
+  computed** (too few callable X sites), instead of a `pass` for something it never checked.
+  Only a real, computed ratio is an informational `pass`. The pre-existing test named
+  `test_evaluate_indeterminate_is_unverified_with_none_value` had asserted `pass` against its
+  own name; it now asserts what the name always said.
+
+### Fixed
+
+- **The dashboard's verdict card no longer prints "PASS: all N checks passed" for a run the
+  engine called `unverified`.** `dashboard/lib/derive.ts`'s `overallQc` was a second,
+  divergent copy of the reducer with no `unverified` arm and no informational skip: a run
+  whose tasks succeeded but whose QC was entirely `unverified` (or entirely informational)
+  showed an "Unverified" badge beside a literal false-pass reason string. `overallQc` now
+  mirrors `overall_verdict` exactly (skip informational, then `fail > warn > pass >
+  unverified`), and its docstring no longer claims "we never re-derive trust" while
+  re-deriving. This was the one live, user-visible defect in this change.
+
+### Honest scope
+
+- **This slice is defensive, not corrective: it changed essentially no run's verdict.**
+  Marking the four checks needed **no verdict-test rewrites** (the suite went 1588 → 1601,
+  +13 tests; the only existing assertions changed were the two `x_het_ratio` "ratio
+  unavailable" cases retargeted from `pass` to `unverified`, disclosed above), because a real
+  run almost never rests on informational checks alone — the
+  main rule pack, the RNA-seq-only `min_sample_count` cross-sample floor, structural manifest
+  checks, or an asserting concordance sibling are present and hold the verdict. The value is
+  that the invariant is now **true and guarded**, not that a live false-pass class was closed.
+- **The roadmap's own motivating example was wrong, and is corrected here.** A
+  `PERCENT_DUPLICATION`-only RNA-seq report does **not** flip to `unverified`: `min_sample_count`
+  is an asserting check (it can FAIL below two samples) that rides along on every RNA-seq run
+  and floors the verdict at `pass`. The honest headline is "a `pass` is now backed by at least
+  one check that could have failed", not "the duplication-only run stops passing". The one
+  genuinely reachable flip is a count-concordance run over two matrices sharing zero genes
+  (both asserting siblings `unverified`, only the informational `gene_overlap` "passing") when
+  no MultiQC or manifest is also present — narrow, but a real false pass removed.
+- **Named residue (unchanged, not fixed here):** `min_sample_count` can fail but asserts
+  nothing *biological*, so a "asserts something biological" distinction remains a possible
+  follow-on; `runner.py`'s `multiqc is not None` gate still makes both RNA-seq plausibility
+  checks vanish rather than report `unverified`; `rrna_contamination` remains a guessed slug;
+  and the CLI `contig report --explain` (`report.py::explain_verdict`) still renders a
+  "Decided by" list of the `unverified` checks for an all-unverified completed run — honest
+  (the headline is `UNVERIFIED`, never a false pass) but not harmonized with the dashboard's
+  cleaner "no check could corroborate this run" wording, a cosmetic follow-on.
+
+## [0.38.0] - 2026-07-15
+
+### Fixed
+
+- **RNA-seq `duplication_rate` now actually ingests from a real MultiQC report — it never had
+  before** (capability C3 follow-on). `RNASEQ_PLAUSIBILITY_PACK` keyed the lowercase
+  `percent_duplication`; MultiQC republishes Picard MarkDuplicates' field name verbatim as
+  uppercase `PERCENT_DUPLICATION`, and `qc_ingest.py`'s general-stats merge is an exact-key
+  match, so the check missed on every real run. A second, independent bug compounded the
+  first: the pack banded a declared 0-100 scale, but Picard's own javadoc says the value is a
+  raw 0-1 fraction ("the fraction of mapped sequence marked as duplicate," no `x100`
+  anywhere) — a 70%-duplicated sample reads `0.707214`. Fixing the key alone would have been
+  worse than the bug: an unrescaled fraction against the old `warn_above: 80.0` band would
+  have silently PASSed every real report.
+  - `duplication_rate` now keys `PERCENT_DUPLICATION` and carries `"unit": "fraction"`, and
+    ships **informational-only — no band at all**: the pack's own docstring records that a
+    deep/high-input library legitimately exceeds 90% duplication, so any band (WARN or FAIL)
+    would flag a legitimate protocol, not a broken run. Declined by design, not pending
+    calibration — a band becomes justifiable only with real per-protocol duplication
+    distributions, or a library-prep/input-amount signal the pack does not have.
+  - A new guard in `rnaseq_plausibility.py` refuses a value present but outside `[0, 1]` as
+    `unverified` rather than rescaling it (`0.5` is ambiguous between "50%" and "0.5%"), so a
+    wrong key was already safe and a wrong unit now is too — every known way this check can be
+    wrong degrades to honest, never a silent lie.
+  - `rule_pack.py`'s `_expected_range` previously rendered the literal string `">= None"` for
+    a band-less rule; it now returns `None`, which `duplication_rate` is the first rule in the
+    repo to exercise.
+  - `rrna_contamination` is untouched and remains a guessed `percent_rRNA` slug — researched,
+    and there is genuinely no default machine-readable rRNA source in `nf-core/rnaseq`
+    (SortMeRNA is off by default; featureCounts biotype QC is GTF-dependent and emits
+    per-biotype counts, not a percentage). Recommended follow-on: drop the check or build a
+    dedicated parser that degrades to UNVERIFIED.
+  - **Honest limit:** the corrected key and unit are read from MultiQC's and Picard's own
+    source, not from an observed run — no real `nf-core/rnaseq multiqc_data.json` exists in
+    this repo (`demo/sample-run`'s is synthetic, `demo/make_sample_run.py:59,105`). The `[0,1]`
+    guard is what makes that acceptable: a wrong key or unit degrades to `unverified`, never a
+    false PASS.
+  - **Caveat for signing users, same shape as v0.35.0/v0.37.0's:** `verdict` is a
+    `@computed_field` serialized into the signed canonical payload, so re-verifying an old
+    bundle re-reduces the verdict under the corrected pack. Blast radius here is unusually
+    small: this check moves from an `unverified` result to an always-PASS informational one,
+    and neither carries severity, so a re-reduced verdict should not flip for any bundle whose
+    verdict was already set by another check.
+  - Corrected `docs/technical/CAPABILITY_ROADMAP.md`'s C3 record, which had called the pack a
+    "silent no-op" (it was dormant but honest — it emitted explicit `unverified` results, unlike
+    a true silent no-op) and claimed the same defect class as the single-cell dormant pack
+    (true only for `percent_rRNA`; `duplication_rate` needed no dedicated parser, only a key/unit
+    fix).
+
+## [0.37.0] - 2026-07-15
+
+### Changed
+
+- **A somatic run with an empty call set now FAILs the verdict — and the remaining
+  plausibility FAIL bands are formally *declined by design*, not deferred again** (capability
+  C4 follow-on / C3 follow-on). v0.36.0 gave the verdict teeth via `--fail-on-verdict`, but
+  germline `variant_calling` was the only assay whose *biological* plausibility could bite: a
+  somatic (tumor–normal) run whose Mutect2 step truncated or crashed into a 0-record VCF
+  rendered a **WARN** and exited `0` even with the flag set, while the germline equivalent of
+  that exact failure already FAILed (`rule_pack.py:84-90`). This slice closes that asymmetry
+  with one band, and — the more durable half — records why every other proposed band will not
+  be built.
+  - **What now FAILs:** `somatic_variant_count` gains `fail_below: 1`. The band's shape and
+    rationale mirror the shipped germline `variant_count` floor exactly, but the counted
+    population differs: `somatic_variant_count` counts biallelic records only (a
+    multiallelic record — a comma in ALT — is skipped before the counter increments),
+    whereas germline `variant_count` counts distinct sites including multiallelic ones. So
+    the floor fires when no biallelic records were called — almost always an empty or
+    truncated call set, though a VCF whose calls are all multiallelic would also read `0`
+    and FAIL. Either way it now drives `record.verdict` → FAIL wherever the verdict is
+    surfaced. The count is always an `int` (initialized to `0` and incremented *before* the
+    tumor-column guard), so a real `0` rides the band into the floor rather than routing to
+    UNVERIFIED — a zero count is never mistaken for "nothing to check."
+  - **The escalation is the narrowest possible.** `warn_below: 10` is **unchanged**, so 1–9
+    records still WARN exactly as before; only the exactly-zero case moves. There is
+    deliberately **no `fail_above`** — mirroring germline's decision, the `warn_above: 100000`
+    ceiling stays a **soft, uncalibrated "absurd-count" tripwire, never a validated ceiling**,
+    because a hypermutator (MSI-high, POLE-mutant) or a WGS tumor legitimately exceeds it.
+  - **Pure data change.** One key on one rule dict. The scorer (`_status_for`), evaluator
+    (`evaluate_somatic_plausibility`), verdict reducer (`overall_verdict`), report,
+    `contig show --explain`, provenance, and dashboard consume it unchanged. No new model
+    field, `FailureClass`, corpus case, or dashboard card; no CLI or default exit-code change.
+  - **Declined by design — not deferred, not pending calibration.** The "FAIL severity
+    deferred until the bands are calibrated on real data" line has now been re-deferred across
+    five slices (germline v0.3.0, RNA-seq v0.6.0, somatic-VAF, RNA-seq composition, and
+    variant-count). It is retired here: an investigation found these bands are not waiting on
+    data, they are **structurally impossible to do honestly**, and no amount of calibration
+    changes that. The reasons are recorded in the pack comments and
+    `docs/technical/CAPABILITY_ROADMAP.md` so they travel with the code:
+    - **Somatic VAF (`median_vaf`, `strelka_median_vaf`) stays WARN-capped.** Germline Ti/Tv
+      could ship FAIL bands because its expected value is *physically constrained* (~2.0 WGS,
+      ~3.0–3.3 WES) with noise at a *distinguishable* ~0.5. A tumor VAF has no such structure:
+      its expected value is a function of **purity and clonality, which the engine never
+      observes** (no purity estimate, no ploidy, no copy-number, no target type). A low median
+      VAF is legitimate science — a low-purity tumor or a subclonal population — so any
+      `fail_below` would FAIL a real sample. `strelka_median_vaf` adds a second, independent
+      reason: the tier1 ratio is arithmetically bounded to [0,1] given non-negative tier
+      counts — which the VCF spec guarantees — since `strelka_vaf.py:95-98,121-124` reject
+      `denom <= 0` and the numerator is one of the two summands. So a `fail_above: 1.0` is
+      **dead code for every real input**.
+    - **`pon_applied` is structurally unbandable.** It is not a numeric metric — a 3-state
+      string from a header search, emitted with `value=None`, that never enters `evaluate()`
+      at all (it is appended alongside the pack's results, not through it). PON absence is
+      also a legitimate configuration that Contig itself does not wire.
+    - **RNA-seq (`RNASEQ_PLAUSIBILITY_PACK`, `RNASEQ_COMPOSITION_PACK`) stays WARN-capped**,
+      on two independent blockers. *Biology:* every metric has a legitimate protocol occupying
+      its extreme — deep/high-input libraries legitimately exceed 90% duplication,
+      total-RNA/ribo-depletion legitimately retains rRNA, nuclear/FFPE/3' libraries are
+      legitimately intron-dominated, non-model annotation legitimately leaves most tags
+      unassigned. "Extreme" and "unusual protocol" are the same number, and the packs see no
+      library-prep or annotation-quality signal that separates them. *Engineering:*
+      `percent_duplication`/`percent_rRNA` (`rule_pack.py:303,309`, both already commented
+      "slug unverified") are **absent from the repo's only real-shaped MultiQC report**
+      (`demo/sample-run/results/multiqc/multiqc_data.json` carries only
+      `uniquely_mapped_percent`, `percent_assigned`, `total_reads`) — FAIL severity on a
+      metric that has never once arrived is severity on dead code. *Also:* the one genuinely
+      broken case, `unassigned_fraction == 1.0`, is already caught more honestly by
+      `RNASEQ_RULE_PACK`'s `assignment_rate fail_below: 40` on the did-it-run tier, so a
+      second FAIL would be redundant rather than new signal.
+    - **Not covered by this decision:** the annotation plausibility pack (a separate C7 M-track
+      item with its own deferral trail) and the germline sex-check axis (hand-built from scalar
+      constants, not a rule pack — unbandable by a data edit) both remain WARN-only.
+  - **Caveat for signing users: re-verifying an affected *old* bundle can break its
+    signature.** `verdict` is a pydantic `@computed_field` (`models.py:357-369`) and
+    `canonical_record_bytes` is `record.model_dump(mode="json")` (`signing.py:63-64`), so the
+    verdict is **inside the signed canonical payload** (verified: a WARN record canonicalizes
+    to `"verdict":"warn"`). Re-verifying a bundle whose verdict changes under the new band
+    recomputes different canonical bytes, and its Ed25519 signature no longer matches. The
+    blast radius is **only** bundles whose verdict actually flips — i.e. somatic runs with an
+    empty call set, which are broken runs by definition; every other bundle canonicalizes
+    identically. This is a pre-existing property of **any** rule-pack edit, inherited unchanged
+    from v0.35.0, and is disclosed rather than fixed: excluding `verdict` from the canonical
+    payload would be a cross-cutting signature-contract change and its own slice.
+  - **Honest scope.** Research-use. The floor is an **engineering tripwire** ("an empty call
+    set is a broken run" — the same tier as `mean_coverage fail_below`), **not** a biological
+    or clinical claim; this slice actively *refuses* the bands that would have over-claimed.
+    A legitimately mutation-free targeted panel **would** FAIL — accepted with eyes open,
+    because the engine has no target-type signal, the escalation is the narrowest possible,
+    sarek's Mutect2 count is not PASS-filtered (so a genuinely 0-record VCF from a real run is
+    a truncation artifact, not a biological result), and `--fail-on-verdict` is opt-in; the
+    revisit trigger is the first real-world report of one. The failure is **reasoned, not
+    observed**: the somatic assay has never run against real data — **no real nf-core/sarek run
+    in CI**, verification rides injected fixtures — so this ships on the germline sibling as its
+    existence proof, and its success criteria are test assertions, not field signal. UNVERIFIED
+    is untouched and is never converted to FAIL. Test-first (RED→GREEN).
+  - **Surfaced, not fixed (recommended next):** `RNASEQ_PLAUSIBILITY_PACK` is a **silent no-op
+    on every real rnaseq run** — the same defect class as the single-cell pack fixed in the C3
+    ingestion slice — and carries a live unit ambiguity (the pack declares 0–100 while Picard's
+    native `PERCENT_DUPLICATION` is a 0–1 fraction and `qc_ingest.py:5-23` does a bare
+    `float()` with no normalization). Likely higher user value than any FAIL band.
+
+## [0.36.0] - 2026-07-15
+
+### Added
+
+- **`contig run` and `contig verify` gain an opt-in `--fail-on-verdict` flag that makes a
+  verified **FAIL** verdict exit non-zero** — closing the "CLI exit-code wiring" follow-on
+  that was deliberately deferred in v0.35.0 (the germline-plausibility-FAIL-severity slice
+  noted "the `contig run`/`verify` exit code is unchanged … wiring that is a deliberate,
+  separately-scoped, cross-cutting follow-on"). Until now no QC verdict, not even a FAIL,
+  moved the exit code: a run that *completed* but whose science was broken (a structural
+  FAIL, or a germline gross-implausibility FAIL — noise-level Ti/Tv, grossly-off het/hom,
+  empty call set) still returned exit `0`, so any researcher wiring Contig into a shell
+  script or CI step got a green result on a FAILed analysis. This gives the verdict teeth
+  without changing anyone's defaults:
+  - **Opt-in, FAIL-only.** When `--fail-on-verdict` is set and the run's reduced verdict is
+    `FAIL`, the command exits `1` after rendering the report. `WARN`, `UNVERIFIED`, and
+    `PASS` always exit `0` — `UNVERIFIED` in particular never converts "we couldn't check"
+    into "it failed." A one-line reason (`Run <id> verdict is FAIL (--fail-on-verdict).`) is
+    echoed to **stderr** on the verdict-driven exit.
+  - **Default behavior is byte-identical to before.** Without the flag, exit codes, stdout,
+    and `--json` payloads are unchanged; the flag reads the existing `record.verdict` (no
+    recomputation, no new model field, no reproduce/signature-contract change).
+  - **On `verify`, the flag composes with the existing checks.** A FAIL verdict ORs into the
+    output-drift and signature-mismatch exit decision across all four sub-paths (no-checksums
+    and has-checksums, text and `--json`) — any one non-zero ⇒ non-zero, including the former
+    "nothing to verify" `return 0` path. Concordance still never affects the exit.
+  - **Honest scope / deferred.** Only `FAIL` triggers non-zero — no `--fail-on-warn` or
+    `--fail-on={fail,warn}` level argument (deferred). The exit code is `1`, reusing the
+    crash idiom — no distinct science-FAIL code. No `verdict` key is added to the `verify
+    --json` payload (deferred to keep it stable). `rerun`/`resume` inherit the default
+    (`False`) and are unaffected, and the dashboard "Run test profile" launch path does not
+    expose the flag yet. Test-first (RED→GREEN) for every behavior; **no real nf-core run in
+    CI** — the gate is driven by the deterministic verdict reduction over synthetic fixtures.
+
+## [0.35.0] - 2026-07-15
+
+### Changed
+
+- **Germline biological-plausibility checks gain their first FAIL severity — a grossly
+  broken germline call set now FAILs the verdict, not just WARNs** (capability C3 follow-on;
+  the "FAIL severity deferred" item the germline slices — Ti/Tv + het/hom (v0.3.0),
+  variant-count (v0.32.0) — each left open "until calibrated on real data"). The germline
+  `VARIANT_RULE_PACK` metrics were WARN-only, so a call set that is essentially noise
+  (Ti/Tv ≈ 0.5, the signature of random/garbage calls) or an empty/near-empty call set
+  produced only a WARN — easy to overlook, and inconsistent with the *did-it-run* QC packs
+  (`mean_coverage fail_below`, methylseq, ampliseq, mag, scrnaseq) that already FAIL on
+  gross failure through the exact same scorer. Three metrics now carry gross-implausibility
+  FAIL bands:
+  - **`ts_tv_ratio`:** `fail_below 1.2` / `fail_above 3.6` (the WARN band `1.8`–`2.4` is
+    unchanged). A noise-level Ti/Tv (~0.5) FAILs; a legitimate WGS (~2.0) or WES (~3.0–3.3)
+    call set stays PASS/WARN.
+  - **`het_hom_ratio`:** `fail_below 1.0` / `fail_above 3.0` (WARN band `1.4`–`2.5`
+    unchanged). The FAIL band is deliberately wider than the WARN band — het/hom is more
+    population/capture-sensitive than Ti/Tv, so only a grossly-off ratio trips it.
+  - **`variant_count`:** `fail_below 1` only — **no `fail_above`**. An essentially-empty
+    call set (broken/truncated calling) is now a **FAIL**, not the prior WARN — a strictly
+    stronger, correct signal (previously the always-int 0 rode the band as a soft WARN). The
+    `warn_above 20_000_000` ceiling stays a soft WARN, so a large joint-called cohort is
+    never FAILed for being legitimately large.
+  - **Pure data change; the whole verdict path is unchanged.** Only the three
+    `VARIANT_RULE_PACK` rule dicts changed — the scorer (`_status_for`), evaluator
+    (`evaluate_variant_plausibility`), verdict reducer (`overall_verdict`), report,
+    `contig show --explain`, provenance, and dashboard consume it unchanged. A failing
+    germline plausibility result now drives `record.verdict` → FAIL wherever the verdict is
+    surfaced. An empty germline VCF yields `variant_count` FAIL **and** `ts_tv`/`het_hom`
+    UNVERIFIED (the ratios are uncomputable with no variants); FAIL dominates, so the overall
+    verdict is FAIL.
+  - **Honest framing.** The bands are **WES-safe gross-implausibility engineering
+    tripwires** (same honesty tier as `mean_coverage fail_below`, literature-grounded Ti/Tv
+    ~2.0 WGS / ~3.0–3.3 WES / noise ~0.5), **not** a clinical or biological/pathogenicity
+    claim. **Verdict-only:** the `contig run`/`verify` exit code is unchanged — no QC verdict,
+    including pre-existing FAIL packs like `mean_coverage`, moves the exit code today; wiring
+    that is a deliberate, separately-scoped, cross-cutting follow-on. **Still WARN-only /
+    FAIL deferred:** the somatic, RNA-seq, RNA-seq-composition, and annotation plausibility
+    packs, and the germline sex-check axis. Test-first with synthetic inline VCF fixtures —
+    **no real nf-core/sarek run in CI**. **Deferred:** CLI exit-code wiring; capture-type-aware
+    (WGS/WES/panel) bands; tighter calibration on real cohorts (the WES-safe bands are
+    deliberately gross-only); and FAIL severity for the non-germline plausibility packs.
+
 ## [0.34.0] - 2026-07-14
 
 ### Added
@@ -1494,6 +2753,19 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.47.0]: https://github.com/haqaliz/contig/releases/tag/v0.47.0
+[0.46.0]: https://github.com/haqaliz/contig/releases/tag/v0.46.0
+[0.45.0]: https://github.com/haqaliz/contig/releases/tag/v0.45.0
+[0.44.0]: https://github.com/haqaliz/contig/releases/tag/v0.44.0
+[0.43.0]: https://github.com/haqaliz/contig/releases/tag/v0.43.0
+[0.42.0]: https://github.com/haqaliz/contig/releases/tag/v0.42.0
+[0.41.0]: https://github.com/haqaliz/contig/releases/tag/v0.41.0
+[0.40.0]: https://github.com/haqaliz/contig/releases/tag/v0.40.0
+[0.39.0]: https://github.com/haqaliz/contig/releases/tag/v0.39.0
+[0.38.0]: https://github.com/haqaliz/contig/releases/tag/v0.38.0
+[0.37.0]: https://github.com/haqaliz/contig/releases/tag/v0.37.0
+[0.36.0]: https://github.com/haqaliz/contig/releases/tag/v0.36.0
+[0.35.0]: https://github.com/haqaliz/contig/releases/tag/v0.35.0
 [0.34.0]: https://github.com/haqaliz/contig/releases/tag/v0.34.0
 [0.33.0]: https://github.com/haqaliz/contig/releases/tag/v0.33.0
 [0.32.0]: https://github.com/haqaliz/contig/releases/tag/v0.32.0

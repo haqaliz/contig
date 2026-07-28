@@ -10,8 +10,9 @@ from html import escape
 
 from pydantic import BaseModel
 
-from contig.models import QCResult, RunRecord, RunSummary, overall_verdict
+from contig.models import QCResult, ReproduceRecord, RunRecord, RunSummary, overall_verdict
 from contig.verification.annotation_surface import corroborated_by_line
+from contig.verification.reproduce import reduce_reproduction
 
 
 class VerdictExplanation(BaseModel):
@@ -83,6 +84,40 @@ def render_explain(record: RunRecord) -> str:
     return "\n".join(lines)
 
 
+def render_reproduction(record: ReproduceRecord) -> str:
+    """Render a `contig reproduce` result as a terminal-friendly report.
+
+    A per-claim table (id, status, claimed vs observed, delta) followed by the
+    reduce_reproduction summary line. Pure presentation: it never re-derives a
+    claim's status, mirroring render_explain's discipline for QC verdicts.
+    """
+    lines = [f"REPRODUCE: {record.reproduce_id}", f"repo: {record.repo}", f"run: {record.run_command}"]
+    for step in record.repair_history:
+        op = step.patch.operation.get("install") if step.patch else None
+        lines.append(f"env-repair: {step.outcome} ({op}) — {step.detail}")
+    header = f"{'id':<20}{'status':<18}{'claimed':<12}{'observed':<12}{'delta':<10}"
+    lines.append(header)
+    for claim in record.claim_results:
+        observed = "" if claim.observed is None else str(claim.observed)
+        delta = "" if claim.delta is None else f"{claim.delta:.4f}"
+        lines.append(
+            f"{claim.id:<20}{claim.status.upper():<18}{str(claim.claimed):<12}"
+            f"{observed:<12}{delta:<10}"
+        )
+        lines.append(f"  {claim.message}")
+    summary = reduce_reproduction(record.claim_results)["summary"]
+    lines.append(summary)
+    return "\n".join(lines)
+
+
+def _status_text(qc: QCResult) -> str:
+    """The status word for a QC line, tagged `[informational]` when the check
+    asserts nothing about the verdict (Task 1's QCResult.informational) -- so a
+    reader cannot mistake an informational pass for a verified one."""
+    tag = " [informational]" if qc.informational else ""
+    return f"{qc.status.upper()}{tag}"
+
+
 def render_run_report(record: RunRecord) -> str:
     """Render a multi-line, terminal-friendly report of a run."""
     summary = RunSummary.from_events(record.events)
@@ -103,7 +138,7 @@ def render_run_report(record: RunRecord) -> str:
         primary = [qc for qc in record.qc_results if qc.kind != "concordance"]
         lines.append("QC checks:")
         for qc in primary:
-            lines.append(f"  - {qc.check}: {qc.status.upper()} (value {qc.value})")
+            lines.append(f"  - {qc.check}: {_status_text(qc)} (value {qc.value})")
         if concordance:
             lines.append("Concordance (cross-tool corroboration):")
             # Plain-language corroboration line from M4's already-computed
@@ -112,7 +147,7 @@ def render_run_report(record: RunRecord) -> str:
             if corroboration is not None:
                 lines.append(f"  {corroboration}")
             for qc in concordance:
-                lines.append(f"  - {qc.check}: {qc.status.upper()} (value {qc.value})")
+                lines.append(f"  - {qc.check}: {_status_text(qc)} (value {qc.value})")
     else:
         lines.append("QC checks: no QC checks ran (run is unverified).")
     if record.repair_history:
@@ -199,9 +234,12 @@ def _qc_table(rows: list[QCResult]) -> str:
     for qc in rows:
         value = "" if qc.value is None else str(qc.value)
         expected = qc.expected_range or ""
+        # Reuse the existing .status-* colour classes; an informational result
+        # just gets the word appended, no new status vocabulary (R4/task 6).
+        status_text = qc.status.upper() + (" (informational)" if qc.informational else "")
         parts.append(
             f"<tr><td>{escape(qc.check)}</td>"
-            f'<td class="status-{escape(qc.status)}">{escape(qc.status.upper())}</td>'
+            f'<td class="status-{escape(qc.status)}">{escape(status_text)}</td>'
             f'<td class="mono">{escape(value)}</td>'
             f'<td class="mono">{escape(expected)}</td>'
             f"<td>{escape(qc.message)}</td></tr>"

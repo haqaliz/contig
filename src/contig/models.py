@@ -73,6 +73,13 @@ class QCResult(BaseModel):
     value: float | None = None
     expected_range: str | None = None
     kind: QCKind = "metric"
+    # Whether this check asserts anything at all (has a warn/fail band) vs. is
+    # purely observational (e.g. a metric surfaced with no pass/fail bounds).
+    # Defaults to False so records predating the field deserialize unchanged.
+    # Orthogonal to `kind`: an informational check is still `kind="metric"`;
+    # `kind` says what produced the result, `informational` says whether it
+    # asserts anything.
+    informational: bool = False
 
 
 def overall_verdict(results: list[QCResult]) -> QCStatus:
@@ -83,10 +90,18 @@ def overall_verdict(results: list[QCResult]) -> QCStatus:
     An "unverified" check carries no severity (it corroborated nothing); it cannot
     by itself turn into a pass, so a set of only unverified checks reduces to
     "unverified", never "pass".
+
+    An `informational` check likewise carries no severity, whatever its `status`:
+    it asserts nothing, so it can never contribute a pass (or a warn/fail) to the
+    verdict. The empty-list guard above runs on the full, unfiltered list — an
+    all-informational list is not empty and must not raise; it just has no
+    severity-bearing result to reduce over. So: a result set containing only
+    informational and/or unverified checks reduces to "unverified", never "pass".
     """
     if not results:
         raise ValueError("overall_verdict requires at least one QC result; use 'unverified'")
-    statuses = {r.status for r in results}
+    severe = [r for r in results if not r.informational]
+    statuses = {r.status for r in severe}
     if "fail" in statuses:
         return "fail"
     if "warn" in statuses:
@@ -254,6 +269,7 @@ FailureClass = Literal[
     "container_pull_failed",
     "container_unavailable",
     "conda_solve_failed",
+    "missing_dependency",
     "platform_unsupported",
     "disk_full",
     "download_failed",
@@ -581,13 +597,14 @@ class HealEvalReport(BaseModel):
 
 class HealSnapshot(BaseModel):
     """One heal-eval result tied to a corpus version; mirrors EvalSnapshot's
-    fields, but not its storage: there is exactly one frozen baseline, not a
-    history.
+    fields.
 
-    Serialized as the single committed baseline (one pretty-printed JSON
-    object, NOT JSONL) that `evaluate_heal`'s outcome-match rate is compared
-    against on every run. There is no history file and no dashboard trend --
-    `--history` is explicitly deferred.
+    Serialized two ways: as the single committed baseline (one pretty-printed
+    JSON object, NOT JSONL) that `evaluate_heal`'s outcome-match rate is
+    compared against on every run, and -- via `contig.snapshot_history`,
+    same as `EvalSnapshot` -- appended one-per-line to a committed JSONL
+    trend (`heal-guard --snapshot`/`--update-baseline`) that `heal-guard
+    --history` renders.
     """
 
     timestamp: str
@@ -619,3 +636,46 @@ class HealGuardResult(BaseModel):
     sha_mismatch: bool = False
     has_baseline: bool = True
     mismatches: list[HealScenarioResult] = []
+
+
+# --- Reproduce published work (C8 slice 1: pure data models) --------------------
+# A "claim" is one quantitative assertion pulled from a published paper/repo (e.g.
+# "F1 = 0.91"). Reproducing a paper means re-running its pipeline and checking each
+# claim against what Contig actually observed. `unverified` (not a downgraded
+# "pass") is the status when the metric can't be located in our output at all --
+# mirrors QCStatus/Verdict's honesty contract: never silently upgrade a claim.
+ClaimStatus = Literal["reproduced", "within_tolerance", "diverged", "unverified"]
+
+
+class ClaimResult(BaseModel):
+    """One claim's outcome: the paper's number vs. what Contig observed."""
+
+    id: str
+    status: ClaimStatus
+    claimed: float
+    observed: float | None = None  # None when the metric is uncomputable
+    tolerance: float
+    delta: float | None = None  # None when uncomputable; relative delta otherwise
+    message: str
+
+
+class ReproduceRecord(BaseModel):
+    """The complete record of one `contig reproduce` run over a published repo.
+
+    `created_at` is passed in, never computed with wall-clock inside the model:
+    determinism matters for reproduce records the same way it does for RunRecord.
+    """
+
+    reproduce_id: str
+    repo: str
+    run_command: str
+    claims_sha256: str
+    claim_results: list[ClaimResult]
+    exit_code: int
+    created_at: str
+    interpreter: str | None = None
+    tool: str = "contig"
+    repair_history: list[RepairStep] = []
+    source_url: str | None = None
+    source_commit: str | None = None
+    source_tree_sha256: str | None = None

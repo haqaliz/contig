@@ -57,6 +57,7 @@ def _concordance(
     message: str,
     value: float | None = None,
     expected_range: str | None = None,
+    informational: bool = False,
 ) -> QCResult:
     """Build a QCResult tagged as concordance so the dashboard groups it correctly."""
     return QCResult(
@@ -66,6 +67,7 @@ def _concordance(
         value=value,
         expected_range=expected_range,
         kind="concordance",
+        informational=informational,
     )
 
 
@@ -243,10 +245,12 @@ def concordance_results(
     `_MIN_SHARED_GENES` genes are comparable — a correlation over 1-2 genes is
     meaningless and could report a false PASS, so we must not claim one. `rho` can
     also be None (a constant count vector), which is UNVERIFIED too. `gene_overlap`
-    is informational and ALWAYS PASS — a second matrix built on a subset annotation
-    legitimately overlaps poorly, so overlap must not cry wolf; the real signal lives
-    in the other two. All results carry kind "concordance". Messages name both
-    matrices by basename so the comparison is auditable.
+    is informational and ALWAYS PASS, and carries `informational=True` so it is
+    excluded from `overall_verdict`'s severity reduction — a second matrix built on
+    a subset annotation legitimately overlaps poorly, so overlap must not cry wolf
+    (nor count as evidence for a "pass" verdict); the real signal lives in the
+    other two. All results carry kind "concordance". Messages name both matrices
+    by basename so the comparison is auditable.
     """
     return results_from_counts(
         parse_count_matrix(matrix_a),
@@ -319,7 +323,7 @@ def results_from_counts(
             expected_range=f">= {_FRACTION_AGREEING_WARN_BELOW}",
         )
 
-    # gene_overlap (informational, never WARN)
+    # gene_overlap (informational, never WARN, never a verdict lever)
     overlap = round(stats.overlap, 4)
     overlap_result = _concordance(
         "gene_overlap",
@@ -328,6 +332,7 @@ def results_from_counts(
         f"{overlap} (informational context, not a verdict lever)",
         value=overlap,
         expected_range=None,
+        informational=True,
     )
 
     return [spearman_result, fraction_result, overlap_result]

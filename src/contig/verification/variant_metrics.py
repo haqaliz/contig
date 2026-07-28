@@ -151,18 +151,20 @@ def _rule_by_check(check_name: str) -> dict:
 def evaluate_variant_plausibility(
     vcf_path: str | os.PathLike, sample: str = "sample"
 ) -> list[QCResult]:
-    """Evaluate the germline plausibility rules over a VCF, capped at WARN.
+    """Evaluate the germline plausibility rules over a VCF.
 
-    Computes ts_tv, het_hom, and variant_count, then runs the three WARN-capped
-    germline rules from VARIANT_RULE_PACK over the COMPUTABLE metrics via the
-    shared evaluate() (so the band logic and check naming, "<check>:<sample>",
-    stay single-sourced). The two ratios can be None (no transversion, or no
-    homozygous-alt genotype); such a metric is NOT silently skipped but gets an
-    explicit "unverified" QCResult, which carries no severity and so can never
-    read as a pass (PRODUCT_SPEC false-pass rate ~0). variant_count is always an
-    int, so it is always computable — a real 0 (empty call set) rides the band as
-    a WARN and never routes into the unverified branch. Every result is kind
-    "metric".
+    Computes ts_tv, het_hom, and variant_count, then runs the three germline
+    rules from VARIANT_RULE_PACK over the COMPUTABLE metrics via the shared
+    evaluate() (so the band logic and check naming, "<check>:<sample>", stay
+    single-sourced). These rules can now FAIL on gross implausibility (WES-safe
+    engineering tripwires, not a clinical claim), so a broken call set drives the
+    verdict to FAIL rather than an easy-to-miss WARN. The two ratios can be None
+    (no transversion, or no homozygous-alt genotype); such a metric is NOT
+    silently skipped but gets an explicit "unverified" QCResult, which carries no
+    severity and so can never read as a pass (PRODUCT_SPEC false-pass rate ~0).
+    variant_count is always an int, so it is always computable — a real 0 (empty
+    call set) rides the band as a FAIL (below fail_below 1) and never routes into
+    the unverified branch. Every result is kind "metric".
     """
     metrics = variant_metrics(vcf_path)
     rules = [_rule_by_check(name) for name in _PLAUSIBILITY_CHECKS]

@@ -1,0 +1,63 @@
+{
+  "run_id": "informational-only-fixture",
+  "pipeline": "nf-core/sarek",
+  "pipeline_revision": "3.4.0",
+  "target": {
+    "backend": "local",
+    "container_runtime": "docker",
+    "work_dir": "/tmp/work",
+    "engine": "nextflow",
+    "credentials_ref": null,
+    "backend_options": {},
+    "resource_limits": {}
+  },
+  "input_checksums": {
+    "samplesheet.csv": "deadbeef"
+  },
+  "parameters": {
+    "genome": "GRCh38"
+  },
+  "container_digests": {},
+  "nextflow_version": "24.10.0",
+  "contig_version": "0.1.0",
+  "events": [
+    {
+      "process": "HAPLOTYPECALLER",
+      "status": "COMPLETED",
+      "exit": 0,
+      "task_id": "1",
+      "name": "HAPLOTYPECALLER (SAMPLE_A)"
+    }
+  ],
+  "qc_results": [
+    {
+      "check": "gene_symbol_concordance",
+      "status": "pass",
+      "message": "VEP vs SnpEff: 42/50 gene symbols agree (0.84, informational).",
+      "value": 0.84,
+      "expected_range": null,
+      "kind": "concordance",
+      "informational": true
+    },
+    {
+      "check": "consequence_concordance",
+      "status": "unverified",
+      "message": "No second annotator to corroborate against.",
+      "value": null,
+      "expected_range": null,
+      "kind": "concordance"
+    },
+    {
+      "check": "identity_concordance",
+      "status": "unverified",
+      "message": "No second call set to corroborate against.",
+      "value": null,
+      "expected_range": null,
+      "kind": "concordance"
+    }
+  ],
+  "output_checksums": {},
+  "repair_history": [],
+  "resource_usage": [],
+  "verdict": "unverified"
+}

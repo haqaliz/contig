@@ -292,21 +292,26 @@ def _sex_plausibility_result(signals: SexSignals, sample: str) -> QCResult:
 
 
 def _x_het_ratio_result(signals: SexSignals, sample: str) -> QCResult:
-    """The informational `x_het_ratio:{sample}` result.
+    """The `x_het_ratio:{sample}` result: the raw ratio, reported for context.
 
-    Always status="pass" -- the established informational-always-PASS
-    convention (mirroring gene_symbol_concordance) for a raw metric that
-    carries no severity of its own; the WARN-capped call lives in
-    sex_plausibility, not here.
+    Two paths, deliberately NOT the same status (A11):
+    - Ratio unavailable (too few callable X sites): the check could not
+      compute anything, so it is `unverified` -- never a pass for something
+      it could not check. `informational=False` here: this reads as a plain
+      unverified result, which is what it is.
+    - Real value: `status="pass"`, `informational=True` -- it carries no
+      severity of its own (a raw metric with no pass/fail bounds), so it must
+      never count as evidence for a verdict; the WARN-capped call that DOES
+      carry severity lives in `sex_plausibility`, not here.
     """
     check = f"x_het_ratio:{sample}"
     if signals.x_het_ratio is None:
         return QCResult(
             check=check,
-            status="pass",
+            status="unverified",
             message=(
                 f"{sample}: chrX heterozygosity ratio unavailable "
-                f"(only {signals.x_sites} callable X site(s)) -- informational metric"
+                f"(only {signals.x_sites} callable X site(s))"
             ),
             value=None,
             kind="metric",
@@ -318,6 +323,7 @@ def _x_het_ratio_result(signals: SexSignals, sample: str) -> QCResult:
         message=f"{sample}: chrX heterozygosity ratio {ratio} -- informational metric",
         value=signals.x_het_ratio,
         kind="metric",
+        informational=True,
     )
 
 
@@ -331,7 +337,9 @@ def evaluate_sex_plausibility(
     be expressed through a single rule_pack.evaluate() band, exactly like
     variant_metrics.py's hand-built UNVERIFIED branch):
       - `sex_plausibility:{sample}`: the WARN-capped verdict-contributing call.
-      - `x_het_ratio:{sample}`: the raw ratio, informational-always-PASS.
+      - `x_het_ratio:{sample}`: the raw ratio -- `unverified` when it could not
+        be computed, else `pass` with `informational=True` (A11); either way
+        it never contributes severity to a verdict.
     """
     signals = sex_signals(vcf_path)
     return [

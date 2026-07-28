@@ -70,6 +70,29 @@ def test_methods_summarizes_qc_checks():
     assert "mapping_rate" in text
 
 
+def test_methods_labels_informational_qc_checks_distinctly():
+    # An informational check supports nothing about the verdict; the methods
+    # clause must label it so, and must not label a normal pass that way.
+    record = _record(
+        qc_results=[
+            QCResult(check="mapping_rate", status="pass", message="ok", value=92.0),
+            QCResult(
+                check="duplication_rate",
+                status="pass",
+                message="fyi",
+                value=0.71,
+                informational=True,
+            ),
+        ]
+    )
+    text = render_methods(record)
+    checks_clause = text.split("quality-control checks:", 1)[1]
+    mapping_part = checks_clause.split("duplication_rate")[0]
+    dup_part = checks_clause.split("duplication_rate", 1)[1]
+    assert "informational" not in mapping_part
+    assert "informational" in dup_part.split(".")[0]
+
+
 def test_methods_is_deterministic():
     record = _record()
     assert render_methods(record) == render_methods(record)

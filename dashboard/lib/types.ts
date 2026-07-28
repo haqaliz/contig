@@ -34,6 +34,12 @@ export interface QCResult {
   // files themselves (present, non-empty, valid) rather than a content metric.
   // Older records omit it; the QC panel treats an absent value as "metric".
   kind?: QCKind;
+  // Whether this check asserts anything at all (has a warn/fail band) vs. is
+  // purely observational (e.g. a metric surfaced with no pass/fail bounds).
+  // Mirrors QCResult.informational in src/contig/models.py. Orthogonal to
+  // `kind`. Older records predate the field and deserialize with it absent;
+  // treat an absent value as false (not informational).
+  informational?: boolean;
 }
 
 export interface ExecutionTarget {
@@ -291,6 +297,29 @@ export interface EvalSnapshot {
   // "rules-strict", or "llm". Older snapshots predate the field; the dashboard
   // treats an absent value as "rules" so the compare view always has a bucket.
   detector?: string;
+}
+
+// One self-heal outcome-match snapshot (src/contig/data/heal_history.jsonl,
+// C6 self-heal regression guard). Mirrors EvalSnapshot's fields but scores the
+// self-heal loop's outcome-match rate against a frozen scenario corpus instead
+// of the detector's accuracy. The engine appends one per line on
+// `heal-guard --snapshot` (and `--update-baseline`); the /eval trend reads them
+// to plot outcome-match rate over time.
+export interface HealClassScore {
+  matched: number;
+  total: number;
+  rate: number;
+}
+
+export interface HealSnapshot {
+  timestamp: string;
+  scenario_count: number;
+  corpus_sha: string;
+  outcome_match_rate: number;
+  recovery_rate: number;
+  per_class: Record<string, HealClassScore>;
+  covered_classes: string[];
+  contig_version: string | null;
 }
 
 // The pre-run estimate from `contig estimate --json` (PRD contract B). The engine

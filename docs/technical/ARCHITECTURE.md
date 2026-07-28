@@ -255,7 +255,7 @@ Layered checks, cheapest first:
    - *Variant calling:* Ti/Tv ratio in the expected range, het/hom and dbSNP-overlap sanity, coverage uniformity, contamination estimate.
 4. **Cross-sample consistency:** sample-swap / sex-check / relatedness flags where applicable.
 
-Each check yields a typed `QCResult{check, status: pass|warn|fail, value, expected_range, message}`. A `fail` is fed back into the self-healing loop as a `qc_anomaly` failure signal, closing the loop between "verify" and "repair." Thresholds live in versioned, per-assay rule packs (data, not code) so they can be tuned and audited without redeploys.
+Each check yields a typed `QCResult{check, status: pass|warn|fail|unverified, value, expected_range, message, kind, informational}`. `unverified` is a check that ran but could not corroborate anything (it carries no severity); `informational` marks a check that *cannot fail* (a band-less rule, or a raw context metric like `x_het_ratio`/`gene_overlap`) and so asserts nothing — the overall verdict reduces over the non-informational results only, so a run resting solely on informational/unverified checks is `unverified`, never a manufactured `pass`. A `fail` is fed back into the self-healing loop as a `qc_anomaly` failure signal, closing the loop between "verify" and "repair." Thresholds live in versioned, per-assay rule packs (data, not code) so they can be tuned and audited without redeploys.
 
 ---
 

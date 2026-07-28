@@ -26,6 +26,18 @@ from contig.notify import emit_event
 _ACTIVE_STATES = {"running", "awaiting_approval"}
 
 
+def _is_real_pid(value: object) -> bool:
+    """True for an actual int pid/pgid, not the bool subclass of int.
+
+    isinstance(True, int) is True in Python, so a plain `isinstance(x, int)`
+    guard lets a hand-edited or corrupted status.json's JSON `true` through
+    as pid 1 -- init/launchd's process group. No writer in this codebase has
+    ever produced a bool here; this exists purely so a corrupted file can't
+    signal it.
+    """
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 class CancelError(Exception):
     """Raised when there is no active run to cancel (already done, or no status)."""
 
@@ -67,11 +79,20 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _terminate_process_group(pid: int, wait_seconds: float) -> None:
-    """SIGTERM the run's process group, then SIGKILL if it does not exit.
+    """SIGTERM the process group containing pid, then SIGKILL if it does not exit.
 
-    Runs are spawned detached, so the process group id equals the pid; killing
-    the group reaps the Nextflow launcher and its Java/tool children together. A
-    pid that is already gone is fine: there is simply nothing left to reap.
+    Two different callers rely on this, and both work because os.getpgid(pid)
+    resolves whichever group pid currently belongs to, whether or not pid is
+    that group's leader:
+
+    - the run's own pid (status.json's `pid`), whose group is shared with an
+      inherited, non-detached child -- true for every run that predates the
+      stall watchdog, and for the watchdog's own supervising process;
+    - a watchdog-spawned child's pgid (status.json's `child_pgid`), which is
+      also a valid pid to pass here: `start_new_session=True` makes that child
+      a session leader, and a session leader's pid equals its own pgid.
+
+    A pid that is already gone is fine: there is simply nothing left to reap.
     """
     try:
         pgid = os.getpgid(pid)
@@ -97,6 +118,12 @@ def cancel_run(runs_dir: str | Path, run_id: str, *, wait_seconds: float = 2.0) 
     already-cancelled, or unknown run has nothing to cancel. If the run says it is
     active but the process is already dead, the terminal state is still written so
     a stale "running" never lingers.
+
+    `wait_seconds` is the SIGTERM grace period, spent once PER process group.
+    A watchdog run that has both a live `child_pgid` and its own `pid` group
+    can therefore take up to 2x `wait_seconds` to cancel, not `wait_seconds` --
+    a rare admin action taking longer is an acceptable trade against the
+    complexity of a single shared grace window across two independent groups.
     """
     run_dir = Path(runs_dir) / run_id
     status = _read_status(run_dir)
@@ -106,8 +133,34 @@ def cancel_run(runs_dir: str | Path, run_id: str, *, wait_seconds: float = 2.0) 
     if state not in _ACTIVE_STATES:
         raise CancelError(f"run {run_id!r} is {state!r}, not active (nothing to cancel)")
 
+    # Child group first, then the run's own (D2): the watchdog's detached
+    # child must die before its supervisor, so the pipeline never outlives the
+    # process that would otherwise clean up after it.
+    #
+    # child_pgid is written while a detached child is running and removed once it
+    # is not, so "absent" means "nothing detached to reap" for every cause, not
+    # merely a back-compat shim for runs predating the watchdog. Two things
+    # remove it: the executor clears the key itself the moment the child is
+    # reaped (runner.py::_clear_child_pgid), and self_heal's _write_status
+    # (self_heal.py:207-234) writes a fresh status dict rather than merging, so
+    # every state-transition write between attempts drops it as well. Neither is
+    # relied on to cover for the other: the retry branches do NOT all call
+    # _write_status before continuing (the auto-approve and safe-patch paths
+    # both fall straight through to the next attempt), which is exactly why the
+    # executor clears it at the source.
+    #
+    # Best-effort, not a guarantee: contig being SIGKILLed between spawning a
+    # child and clearing the key leaves the value behind with no chance to clean
+    # up. A pgid that is merely GONE is harmless to signal -- that is what
+    # _terminate_process_group's ProcessLookupError handling is for -- but one
+    # that has been RECYCLED names an unrelated process group, and no error
+    # handling here can tell the two apart. That is the hazard the eager clear
+    # exists to keep rare.
+    child_pgid = status.get("child_pgid")
+    if _is_real_pid(child_pgid):
+        _terminate_process_group(child_pgid, wait_seconds)
     pid = status.get("pid")
-    if isinstance(pid, int):
+    if _is_real_pid(pid):
         _terminate_process_group(pid, wait_seconds)
     _write_terminal_status(run_dir, status, "cancelled")
     emit_event(runs_dir, run_id, "cancelled", f"Run {run_id} was cancelled.")

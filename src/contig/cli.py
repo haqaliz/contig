@@ -8,8 +8,12 @@ generating a nextflow.config from the ExecutionTarget (ARCHITECTURE §4.1).
 
 from __future__ import annotations
 
+import dataclasses as _dataclasses
+import hashlib
 import json as _json
+import os
 import re as _re
+import shlex
 import shutil
 import tempfile
 import time
@@ -37,6 +41,7 @@ from contig.corpus import (
     promote_pending_case,
 )
 from contig.detect import get_detector
+from contig.fetch import classify_repo_argument, classify_rev_argument, fetch_repo
 from contig.eval_history import (
     append_snapshot,
     default_history_path,
@@ -46,6 +51,7 @@ from contig.eval_history import (
 from contig.holdout import (
     compare_to_baseline,
     default_baseline_path,
+    default_holdout_history_path,
     default_holdout_path,
     load_baseline,
     save_baseline,
@@ -53,6 +59,7 @@ from contig.holdout import (
 from contig.heal import (
     compare_heal_to_baseline,
     default_heal_baseline_path,
+    default_heal_history_path,
     default_heal_scenarios_path,
     evaluate_heal,
     load_heal_baseline,
@@ -60,13 +67,22 @@ from contig.heal import (
     save_heal_baseline,
     snapshot_from_heal_report,
 )
-from contig.bundle import compute_output_checksums
+from contig.snapshot_history import append_jsonl, load_jsonl
+from contig.bundle import compute_output_checksums, compute_tree_sha256, write_reproduce_bundle
 from contig.cost import cost_report
 from contig.signing import generate_keypair, signing_available, verify_signature
 from contig.estimate import estimate_run
 from contig.methods import render_methods
 from contig.provenance import to_rocrate
-from contig.models import ExecutionTarget, LaunchManifest, RunRecord, RunSummary, sha256_file
+from contig.models import (
+    EvalSnapshot,
+    ExecutionTarget,
+    HealSnapshot,
+    LaunchManifest,
+    RunRecord,
+    RunSummary,
+    sha256_file,
+)
 from contig.nfconfig import ConfigGenerationError, preflight_aws_batch, preflight_slurm
 from contig.planner import PlanningError
 from contig.planner import plan as build_plan
@@ -75,7 +91,12 @@ from contig.reference import ReferenceError, resolve_reference
 from contig.reference_check import check_reference_consistency, fasta_contigs, gtf_contigs
 from contig.reference_harmonize import harmonize_gtf, plan_harmonization
 from contig.registry import UnknownAssayError, assay_for_pipeline, select_pipeline
-from contig.report import render_explain, render_run_report, render_run_report_html
+from contig.report import (
+    render_explain,
+    render_reproduction,
+    render_run_report,
+    render_run_report_html,
+)
 from contig.verification.concordance import evaluate_concordance
 from contig.verification.count_concordance import (
     _COUNT_MATRIX_GLOB,
@@ -97,8 +118,28 @@ from contig.verification.sc_count_quantifier import (
     SecondScQuantifierError,
     run_starsolo_quantifier,
 )
+from contig.verification.claim_extraction import (
+    ExtractedClaim,
+    extract_claims as _extract_claims,
+    extract_with_llm,
+    merge_claims,
+)
+from contig.verification.reproduce import (
+    ClaimsError,
+    _MAX_MATCH_BYTES,
+    load_claims,
+    run_reproduction,
+)
 from contig.verification.structural import manifest_for
-from contig.runner import PipelineExecutionError, default_executor, default_index_builder
+from contig.runner import (
+    PipelineExecutionError,
+    default_command_executor,
+    default_executor,
+    default_fetcher,
+    default_index_builder,
+    default_installer,
+    make_watchdog_executor,
+)
 from contig.samplesheet import (
     fastq_paths,
     parse_samplesheet,
@@ -182,6 +223,24 @@ def _generate_run_id() -> str:
     return "run-" + datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%fZ")
 
 
+def default_extractor(text: str, *, use_llm: bool) -> list[ExtractedClaim]:
+    """Compose the deterministic core with the optional LLM assist.
+
+    The single monkeypatchable entry point the `extract-claims` command uses
+    (mirrors `default_command_executor`/`default_installer`/`default_fetcher`),
+    so CLI tests swap the whole extraction by patching `contig.cli.default_extractor`.
+
+    `use_llm=False` returns `extract_claims(text)` alone -- the assist is never
+    invoked. `use_llm=True` merges `extract_with_llm(text)` into the core via
+    `merge_claims` (core wins on a `(metric, value)` clash); when no provider is
+    configured `extract_with_llm` returns `[]`, so the result is core-only.
+    """
+    core = _extract_claims(text)
+    if not use_llm:
+        return core
+    return merge_claims(core, extract_with_llm(text))
+
+
 @app.callback()
 def main() -> None:
     """Contig: agentic bioinformatics analyst."""
@@ -234,8 +293,55 @@ def plan(
         typer.echo(f"  ⚠ {warning}")
 
 
+_DETECT_STALLS_HELP = (
+    "Terminate a hung run once its heartbeat shows no forward progress for "
+    "--stall-timeout seconds, so self-heal classifies it no_progress and "
+    "retries with -resume. Off by default."
+)
+_STALL_TIMEOUT_HELP = (
+    "Seconds of no forward progress before --detect-stalls terminates the "
+    "run (default: 1 hour). Requires --detect-stalls; refused otherwise."
+)
+
+
+def _validate_stall_flags(
+    ctx: typer.Context, *, detect_stalls: bool, stall_timeout: float
+) -> None:
+    """Refuse an incoherent --detect-stalls / --stall-timeout pairing.
+
+    Shared by `run`, `rerun`, and `resume` so the two refusals -- --stall-timeout
+    without the gate flag, and --detect-stalls with a non-positive timeout --
+    behave identically everywhere the flags are offered.
+
+    --stall-timeout is meaningless without --detect-stalls to act on it.
+    Refusing here -- rather than silently ignoring it -- matters because a
+    caller who passes --stall-timeout and sees a success would reasonably
+    believe they set the watchdog window (the slice-7 `--rev` posture:
+    refused, not ignored). `stall_timeout` has a non-None default (3600.0,
+    itself a legal explicit value), so "was it passed?" cannot be read off
+    the value -- it requires the Click parameter source.
+    """
+    stall_timeout_source = ctx.get_parameter_source("stall_timeout")
+    stall_timeout_was_set = (
+        stall_timeout_source is not None and stall_timeout_source.name == "COMMANDLINE"
+    )
+    if stall_timeout_was_set and not detect_stalls:
+        typer.echo(
+            "--stall-timeout requires --detect-stalls; pass --detect-stalls to "
+            "enable the watchdog, or drop --stall-timeout.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if detect_stalls and stall_timeout <= 0:
+        typer.echo(
+            f"--stall-timeout must be positive (got {stall_timeout}).", err=True
+        )
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def run(
+    ctx: typer.Context,
     run_id: str = typer.Option(..., "--run-id", help="Identifier for this run."),
     pipeline: str = typer.Option("nf-core/rnaseq", "--pipeline", help="Pipeline to run (Nextflow engine)."),
     assay: str = typer.Option(None, "--assay", help="Assay key override; needed when two assays share a pipeline (e.g. somatic vs germline sarek). Defaults to the pipeline's registered assay."),
@@ -261,7 +367,10 @@ def run(
     allow_reference_mismatch: bool = typer.Option(False, "--allow-reference-mismatch", help="Proceed even if the FASTA and GTF use disjoint contig naming (almost always a mistake)."),
     auto_approve: bool = typer.Option(False, "--auto-approve", help="Apply gated patches without waiting (non-interactive/CI)."),
     approval_timeout: float = typer.Option(1800, "--approval-timeout", help="Seconds to wait for a human approval before stopping."),
+    detect_stalls: bool = typer.Option(False, "--detect-stalls", help=_DETECT_STALLS_HELP),
+    stall_timeout: float = typer.Option(3600.0, "--stall-timeout", help=_STALL_TIMEOUT_HELP),
     notify: str = typer.Option(None, "--notify", help="Webhook URL to POST run lifecycle events to (http/https)."),
+    fail_on_verdict: bool = typer.Option(False, "--fail-on-verdict", help="Exit non-zero if the run's verdict is FAIL (opt-in; WARN/UNVERIFIED do not). Default off."),
 ) -> None:
     """Run a pipeline, self-heal recoverable failures, verify it, and report the verdict.
 
@@ -270,6 +379,7 @@ def run(
     checksums every input into the provenance. Without --input it runs nf-core's
     bundled test profile.
     """
+    _validate_stall_flags(ctx, detect_stalls=detect_stalls, stall_timeout=stall_timeout)
     _dispatch_run(
         run_id=run_id,
         pipeline=pipeline,
@@ -296,7 +406,10 @@ def run(
         allow_reference_mismatch=allow_reference_mismatch,
         auto_approve=auto_approve,
         approval_timeout=approval_timeout,
+        detect_stalls=detect_stalls,
+        stall_timeout=stall_timeout,
         notify=notify,
+        fail_on_verdict=fail_on_verdict,
     )
 
 
@@ -352,7 +465,10 @@ def _dispatch_run(
     resume: bool = False,
     auto_approve: bool = False,
     approval_timeout: float = 1800,
+    detect_stalls: bool = False,
+    stall_timeout: float = 3600.0,
     notify: str | None = None,
+    fail_on_verdict: bool = False,
 ) -> None:
     """Validate, write the reproduce sidecar, run through self-heal, and report.
 
@@ -597,7 +713,15 @@ def _dispatch_run(
             input_paths=input_paths,
             runs_dir=runs_dir,
             run_id=run_id,
-            executor=default_executor,
+            # The only production line whose behavior changes with --detect-stalls:
+            # off (the default) is byte-identical to before -- default_executor,
+            # untouched. On, a watchdog wraps the child so a hung run gets
+            # terminated and the detector can classify it no_progress.
+            executor=(
+                make_watchdog_executor(stall_timeout_sec=stall_timeout)
+                if detect_stalls
+                else default_executor
+            ),
             index_builder=default_index_builder,
             params=params or None,
             max_attempts=max_attempts,
@@ -618,13 +742,19 @@ def _dispatch_run(
     typer.echo(render_run_report(record))
     if not RunSummary.from_events(record.events).succeeded:
         raise typer.Exit(code=1)
+    if fail_on_verdict and record.verdict == "fail":
+        typer.echo(f"Run {run_id} verdict is FAIL (--fail-on-verdict).", err=True)
+        raise typer.Exit(code=1)
 
 
 @app.command()
 def rerun(
+    ctx: typer.Context,
     run_id: str = typer.Argument(..., help="The run to reproduce (reads its launch.json)."),
     runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
     new_run_id: str = typer.Option(None, "--new-run-id", help="Identifier for the reproduced run (generated if omitted)."),
+    detect_stalls: bool = typer.Option(False, "--detect-stalls", help=_DETECT_STALLS_HELP),
+    stall_timeout: float = typer.Option(3600.0, "--stall-timeout", help=_STALL_TIMEOUT_HELP),
 ) -> None:
     """Reproduce a past run from its launch.json under a fresh run id.
 
@@ -632,6 +762,12 @@ def rerun(
     manifest is never trusted blindly), and dispatches an identical run via the
     same path `run` uses, with a re-defaulted outdir/work_dir. Prints the new id.
     """
+    # Argument validation is cheap, deterministic, and about the caller's own
+    # input -- it runs before any filesystem work (the manifest lookup below),
+    # so a flag mistake is reported as a flag mistake even for a run id that
+    # does not exist at all, matching `run` and `resume`.
+    _validate_stall_flags(ctx, detect_stalls=detect_stalls, stall_timeout=stall_timeout)
+
     manifest_path = Path(runs_dir) / run_id / "launch.json"
     if not manifest_path.exists():
         typer.echo(f"No launch manifest for run {run_id!r} in {runs_dir}.", err=True)
@@ -675,6 +811,491 @@ def rerun(
         max_cpus=manifest.max_cpus,
         max_attempts=manifest.max_attempts,
         allow_reference_mismatch=manifest.allow_reference_mismatch,
+        detect_stalls=detect_stalls,
+        stall_timeout=stall_timeout,
+    )
+
+
+@app.command()
+def reproduce(
+    repo: str = typer.Argument(
+        ..., help="Path to a local repo, or an https:// git URL (with --allow-fetch)"
+    ),
+    run: str = typer.Option(..., "--run", help="Command to run inside the repo"),
+    claims: str = typer.Option(..., "--claims", help="Path to the claims JSON file"),
+    results: str = typer.Option(
+        "results.json",
+        "--results",
+        help=(
+            "Repo-relative JSON the script writes: {claim_id: value}; the "
+            "fallback for claims without a 'from'/'path' locator"
+        ),
+    ),
+    runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+    tolerance: float = typer.Option(
+        0.1,
+        "--tolerance",
+        help="Default relative tolerance when a claim omits one",
+    ),
+    fail_on_diverged: bool = typer.Option(
+        False, "--fail-on-diverged", help="Exit non-zero if any claim diverged"
+    ),
+    allow_install: bool = typer.Option(
+        False,
+        "--allow-install/--no-allow-install",
+        help=(
+            "Install a missing Python dependency and retry the run once when the "
+            "first run fails on ModuleNotFoundError. Reaches the network and mutates "
+            "the environment; off by default (a missing module stays UNVERIFIED)."
+        ),
+    ),
+    rev: str = typer.Option(
+        None,
+        "--rev",
+        help=(
+            "Revision to check out: a full 40-character commit SHA, a tag, or a "
+            "branch. Requires an https:// URL and --allow-fetch. With it, the "
+            "recorded source_commit is the revision you asked for rather than "
+            "whatever HEAD happened to be at fetch time."
+        ),
+    ),
+    allow_fetch: bool = typer.Option(
+        False,
+        "--allow-fetch/--no-allow-fetch",
+        help=(
+            "Clone an https:// git URL passed as the repo argument into the run "
+            "bundle and run against that checkout. Reaches the network and writes "
+            "a checkout under the runs directory; off by default (a URL is "
+            "refused without it)."
+        ),
+    ),
+) -> None:
+    """Reproduce a published paper/repo's claims against a fresh run.
+
+    Loads a claims file (one published numeric claim per id), runs `--run`
+    inside `repo`, classifies each claim against the observed value, and writes
+    a signed, re-runnable bundle under `runs_dir`. Nothing is written when the
+    repo is missing or the claims file is malformed -- validation happens
+    before any run or record.
+
+    `repo` is either a local path or an https:// git URL. A URL requires
+    --allow-fetch (off by default): with it, the repo is cloned into
+    `<runs_dir>/<reproduce_id>/source` and the run happens against that
+    checkout, with the URL and the resolved HEAD commit recorded on the
+    bundle as `source_url`/`source_commit` -- the pin that says which
+    revision produced this verdict. The record's `repo` stays the URL; the
+    local checkout path never enters the portable manifest. The freshness
+    requirement below applies to a fetched checkout exactly as to a local
+    repo: a clone writes every file at clone time, and the clone happens
+    BEFORE the run's start is stamped, so a repo that commits its outputs
+    cannot report a false REPRODUCED off the authors' stored numbers.
+
+    A claim's locator may target a JSON value (`from` + `path`, a JSONPath-lite
+    into a JSON file) or a TSV/CSV cell (`from` + `column` + `row`, optionally
+    `header`/`delimiter`) -- e.g. `{"id": "log2fc", "value": -2.31, "from":
+    "out/de.tsv", "column": "log2FoldChange", "row": {"gene_id": "ENSG1"}}`.
+
+    A locator may instead be a regex `pattern`: on its own it is matched
+    against the run's own stdout/stderr, and with `from` it is matched against
+    that repo-relative file -- e.g. `{"id": "auc", "value": 0.91, "pattern":
+    "Final AUC: ([0-9.]+)"}`. The observed value is capture group 1 when the
+    pattern has capturing groups, otherwise the whole match. Matching is
+    strict: a pattern that matches 0 times or more than 1 time leaves the
+    claim UNVERIFIED rather than guessing which number was meant.
+
+    A locator may target a Jupyter notebook cell's output (`from` + `cell` +
+    `pattern`), where `cell` is a code-cell index (or `{"contains": <source
+    substring>}`) and `pattern` is applied to that cell's captured stdout/
+    result text -- e.g. `{"id": "auc", "value": 0.91, "from": "out.ipynb",
+    "cell": 7, "pattern": "AUC: ([0-9.]+)"}`.
+
+    Every value read off disk must come from a file THIS run rewrote. Each
+    locator carrying a `from` (JSON, TSV/CSV, text/log, notebook) and the
+    `--results` file itself resolve only when the file's mtime is at or after
+    the run's start; a file the run did not rewrite stays UNVERIFIED rather
+    than binding a committed artifact as a false REPRODUCED. There is no
+    opt-out. The single exemption is a `pattern` with no `from`: it matches
+    the run's own captured stdout/stderr, touches no file on disk, and so can
+    never be stale.
+    """
+    repo_argument = classify_repo_argument(repo)
+    if repo_argument.refusal is not None:
+        typer.echo(repo_argument.refusal, err=True)
+        raise typer.Exit(code=1)
+
+    if repo_argument.kind == "remote" and not allow_fetch:
+        typer.echo(
+            f"{repo} is a remote URL; pass --allow-fetch to clone it "
+            "(it reaches the network and writes a checkout under --runs-dir)",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # --rev is meaningless without something to check out. Refusing here --
+    # rather than ignoring it -- matters because a caller who passes --rev and
+    # sees a success would reasonably believe they pinned a revision. Checked
+    # after the --allow-fetch refusal above, so a URL without the flag reports
+    # the flag (the more actionable of the two problems), and before anything
+    # is created on disk.
+    if rev is not None and repo_argument.kind == "local":
+        typer.echo(
+            "--rev applies only to a remote https:// URL fetched with "
+            "--allow-fetch; a local repo is used as-is",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if rev is not None:
+        rev_argument = classify_rev_argument(rev)
+        if rev_argument.refusal is not None:
+            typer.echo(rev_argument.refusal, err=True)
+            raise typer.Exit(code=1)
+
+    # The run id is generated here, ahead of every validation gate, because a
+    # remote run's checkout path is derived from it and the containment guards
+    # below must run against that real path. It is only a name at this point;
+    # nothing is created on disk until the fetch (or, for a local run, until
+    # the bundle is written).
+    reproduce_id = _generate_run_id()
+
+    if repo_argument.kind == "local":
+        repo_path = Path(repo)
+        if not repo_path.is_dir():
+            typer.echo(f"No such repo directory: {repo}", err=True)
+            raise typer.Exit(code=1)
+    else:
+        # The PROSPECTIVE checkout path -- not created yet. The containment
+        # guards below must never join a user path onto the raw URL string:
+        # Path("https://host/org/repo") / "../../etc/passwd" is lexically
+        # "inside" Path("https://host/org/repo"), so both guards would become
+        # silent no-ops on exactly the untrusted third-party repos they exist
+        # for. Path.resolve() on a not-yet-existing path is well-defined and
+        # touches no filesystem, so every cheap refusal still runs BEFORE the
+        # expensive, disk-touching clone.
+        repo_path = Path(runs_dir) / reproduce_id / "source"
+
+    # --results is repo-relative by contract (no raw-data egress outside the
+    # repo Contig is asked to run in). Reject an absolute path or one that
+    # resolves outside repo_path (e.g. "../secret.json") before anything runs.
+    resolved_results = (repo_path / results).resolve()
+    try:
+        resolved_results.relative_to(repo_path.resolve())
+    except ValueError:
+        typer.echo(f"--results path escapes the repo: {results}", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        claims_list = load_claims(claims)
+    except (ClaimsError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+    # Validate --run BEFORE running anything: an unbalanced quote makes
+    # shlex.split raise ValueError, and an empty/whitespace-only command
+    # splits to []. Both would otherwise surface as a raw traceback deep in
+    # run_reproduction/subprocess. Pre-validate here and still pass the
+    # original string through -- run_reproduction's own shlex.split is then
+    # guaranteed not to raise on it.
+    try:
+        run_argv = shlex.split(run)
+    except ValueError as exc:
+        typer.echo(f"Malformed --run command: {exc}", err=True)
+        raise typer.Exit(code=1)
+    if not run_argv:
+        typer.echo("--run command must not be empty", err=True)
+        raise typer.Exit(code=1)
+
+    # load_claims already defaults a claim's tolerance to 0.1 when the claims
+    # file omits it. A claim that explicitly sets a DIFFERENT tolerance always
+    # wins; --tolerance only re-defaults the ones still sitting at 0.1 (an
+    # explicit 0.1 in the file is indistinguishable from an omitted one, and
+    # both are the fallback's to own). --tolerance's own default is 0.1, so a
+    # caller who never passes it sees no change.
+    claims_list = [
+        _dataclasses.replace(claim, tolerance=tolerance) if claim.tolerance == 0.1 else claim
+        for claim in claims_list
+    ]
+
+    # A located claim's 'from' is repo-relative by the same contract as
+    # --results: no raw-data egress outside the repo Contig is asked to run
+    # in. Reject an absolute path or one that resolves outside repo_path
+    # (e.g. "../secret.json") before anything runs -- the engine also
+    # defends against this, but refusing here means no run and no record.
+    # A `from`-less pattern locator (source is None) names no file at all --
+    # it reads the run's own stdout/stderr -- so there is nothing to contain
+    # and nothing to join onto repo_path; skip it like an unlocated claim.
+    repo_root = repo_path.resolve()
+    for claim in claims_list:
+        if claim.locator is None or claim.locator.source is None:
+            continue
+        resolved_locator = (repo_path / claim.locator.source).resolve()
+        try:
+            resolved_locator.relative_to(repo_root)
+        except ValueError:
+            typer.echo(
+                f"locator 'from' path escapes the repo: {claim.locator.source}", err=True
+            )
+            raise typer.Exit(code=1)
+
+    # The clone (or, with --rev, the targeted fetch + checkout) is the FIRST
+    # disk write of this command, and it deliberately happens BEFORE
+    # run_started_at is stamped below. Either shape writes every file at
+    # fetch time; stamping first would make every author-committed artifact
+    # look freshly written by this run and silently disable the freshness guard
+    # for remote repos -- reopening the false-REPRODUCED hole on the very path
+    # (real published repos) where it matters most. A failed fetch leaves no
+    # directory behind (see fetch_repo).
+    source_commit: str | None = None
+    source_tree_sha256: str | None = None
+    if repo_argument.kind == "remote":
+        fetched = fetch_repo(
+            repo_argument.url, repo_path, fetcher=default_fetcher, rev=rev
+        )
+        if fetched.refusal is not None:
+            typer.echo(fetched.refusal, err=True)
+            raise typer.Exit(code=1)
+        source_commit = fetched.commit
+        # Hashed here too -- right after the fetch, before run_started_at is
+        # stamped below -- so an --allow-install retry (or anything the run
+        # itself writes into the checkout) can never change the recorded digest.
+        source_tree_sha256 = compute_tree_sha256(repo_path)
+
+    claims_sha256 = hashlib.sha256(Path(claims).read_bytes()).hexdigest()
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    # Stamp run-start once, AFTER all pre-run validation and BEFORE the executor
+    # runs. Every artifact read off disk -- the JSON, table, file-mode pattern and
+    # notebook locators, plus the flat --results file -- binds only when its mtime
+    # is >= this instant (i.e. this run rewrote it); anything older stays
+    # UNVERIFIED. Captured here so an --allow-install retry does not re-stamp it.
+    run_started_at = time.time()
+
+    record = run_reproduction(
+        str(repo_path),
+        run,
+        claims_list,
+        executor=default_command_executor,
+        claims_sha256=claims_sha256,
+        results_path=results,
+        created_at=created_at,
+        reproduce_id=reproduce_id,
+        allow_install=allow_install,
+        installer=default_installer,
+        run_started_at=run_started_at,
+    )
+    if repo_argument.kind == "remote":
+        # `repo` on the record is the URL, never the local scratch checkout:
+        # the checkout is a per-run path that means nothing to anyone else,
+        # while the URL + commit is the pin that makes the bundle portable.
+        record = record.model_copy(
+            update={
+                "repo": repo_argument.url,
+                "source_url": repo_argument.url,
+                "source_commit": source_commit,
+                "source_tree_sha256": source_tree_sha256,
+            }
+        )
+
+    write_reproduce_bundle(record, Path(runs_dir) / reproduce_id, requested_rev=rev)
+
+    typer.echo(render_reproduction(record))
+
+    if fail_on_diverged and any(c.status == "diverged" for c in record.claim_results):
+        raise typer.Exit(code=1)
+
+
+def _review_sidecar(claims: list[ExtractedClaim]) -> str:
+    """Render the human-review sidecar for a draft claims file.
+
+    The draft the command writes is deliberately locator-LESS (`id`/`value`/
+    `tolerance` only), so this sidecar is where all provenance and the
+    reviewer's to-do list live. It explains that every claim needs a locator
+    added before `contig reproduce` can verify it, that a `%`-unit claim needs
+    its scale reconciled against the repo's own output, and lists each claim's
+    metric/value/unit/origin and the source sentence it came from. An
+    `llm`-origin candidate is marked "review first" -- it never went through the
+    deterministic core.
+    """
+    lines: list[str] = [
+        "# Draft claims -- review before `contig reproduce`",
+        "",
+        "This file was generated by `contig extract-claims`. The draft JSON next "
+        "to it is intentionally **locator-less**: each claim carries only "
+        "`id`/`value`/`tolerance`. Before Contig can verify a claim, add a "
+        "**locator** telling it where the fresh run's value is read from -- one of:",
+        "",
+        "- `from` + `path` (a JSON value)",
+        "- `pattern` (a regex over the run's stdout/stderr, or over `from` a file)",
+        "- `from` + `column` + `row` (a TSV/CSV cell)",
+        "- `from` + `cell` + `pattern` (a Jupyter notebook cell's output)",
+        "",
+        "An unreviewed claim (no locator) degrades to UNVERIFIED at reproduce "
+        "time -- extraction can never manufacture a false REPRODUCED.",
+        "",
+        "For any claim whose unit is `%`, reconcile the **scale** against the "
+        "repo's output before adding the locator: the value below is the raw "
+        "number as printed in the paper (`87` for \"87%\"), but the repo may "
+        "emit a fraction (`0.87`). Set the claim's `value` to match what the run "
+        "actually writes.",
+        "",
+        "## Claims",
+        "",
+    ]
+    for claim in claims:
+        unit = claim.unit if claim.unit else "—"
+        flag = " -- review first (LLM candidate)" if claim.origin == "llm" else ""
+        lines.append(f"### {claim.id}{flag}")
+        lines.append(f"- value: {claim.value}")
+        lines.append(f"- unit: {unit}")
+        lines.append(f"- origin: {claim.origin}")
+        source = claim.source_text.strip() if claim.source_text else "—"
+        lines.append(f"- source: {source}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+@app.command()
+def extract_claims(
+    paper: str = typer.Argument(
+        ..., help="Path to a local paper text file (.txt/.md)."
+    ),
+    out: str = typer.Option(
+        ..., "--out", help="Path to write the draft claims JSON."
+    ),
+    no_llm: bool = typer.Option(
+        False,
+        "--no-llm",
+        help="Force core-only extraction even when an LLM provider is configured.",
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Overwrite an existing --out (else refuse)."
+    ),
+) -> None:
+    """Extract candidate numeric claims from a paper's text into a draft.
+
+    Reads a paper's LOCAL text (`.txt`/`.md`), runs the deterministic extractor
+    (optionally augmented by the LLM assist unless `--no-llm`), and writes two
+    files: a **locator-less** draft claims JSON at `--out` (`id`/`value`/
+    `tolerance` only) and a `<out>.review.md` sidecar carrying all provenance and
+    the reviewer's to-do list. This command never runs a pipeline, never touches
+    the verdict/bundle path, and never emits a draft the reproduce loader would
+    reject: the draft is validated by a round-trip through `load_claims` before
+    it is committed to `--out`.
+
+    Nothing is written on any input failure (missing/oversized/non-UTF-8 paper,
+    or an existing `--out` without `--force`). Add a locator to each claim
+    (see the sidecar) before running `contig reproduce`.
+    """
+    paper_path = Path(paper)
+    out_path = Path(out)
+
+    # Refuse --out == the input path: we would clobber the paper we are reading.
+    try:
+        clobbers_input = paper_path.resolve() == out_path.resolve()
+    except OSError:
+        clobbers_input = False
+    if clobbers_input:
+        typer.echo(
+            "--out must not be the input paper path (it would overwrite the paper)",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # stat() BEFORE any read: a missing path, a directory, or an oversized file
+    # must be refused without reading (and without writing anything).
+    try:
+        stat_result = paper_path.stat()
+    except OSError as exc:
+        typer.echo(f"Cannot read paper: {exc}", err=True)
+        raise typer.Exit(code=1)
+    if not paper_path.is_file():
+        typer.echo(f"Not a file: {paper}", err=True)
+        raise typer.Exit(code=1)
+    if stat_result.st_size > _MAX_MATCH_BYTES:
+        typer.echo(
+            f"paper is {stat_result.st_size} bytes, over the "
+            f"{_MAX_MATCH_BYTES}-byte cap",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        text = paper_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        typer.echo(f"paper is not valid UTF-8: {exc}", err=True)
+        raise typer.Exit(code=1)
+    except OSError as exc:
+        typer.echo(f"Cannot read paper: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    # Overwrite guard: refuse an existing --out unless --force. Nothing written.
+    if out_path.exists() and not force:
+        typer.echo(
+            f"--out already exists: {out}; pass --force to overwrite it", err=True
+        )
+        raise typer.Exit(code=1)
+
+    out_dir = out_path.parent if str(out_path.parent) else Path(".")
+    if not out_dir.is_dir():
+        typer.echo(f"--out directory does not exist: {out_dir}", err=True)
+        raise typer.Exit(code=1)
+
+    claims = default_extractor(text, use_llm=not no_llm)
+
+    draft = [
+        {"id": claim.id, "value": claim.value, "tolerance": claim.tolerance}
+        for claim in claims
+    ]
+    serialized = _json.dumps(draft, indent=2) + "\n"
+
+    # THE LOAD-BEARING INVARIANT: write the draft to a temp file in the
+    # destination directory, validate it through the unchanged `load_claims`,
+    # and only `os.replace` it into place on success. A ClaimsError here is an
+    # internal bug (the emitted shape is always loadable for real extractor
+    # output -- a test pins this) -- so we remove the temp and fail loudly
+    # rather than leave a draft the reproduce path cannot load.
+    fd, tmp_name = tempfile.mkstemp(dir=str(out_dir), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(serialized)
+        try:
+            load_claims(tmp_name)
+        except ClaimsError as exc:
+            typer.echo(
+                f"internal error: generated draft failed load_claims: {exc}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        os.replace(tmp_name, out_path)
+    finally:
+        if os.path.exists(tmp_name):
+            os.remove(tmp_name)
+
+    if out_path.suffix == ".json":
+        sidecar_path = out_path.with_suffix(".review.md")
+    else:
+        sidecar_path = Path(str(out_path) + ".review.md")
+
+    if claims:
+        sidecar_path.write_text(_review_sidecar(claims), encoding="utf-8")
+    else:
+        sidecar_path.write_text(
+            "# Draft claims -- review before `contig reproduce`\n\n"
+            "No numeric claims found; add claims by hand or check the input.\n",
+            encoding="utf-8",
+        )
+
+    if not claims:
+        typer.echo(
+            f"No numeric claims found in {paper}. Wrote an empty draft to "
+            f"{out_path} and a note to {sidecar_path}."
+        )
+        return
+
+    typer.echo(
+        f"Extracted {len(claims)} candidate claim(s) to {out_path}.\n"
+        f"Review sidecar: {sidecar_path}\n"
+        "Review each claim and add a locator before running `contig reproduce`."
     )
 
 
@@ -756,6 +1377,14 @@ def verify(
     run_id: str = typer.Argument(..., help="The run whose outputs to re-verify."),
     runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
     json_out: bool = typer.Option(False, "--json", help="Emit the result as JSON (for the dashboard)."),
+    fail_on_verdict: bool = typer.Option(
+        False,
+        "--fail-on-verdict",
+        help=(
+            "Exit non-zero if the run's stored verdict is FAIL (opt-in; WARN/UNVERIFIED do "
+            "not). Composes with output-drift/signature checks. Default off."
+        ),
+    ),
     concordance_vcf: str = typer.Option(
         None,
         "--concordance-vcf",
@@ -832,6 +1461,12 @@ def verify(
     output that changed or disappeared is drift and exits non-zero. A run whose
     record captured no outputs reports "nothing to verify" (PRD contract B).
 
+    With --fail-on-verdict (opt-in, default off), a loaded record whose reduced
+    verdict is FAIL also exits non-zero (code 1), on every path — no-checksums and
+    has-checksums, text and --json. It composes with the output-drift and signature
+    checks (any one non-zero exits non-zero); WARN/UNVERIFIED/PASS still exit 0, the
+    --json payload is unchanged, and concordance still NEVER affects the exit code.
+
     With --concordance-vcf, also corroborate the run's germline variants against a
     second call set (PRD C1): the concordance checks are printed (and included in
     the JSON payload), but concordance is at-most-WARN and NEVER changes the exit
@@ -895,6 +1530,14 @@ def verify(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
 
+    # Opt-in verdict gate (PRD M2): a loaded FAIL verdict makes verify exit non-zero
+    # on every terminal path below, composing with drift/signature (any one non-zero
+    # exits non-zero). Computed once; WARN/UNVERIFIED/PASS never trip it.
+    verdict_fail = fail_on_verdict and record.verdict == "fail"
+
+    def _echo_verdict_reason() -> None:
+        typer.echo(f"Run {run_id} verdict is FAIL (--fail-on-verdict).", err=True)
+
     # Concordance is independent of output-drift: compute it (if requested) up front
     # so it is surfaced on BOTH the no-checksums and has-checksums paths, and so it
     # can never influence the `ok`/exit decision below.
@@ -932,11 +1575,17 @@ def verify(
             result["concordance"] = [c.model_dump() for c in concordance]
         if json_out:
             typer.echo(_json.dumps(result))
-            if sig_bad:
+            if verdict_fail:
+                _echo_verdict_reason()
+            if sig_bad or verdict_fail:
                 raise typer.Exit(code=1)
             return
         if sig_bad:
             typer.echo(f"Signature mismatch for run {run_id}: the record was modified.", err=True)
+            _echo_concordance(concordance)
+            raise typer.Exit(code=1)
+        if verdict_fail:
+            _echo_verdict_reason()
             _echo_concordance(concordance)
             raise typer.Exit(code=1)
         signed_note = " (signature verified)" if sig.get("signature_ok") else ""
@@ -950,11 +1599,13 @@ def verify(
         result["concordance"] = [c.model_dump() for c in concordance]
     if json_out:
         typer.echo(_json.dumps(result))
-        if not result["ok"] or sig_bad:
+        if verdict_fail:
+            _echo_verdict_reason()
+        if not result["ok"] or sig_bad or verdict_fail:
             raise typer.Exit(code=1)
         return
 
-    if result["ok"] and not sig_bad:
+    if result["ok"] and not sig_bad and not verdict_fail:
         signed_note = " Signature verified." if sig.get("signature_ok") else ""
         typer.echo(f"Outputs verified for run {run_id}: all recorded outputs match.{signed_note}")
         _echo_concordance(concordance)
@@ -967,6 +1618,8 @@ def verify(
             typer.echo(f"  changed: {rel}", err=True)
         for rel in result["missing"]:
             typer.echo(f"  missing: {rel}", err=True)
+    if verdict_fail:
+        _echo_verdict_reason()
     _echo_concordance(concordance)
     raise typer.Exit(code=1)
 
@@ -1500,8 +2153,11 @@ def watch(
 
 @app.command()
 def resume(
+    ctx: typer.Context,
     run_id: str = typer.Argument(..., help="The cancelled or interrupted run to resume."),
     runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+    detect_stalls: bool = typer.Option(False, "--detect-stalls", help=_DETECT_STALLS_HELP),
+    stall_timeout: float = typer.Option(3600.0, "--stall-timeout", help=_STALL_TIMEOUT_HELP),
 ) -> None:
     """Resume a cancelled or interrupted run: re-run the same id with Nextflow -resume.
 
@@ -1512,6 +2168,7 @@ def resume(
     if not _is_safe_run_id(run_id):
         typer.echo(f"Invalid run id: {run_id!r}", err=True)
         raise typer.Exit(code=1)
+    _validate_stall_flags(ctx, detect_stalls=detect_stalls, stall_timeout=stall_timeout)
     try:
         resumable_state(runs_dir, run_id)
     except ResumeError as exc:
@@ -1556,6 +2213,8 @@ def resume(
         max_attempts=manifest.max_attempts,
         allow_reference_mismatch=manifest.allow_reference_mismatch,
         resume=True,
+        detect_stalls=detect_stalls,
+        stall_timeout=stall_timeout,
     )
 
 
@@ -1758,6 +2417,22 @@ def corpus_promote(
     typer.echo(f"Promoted {promoted.case_id} ({promoted.expected_class}) into the golden corpus.")
 
 
+def _print_trend(rows, *, title):
+    """Render a metric trend oldest->newest with a per-version delta column.
+
+    rows: list of (timestamp, value_float, detail_str, version_str). The delta is
+    value vs the previous row's value, in percentage points; the first row shows a
+    dash and the last row is tagged so the current standing is obvious.
+    """
+    typer.echo(title)
+    prev = None
+    for i, (ts, value, detail, version) in enumerate(rows):
+        delta = "   —   " if prev is None else f"{(value - prev) * 100:+.1f}pp"
+        latest = "  ←latest" if i == len(rows) - 1 else ""
+        typer.echo(f"  {ts}  {detail}  Δ {delta}  [{version}]{latest}")
+        prev = value
+
+
 @app.command(name="eval-detector")
 def eval_detector(
     corpus: str = typer.Option(None, "--corpus", help="Failure-corpus JSONL (defaults to the shipped seed)."),
@@ -1837,6 +2512,9 @@ def eval_guard(
     tolerance: float = typer.Option(1e-9, "--tolerance", help="Float tolerance; accuracy below (baseline - tolerance) is a regression."),
     update_baseline: bool = typer.Option(False, "--update-baseline", help="(Re)freeze the baseline to the current held-out accuracy. Deliberate, reviewed act."),
     json_out: bool = typer.Option(False, "--json", help="Emit the guard result as JSON."),
+    snapshot: bool = typer.Option(False, "--snapshot", help="Append this guard run to the held-out accuracy trend (moat #2)."),
+    show_history: bool = typer.Option(False, "--history", help="Print the recorded held-out accuracy trend instead of guarding. Ignores --snapshot."),
+    history_file: str = typer.Option(None, "--history-file", help="Held-out accuracy history JSONL (defaults to the shipped one)."),
 ) -> None:
     """Guard detector accuracy against a frozen held-out set (moat #2, C6 slice 1).
 
@@ -1844,10 +2522,29 @@ def eval_guard(
     compares the accuracy to a committed baseline, exiting non-zero on a real
     regression so a detector or corpus change never regresses diagnosis
     silently. `--update-baseline` deliberately (re)freezes the baseline instead
-    of guarding; that always exits 0.
+    of guarding; that always exits 0. With --snapshot the result is also
+    appended to the committed held-out trend; with --history the recorded
+    trend is printed instead.
     """
     holdout_path = Path(holdout) if holdout else default_holdout_path()
     baseline_path = Path(baseline) if baseline else default_baseline_path()
+    history_path = Path(history_file) if history_file else default_holdout_history_path()
+
+    if show_history:
+        history = load_jsonl(EvalSnapshot, history_path)
+        if json_out:
+            typer.echo("[" + ",".join(s.model_dump_json() for s in history) + "]")
+            return
+        if not history:
+            typer.echo(f"No held-out accuracy snapshots recorded yet in {history_path}.")
+            return
+        _print_trend(
+            [(s.timestamp, s.accuracy,
+              f"accuracy {s.accuracy:.1%}  (held-out {s.corpus_size})",
+              s.detector) for s in history],
+            title="Held-out detector accuracy over time:",
+        )
+        return
 
     try:
         detector_fn = get_detector(detector)
@@ -1865,7 +2562,7 @@ def eval_guard(
     holdout_sha = sha256_file(holdout_path)
 
     if update_baseline:
-        snapshot = snapshot_from_report(
+        snap = snapshot_from_report(
             report,
             timestamp=datetime.now(timezone.utc).isoformat(),
             corpus_size=len(cases),
@@ -1873,12 +2570,26 @@ def eval_guard(
             contig_version=_pkg_version("contig"),
             detector=detector,
         )
-        save_baseline(snapshot, baseline_path)
+        save_baseline(snap, baseline_path)
+        append_jsonl(snap, history_path)
         typer.echo(
             f"Baseline updated: accuracy {report.accuracy:.1%} over {len(cases)} held-out "
             f"cases (detector={detector}, sha {holdout_sha[:12]}...)"
         )
         return
+
+    if snapshot:
+        append_jsonl(
+            snapshot_from_report(
+                report,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                corpus_size=len(cases),
+                corpus_sha=holdout_sha,
+                contig_version=_pkg_version("contig"),
+                detector=detector,
+            ),
+            history_path,
+        )
 
     baseline_snapshot = load_baseline(baseline_path)
     result = compare_to_baseline(
@@ -1952,6 +2663,9 @@ def heal_guard(
     tolerance: float = typer.Option(1e-9, "--tolerance", help="Float tolerance; outcome-match rate below (baseline - tolerance) is a regression."),
     update_baseline: bool = typer.Option(False, "--update-baseline", help="(Re)freeze the baseline to the current outcome-match rate. Deliberate, reviewed act."),
     json_out: bool = typer.Option(False, "--json", help="Emit the guard result as JSON."),
+    snapshot: bool = typer.Option(False, "--snapshot", help="Append this guard run to the self-heal outcome-match trend (moat #2)."),
+    show_history: bool = typer.Option(False, "--history", help="Print the recorded self-heal outcome-match trend instead of guarding. Ignores --snapshot."),
+    history_file: str = typer.Option(None, "--history-file", help="Self-heal outcome-match history JSONL (defaults to the shipped one)."),
 ) -> None:
     """Guard the self-heal loop's outcome-match rate against a frozen synthetic scenario set (C6 slice 2).
 
@@ -1961,18 +2675,37 @@ def heal_guard(
     regression so a change to the loop, a detector, or a patch never silently
     starts diverging from a scenario's declared outcome. `--update-baseline`
     deliberately (re)freezes the baseline instead of guarding; that always
-    exits 0.
+    exits 0. With --snapshot the result is also appended to the committed
+    self-heal trend; with --history the recorded trend is printed instead.
 
-    Honest scope: the number is over **7 SYNTHETIC scenarios**, not a field
-    recovery rate. Covered failure classes: bad_param, missing_index, oom,
-    time_limit, tool_crash. Not covered: qc_anomaly and no_progress are
-    currently structurally unreachable (no diagnose_failure rule branch emits
-    them yet); container_pull_failed, container_unavailable, conda_solve_failed,
+    Honest scope: the number is over **8 SYNTHETIC scenarios**, not a field
+    recovery rate. Covered failure classes: bad_param, missing_index, no_progress,
+    oom, time_limit, tool_crash. Not covered: qc_anomaly is currently
+    structurally unreachable (no diagnose_failure rule branch emits it yet);
+    container_pull_failed, container_unavailable, conda_solve_failed,
     platform_unsupported, disk_full, download_failed, permission_denied, and
     missing_reference have no scenario yet and are deferred follow-on slices.
     """
     scenarios_path = Path(scenarios) if scenarios else default_heal_scenarios_path()
     baseline_path = Path(baseline) if baseline else default_heal_baseline_path()
+    history_path = Path(history_file) if history_file else default_heal_history_path()
+
+    if show_history:
+        history = load_jsonl(HealSnapshot, history_path)
+        if json_out:
+            typer.echo("[" + ",".join(s.model_dump_json() for s in history) + "]")
+            return
+        if not history:
+            typer.echo(f"No self-heal outcome-match snapshots recorded yet in {history_path}.")
+            return
+        _print_trend(
+            [(s.timestamp, s.outcome_match_rate,
+              f"outcome-match {s.outcome_match_rate:.0%}  ({s.scenario_count} scenarios)  "
+              f"recovery {round(s.recovery_rate * s.scenario_count)}/{s.scenario_count}",
+              s.contig_version or "unknown") for s in history],
+            title="Self-heal outcome-match over time:",
+        )
+        return
 
     try:
         cases = load_heal_scenarios(scenarios_path)
@@ -1985,20 +2718,33 @@ def heal_guard(
     covered_classes = sorted({s.expected_class for s in cases})
 
     if update_baseline:
-        snapshot = snapshot_from_heal_report(
+        snap = snapshot_from_heal_report(
             report,
             corpus_sha=corpus_sha,
             covered_classes=covered_classes,
             contig_version=_pkg_version("contig"),
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
-        save_heal_baseline(snapshot, baseline_path)
+        save_heal_baseline(snap, baseline_path)
+        append_jsonl(snap, history_path)
         typer.echo(
             f"Baseline updated: outcome-match {report.outcome_match_rate:.0%} over "
             f"{report.total} synthetic scenarios; recovery {report.healed}/{report.total}; "
             f"covered: {', '.join(covered_classes)}"
         )
         return
+
+    if snapshot:
+        append_jsonl(
+            snapshot_from_heal_report(
+                report,
+                corpus_sha=corpus_sha,
+                covered_classes=covered_classes,
+                contig_version=_pkg_version("contig"),
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            ),
+            history_path,
+        )
 
     baseline_snapshot = load_heal_baseline(baseline_path)
     result = compare_heal_to_baseline(
