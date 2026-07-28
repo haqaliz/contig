@@ -197,6 +197,42 @@ def test_run_fail_verdict_without_flag_is_zero(tmp_path, monkeypatch):
     assert result.exit_code == 0
 
 
+def _flagged_step_outcomes(runs_dir, run_id):
+    """The recorded outcomes of a run's repair history, read off the bundle.
+
+    The exit-code tests below pair with this: asserting only the exit code
+    would keep passing if the qc_anomaly trigger silently stopped firing, so
+    each one first proves the step IS there and then proves the exit code did
+    not move because of it.
+    """
+    record = json.loads((Path(runs_dir) / run_id / "run_record.json").read_text())
+    return [step["outcome"] for step in record["repair_history"]]
+
+
+def test_qc_only_fail_that_is_flagged_still_exits_zero_without_the_flag(tmp_path, monkeypatch):
+    # A6, the default direction. A green run whose QC reduces to FAIL now
+    # carries a diagnosed qc_anomaly step, and that must buy the user nothing
+    # but information: the run finished, so the default exit code stays 0 and
+    # no CI pipeline changes colour because we started diagnosing this.
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_OK, FAIL_MQC))
+    result = runner.invoke(app, ["run", "--run-id", "qcz", "--runs-dir", str(tmp_path)])
+    assert _flagged_step_outcomes(tmp_path, "qcz") == ["qc_verdict_flagged"]
+    assert result.exit_code == 0
+
+
+def test_qc_only_fail_that_is_flagged_exits_one_with_fail_on_verdict(tmp_path, monkeypatch):
+    # A6, the opt-in direction. --fail-on-verdict keeps deciding on the verdict
+    # alone: the flagged step neither adds a failure of its own nor suppresses
+    # the one the flag exists to raise.
+    monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_OK, FAIL_MQC))
+    result = runner.invoke(
+        app, ["run", "--run-id", "qco", "--runs-dir", str(tmp_path), "--fail-on-verdict"]
+    )
+    assert _flagged_step_outcomes(tmp_path, "qco") == ["qc_verdict_flagged"]
+    assert result.exit_code == 1
+    assert "verdict is FAIL" in result.output
+
+
 def test_run_incomplete_still_fails_with_flag(tmp_path, monkeypatch):
     # A non-completing run already exits non-zero via .succeeded; the flag must not
     # regress that (and must not double-fire — the .succeeded gate returns first).

@@ -1051,6 +1051,33 @@ def self_heal_run(
                         ),
                     ),
                 )
+                # Same capture the exception path performs, so this class of
+                # failure can finally reach the corpus at all -- until now it
+                # was the one diagnosed failure with no way in, because capture
+                # only ever ran after an exception and nothing here raises.
+                #
+                # `log_text` has no natural value: every task exited 0, so there
+                # is no stderr and no task error file to read. Passing "" would
+                # file a case carrying no evidence, and log-shaped prose would
+                # put words in Nextflow's mouth. The QC summary IS the evidence
+                # here, so it is what the case carries -- labelled as such, not
+                # dressed as a log. `failure_case_from_run` keeps only failing
+                # events, so `events` is legitimately empty: a green run has
+                # none, which is precisely why R9 keeps this class out of the
+                # committed detector corpora.
+                append_case(
+                    failure_case_from_run(
+                        record,
+                        "No failure log: every task exited 0. QC verdict summary:\n"
+                        + diagnosis.root_cause
+                        + "\n"
+                        + "\n".join(diagnosis.evidence),
+                        diagnosis.failure_class,
+                        case_id=f"{run_id}-attempt{attempt}",
+                        source=f"pending:{run_id}",
+                    ),
+                    pending_path,
+                )
             return _finalize(
                 record, repair_history, run_dir,
                 runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
