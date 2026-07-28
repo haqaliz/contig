@@ -23,9 +23,11 @@ export function taskCounts(record: RunRecord): { total: number; failed: number }
 }
 
 /** Did the run carry a patch? A recorded step is not itself a repair: `gave_up`
- *  (no fix was found) and `qc_verdict_flagged` (a diagnosed QC verdict on a run
- *  whose tasks all succeeded) both carry `patch: null` and repaired nothing, so
- *  keying on the patch is strictly better than keying on the step count.
+ *  *on its no-patch path* (no fix was found at all) and `qc_verdict_flagged` (a
+ *  diagnosed QC verdict on a run whose tasks all succeeded) both carry
+ *  `patch: null` and repaired nothing, so keying on the patch is strictly better
+ *  than keying on the step count. Note `gave_up` carries a patch on its other two
+ *  sites -- see the limit below.
  *
  *  Known limit, deliberately shipped: this means a patch was *proposed*, not
  *  applied. `apply_patch` runs at only two sites in `self_heal.py`, and five

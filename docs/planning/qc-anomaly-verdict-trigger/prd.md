@@ -41,17 +41,33 @@ development machine were scanned against the exact R1 trigger condition:
 | **Green with `qc_verdict == "fail"` — would trip** | **1** |
 
 The tripping run is `runs/variant-bad`: an `nf-core/sarek` germline record where
-`NFCORE_SAREK:HAPLOTYPECALLER (S1)` **COMPLETED with exit 0**, `ts_tv_ratio:S1 = 3.5` **FAILs**
-the germline plausibility band, `mean_coverage` and `het_hom_ratio` both PASS — and
-`repair_history` is **`[]`**. That is the gap this PRD describes, sitting in a real bundle on
-disk, and it becomes the slice's regression fixture rather than a synthetic one.
+`NFCORE_SAREK:HAPLOTYPECALLER (S1)` **COMPLETED with exit 0**, the recorded `ts_tv_ratio:S1`
+carries `status: "fail"`, `mean_coverage` and `het_hom_ratio` both PASS — and `repair_history`
+is **`[]`**. That is the gap this PRD describes, sitting in a real bundle on disk, and it becomes
+the slice's regression fixture rather than a synthetic one.
 
-**Two qualifications, stated because they cut against the slice:** the run is named
-`variant-bad` and was plainly *authored* to be bad (it carries `contig_version: 0.0.1`), so
-**organic frequency across recorded runs is 0 of 17**. And 5 of the 17 crashed outright, which
-the existing loop already diagnoses. So the measurement proves the shape is **producible and
-representable**, not that it **occurs**. This remains **push, not demand-pull** (see *Honest
-Limits*).
+**⚠️ Correction (2026-07-28, found during Phase 1 mutation testing — this cuts against the
+slice and is recorded rather than smoothed).** An earlier draft of this section claimed
+`ts_tv = 3.5` "**FAILs** the germline plausibility band". **That is false under today's bands.**
+`VARIANT_RULE_PACK`'s `ts_tv_ratio` is `warn_above: 2.4`, `fail_above: 3.6`
+(`verification/rule_pack.py:57-64`), so **3.5 evaluates to WARN**. The bundle records
+`status: "fail"` with `expected_range: [1.8, 2.4]` from a **`contig_version: 0.0.1`** evaluation
+that predates the current bands.
+
+The trigger still fires on it, and legitimately so — it reduces the **recorded** `qc_results`
+via `overall_verdict` and does not re-evaluate bands. But the honest reading of the measurement
+changes:
+
+- **Literally true:** 1 of 17 recorded bundles trips the trigger.
+- **What that 1 actually is:** a stale v0.0.1 recorded status, not a current-band FAIL.
+- **Under today's bands, re-evaluated: 0 of 17.**
+
+**So the measurement proves the shape is producible and representable — not that it occurs.**
+Combined with the fact that the run was plainly *authored* to be bad, and that 5 of the 17
+crashed outright (which the existing loop already diagnoses), **organic frequency is 0 of 17 on
+either reading**, and the stricter reading is the one to quote. This is **push, not
+demand-pull**, and it makes the committed revisit trigger below load-bearing rather than
+ceremonial.
 
 ### ⚠️ Correction to the inherited rationale
 
@@ -332,6 +348,65 @@ heal-scenario driver, and the FAIL-severity packs that make the trigger reachabl
 - The dead-looking `verification/run_qc.py::run_qc` (nothing in `src/contig` calls it; only
   `evaluate_run_qc` is live) — flagged by the dig, cleanup is unrelated debt.
 - Any Layer-1 (NL→workflow) surface.
+
+### Filed follow-up — `wasRepaired` still overclaims, and `OUTCOME_META` is thirteen short
+
+Found during Phase 3.5 review; **deliberately not fixed here** (founder decision, 2026-07-28).
+
+This slice changes the dashboard's `wasRepaired` from `repair_history.length > 0` to
+`some(s => s.patch !== null)`. That is **strictly better** — it fixes the new
+`qc_verdict_flagged` case and the pre-existing no-patch `gave_up` case — but it means **"a patch
+was *proposed*"**, not applied. `apply_patch` runs at only two sites (`self_heal.py:879`,
+`:1266`), and **five** paths record a non-null patch and return before either:
+
+| Site | Outcome | Patch |
+|---|---|---|
+| `:1102` | `gave_up` (attempt budget exhausted) | `gated` |
+| `:1183` | `rejected_by_user` / `invalid_choice_rejected` / `approval_timed_out` | `gated` |
+| `:1234` | `rejected_by_user` / `approval_timed_out` | `gated` |
+| `:1246` | `gave_up` (attempt budget exhausted) | `safe` |
+| `:1257` | `gave_up_at_ceiling` | `safe` |
+
+The sharpest case: **a user who rejects a patch at the approval gate is told their run was
+`Repaired`.** Pre-existing (today's `length > 0` does the same), so this slice makes nothing
+worse — but it does not deliver the "a patch was applied" semantics its own decision claims.
+
+**The durable fix is a structured field, not more string matching.** A TypeScript allowlist
+would have to track **15** Python outcome literals that `RepairStep.outcome` does not
+type-constrain (it is a bare `str`, `models.py:313`): `patched_and_retried`,
+`approved_and_retried`, `chose_and_retried`, `built_index_and_retried`,
+`recompressed_reference_and_retried`, `gave_up`, `gave_up_at_ceiling`, `rejected_by_user`,
+`approval_timed_out`, `invalid_choice_rejected`, `index_build_failed`, `index_unresolvable`,
+`reference_recompress_failed`, `reference_recompress_unresolvable`, `qc_verdict_flagged`.
+
+`OUTCOME_META` maps three keys, but one (`stopped_for_confirmation`) **appears nowhere in
+`src/`** — it is dead. So it maps **2 real literals of 15**, and `rejected_by_user`,
+`approval_timed_out`, `gave_up_at_ceiling` and ten others **already render today** as mangled
+snake_case dressed in give-up styling. A user who rejected a patch already sees something that
+looks like a give-up.
+
+**Follow-up slice:** add `RepairStep.patch_applied: bool`, drive the badge off it, and map the
+unmapped literals.
+
+> ⚠️ **Do NOT set the flag "wherever `apply_patch` returns"** — that naive rule reproduces the
+> very bug this follow-up exists to kill. `_apply_patch_and_maybe_build` calls `apply_patch` on
+> its **first line** (`:879`), before it knows whether the build or recompress succeeded, and the
+> code says so itself at `:876`: *"The build IS the fix (apply_patch is a no-op for
+> build_index)."* Under that rule `index_build_failed`, `index_unresolvable`,
+> `reference_recompress_failed`, and `reference_recompress_unresolvable` would all be stamped
+> `patch_applied=True` despite nothing effective having happened — and hardened into the
+> **signed** record, where it is far more expensive to correct than a dashboard predicate.
+>
+> **Use the signal that already exists:** `_apply_patch_and_maybe_build` returns a 5-tuple whose
+> last element is `continue_` (`-> tuple[..., bool]`, `:849`), documented as "the loop should
+> retry" — i.e. *something effective happened*. It is `True` exactly for the
+> applied-and-proceeding cases and `False` for all four failures above. Drive `patch_applied`
+> off that boolean, plus `True` at the `:1266` site. Derived from control flow, not from a
+> hand-maintained literal list — which is the entire reason to prefer a structured field.
+
+It touches the **signed** `RunRecord` shape, so it must re-verify the signature safety this
+slice's Phase 0 established — which is exactly why it is its own slice and not a two-file
+phase's side effect.
 
 ---
 

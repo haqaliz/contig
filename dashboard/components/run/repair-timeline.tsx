@@ -59,10 +59,14 @@ const OUTCOME_META: Record<
       "border-slate-300 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300",
   },
   // A diagnosed QC verdict on a run whose tasks all succeeded: nothing failed and
-  // nothing was patched, so this is a finding, not a give-up. It shares the amber
-  // "needs your attention" register with stopped_for_confirmation; the icon and
-  // label carry the distinction, per this map's rule that color is never the only
-  // signal. What it must NOT share is gave_up's slate -- see repair-truthfulness.spec.ts.
+  // nothing was patched, so this is a finding, not a give-up. What it must NOT
+  // share is gave_up's slate -- see repair-truthfulness.spec.ts.
+  //
+  // The amber token here is byte-identical to stopped_for_confirmation's, but that
+  // is not a live precedent: stopped_for_confirmation is emitted NOWHERE in src/
+  // and never renders. So amber is in practice unique to this outcome. If that
+  // entry is ever revived, the two would collide and the spec would NOT catch it --
+  // it compares only against gave_up. Give one of them its own hue at that point.
   qc_verdict_flagged: {
     label: "QC verdict flagged",
     icon: Flag,
