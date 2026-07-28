@@ -8,6 +8,143 @@ All notable changes to Contig are recorded here. The format follows
 
 ### Added
 
+- **A green run whose QC verdict is FAIL is now diagnosed as `qc_anomaly` — closing the
+  last structurally unreachable failure class (C6 × C2).** `self_heal_run` only ever
+  diagnosed a **non-zero exit**: `diagnose_failure` was called from the single
+  `except PipelineExecutionError` branch, so a run that finished with **every task green**
+  and whose QC then reduced to **FAIL** — a truncated caller yielding an empty call set is
+  exactly this shape — returned straight into `_finalize` undiagnosed, absent from
+  `repair_history`, and absent from the corpus. The verdict was an **output only**; it was
+  never an **input**. `qc_anomaly` was the `FailureClass` literal naming that gap, and
+  nothing in the product could produce it. It is now reachable, and **no failure class is
+  structurally unreachable any more**.
+  - **A structural trigger, keyed on three conditions — not on `record.verdict`.** After
+    `run_pipeline` returns normally: `RunSummary.from_events(record.events).succeeded`,
+    **and** `record.qc_results` non-empty, **and**
+    `overall_verdict(record.qc_results) == "fail"`. Keying on `record.verdict` alone would
+    misattribute a crash, since `verdict` is already `"fail"` for a FAILED task event
+    *before* QC is consulted (`models.py:373-385`); empty `qc_results` reduces to
+    `"unverified"`, never `"fail"`, and stays a silent skip. Both are pinned by tests, and
+    the whole set was **verified by mutation** rather than trusted for passing — including
+    the no-retry guarantee, which was previously covered only by a **hang** (a test that
+    spins until killed says something took too long, not that the trigger re-entered the
+    loop); three seams now carry a self-limiting guard so that mutation fails the file in
+    0.25 s naming the defect.
+  - **The `Diagnosis` is synthesized in place; `detect.py` is untouched.** This is a
+    deterministic read of our own verdict object, not an inference over log text, so
+    `confidence` is `1.0` and no `Detector` signature widens. The step is recorded through
+    the existing `_record_attempt` with `patch=None` and a new outcome literal
+    **`qc_verdict_flagged`** — not `gave_up`, which would claim an attempt that never
+    happened and make this indistinguishable in the corpus from a real give-up. Its
+    `detail` carries the failing check names, their count, and the assay, under one
+    greppable message stem, so the revisit trigger below is countable without new
+    telemetry. Always on: no flag, because there is no side effect to gate and an opt-in
+    corpus only ever sees volunteers.
+  - **It also becomes eval data.** Corpus capture previously ran only on the exception
+    path, so this class of failure could not enter the corpus **at all**. The run now
+    writes a pending `FailureCase`. Its `log_text` has no natural value — every task exited
+    0, so there is no stderr and no task error file — and it carries the QC summary
+    explicitly labelled as such, rather than `""` or log-shaped prose putting words in
+    Nextflow's mouth.
+  - **`heal-guard`: `covered_classes` 6 → 7**, over **9** frozen scenarios instead of 8,
+    **outcome-match still 1.0**. The frozen set previously could not represent this class:
+    the harness replays only `(status, exit, log_text)`, so `_discover_qc` found nothing
+    and every scenario reduced to `"unverified"`. One optional `HealScenario` field now
+    directs the harness to drop a header-only `.vcf.gz` into the run dir, which the
+    **real, unmodified** `_discover_qc` reads — zero data rows, `variant_count=0`, and
+    `VARIANT_RULE_PACK`'s `fail_below: 1` makes that a FAIL by design. **No seam bypasses
+    QC**, so the scenario exercises the shipped path rather than a mock of it; the field
+    defaults to `None`, leaving all 8 existing scenarios byte-identical. Baseline refrozen
+    as a deliberate act. `detector_corpus.jsonl`, `detector_corpus_holdout.jsonl` and
+    `holdout_baseline.json` are **untouched**.
+  - **Honest limits — each of these is load-bearing, and none of them is softened:**
+    1. **`eval-guard` does not move, deliberately: it stays at 92.3% (12/13).** The
+       held-out fixture `holdout-qc-anomaly-1` is **log-text** shaped, so it would classify
+       only through a detector needle branch, and those needles would be phrases **Contig
+       never emits**. The `no_progress` slice's justification — *"what generalizes the
+       branch is that our own wording is ordinary English"* — was therefore **unavailable
+       here**, and the trade was declined rather than taken for the number. The guard
+       prints its own evidence: `MISS holdout-qc-anomaly-1: expected qc_anomaly, predicted
+       tool_crash`. **Any claim that this slice improved detector accuracy would be false.**
+    2. **It recovers nothing, by design.** Every task exited 0, so a `-resume` retry is a
+       **100% cache hit**: `-resume` is appended with no cache invalidation
+       (`runner.py:1116-1117`) and Contig has no mechanism of its own to invalidate
+       Nextflow's task cache, so nothing re-executes and `overall_verdict` re-derives
+       **identically**. `propose_patches` gains **no** `qc_anomaly` branch and a test pins
+       its absence, so nobody adds a dressed-up retry without revisiting this reasoning.
+       This is diagnosis and telemetry. Calling it a self-heal improvement would be false.
+    3. **The `recovery_rate` move 0.625 → 0.667 is an artifact, not an improvement.** The
+       driver derives `recovered` from event success (`heal.py:130`) and diverges a
+       scenario on a mismatch, which would drop the **guarded** outcome-match rate; our
+       scenario is green from attempt 1, so `recovered` computes `true` **though nothing
+       was recovered**, and the scenario's own description says so. Disclosed rather than
+       fixed: redefining `recovered` would retroactively change the meaning of every
+       recorded `heal_history` point to correct a cosmetic artifact in a metric that is
+       documented informational-only and **never guarded**. Redefinition is deferred.
+    4. **Push, not demand-pull — organic frequency is 0 of 17 recorded runs.** All 17
+       `run_record.json` bundles on the development machine were scanned against the exact
+       trigger condition: 5 crashed (which the existing loop already handles), 11 are green
+       with a non-FAIL verdict, and **1 trips the trigger**. That one (`runs/variant-bad`)
+       was plainly authored to be bad, carries **`contig_version: 0.0.1`**, and its
+       `ts_tv = 3.5` is a **WARN** under today's `fail_above: 3.6` band — its recorded
+       `status: "fail"` predates the current bands. **Re-evaluated under today's bands:
+       0 of 17**, and that is the number to quote. The measurement proves the shape is
+       producible and representable, **not** that it occurs.
+    5. **The `heal-guard` gain is a scenario we authored for a class we made reachable.**
+       It is evidence that a documented taxonomy gap closed, not that a user was helped.
+    6. **No real nf-core run in CI.** The trigger is exercised against synthetic records
+       and the scripted heal harness; whether a real sarek truncation lands exactly on
+       *events-succeeded + QC-FAIL* is **reasoned, not observed**, and belongs to the
+       manual gate.
+    7. **A transient live-view window, disclosed rather than engineered around.**
+       `_record_attempt` writes `repair_progress.jsonl` before `_finalize` writes the
+       bundle, so while finalize runs a dashboard poll can briefly show
+       `Self-heal attempts: 1`. Self-clearing; moving the trigger after `_finalize` would
+       break the single-call-site invariant.
+  - **Committed revisit trigger, in both directions.** *Against:* if the trigger fires on
+    **zero non-authored runs across the next 20 real runs**, the diagnosis path is
+    **removed** and the behaviour reduced to a report-only note — countable by grepping
+    `repair_progress.jsonl` for the `detail` message stem. *For:* if it fires on real runs
+    and the diagnosed check names cluster (repeatedly `variant_count` on truncated
+    callers, say), that cluster is the demand signal for the **actual remediation** this
+    slice deliberately declines to build, at which point `qc_anomaly` earns a real
+    `propose_patches` branch on evidence rather than on taste.
+  - **Dashboard: a `Repaired` badge now means a patch, not a recorded step — and this
+    changes what existing runs display.** `wasRepaired` was `repair_history.length > 0`, so
+    **any** recorded step lit the badge; the new `qc_verdict_flagged` step would have made a
+    green run claim a repair that never happened, and the same bug **already misreported
+    today's `gave_up` steps**, which carry `patch=null` and repaired nothing. It now keys on
+    the patch. **Behaviour change, called out rather than smuggled in:** the local
+    `testpass2` bundle carries one `gave_up` step with `patch=null` and **stops showing
+    `Repaired`**. Separately, `qc_verdict_flagged` fell through `OUTCOME_META`'s default to
+    `gave_up`'s slate styling — dressing a flag as a give-up and defeating the reason for a
+    distinct literal — and now has its own icon, amber class and label, with `qc_anomaly`
+    rendering as "QC anomaly" instead of the mangled "Qc Anomaly".
+    **The fix is partial, and the remainder is stated rather than left to be discovered:**
+    it means a patch was **proposed**, not **applied**. `apply_patch` runs at only two
+    sites, and **five** paths record a non-null patch and return before either (attempt-budget
+    exhaustion ×2, the resource ceiling, and the approval-gate refusals ×2) — so **a user
+    who rejects a patch at the approval gate is still told the run was `Repaired`**.
+    Pre-existing, not made worse here; the durable fix is a structured
+    `RepairStep.patch_applied` field driven off control flow rather than a hand-maintained
+    literal list, filed as its own slice because it touches the **signed** `RunRecord`
+    shape. `OUTCOME_META` also still maps only **four** keys — one of which,
+    `stopped_for_confirmation`, is emitted **nowhere** in `src/` and is therefore dead — so
+    the great majority of the engine's outcome literals, `rejected_by_user`,
+    `approval_timed_out`, `gave_up_at_ceiling`, `index_build_failed` and the rest, already
+    render today as mangled snake_case dressed in give-up styling. A user who rejected a
+    patch already sees something that looks like a give-up.
+  - **No contract moved.** Exit code (a QC-only FAIL still exits **0** by default, and 1
+    only under the opt-in `--fail-on-verdict`), lifecycle event (still `finished`), and
+    `record.verdict` are unchanged and each pinned by a test — the verdict test strips
+    `repair_history` from the record and asserts the number is unchanged, so no future
+    revision can let a recorded step feed the number a user trusts. **Signatures are
+    provably safe:** `repair_history` is already a signed field with a `[]` default, so an
+    existing bundle's canonical bytes, `signed_sha256` and detached signature are
+    bit-identical before and after — **no signature-break disclosure**, unlike three prior
+    C8 slices. No new QC check, band, threshold, or biological claim; no new dependency;
+    `detect.py`, `repair.py` and `runner.py` untouched.
+
 - **Tumor/normal swapped-pair smell test — cross-column VAF corroboration for a somatic
   swap, mislabel, or contamination** (capability C4 follow-on, closing the deferred
   "cross-column swapped-pair smell test" item named by both the v0.14.0 VAF-plausibility

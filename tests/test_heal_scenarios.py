@@ -218,6 +218,47 @@ def test_run_heal_scenario_bwa_missing_index_unresolvable(tmp_path):
     assert result.actual_outcome == "index_unresolvable"
 
 
+def test_run_heal_scenario_qc_anomaly_flags_a_green_run(tmp_path):
+    """A14: a green-from-attempt-1 scenario whose run dir carries a header-only
+    VCF drives the REAL `_discover_qc` to a FAIL verdict, so the loop's QC-anomaly
+    trigger records one `qc_verdict_flagged` step -- no QC mocking anywhere.
+
+    `expected_recovered=True` is not a claim that anything was healed: the driver
+    computes `recovered` from event success (`heal.py:130`), and this run's single
+    task exits 0. See plan D8.
+    """
+    scn = HealScenario(
+        scenario_id="qc-anomaly-1",
+        description="Green sarek run whose empty VCF fails variant QC",
+        source="synthetic",
+        expected_class="qc_anomaly",
+        attempts=[AttemptSpec(status="COMPLETED", exit=0, log_text="done")],
+        assay="variant_calling",
+        qc_artifact="empty_vcf_gz",
+        expected_recovered=True,
+        expected_outcome="qc_verdict_flagged",
+    )
+    result = run_heal_scenario(scn, tmp_path)
+    assert result.matched is True, result.divergence
+    assert result.diagnosed_class == "qc_anomaly"
+    assert result.actual_outcome == "qc_verdict_flagged"
+
+
+def test_heal_scenario_qc_artifact_defaults_to_none():
+    """The new field is opt-in: every shipped scenario that omits it keeps its
+    existing behaviour (no artifact written into the run dir)."""
+    scn = HealScenario(
+        scenario_id="no-artifact",
+        description="unchanged",
+        source="synthetic",
+        expected_class="oom",
+        attempts=[AttemptSpec(status="FAILED", exit=137)],
+        expected_recovered=False,
+        expected_outcome="gave_up",
+    )
+    assert scn.qc_artifact is None
+
+
 def test_evaluate_heal_aggregates_rates(tmp_path):
     oom_scn = HealScenario(
         scenario_id="oom-1",
@@ -289,15 +330,24 @@ def test_shipped_heal_scenarios_all_reproduce_their_declared_outcomes():
     scenarios = load_heal_scenarios(default_heal_scenarios_path())
     report = evaluate_heal(scenarios)
 
-    assert report.total == 8
+    assert report.total == 9
     assert report.outcome_match_rate == 1.0, [
         (m.scenario_id, m.divergence) for m in report.mismatches
     ]
-    assert report.healed == 5
-    assert report.recovery_rate == pytest.approx(5 / 8)
+    # 6 of 9, not 5 of 8: `qc-anomaly-verdict-flagged` is green from attempt 1,
+    # so the driver counts it as recovered while nothing was repaired. An
+    # artifact of the metric's definition, deliberately not corrected (plan D8).
+    assert report.healed == 6
+    assert report.recovery_rate == pytest.approx(6 / 9)
 
     covered = {s.expected_class for s in scenarios}
-    assert covered >= {"oom", "time_limit", "missing_index", "tool_crash"}
+    assert covered >= {
+        "oom",
+        "time_limit",
+        "missing_index",
+        "tool_crash",
+        "qc_anomaly",
+    }
 
 
 def test_shipped_heal_baseline_matches_shipped_scenarios():
@@ -307,16 +357,20 @@ def test_shipped_heal_baseline_matches_shipped_scenarios():
     baseline = load_heal_baseline(default_heal_baseline_path())
 
     assert baseline is not None
-    assert baseline.scenario_count == 8
+    assert baseline.scenario_count == 9
     assert baseline.outcome_match_rate == 1.0
-    assert baseline.recovery_rate == pytest.approx(5 / 8)
+    assert baseline.recovery_rate == pytest.approx(6 / 9)
     assert baseline.corpus_sha == sha256_file(scenarios_path)
     assert set(baseline.covered_classes) >= {
         "oom",
         "time_limit",
         "missing_index",
         "tool_crash",
+        "qc_anomaly",
     }
+    # A15: seven covered classes exactly -- the six the no_progress slice left
+    # plus qc_anomaly. A silent drop here would mean a class lost its scenario.
+    assert len(baseline.covered_classes) == 7
 
 
 def test_shipped_heal_report_does_not_regress_against_baseline():

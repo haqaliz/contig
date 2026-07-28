@@ -22,9 +22,23 @@ export function taskCounts(record: RunRecord): { total: number; failed: number }
   return { total: record.events.length, failed };
 }
 
-/** Did the run apply any repair? */
+/** Did the run carry a patch? A recorded step is not itself a repair: `gave_up`
+ *  *on its no-patch path* (no fix was found at all) and `qc_verdict_flagged` (a
+ *  diagnosed QC verdict on a run whose tasks all succeeded) both carry
+ *  `patch: null` and repaired nothing, so keying on the patch is strictly better
+ *  than keying on the step count. Note `gave_up` carries a patch on its other two
+ *  sites -- see the limit below.
+ *
+ *  Known limit, deliberately shipped: this means a patch was *proposed*, not
+ *  applied. `apply_patch` runs at only two sites in `self_heal.py`, and five
+ *  paths record a non-null patch and return before either -- budget exhaustion,
+ *  the resource ceiling, and the approval-gate refusals. So a user who REJECTS a
+ *  patch is still told the run was "Repaired". That is pre-existing (the previous
+ *  `length > 0` did the same) and is not made worse here. The real fix is a
+ *  structured `RepairStep.patch_applied` flag rather than more string matching --
+ *  filed in docs/planning/qc-anomaly-verdict-trigger/prd.md. */
 export function wasRepaired(record: RunRecord): boolean {
-  return record.repair_history.length > 0;
+  return record.repair_history.some((s) => s.patch !== null);
 }
 
 /** Severity order for sorting/grouping (fail worst). */

@@ -32,7 +32,16 @@ from contig.bundle import (
 from contig.corpus import append_case, failure_case_from_run
 from contig.detect import diagnose_failure
 from contig.events import parse_resource_usage_file
-from contig.models import Diagnosis, ExecutionTarget, Patch, QCResult, RepairStep, RunRecord, RunSummary
+from contig.models import (
+    Diagnosis,
+    ExecutionTarget,
+    Patch,
+    QCResult,
+    RepairStep,
+    RunRecord,
+    RunSummary,
+    overall_verdict,
+)
 from contig.notify import emit_event
 from contig.reference_check import fasta_contigs, gtf_contigs
 from contig.registry import VARIANT_ASSAYS, assay_for_pipeline
@@ -64,6 +73,13 @@ CEILING_TIME_H = 72
 # A diagnosis below this confidence is treated as ambiguous: even a single gated
 # fix is offered as a choice rather than a take-it-or-leave-it confirm (contract D).
 _AMBIGUOUS_CONFIDENCE = 0.5
+
+# The outcome recorded when a green run's QC verdict is FAIL. Deliberately not
+# `gave_up`: that literal means "we tried a fix and lost", and nothing was tried
+# here — reusing it would make this indistinguishable in the corpus from a real
+# give-up. Shared so the production path and the heal scenario cannot drift
+# (`RepairStep.outcome` is a plain str with no enum to catch a typo).
+QC_VERDICT_FLAGGED_OUTCOME = "qc_verdict_flagged"
 
 # Matches a non-whitespace, non-quote token ending in one of the supported
 # single-file index extensions (.fai/.bai/.tbi/.csi/.dict; relative or absolute
@@ -982,6 +998,86 @@ def self_heal_run(
                 resume=resume or attempt > 1,
                 assay=assay,
             )
+            # A run can finish with every task green and still be untrustworthy.
+            # QC is computed inside run_pipeline on every attempt, so the FAIL
+            # verdict is already on the record here; until now the success path
+            # had no diagnosis call at all, so that failure was never diagnosed,
+            # never entered repair_history, and never became eval data.
+            #
+            # The events guard is not redundant with the verdict: RunRecord.verdict
+            # is already "fail" for a FAILED task event, before it ever consults
+            # QC, so keying on the verdict alone would misattribute a crash as a
+            # QC anomaly. The qc_results guard is load-bearing too — an empty list
+            # reduces to "unverified", and asking overall_verdict for a severity
+            # it refuses to invent would raise.
+            if (
+                RunSummary.from_events(record.events).succeeded
+                and record.qc_results
+                and overall_verdict(record.qc_results) == "fail"
+            ):
+                # Only the checks that actually carry severity, mirroring the
+                # filter overall_verdict itself applied.
+                failed = [
+                    q for q in record.qc_results if q.status == "fail" and not q.informational
+                ]
+                names = ", ".join(q.check for q in failed)
+                diagnosis = Diagnosis(
+                    failure_class="qc_anomaly",
+                    root_cause=(
+                        f"{len(failed)} QC check(s) FAILed on a run whose tasks all "
+                        "succeeded: the outputs exist but do not pass verification."
+                    ),
+                    evidence=[f"{q.check}: {q.status} ({q.message})" for q in failed],
+                    # A deterministic structural read of our own verdict object,
+                    # not an inference from log text — the grading that ranks
+                    # guesses (0.2-0.95) does not apply to a fact we computed.
+                    confidence=1.0,
+                )
+                _record_attempt(
+                    run_dir,
+                    repair_history,
+                    RepairStep(
+                        attempt=attempt,
+                        diagnosis=diagnosis,
+                        patch=None,
+                        outcome=QC_VERDICT_FLAGGED_OUTCOME,
+                        # Stable, greppable stem: this line is the field
+                        # instrument for counting real firings later.
+                        detail=(
+                            f"QC verdict FAIL on a green run: {len(failed)} check(s) "
+                            f"failed on assay '{assay}' ({names}). No repair attempted "
+                            "because none can work: every task exited 0, so a -resume "
+                            "retry is a 100% cache hit and re-derives an identical verdict."
+                        ),
+                    ),
+                )
+                # Same capture the exception path performs, so this class of
+                # failure can finally reach the corpus at all -- until now it
+                # was the one diagnosed failure with no way in, because capture
+                # only ever ran after an exception and nothing here raises.
+                #
+                # `log_text` has no natural value: every task exited 0, so there
+                # is no stderr and no task error file to read. Passing "" would
+                # file a case carrying no evidence, and log-shaped prose would
+                # put words in Nextflow's mouth. The QC summary IS the evidence
+                # here, so it is what the case carries -- labelled as such, not
+                # dressed as a log. `failure_case_from_run` keeps only failing
+                # events, so `events` is legitimately empty: a green run has
+                # none, which is precisely why R9 keeps this class out of the
+                # committed detector corpora.
+                append_case(
+                    failure_case_from_run(
+                        record,
+                        "No failure log: every task exited 0. QC verdict summary:\n"
+                        + diagnosis.root_cause
+                        + "\n"
+                        + "\n".join(diagnosis.evidence),
+                        diagnosis.failure_class,
+                        case_id=f"{run_id}-attempt{attempt}",
+                        source=f"pending:{run_id}",
+                    ),
+                    pending_path,
+                )
             return _finalize(
                 record, repair_history, run_dir,
                 runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,

@@ -1,0 +1,71 @@
+{
+  "run_id": "qc-anomaly-fixture",
+  "pipeline": "nf-core/sarek",
+  "pipeline_revision": "3.5.1",
+  "target": {
+    "backend": "local",
+    "container_runtime": "docker",
+    "work_dir": "runs/qc-anomaly-fixture/work",
+    "engine": "nextflow",
+    "credentials_ref": null,
+    "backend_options": {},
+    "resource_limits": {}
+  },
+  "input_checksums": {},
+  "parameters": {
+    "genome": "GRCh38",
+    "outdir": "runs/qc-anomaly-fixture/results"
+  },
+  "container_digests": {},
+  "nextflow_version": "26.04.4",
+  "contig_version": "0.0.1",
+  "assay": "variant_calling",
+  "events": [
+    {
+      "process": "NFCORE_SAREK:HAPLOTYPECALLER (S1)",
+      "status": "COMPLETED",
+      "exit": 0,
+      "task_id": "1",
+      "name": "NFCORE_SAREK:HAPLOTYPECALLER (S1)"
+    }
+  ],
+  "qc_results": [
+    {
+      "check": "ts_tv_ratio:S1",
+      "status": "fail",
+      "message": "S1: ts_tv=3.5 (fail)",
+      "value": 3.5,
+      "expected_range": "[1.8, 2.4]"
+    },
+    {
+      "check": "het_hom_ratio:S1",
+      "status": "pass",
+      "message": "S1: het_hom=1.6 (pass)",
+      "value": 1.6,
+      "expected_range": "[1.4, 2.5]"
+    },
+    {
+      "check": "mean_coverage:S1",
+      "status": "pass",
+      "message": "S1: mean_coverage=35.0 (pass)",
+      "value": 35.0,
+      "expected_range": ">= 20.0"
+    }
+  ],
+  "output_checksums": {},
+  "repair_history": [
+    {
+      "attempt": 1,
+      "diagnosis": {
+        "failure_class": "qc_anomaly",
+        "root_cause": "1 of 3 non-informational QC checks FAILed on a run whose tasks all completed.",
+        "evidence": ["ts_tv_ratio:S1: fail (value 3.5, expected [1.8, 2.4])"],
+        "confidence": 1.0
+      },
+      "patch": null,
+      "outcome": "qc_verdict_flagged",
+      "detail": "contig qc-anomaly: no repair attempted; a -resume retry is 100% cache-hit and would re-derive an identical verdict. assay=variant_calling failed_checks=ts_tv_ratio:S1"
+    }
+  ],
+  "verdict": "fail"
+}

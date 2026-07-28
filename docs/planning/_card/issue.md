@@ -1,92 +1,101 @@
-# Card: feat / somatic-swapped-pair
+# Card: feat / qc-anomaly-verdict-trigger
 
 - **Type:** feat
-- **Id/slug:** somatic-swapped-pair
+- **Id/slug:** qc-anomaly-verdict-trigger
 - **Owner:** aliz
-- **Branch:** feat/somatic-swapped-pair/aliz
-- **Source:** inline brief (no GitHub issue) — carried from the `/contig-next`
-  recommendation (2026-07-14), the next slice after Strelka2-native VAF shipped v0.34.0.
+- **Branch:** feat/qc-anomaly-verdict-trigger/aliz
+- **Source:** inline brief (no GitHub issue — `gh issue list` returns "No Issues") — carried
+  from the `/contig-next` recommendation (2026-07-28), the next slice after the somatic
+  swapped-pair smell test merged.
 
 ## Brief
 
-Build the C4 cross-column **swapped-pair smell test** — the deferred sibling slice named in
-`docs/planning/somatic-strelka2-vaf/prd.md:175` and
-`docs/planning/somatic-vaf-plausibility/vaf-verdict/plan_20260704.md:25`.
+Close `qc_anomaly`, the last structurally unreachable `FailureClass` (it exists only in
+`src/contig/models.py:279`, the held-out fixture, and a `src/contig/cli.py:2683` docstring —
+**no `detect.py` branch, no `repair.py` branch**), by making the QC verdict an input to the
+self-heal loop.
 
-In the somatic verdict, derive VAF for **both** the tumor and normal columns of the run's
-Mutect2 VCF and emit one WARN-capped plausibility metric that fires when the tumor/normal
-VAF relationship is inverted or implausible (somatic calls concentrated in the normal, or a
-tumor column that looks germline-clonal at ~0.5/1.0), reusing the shipped
-`somatic_plausibility.py` VAF machinery and riding the existing `SOMATIC_PLAUSIBILITY_PACK`
-band — no new `FailureClass`, no FAIL severity, no dashboard card.
+Today `self_heal_run` (`src/contig/self_heal.py:925`) only reacts to a **non-zero exit**, so
+a run that completes green while `_finalize` reduces to **FAIL** — a real outcome since the
+germline Ti/Tv, het/hom, variant-count and somatic empty-call-set FAIL floors shipped — is
+never diagnosed, never enters the loop, and exits 0 unless `--fail-on-verdict`.
 
-Honest floor: when the normal column can't be identified from the `##normal_sample=` /
-`#CHROM` headers, degrade to **UNVERIFIED, never a false pass** (mirror the existing
-header-based tumor-ID fallback); bands stay uncalibrated so it's WARN-only. Test-first with
-synthetic two-column VCF fixtures, no real nf-core/sarek run in CI, research-use
-corroboration only.
+Dig carefully into the **two possible triggers** before choosing: the held-out fixture
+`holdout-qc-anomaly-1` is *pipeline-step* shaped (a `MULTIQC_QC_GATE` FAILED event +
+third-party "QC gate rejected the run" log text), while the product-real trigger is Contig's
+own **verdict object** at `_finalize` — so scoring 13/13 on `eval-guard` needs a log-text
+branch whose needles are foreign text nothing constrains, the same first-party-uniqueness
+trade the `no_progress` slice took and recorded as residual risk.
+
+Expect **no genuine repair** for most cases (an honest diagnosed give-up, not a dressed-up
+recovery), guard against retrying a deterministic FAIL in a loop, change **no default exit
+code**, and state plainly that any `eval-guard` move (0.923 → 1.0) is **partly self-graded**.
 
 ## Why (moat + shipped state)
 
-- **Unblocked, depth-first.** The trigger always exists: every somatic run emits a
-  two-column Mutect2 VCF, and the VAF-derivation machinery is already built
-  (`verification/somatic_plausibility.py` v0.14.0, `verification/strelka_vaf.py` v0.34.0).
-  Natural next slice on the assay that got the last two releases.
-- **Catches a catastrophic silent failure incumbents leave to humans.** A tumor/normal swap
-  reports the normal's germline as somatic; it passes all current QC. WARN-capped
-  corroboration, gets better as models adjudicate ambiguous cases
-  (`CAPABILITY_ROADMAP.md:474-476`).
-- **Captures eval data, no data/credentials needed.** Synthetic fixtures, no real sarek run
-  in CI, no calibration needed for a directional smell. No Layer-1, no clinical claim.
+- **The last structurally unreachable failure class, and the docs name it as needing its own
+  slice.** `docs/technical/CAPABILITY_ROADMAP.md:1074` — *"`qc_anomaly` remains the one
+  structurally unreachable class — this slice did not close it and must not be read as having
+  done so; its honest trigger is the verdict object, not log text (QC runs at `_finalize`, not
+  as a pipeline step), so it needs its own slice."*
+- **It closes the one place where verify does not feed self-heal.** The verdict is today an
+  output only. A run that finishes green while `_finalize` reduces to FAIL — real per the
+  germline FAIL bands (`CAPABILITY_ROADMAP.md:585`) and the somatic empty-call-set floor
+  (`:871`) — is never diagnosed. That silent-success shape is exactly what the moat exists to
+  kill (`CLAUDE.md` constraint #2), and it makes the verdict an *input* to the loop.
+- **Measurable against a frozen baseline.** `holdout-qc-anomaly-1` has been misclassified in
+  **all seven** recorded trend points (`src/contig/data/holdout_history.jsonl` — `qc_anomaly`
+  `predicted: 0`, `recall: 0.0`, v0.22.0 → v0.48.0). `eval-guard` would move 0.923 → 1.0
+  (13/13); `heal-guard` `covered_classes` 6 → 7.
 
-## KNOWN CAVEAT — the VAF-direction signal is the substance (pin FIRST in the dig)
+## KNOWN CAVEAT — two different doors, only one of them honest (pin FIRST in the dig)
 
-This catches a swap through the **VAF-direction signal** (tumor col ~germline 0.5/1.0, or the
-normal col carrying the somatic signal), **not** by trusting labels — which is the point,
-since a sheet-level swap is internally label-consistent. Today `somatic_plausibility.py`
-reads only the tumor column (via Mutect2's `##tumor_sample=` header); this slice must also
-resolve and read the **normal** column.
+The held-out fixture and the product-real trigger are **not the same thing**:
 
-- Mutect2 emits `##normal_sample=<name>` alongside `##tumor_sample=<name>`; both map to
-  `#CHROM` columns. The dig's first task: **confirm the `##normal_sample=` header exists and
-  is parseable** on a real sarek 3.5.1 Mutect2 header (the tumor-side resolver is already
-  proven — verify the symmetric normal side).
-- When the normal column can't be identified → degrade to **UNVERIFIED, never a false pass**
-  (same honest floor as the header-based tumor ID). Bands uncalibrated → WARN-only.
-- Scope: one metric riding the existing `SOMATIC_PLAUSIBILITY_PACK`, no
-  `FailureClass`/dashboard/FAIL-severity.
+- `src/contig/data/detector_corpus_holdout.jsonl` → `holdout-qc-anomaly-1` is *pipeline-step*
+  shaped: `events: [{process: "MULTIQC_QC_GATE", status: "FAILED"}]` plus
+  `log_text: "QC gate rejected the run: MultiQC duplication-rate metric (92%) breached the
+  assay's QC anomaly threshold."` — i.e. a **third-party QC gate inside someone else's
+  workflow**.
+- Contig's own trigger is the **verdict object** at `_finalize` — no log text, no failed
+  process, exit code 0.
 
-## Honest contract (mirror the shipped C3/somatic-plausibility contract exactly)
+So **scoring 13/13 requires a log-text branch whose needles are foreign text nothing
+constrains** — the exact first-party-uniqueness trade the `no_progress` slice took knowingly
+and recorded as unenforced residual risk (`CAPABILITY_ROADMAP.md:370`). Decide deliberately
+which door(s) this slice opens, and **do not let the eval number drive the detector rule**.
 
-- **WARN-capped, never FAIL, never changes the `contig run`/`verify` exit code** (bands are
-  uncalibrated engineering defaults).
-- **UNVERIFIED-when-absent, never a false pass:** no Mutect2 VCF with a resolvable
-  tumor+normal pair, or no derivable VAF → one honest UNVERIFIED; no VCF at all skips
-  silently (structural QC owns a genuinely-missing output).
-- Additive to the verdict only — **no new `FailureClass`, model, persisted record,
-  dependency, or exit-code/reproduce change**; gated to
-  `assay == "somatic_variant_calling"` in `_discover_qc`.
-- No raw-read egress (reads a small VCF already on the user's compute); research-use only,
-  never a clinical judgement. Test-first with synthetic two-column VCF fixtures — **no real
-  nf-core/sarek run in CI**.
+## Honest contract (constraints this slice must not break)
+
+- **There is often no repair.** Bad biology is not retryable. The honest terminal outcome is a
+  **diagnosed give-up**, mirroring the frozen `tool-crash-giveup` scenario — never a
+  dressed-up recovery.
+- **No retry loop over a deterministic FAIL.** A verdict that will re-derive identically must
+  not be re-attempted; whatever bound is chosen must provably terminate.
+- **No default exit-code change.** v0.36.0 made FAIL → exit 1 **opt-in** via
+  `--fail-on-verdict` (`docs/planning/verdict-exit-code/`); this slice must not silently
+  reroute that.
+- **Partly self-graded, stated as such.** We would be making reachable a class whose held-out
+  fixture we wrote ourselves — the same critique the `no_progress` slice recorded about
+  itself. It evidences that a documented taxonomy gap closed; nothing more.
+- Test-first, no real nf-core run in CI, no new dependency unless argued.
 
 ## Shipped precedents to mirror
 
-- **Somatic VAF-plausibility slice (v0.14.0)** — `verification/somatic_plausibility.py`,
-  `SOMATIC_PLAUSIBILITY_PACK`, `_discover_qc` somatic gate. The tumor-only `median_vaf` this
-  slice extends to a tumor-vs-normal comparison. (`CAPABILITY_ROADMAP.md` C4.)
-- **Strelka2-native VAF slice (v0.34.0)** — `verification/strelka_vaf.py`, evaluated via
-  `evaluate_strelka_vaf_plausibility()` riding the same shared pack. The most recent
-  precedent for adding one metric to the shared somatic pack.
-- **C1 somatic-concordance slice** — `verification/somatic_concordance.py` locates the
-  Mutect2 VCF (by `mutect2` path component). Reuse this discovery seam rather than
-  re-globbing.
+- **`docs/planning/stall-watchdog-no-progress/`** — the closest precedent: the previous slice
+  that made an unreachable class reachable (`no_progress`), including its detector-branch
+  needle discipline, its ordering decision in `detect.py`, and its residual-risk record.
+- **`docs/planning/verdict-exit-code/`** — the `--fail-on-verdict` opt-in exit-code wiring;
+  the boundary this slice must respect.
+- **`docs/planning/eval-holdout-guard/`** — `contig eval-guard`, the frozen held-out corpus,
+  and the `--update-baseline` refreeze-as-a-deliberate-act convention.
+- **`docs/planning/self-heal-eval-guard/`** — `contig heal-guard`, `heal_scenarios.jsonl`, and
+  the outcome-match-vs-recovery-rate distinction.
 
-## Deferred (name in PRD, out of scope for this slice)
+## Deferred (name in PRD, out of scope unless the dig argues otherwise)
 
-- FAIL severity + band calibration on real somatic cohorts.
-- PON / germline-resource reference wiring for a real Mutect2 somatic run.
-- Any Strelka2 QSS/QSI quality-score plausibility beyond VAF.
-- A dashboard card / "corroborated by" surface for the somatic swap signal.
-- Any `FailureClass`, self-heal, or eval-corpus/heal-scenario change.
-- Any Layer-1 (NL→workflow) surface.
+- Folding the unlabeled C1 concordance / C3 plausibility corroboration signals into one eval
+  number (blocked on a labeling design — `CAPABILITY_ROADMAP.md:1024`).
+- Any dashboard card for the new class.
+- Band calibration of any QC threshold (this slice adds no new bands).
+- Any Layer-1 (NL → workflow) surface.

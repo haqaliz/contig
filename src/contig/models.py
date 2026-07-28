@@ -556,6 +556,12 @@ class HealScenario(BaseModel):
     index_builder_result: Literal["success", "fail"] | None = None
     max_attempts: int = 3
     assay: str = "rnaseq"
+    # Opt-in: drop a QC artifact into the run dir so the REAL `_discover_qc`
+    # has something to verify. Deliberately a named fixture rather than an
+    # injectable `qc_results` -- QC discovery only needs a file and an assay,
+    # and synthesizing the verdict would stop measuring the thing under test.
+    # None (the default) leaves a scenario's behaviour exactly as it was.
+    qc_artifact: Literal["empty_vcf_gz"] | None = None
     expected_recovered: bool
     expected_outcome: str
 

@@ -2678,13 +2678,21 @@ def heal_guard(
     exits 0. With --snapshot the result is also appended to the committed
     self-heal trend; with --history the recorded trend is printed instead.
 
-    Honest scope: the number is over **8 SYNTHETIC scenarios**, not a field
+    Honest scope: the number is over **9 SYNTHETIC scenarios**, not a field
     recovery rate. Covered failure classes: bad_param, missing_index, no_progress,
-    oom, time_limit, tool_crash. Not covered: qc_anomaly is currently
-    structurally unreachable (no diagnose_failure rule branch emits it yet);
-    container_pull_failed, container_unavailable, conda_solve_failed,
-    platform_unsupported, disk_full, download_failed, permission_denied, and
-    missing_reference have no scenario yet and are deferred follow-on slices.
+    oom, qc_anomaly, time_limit, tool_crash. Not covered: container_pull_failed,
+    container_unavailable, conda_solve_failed, platform_unsupported, disk_full,
+    download_failed, permission_denied, missing_reference and reference_not_bgzf
+    have no scenario yet and are deferred follow-on slices. (missing_dependency
+    is emitted only by `contig reproduce --allow-install`, never by this loop, so
+    this guard cannot cover it; unknown is the detector's fallback, not a target.)
+
+    **No failure class is structurally unreachable any more.** qc_anomaly was the
+    last one, and its scenario is one we authored for a class we made reachable --
+    evidence that a taxonomy gap closed, not that a user was helped. Its recovery
+    accounting is also an artifact: the scenario is green by construction (every
+    task exits 0, only the QC verdict FAILs), so the informational-only
+    recovery count reads 6/9 while nothing was recovered.
     """
     scenarios_path = Path(scenarios) if scenarios else default_heal_scenarios_path()
     baseline_path = Path(baseline) if baseline else default_heal_baseline_path()

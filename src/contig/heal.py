@@ -13,6 +13,7 @@ single classification.
 
 from __future__ import annotations
 
+import gzip
 import tempfile
 from os import PathLike
 from pathlib import Path
@@ -33,8 +34,28 @@ from contig.runner import IndexBuilder, PipelineExecutionError, default_index_bu
 from contig.self_heal import _poll_approval_file, self_heal_run
 
 
-def _write_attempt(trace_path: Path, attempt: AttemptSpec) -> None:
-    """Write one AttemptSpec's single-task trace row + sibling run.log.
+def _write_qc_artifact(run_dir: Path, artifact: str) -> None:
+    """Drop the named QC fixture into the run dir for the real `_discover_qc`.
+
+    `empty_vcf_gz` is a header-only germline VCF: `parse_vcf` opens a `.gz` name
+    with stdlib gzip, so it yields zero sites, `variant_count` is 0, and
+    VARIANT_RULE_PACK's `fail_below: 1` makes that a FAIL by design. The header
+    lines are cosmetic (an empty gzip stream FAILs identically) but keep the
+    fixture readable as a VCF to a human.
+    """
+    if artifact == "empty_vcf_gz":
+        with gzip.open(Path(run_dir) / "calls.vcf.gz", "wt") as fh:
+            fh.write(
+                "##fileformat=VCFv4.2\n"
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+            )
+
+
+def _write_attempt(
+    trace_path: Path, attempt: AttemptSpec, qc_artifact: str | None = None
+) -> None:
+    """Write one AttemptSpec's single-task trace row + sibling run.log, plus the
+    scenario's QC artifact when it declares one.
 
     Mirrors the `_trace(status, exit)` helper in tests/test_self_heal.py.
     """
@@ -42,6 +63,8 @@ def _write_attempt(trace_path: Path, attempt: AttemptSpec) -> None:
     row = f"1\tab/cd\t1\tNFCORE_RNASEQ:STAR_ALIGN (S1)\t{attempt.status}\t{attempt.exit}\t-\t-\t-\n"
     Path(trace_path).write_text(header + row)
     (Path(trace_path).parent / "run.log").write_text(attempt.log_text)
+    if qc_artifact is not None:
+        _write_qc_artifact(Path(trace_path).parent, qc_artifact)
 
 
 def _scripted_executor(scenario: HealScenario) -> Callable[[list[str], Path], int]:
@@ -54,7 +77,7 @@ def _scripted_executor(scenario: HealScenario) -> Callable[[list[str], Path], in
         state["n"] += 1
         index = min(state["n"], len(scenario.attempts)) - 1
         attempt = scenario.attempts[index]
-        _write_attempt(trace_path, attempt)
+        _write_attempt(trace_path, attempt, scenario.qc_artifact)
         return attempt.exit
 
     return executor

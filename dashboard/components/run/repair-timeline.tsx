@@ -3,7 +3,7 @@
 // class, root cause, confidence, evidence), the proposed patch (or "no automatic
 // patch"), and the outcome. The detector logic lives in Python, this only renders
 // what it recorded.
-import { CheckCircle2, HelpCircle, PauseCircle } from "lucide-react";
+import { CheckCircle2, Flag, HelpCircle, PauseCircle } from "lucide-react";
 
 import {
   Card,
@@ -23,6 +23,7 @@ const FAILURE_LABELS: Record<string, string> = {
   reference: "Reference / input problem",
   reference_mismatch: "Reference mismatch",
   missing_input: "Missing input",
+  qc_anomaly: "QC anomaly",
   unknown: "Unknown failure",
 };
 
@@ -56,6 +57,21 @@ const OUTCOME_META: Record<
     icon: HelpCircle,
     className:
       "border-slate-300 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300",
+  },
+  // A diagnosed QC verdict on a run whose tasks all succeeded: nothing failed and
+  // nothing was patched, so this is a finding, not a give-up. What it must NOT
+  // share is gave_up's slate -- see repair-truthfulness.spec.ts.
+  //
+  // The amber token here is byte-identical to stopped_for_confirmation's, but that
+  // is not a live precedent: stopped_for_confirmation is emitted NOWHERE in src/
+  // and never renders. So amber is in practice unique to this outcome. If that
+  // entry is ever revived, the two would collide and the spec would NOT catch it --
+  // it compares only against gave_up. Give one of them its own hue at that point.
+  qc_verdict_flagged: {
+    label: "QC verdict flagged",
+    icon: Flag,
+    className:
+      "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300",
   },
 };
 
@@ -170,7 +186,8 @@ export function RepairTimeline({ history }: { history: RepairStep[] }) {
       <CardHeader>
         <CardTitle>Self-heal</CardTitle>
         <CardDescription>
-          The bounded detect, diagnose, patch, re-run loop.
+          The bounded detect, diagnose, patch, re-run loop. Not every diagnosis
+          produces a patch.
         </CardDescription>
       </CardHeader>
       <CardContent>
