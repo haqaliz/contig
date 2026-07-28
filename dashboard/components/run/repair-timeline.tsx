@@ -3,7 +3,7 @@
 // class, root cause, confidence, evidence), the proposed patch (or "no automatic
 // patch"), and the outcome. The detector logic lives in Python, this only renders
 // what it recorded.
-import { CheckCircle2, HelpCircle, PauseCircle } from "lucide-react";
+import { CheckCircle2, Flag, HelpCircle, PauseCircle } from "lucide-react";
 
 import {
   Card,
@@ -23,6 +23,7 @@ const FAILURE_LABELS: Record<string, string> = {
   reference: "Reference / input problem",
   reference_mismatch: "Reference mismatch",
   missing_input: "Missing input",
+  qc_anomaly: "QC anomaly",
   unknown: "Unknown failure",
 };
 
@@ -56,6 +57,17 @@ const OUTCOME_META: Record<
     icon: HelpCircle,
     className:
       "border-slate-300 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300",
+  },
+  // A diagnosed QC verdict on a run whose tasks all succeeded: nothing failed and
+  // nothing was patched, so this is a finding, not a give-up. It shares the amber
+  // "needs your attention" register with stopped_for_confirmation; the icon and
+  // label carry the distinction, per this map's rule that color is never the only
+  // signal. What it must NOT share is gave_up's slate -- see repair-truthfulness.spec.ts.
+  qc_verdict_flagged: {
+    label: "QC verdict flagged",
+    icon: Flag,
+    className:
+      "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300",
   },
 };
 
@@ -170,7 +182,8 @@ export function RepairTimeline({ history }: { history: RepairStep[] }) {
       <CardHeader>
         <CardTitle>Self-heal</CardTitle>
         <CardDescription>
-          The bounded detect, diagnose, patch, re-run loop.
+          The bounded detect, diagnose, patch, re-run loop. Not every diagnosis
+          produces a patch.
         </CardDescription>
       </CardHeader>
       <CardContent>

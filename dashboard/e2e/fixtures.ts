@@ -86,6 +86,17 @@ export const FIXTURE_RUN_IDS = [
   // overallQc skips informational results rather than letting them drive the
   // reduction to "pass" (see e2e/unverified-verdict.spec.ts).
   "informational-only-fixture",
+  // A GREEN run (every task COMPLETED) whose QC reduces to fail, carrying the one
+  // qc_verdict_flagged step the engine's QC-anomaly trigger records: patch null,
+  // failure class qc_anomaly. Nothing was repaired, so it must not claim a repair,
+  // and the timeline must not dress the flag as a give-up
+  // (see e2e/repair-truthfulness.spec.ts).
+  "qc-anomaly-fixture",
+  // The same flag reached after a REAL repair: attempt 1 applied a safe memory
+  // patch and retried, attempt 2 came back green but QC-failing. The positive
+  // control for wasRepaired -- a patch genuinely was applied here, so this run
+  // must still read as Repaired (see e2e/repair-truthfulness.spec.ts).
+  "qc-anomaly-patched-fixture",
 ];
 
 // Mirror lib/runs.ts runsDir(): CONTIG_RUNS_DIR, else ../runs from the dashboard
