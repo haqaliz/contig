@@ -10,7 +10,14 @@ from html import escape
 
 from pydantic import BaseModel
 
-from contig.models import QCResult, ReproduceRecord, RunRecord, RunSummary, overall_verdict
+from contig.models import (
+    QCResult,
+    RepairStep,
+    ReproduceRecord,
+    RunRecord,
+    RunSummary,
+    overall_verdict,
+)
 from contig.verification.annotation_surface import corroborated_by_line
 from contig.verification.reproduce import reduce_reproduction
 
@@ -84,6 +91,22 @@ def render_explain(record: RunRecord) -> str:
     return "\n".join(lines)
 
 
+def _applied_word(step: RepairStep) -> str:
+    """`applied` / `not applied` for one repair step.
+
+    Reads RepairStep.patch_applied verbatim: the patch was **enacted** and the loop
+    proceeded to retry. Not "the config was mutated", and not "the patch worked" --
+    an applied patch can still have been followed by a failing retry. Both states
+    are spelled out because silence would read as "applied" to anyone skimming.
+    """
+    return "applied" if step.patch_applied else "not applied"
+
+
+def _applied_tag(step: RepairStep) -> str:
+    """The bracketed form of _applied_word, matching _status_text's `[informational]`."""
+    return f"[{_applied_word(step)}]"
+
+
 def render_reproduction(record: ReproduceRecord) -> str:
     """Render a `contig reproduce` result as a terminal-friendly report.
 
@@ -94,7 +117,7 @@ def render_reproduction(record: ReproduceRecord) -> str:
     lines = [f"REPRODUCE: {record.reproduce_id}", f"repo: {record.repo}", f"run: {record.run_command}"]
     for step in record.repair_history:
         op = step.patch.operation.get("install") if step.patch else None
-        lines.append(f"env-repair: {step.outcome} ({op}) — {step.detail}")
+        lines.append(f"env-repair: {step.outcome} {_applied_tag(step)} ({op}) — {step.detail}")
     header = f"{'id':<20}{'status':<18}{'claimed':<12}{'observed':<12}{'delta':<10}"
     lines.append(header)
     for claim in record.claim_results:
@@ -156,7 +179,7 @@ def render_run_report(record: RunRecord) -> str:
             patch_kind = step.patch.kind if step.patch else "none"
             lines.append(
                 f"  - attempt {step.attempt}: {step.diagnosis.failure_class} "
-                f"→ {patch_kind} patch → {step.outcome}"
+                f"→ {patch_kind} patch {_applied_tag(step)} → {step.outcome}"
             )
     return "\n".join(lines)
 
@@ -334,7 +357,7 @@ def render_run_report_html(
     if record.repair_history:
         parts.append(
             "<table><thead><tr><th>Attempt</th><th>Failure class</th>"
-            "<th>What was patched</th><th>Outcome</th></tr></thead><tbody>"
+            "<th>What was patched</th><th>Enacted?</th><th>Outcome</th></tr></thead><tbody>"
         )
         for step in record.repair_history:
             patched = step.patch.kind if step.patch else "none"
@@ -342,6 +365,7 @@ def render_run_report_html(
                 f"<tr><td>{step.attempt}</td>"
                 f"<td>{escape(step.diagnosis.failure_class)}</td>"
                 f"<td>{escape(patched)}</td>"
+                f"<td>{_applied_word(step)}</td>"
                 f"<td>{escape(step.outcome)}</td></tr>"
             )
         parts.append("</tbody></table>")
