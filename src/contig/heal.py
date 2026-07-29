@@ -132,6 +132,7 @@ def run_heal_scenario(scenario: HealScenario, tmp_dir: Path) -> HealScenarioResu
     diagnosed_class: str | None = None
     recovered = False
     actual_outcome: str | None = None
+    patch_applied = False
 
     try:
         record = self_heal_run(
@@ -151,6 +152,7 @@ def run_heal_scenario(scenario: HealScenario, tmp_dir: Path) -> HealScenarioResu
             assay=scenario.assay,
         )
         recovered = RunSummary.from_events(record.events).succeeded
+        patch_applied = any(s.patch_applied for s in record.repair_history)
         if record.repair_history:
             last = record.repair_history[-1]
             actual_outcome = last.outcome
@@ -159,6 +161,7 @@ def run_heal_scenario(scenario: HealScenario, tmp_dir: Path) -> HealScenarioResu
         recovered = False
         actual_outcome = "no_record"
         diagnosed_class = None
+        patch_applied = False
 
     divergence: list[str] = []
     if diagnosed_class != scenario.expected_class:
@@ -172,6 +175,16 @@ def run_heal_scenario(scenario: HealScenario, tmp_dir: Path) -> HealScenarioResu
     if actual_outcome != scenario.expected_outcome:
         divergence.append(
             f"outcome: expected {scenario.expected_outcome!r}, got {actual_outcome!r}"
+        )
+    # Opt-in (R7): a scenario that says nothing about patch_applied is scored
+    # exactly as it was before the field existed.
+    if (
+        scenario.expected_patch_applied is not None
+        and patch_applied != scenario.expected_patch_applied
+    ):
+        divergence.append(
+            f"patch_applied: expected {scenario.expected_patch_applied!r}, "
+            f"got {patch_applied!r}"
         )
 
     return HealScenarioResult(

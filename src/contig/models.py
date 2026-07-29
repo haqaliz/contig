@@ -570,6 +570,11 @@ class HealScenario(BaseModel):
     qc_artifact: Literal["empty_vcf_gz"] | None = None
     expected_recovered: bool
     expected_outcome: str
+    # Opt-in assertion on whether the loop actually enacted a patch (R7), checked
+    # against `any(step.patch_applied ...)` over the real repair history. None (the
+    # default) skips the check entirely, so a scenario omitting it scores exactly
+    # as it did before the field existed.
+    expected_patch_applied: bool | None = None
 
 
 class HealClassScore(BaseModel):

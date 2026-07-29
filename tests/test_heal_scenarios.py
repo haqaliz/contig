@@ -259,6 +259,72 @@ def test_heal_scenario_qc_artifact_defaults_to_none():
     assert scn.qc_artifact is None
 
 
+def test_scenario_without_expected_patch_applied_is_unchanged(tmp_path):
+    """R7 back-compat: `expected_patch_applied` is opt-in. A scenario omitting it
+    parses with the field at None and scores exactly as it did before -- no new
+    divergence entry, matched unchanged."""
+    scn = HealScenario(
+        scenario_id="oom-no-assertion",
+        description="OOM heals; the scenario says nothing about patch_applied",
+        source="synthetic",
+        expected_class="oom",
+        attempts=[
+            AttemptSpec(status="FAILED", exit=137, log_text="Process killed: out of memory (exit 137)"),
+            AttemptSpec(status="COMPLETED", exit=0, log_text="done"),
+        ],
+        expected_recovered=True,
+        expected_outcome="patched_and_retried",
+    )
+    assert scn.expected_patch_applied is None
+
+    result = run_heal_scenario(scn, tmp_path)
+    assert result.divergence == []
+    assert result.matched is True
+
+
+def test_patch_applied_mismatch_is_a_divergence(tmp_path):
+    """R7 negative: a scenario claiming a patch was applied, driven down a path
+    that applies nothing (unrecoverable tool crash), must diverge -- and the
+    divergence string must name the field so the failure is readable."""
+    scn = HealScenario(
+        scenario_id="tool-crash-claims-a-patch",
+        description="Segfault gives up, but the scenario wrongly claims a patch was applied",
+        source="synthetic",
+        expected_class="tool_crash",
+        attempts=[
+            AttemptSpec(status="FAILED", exit=1, log_text="Segmentation fault in some_tool"),
+        ],
+        expected_recovered=False,
+        expected_outcome="gave_up",
+        expected_patch_applied=True,
+    )
+    result = run_heal_scenario(scn, tmp_path)
+    assert result.matched is False
+    assert any("patch_applied" in d for d in result.divergence), result.divergence
+
+
+def test_patch_applied_match_is_not_a_divergence(tmp_path):
+    """R7 positive control: when the loop agrees with the scenario's claim, the
+    check must stay silent. Without this an implementation that appends a
+    divergence unconditionally would still pass the negative test."""
+    scn = HealScenario(
+        scenario_id="oom-claims-a-patch",
+        description="OOM heals by applying a resource patch, and says so",
+        source="synthetic",
+        expected_class="oom",
+        attempts=[
+            AttemptSpec(status="FAILED", exit=137, log_text="Process killed: out of memory (exit 137)"),
+            AttemptSpec(status="COMPLETED", exit=0, log_text="done"),
+        ],
+        expected_recovered=True,
+        expected_outcome="patched_and_retried",
+        expected_patch_applied=True,
+    )
+    result = run_heal_scenario(scn, tmp_path)
+    assert result.divergence == []
+    assert result.matched is True
+
+
 def test_evaluate_heal_aggregates_rates(tmp_path):
     oom_scn = HealScenario(
         scenario_id="oom-1",
