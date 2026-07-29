@@ -59,12 +59,15 @@
       "diagnosis": {
         "failure_class": "qc_anomaly",
         "root_cause": "1 of 3 non-informational QC checks FAILed on a run whose tasks all completed.",
-        "evidence": ["ts_tv_ratio:S1: fail (value 3.5, expected [1.8, 2.4])"],
+        "evidence": [
+          "ts_tv_ratio:S1: fail (value 3.5, expected [1.8, 2.4])"
+        ],
         "confidence": 1.0
       },
       "patch": null,
       "outcome": "qc_verdict_flagged",
-      "detail": "contig qc-anomaly: no repair attempted; a -resume retry is 100% cache-hit and would re-derive an identical verdict. assay=variant_calling failed_checks=ts_tv_ratio:S1"
+      "detail": "contig qc-anomaly: no repair attempted; a -resume retry is 100% cache-hit and would re-derive an identical verdict. assay=variant_calling failed_checks=ts_tv_ratio:S1",
+      "patch_applied": false
     }
   ],
   "verdict": "fail"
