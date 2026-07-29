@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-07-29
+
 ### Added
 
 - **The repair record now says whether a patch was actually APPLIED, not merely proposed —
@@ -2995,6 +2997,8 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.49.0]: https://github.com/haqaliz/contig/releases/tag/v0.49.0
+[0.48.0]: https://github.com/haqaliz/contig/releases/tag/v0.48.0
 [0.47.0]: https://github.com/haqaliz/contig/releases/tag/v0.47.0
 [0.46.0]: https://github.com/haqaliz/contig/releases/tag/v0.46.0
 [0.45.0]: https://github.com/haqaliz/contig/releases/tag/v0.45.0
