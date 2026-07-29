@@ -312,6 +312,12 @@ class RepairStep(BaseModel):
     patch: Patch | None = None
     outcome: str
     detail: str | None = None
+    # True iff the patch was **enacted** and the loop proceeded to retry. NOT "the run's
+    # configuration was mutated" — `apply_patch` is a documented no-op for `code`/`retry`
+    # patches (self_heal.py:549), and a fully clamped resource bump can leave the target
+    # identical. NOT "the patch worked" — see reproduce's `retry_failed`. Defaults False so
+    # a pre-field bundle under-claims rather than over-claims.
+    patch_applied: bool = False
 
 
 class RunRecord(BaseModel):
