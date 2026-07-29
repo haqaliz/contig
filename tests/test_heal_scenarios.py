@@ -470,7 +470,9 @@ def test_shipped_heal_baseline_matches_shipped_scenarios():
     assert baseline is not None
     assert baseline.scenario_count == 9
     assert baseline.outcome_match_rate == 1.0
-    assert baseline.recovery_rate == pytest.approx(6 / 9)
+    # 5/9 since the R8 refreeze; 6/9 before it, when a green-but-unrepaired run
+    # still counted as a recovery.
+    assert baseline.recovery_rate == pytest.approx(5 / 9)
     assert baseline.corpus_sha == sha256_file(scenarios_path)
     assert set(baseline.covered_classes) >= {
         "oom",
