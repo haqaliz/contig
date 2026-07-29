@@ -22,23 +22,23 @@ export function taskCounts(record: RunRecord): { total: number; failed: number }
   return { total: record.events.length, failed };
 }
 
-/** Did the run carry a patch? A recorded step is not itself a repair: `gave_up`
- *  *on its no-patch path* (no fix was found at all) and `qc_verdict_flagged` (a
- *  diagnosed QC verdict on a run whose tasks all succeeded) both carry
- *  `patch: null` and repaired nothing, so keying on the patch is strictly better
- *  than keying on the step count. Note `gave_up` carries a patch on its other two
- *  sites -- see the limit below.
+/** Was a patch actually applied? Neither the step count nor the presence of a
+ *  patch answers that. A recorded step is not itself a repair (`gave_up` on its
+ *  no-patch path and `qc_verdict_flagged` both carry `patch: null` and repaired
+ *  nothing), and a recorded *patch* is not one either: five paths in
+ *  `self_heal.py` record a non-null patch and return before `apply_patch` is
+ *  ever called -- budget exhaustion, the resource ceiling, and the three
+ *  approval-gate refusals. Keying on the patch therefore told a user who
+ *  REJECTED a fix that their run was "Repaired".
  *
- *  Known limit, deliberately shipped: this means a patch was *proposed*, not
- *  applied. `apply_patch` runs at only two sites in `self_heal.py`, and five
- *  paths record a non-null patch and return before either -- budget exhaustion,
- *  the resource ceiling, and the approval-gate refusals. So a user who REJECTS a
- *  patch is still told the run was "Repaired". That is pre-existing (the previous
- *  `length > 0` did the same) and is not made worse here. The real fix is a
- *  structured `RepairStep.patch_applied` flag rather than more string matching --
- *  filed in docs/planning/qc-anomaly-verdict-trigger/prd.md. */
+ *  So we read the engine's own `patch_applied`, which it derives from control
+ *  flow (`continue_`) rather than from the outcome string, so a future outcome
+ *  literal is correct here with no map to update. Its meaning is the engine's:
+ *  the patch was ENACTED and the loop proceeded to retry -- not that the config
+ *  was mutated, and not that the patch worked. A pre-field bundle has no key,
+ *  which is falsy: it under-claims, the safe direction for this badge. */
 export function wasRepaired(record: RunRecord): boolean {
-  return record.repair_history.some((s) => s.patch !== null);
+  return record.repair_history.some((s) => s.patch_applied);
 }
 
 /** Severity order for sorting/grouping (fail worst). */

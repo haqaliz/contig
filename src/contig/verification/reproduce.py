@@ -1239,6 +1239,9 @@ def run_reproduction(
                         patch=patch,
                         outcome="install_failed",
                         detail=f"pip install {module} exited {install_rc}",
+                        # pip exited non-zero: the patch was proposed but its
+                        # operation never ran.
+                        patch_applied=False,
                     )
                 )
             else:
@@ -1254,6 +1257,11 @@ def run_reproduction(
                             patch=patch,
                             outcome="retry_failed",
                             detail=f"installed {module}; retry exited {exit_code}",
+                            # The install SUCCEEDED (install_rc == 0) -- the
+                            # patch was enacted and the loop proceeded to retry.
+                            # The retry then failed on its own, which is a
+                            # separate fact: applied != successful.
+                            patch_applied=True,
                         )
                     )
                 else:
@@ -1264,6 +1272,7 @@ def run_reproduction(
                             patch=patch,
                             outcome="installed_and_retried",
                             detail=f"installed {module}; retry exited 0",
+                            patch_applied=True,
                         )
                     )
         # module is None: no installable module detected -- nothing to record,

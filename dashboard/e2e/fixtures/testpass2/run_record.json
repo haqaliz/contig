@@ -2791,7 +2791,8 @@
         "confidence": 0.2
       },
       "patch": null,
-      "outcome": "gave_up"
+      "outcome": "gave_up",
+      "patch_applied": false
     }
   ],
   "verdict": "pass"

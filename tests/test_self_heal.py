@@ -3119,3 +3119,247 @@ def test_recompress_reference_decompress_failure(tmp_path):
     assert outcome == "reference_recompress_failed"
     assert continue_ is False
     assert result_params["fasta"] == str(fasta)
+
+
+# --- patch_applied: the value recorded at each _record_attempt site -------------
+#
+# `patch_applied` answers "was the patch ENACTED and did the loop proceed to
+# retry?" — never "was a patch proposed?" and never "did the patch work?". Each
+# test below drives one real branch of `self_heal_run` through the scripted
+# executor/index_builder/poll seams and pins the value that branch must record.
+# The negative cases matter most: `apply_patch` runs on the FIRST line of
+# `_apply_patch_and_maybe_build`, so anything derived from "apply_patch returned"
+# would stamp a failed build as applied.
+
+
+def test_rejected_patch_is_not_recorded_as_applied(tmp_path):
+    # A rejected gate still CARRIES the patch it offered; it just never enacted
+    # it. The two fields are independent.
+    def poll(run_dir, timeout_sec):
+        return {"decision": "reject", "decided_at": "2026-06-22T00:00:00+00:00"}
+
+    record = _heal(tmp_path, _index_executor(), poll=poll)
+    last = record.repair_history[-1]
+    assert last.outcome == "rejected_by_user"
+    assert last.patch is not None
+    assert last.patch_applied is False
+
+
+def test_approval_timeout_is_not_recorded_as_applied(tmp_path):
+    record = _heal(tmp_path, _index_executor(), poll=lambda run_dir, timeout_sec: None)
+    last = record.repair_history[-1]
+    assert last.outcome == "approval_timed_out"
+    assert last.patch is not None
+    assert last.patch_applied is False
+
+
+def test_invalid_choice_is_not_recorded_as_applied(tmp_path):
+    def poll(run_dir, timeout_sec):
+        return {"decision": "approve", "choice": 9, "decided_at": "2026-06-22T00:00:00+00:00"}
+
+    record = _heal(tmp_path, _index_executor(), poll=poll, propose=_two_candidates)
+    last = record.repair_history[-1]
+    assert last.outcome == "invalid_choice_rejected"
+    assert last.patch is not None
+    assert last.patch_applied is False
+
+
+def test_budget_exhausted_giveup_is_not_recorded_as_applied(tmp_path):
+    # Both budget-exhausted give-ups record the patch they WOULD have tried and
+    # stop before applying it: the gated variant (no safe fix) and the safe one.
+    gated = _heal(tmp_path, _index_executor(), max_attempts=1, poll=lambda d, t: None)
+    gated_last = gated.repair_history[-1]
+    assert gated_last.outcome == "gave_up"
+    assert gated_last.patch is not None
+    assert gated_last.patch_applied is False
+
+    def oom_executor(cmd, trace_path):
+        _write(trace_path, TRACE_OOM, "out of memory exit 137")
+        return 1
+
+    safe = _heal(tmp_path, oom_executor, max_attempts=1, run_id="r2")
+    safe_last = safe.repair_history[-1]
+    assert safe_last.outcome == "gave_up"
+    assert safe_last.patch is not None and safe_last.patch.risk == "safe"
+    assert safe_last.patch_applied is False
+
+
+def test_ceiling_giveup_is_not_recorded_as_applied(tmp_path):
+    # Blocked at the ceiling BEFORE apply_patch is reached at all.
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_OOM, "out of memory exit 137")
+        return 1
+
+    target = ExecutionTarget(
+        backend="local",
+        container_runtime="docker",
+        work_dir=str(tmp_path / "w"),
+        resource_limits={"memory": "128.GB"},
+    )
+    record = _heal(tmp_path, executor, target=target)
+    last = record.repair_history[-1]
+    assert last.outcome == "gave_up_at_ceiling"
+    assert last.patch is not None
+    assert last.patch_applied is False
+
+
+def test_failed_index_build_is_not_recorded_as_applied(tmp_path):
+    # The trap case: apply_patch already returned (it is a no-op for build_index)
+    # and the BUILD is what failed. Nothing was enacted.
+    state = {"n": 0}
+    calls = {"n": 0}
+    record = _heal(
+        tmp_path,
+        _fai_executor(state),
+        auto_approve=True,
+        index_builder=_building_builder(calls, rc=1),
+    )
+    last = record.repair_history[-1]
+    assert last.outcome == "index_build_failed"
+    assert last.patch is not None
+    assert last.patch_applied is False
+
+
+def test_unresolvable_index_is_not_recorded_as_applied(tmp_path):
+    # Same trap, earlier exit: the index path never parsed, so no build ran.
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_INDEX, "ERROR: index file not found")
+        return 1
+
+    record = _heal(tmp_path, executor, auto_approve=True, index_builder=lambda cmd, cwd: 0)
+    last = record.repair_history[-1]
+    assert last.outcome == "index_unresolvable"
+    assert last.patch is not None
+    assert last.patch_applied is False
+
+
+def test_qc_verdict_flag_is_not_recorded_as_applied(tmp_path):
+    # A green run with a FAIL verdict proposes NOTHING (no repair can work), so
+    # there is neither a patch nor an application to claim.
+    import gzip
+
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_OK, "ok")
+        with gzip.open(Path(trace_path).parent / "calls.vcf.gz", "wt") as fh:
+            fh.write("##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n")
+        return 0
+
+    record = _heal(
+        tmp_path, executor,
+        pipeline="nf-core/sarek", revision="3.5.1", assay="variant_calling",
+    )
+    last = record.repair_history[-1]
+    assert last.outcome == "qc_verdict_flagged"
+    assert last.patch is None
+    assert last.patch_applied is False
+
+
+def test_resource_bump_is_recorded_as_applied(tmp_path):
+    state = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, TRACE_OOM, "out of memory exit 137")
+            return 1
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor)
+    step = record.repair_history[0]
+    assert step.outcome == "patched_and_retried"
+    assert step.patch_applied is True
+
+
+def _single_gated_param(diagnosis):
+    """One confident, non-reference gated fix: a plain confirm gate that applies."""
+    return [_gated("param", {"set_param": {"igenomes_ignore": True}},
+                   "Use the local reference instead of igenomes.", "reference resolved")]
+
+
+def test_approved_patch_is_recorded_as_applied(tmp_path):
+    state = {"n": 0}
+
+    def poll(run_dir, timeout_sec):
+        return {"decision": "approve", "decided_at": "2026-06-22T00:00:00+00:00"}
+
+    record = _heal(
+        tmp_path, _fai_executor(state), poll=poll, propose=_single_gated_param,
+    )
+    step = record.repair_history[0]
+    assert step.outcome == "approved_and_retried"
+    assert step.patch_applied is True
+
+
+def test_chosen_patch_is_recorded_as_applied(tmp_path):
+    # Option 0 of the ambiguous pair is a plain set_param reference patch: it
+    # applies directly, with no build to fail underneath it.
+    state = {"n": 0}
+
+    def poll(run_dir, timeout_sec):
+        return {"decision": "approve", "choice": 0, "decided_at": "2026-06-22T00:00:00+00:00"}
+
+    record = _heal(tmp_path, _fai_executor(state), poll=poll, propose=_two_candidates)
+    step = record.repair_history[0]
+    assert step.outcome == "chose_and_retried"
+    assert step.patch_applied is True
+
+
+def test_built_index_is_recorded_as_applied(tmp_path):
+    state = {"n": 0}
+    calls = {"n": 0}
+    record = _heal(
+        tmp_path,
+        _fai_executor(state),
+        auto_approve=True,
+        index_builder=_building_builder(calls),
+    )
+    step = record.repair_history[0]
+    assert step.outcome == "built_index_and_retried"
+    assert step.patch_applied is True
+
+
+def test_retry_patch_is_recorded_as_applied(tmp_path):
+    # D2, pinned: a `retry` patch mutates NOTHING (apply_patch is a documented
+    # no-op for it), yet it was enacted and the loop proceeded to retry — which
+    # is exactly what the field claims. "Applied" is not "the target changed".
+    state = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(
+                trace_path, TRACE_TOOL,
+                "contig watchdog: no forward progress for 900s (limit 900s); "
+                "no new output or trace update on trace.txt; terminating the stalled run.",
+            )
+            return 1
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor)
+    step = record.repair_history[0]
+    assert step.diagnosis.failure_class == "no_progress"
+    assert step.patch is not None and step.patch.kind == "retry"
+    assert step.outcome == "patched_and_retried"
+    assert step.patch_applied is True
+
+
+def test_repair_progress_jsonl_carries_patch_applied(tmp_path):
+    # The live jsonl mirrors repair_history, so the field has to travel with it.
+    from contig.models import RepairStep
+
+    state = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, TRACE_OOM, "out of memory exit 137")
+            return 1
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    _heal(tmp_path, executor)
+    lines = (tmp_path / "runs" / "r" / "repair_progress.jsonl").read_text().splitlines()
+    assert json.loads(lines[0])["patch_applied"] is True
+    assert RepairStep.model_validate_json(lines[0]).patch_applied is True

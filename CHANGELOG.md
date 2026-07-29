@@ -8,6 +8,111 @@ All notable changes to Contig are recorded here. The format follows
 
 ### Added
 
+- **The repair record now says whether a patch was actually APPLIED, not merely proposed —
+  and the surfaces stop claiming a repair that never happened.** `RepairStep` recorded that a
+  patch was *proposed*; nothing recorded whether it was *enacted*, so every consumer had to
+  guess and they all guessed the same wrong way. The sharpest case: **a user who REJECTED a
+  patch at the approval gate was told their run was `Repaired`.** Five paths in `self_heal.py`
+  record a non-null patch and return **before** `apply_patch` is ever called — attempt-budget
+  exhaustion (two sites), the resource ceiling, and the three approval-gate refusals
+  (`rejected_by_user` / `approval_timed_out` / `invalid_choice_rejected`) — and the dashboard's
+  `wasRepaired` keyed on `patch !== null`, so the badge fired for all of them. This closes the
+  follow-up the `qc_anomaly` slice filed against itself.
+  - **The flag is derived from control flow, never from the outcome string.** A new
+    `RepairStep.patch_applied: bool = False` is set at all **eleven** `_record_attempt` sites
+    from the `continue_` boolean that `_apply_patch_and_maybe_build` already returns and that
+    was already in scope at each of the three sites that need it — **no new plumbing, no
+    widened helper signature**. The naive rule ("set it wherever `apply_patch` returns") was
+    explicitly rejected: `apply_patch` runs on the **first line** of
+    `_apply_patch_and_maybe_build`, before the build or recompress is attempted (the code says
+    so itself), so that rule would have stamped `index_build_failed`, `index_unresolvable`,
+    `reference_recompress_failed` and `reference_recompress_unresolvable` as applied —
+    hardening the very bug into the **signed** record, where it is far more expensive to
+    correct than a dashboard predicate. The signal was **verified sound, not assumed**: all 17
+    returns across `_apply_patch_and_maybe_build` / `_build_star_index` /
+    `_recompress_reference` were enumerated, and `continue_` is `True` at exactly 4 — all
+    enacted-and-proceeding — and `False` at exactly 13, all honest give-ups where nothing ran.
+  - **A derived `outcome → applied` map was considered and rejected, and the reason is not
+    that it would not work today.** It would: the 18 live outcome literals partition cleanly,
+    so the mapping is currently total, and that alternative would have cost **no signature
+    break at all**. It was declined because the map is hand-maintained — a literal added later
+    at an existing recording site would silently default to "not applied", reintroducing this
+    exact bug by a different door. The structured field is correct **by construction rather
+    than by review**. That is the whole justification; no concrete pending literal is being
+    claimed.
+  - **What the flag means, stated on the model itself because the name invites a narrower
+    reading:** *the patch was **enacted** and the loop proceeded to retry.* It is **not** "the
+    run's configuration was mutated" — `apply_patch` is a documented no-op for `code`/`retry`
+    patches (the re-run *is* the fix), so a successful `no_progress` heal would otherwise have
+    reported no patch applied, a fresh under-claim. It is **not** "the patch worked" — see
+    `retry_failed` below. Both readings are pinned by tests.
+  - **`contig reproduce` was wired too, and it is what makes the semantics legible.**
+    `ReproduceRecord.repair_history` holds the **same** `RepairStep` type, so the
+    `--allow-install` env-resurrection loop's three steps would otherwise have silently taken
+    the `False` default — a **new** dishonesty inside the surface this work exists to fix. The
+    filed follow-up's list of 15 outcome literals was `self_heal.py`-only; there are **18**.
+    `install_failed` → `False` (pip exited non-zero; nothing was installed), `retry_failed` →
+    **`True`** (the install *succeeded*; the retried run then failed), `installed_and_retried`
+    → `True`. **`retry_failed` is the canonical demonstration that applied ≠ successful**, and
+    reading it the other way would encode the exact confusion this change removes.
+  - **`heal-guard`'s `recovered` is redefined, retiring an artifact the previous slice
+    disclosed rather than fixed.** It was `RunSummary.from_events(record.events).succeeded` —
+    purely event-derived — so a green-by-construction scenario computed `recovered=True`
+    although nothing was recovered; the `qc_anomaly` slice recorded that as "an **artifact**,
+    not an improvement" and declined to fix it because no honest signal existed. One now does:
+    `recovered = succeeded AND any(step.patch_applied)`. **Exactly one frozen expectation
+    changes** (`qc-anomaly-verdict-flagged`, `expected_recovered` `true` → `false`), and the
+    **guarded** `outcome_match_rate` stays **1.0** precisely *because* that correction lands in
+    the same commit as the redefinition — `recovered` feeds `divergence` → `matched`, so
+    refreezing without it would have laundered a real regression into the baseline. The
+    scenarios also gained an optional `expected_patch_applied`, asserted through the **real**
+    self-heal loop, so the new field is guarded in CI rather than only by unit tests.
+  - **The informational `recovery_rate` moves 0.667 → 0.556 (6/9 → 5/9), and its sixth trend
+    point is NOT comparable to the prior five** (0.571 ×3, 0.625, 0.667), all of which were
+    computed under the old definition. This non-comparability is the exact objection the
+    `qc_anomaly` slice raised when it declined this change; it is accepted deliberately here,
+    because the metric is informational-only (never guarded — `regressed` is computed from
+    `outcome_match_rate` alone) and the new definition is truthful where the old one was not.
+    `heal_history.jsonl` is append-only and its historical points were **not** rewritten.
+  - **The fourth disclosed signature break — and the narrowest.** `canonical_record_bytes` is
+    a full `model_dump`, so a pre-change **signed** bundle no longer verifies. But unlike C8
+    slice 6 (`source_url`/`source_commit`), slice 8 (`source_tree_sha256`) and the somatic
+    FAIL-floor `verdict` field, this key is **nested inside a list**: a record with an **empty
+    `repair_history` serializes byte-identically and its old signature still verifies**. So the
+    blast radius is "signed bundles that recorded at least one repair attempt", **not** every
+    signed bundle — and that narrowing is **verified by its own test**, not asserted. The
+    pre-change canonical-bytes helper accordingly **recurses** into `repair_history` instead of
+    deleting a top-level key, and asserts the strip actually removed the key, because a strip
+    at the wrong level would make the test pass over unchanged bytes.
+  - **The legacy default is a plain `bool = False`, deliberately.** A pre-field bundle that
+    genuinely did patch now reports "not applied" — an **under-claim**, which is the safe
+    direction of error for a change whose entire purpose is to stop over-claiming. A tri-state
+    `None`-means-unknown was rejected: it forces three branches on every consumer, and the
+    repo's `source_*` precedent used `None` because `None` was a **real value** (a local run),
+    not because it meant unknown.
+  - **The dashboard's second over-claim is fixed in the same pass.** `OUTCOME_META` mapped
+    **3** outcomes — one of which, `stopped_for_confirmation`, is emitted **nowhere** in
+    `src/` and was dead — and everything else fell through to the raw literal dressed in
+    `gave_up`'s styling. So `rejected_by_user` rendered as snake_case **in give-up grey**,
+    reading as though the engine had failed when in fact the human declined. All **18** live
+    literals are now mapped and grouped by what actually happened to the patch, with
+    human-declined visually distinct from engine-gave-up. `derive.ts` also **lost the
+    doc-comment that documented this defect as a known shipped limit** — the honest disclosure
+    the previous slice left behind, now obsolete rather than merely stale.
+  - **Honest limits, each load-bearing:** (1) **Push, not demand-pull.** No design partner
+    asked; Contig is pre-revenue and no user has reported this. The driver was a self-audit,
+    and nothing here claims otherwise. (2) **The success criteria are conformance assertions,
+    not outcome metrics** — every one is something a test checks about our own code; none
+    measures whether a user trusted the product more, because there is no user to measure.
+    (3) **It recovers nothing new** — this changes what the record *says*, not what the engine
+    *does*; calling it a self-heal improvement would be false. (4) **`eval-guard` is unmoved at
+    92.3%**, correctly: the detector corpus contains no `RepairStep`, so any movement would
+    have meant something leaked. (5) A **pre-existing** hazard surfaced while testing and is
+    recorded rather than fixed: the dashboard e2e suite temporarily **replaces**
+    `src/contig/data/{eval,holdout,heal}_history.jsonl` with fixtures, so **pytest and
+    playwright cannot run concurrently against the same checkout** — `test_snapshot_history.py`
+    fails spuriously if they overlap. CI never trips it (separate jobs); a local run will.
+
 - **A green run whose QC verdict is FAIL is now diagnosed as `qc_anomaly` — closing the
   last structurally unreachable failure class (C6 × C2).** `self_heal_run` only ever
   diagnosed a **non-zero exit**: `diagnose_failure` was called from the single

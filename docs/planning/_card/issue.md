@@ -1,101 +1,110 @@
-# Card: feat / qc-anomaly-verdict-trigger
+# Card: feat / repair-patch-applied
 
 - **Type:** feat
-- **Id/slug:** qc-anomaly-verdict-trigger
+- **Id/slug:** `repair-patch-applied`
 - **Owner:** aliz
-- **Branch:** feat/qc-anomaly-verdict-trigger/aliz
+- **Branch:** `feat/repair-patch-applied/aliz`
 - **Source:** inline brief (no GitHub issue — `gh issue list` returns "No Issues") — carried
-  from the `/contig-next` recommendation (2026-07-28), the next slice after the somatic
-  swapped-pair smell test merged.
+  from the `/contig-next` recommendation (2026-07-29), the next slice after the
+  `qc_anomaly` verdict trigger merged.
 
 ## Brief
 
-Close `qc_anomaly`, the last structurally unreachable `FailureClass` (it exists only in
-`src/contig/models.py:279`, the held-out fixture, and a `src/contig/cli.py:2683` docstring —
-**no `detect.py` branch, no `repair.py` branch**), by making the QC verdict an input to the
-self-heal loop.
+Add `RepairStep.patch_applied` and drive the dashboard's repair badge off it, so the
+self-heal surface stops claiming "Repaired" for a patch that was only **proposed** — most
+sharply, a user who *rejected* a patch at the approval gate is currently told their run was
+`Repaired`.
 
-Today `self_heal_run` (`src/contig/self_heal.py:925`) only reacts to a **non-zero exit**, so
-a run that completes green while `_finalize` reduces to **FAIL** — a real outcome since the
-germline Ti/Tv, het/hom, variant-count and somatic empty-call-set FAIL floors shipped — is
-never diagnosed, never enters the loop, and exits 0 unless `--fail-on-verdict`.
+The design is already filed in `docs/planning/qc-anomaly-verdict-trigger/prd.md:352-409`
+("Filed follow-up — `wasRepaired` still overclaims, and `OUTCOME_META` is thirteen short",
+founder decision 2026-07-28):
 
-Dig carefully into the **two possible triggers** before choosing: the held-out fixture
-`holdout-qc-anomaly-1` is *pipeline-step* shaped (a `MULTIQC_QC_GATE` FAILED event +
-third-party "QC gate rejected the run" log text), while the product-real trigger is Contig's
-own **verdict object** at `_finalize` — so scoring 13/13 on `eval-guard` needs a log-text
-branch whose needles are foreign text nothing constrains, the same first-party-uniqueness
-trade the `no_progress` slice took and recorded as residual risk.
-
-Expect **no genuine repair** for most cases (an honest diagnosed give-up, not a dressed-up
-recovery), guard against retrying a deterministic FAIL in a loop, change **no default exit
-code**, and state plainly that any `eval-guard` move (0.923 → 1.0) is **partly self-graded**.
+- Derive the flag from `_apply_patch_and_maybe_build`'s returned `continue_` boolean
+  (`self_heal.py:849`) plus the `:1266` site — **NOT** from "wherever `apply_patch` returns".
+  That naive rule would stamp `index_build_failed` / `index_unresolvable` /
+  `reference_recompress_failed` / `reference_recompress_unresolvable` as applied, hardening
+  the very bug into the **signed** record, where it is far more expensive to correct than a
+  dashboard predicate.
+- Also map the unmapped outcome literals: `RepairStep.outcome` is a bare `str`
+  (`models.py:313`) with **15** live values, and the dashboard's `OUTCOME_META` maps 2 real
+  ones (one of its 3 keys, `stopped_for_confirmation`, appears nowhere in `src/` — it is
+  dead), so `rejected_by_user` / `approval_timed_out` / `gave_up_at_ceiling` and ten others
+  render today as mangled snake_case dressed in give-up styling.
 
 ## Why (moat + shipped state)
 
-- **The last structurally unreachable failure class, and the docs name it as needing its own
-  slice.** `docs/technical/CAPABILITY_ROADMAP.md:1074` — *"`qc_anomaly` remains the one
-  structurally unreachable class — this slice did not close it and must not be read as having
-  done so; its honest trigger is the verdict object, not log text (QC runs at `_finalize`, not
-  as a pipeline step), so it needs its own slice."*
-- **It closes the one place where verify does not feed self-heal.** The verdict is today an
-  output only. A run that finishes green while `_finalize` reduces to FAIL — real per the
-  germline FAIL bands (`CAPABILITY_ROADMAP.md:585`) and the somatic empty-call-set floor
-  (`:871`) — is never diagnosed. That silent-success shape is exactly what the moat exists to
-  kill (`CLAUDE.md` constraint #2), and it makes the verdict an *input* to the loop.
-- **Measurable against a frozen baseline.** `holdout-qc-anomaly-1` has been misclassified in
-  **all seven** recorded trend points (`src/contig/data/holdout_history.jsonl` — `qc_anomaly`
-  `predicted: 0`, `recall: 0.0`, v0.22.0 → v0.48.0). `eval-guard` would move 0.923 → 1.0
-  (13/13); `heal-guard` `covered_classes` 6 → 7.
+- **It is the explicitly filed follow-on of the slice that just merged.** Commit `965e42b`
+  ("fix(dashboard): a repair badge means a patch, not a recorded step") moved `wasRepaired`
+  from `repair_history.length > 0` to `some(s => s.patch !== null)` — strictly better, but
+  that means *proposed*, not *applied*. Five paths record a non-null patch and return before
+  `apply_patch` ever runs (`self_heal.py:1102, :1183, :1234, :1246, :1257`).
+- **It is an over-claim on the differentiator surface.** "No correctness over-claiming" is a
+  standing guardrail (`FEATURES.md:308`, `CAPABILITY_ROADMAP.md:1825`), and the self-heal
+  chain is one of the two headline differentiators (`FEATURES.md:108-115`).
+- **It is corpus/eval work, not cosmetics.** No structured field distinguishes proposed from
+  applied today, which is what `heal-guard`'s informational `recovery_rate` and the still
+  unbuilt "Repair success-rate analytics" (`FEATURES.md:217`) both need — moat #2 fuel
+  (`CLAUDE.md` constraint #2).
+- **It is unblocked**, unlike the neighbouring C6/C7 item (folding C1/C3 signals into one
+  eval number is **blocked on a labeling design** — `CAPABILITY_ROADMAP.md:1029-1030`,
+  restated as out of scope at `qc-anomaly-verdict-trigger/prd.md:346`).
 
-## KNOWN CAVEAT — two different doors, only one of them honest (pin FIRST in the dig)
+## KNOWN CAVEATS (confront in the dig, do not discover late)
 
-The held-out fixture and the product-real trigger are **not the same thing**:
+1. **This touches the signed `RunRecord`.** `canonical_record_bytes` is
+   `record.model_dump(mode="json")` (`signing.py:63`) and includes every field, so adding
+   `RepairStep.patch_applied` is the **fourth disclosed signature break** — after C8 slice 6
+   (`source_url`/`source_commit`), C8 slice 8 (`source_tree_sha256`), and the somatic
+   FAIL-floor `verdict` field. Pre-change signed bundles must still **load**, and the fact
+   that they no longer **verify** must be pinned by a test, the way the prior three were. The
+   filed follow-up says this is *precisely why it is its own slice*.
+2. **The legacy default is a real design decision, not a formality.** A plain
+   `bool = False` makes every pre-change bundle claim *no patch applied*, which under-claims
+   where the old record genuinely did apply one. A tri-state (`bool | None = None`, `None` =
+   unknown, rendered as today) may be the honest default. Decide deliberately; do not default
+   by habit.
+3. **Do NOT set the flag "wherever `apply_patch` returns."** `_apply_patch_and_maybe_build`
+   calls `apply_patch` on its **first line** (`self_heal.py:879`), before it knows whether the
+   build or recompress succeeded — the code says so itself at `:876` ("The build IS the fix
+   (apply_patch is a no-op for build_index)"). Use the `continue_` boolean, the last element
+   of its documented 5-tuple return (`-> tuple[..., bool]`, `:849`), which is `True` exactly
+   for the applied-and-proceeding cases and `False` for all four failure branches.
 
-- `src/contig/data/detector_corpus_holdout.jsonl` → `holdout-qc-anomaly-1` is *pipeline-step*
-  shaped: `events: [{process: "MULTIQC_QC_GATE", status: "FAILED"}]` plus
-  `log_text: "QC gate rejected the run: MultiQC duplication-rate metric (92%) breached the
-  assay's QC anomaly threshold."` — i.e. a **third-party QC gate inside someone else's
-  workflow**.
-- Contig's own trigger is the **verdict object** at `_finalize` — no log text, no failed
-  process, exit code 0.
+## The five over-claiming sites (from the filed follow-up)
 
-So **scoring 13/13 requires a log-text branch whose needles are foreign text nothing
-constrains** — the exact first-party-uniqueness trade the `no_progress` slice took knowingly
-and recorded as unenforced residual risk (`CAPABILITY_ROADMAP.md:370`). Decide deliberately
-which door(s) this slice opens, and **do not let the eval number drive the detector rule**.
+| Site | Outcome | Patch |
+|---|---|---|
+| `self_heal.py:1102` | `gave_up` (attempt budget exhausted) | `gated` |
+| `self_heal.py:1183` | `rejected_by_user` / `invalid_choice_rejected` / `approval_timed_out` | `gated` |
+| `self_heal.py:1234` | `rejected_by_user` / `approval_timed_out` | `gated` |
+| `self_heal.py:1246` | `gave_up` (attempt budget exhausted) | `safe` |
+| `self_heal.py:1257` | `gave_up_at_ceiling` | `safe` |
 
-## Honest contract (constraints this slice must not break)
+## The 15 live `RepairStep.outcome` literals (untyped `str` today)
 
-- **There is often no repair.** Bad biology is not retryable. The honest terminal outcome is a
-  **diagnosed give-up**, mirroring the frozen `tool-crash-giveup` scenario — never a
-  dressed-up recovery.
-- **No retry loop over a deterministic FAIL.** A verdict that will re-derive identically must
-  not be re-attempted; whatever bound is chosen must provably terminate.
-- **No default exit-code change.** v0.36.0 made FAIL → exit 1 **opt-in** via
-  `--fail-on-verdict` (`docs/planning/verdict-exit-code/`); this slice must not silently
-  reroute that.
-- **Partly self-graded, stated as such.** We would be making reachable a class whose held-out
-  fixture we wrote ourselves — the same critique the `no_progress` slice recorded about
-  itself. It evidences that a documented taxonomy gap closed; nothing more.
-- Test-first, no real nf-core run in CI, no new dependency unless argued.
+`patched_and_retried`, `approved_and_retried`, `chose_and_retried`,
+`built_index_and_retried`, `recompressed_reference_and_retried`, `gave_up`,
+`gave_up_at_ceiling`, `rejected_by_user`, `approval_timed_out`, `invalid_choice_rejected`,
+`index_build_failed`, `index_unresolvable`, `reference_recompress_failed`,
+`reference_recompress_unresolvable`, `qc_verdict_flagged`.
 
 ## Shipped precedents to mirror
 
-- **`docs/planning/stall-watchdog-no-progress/`** — the closest precedent: the previous slice
-  that made an unreachable class reachable (`no_progress`), including its detector-branch
-  needle discipline, its ordering decision in `detect.py`, and its residual-risk record.
-- **`docs/planning/verdict-exit-code/`** — the `--fail-on-verdict` opt-in exit-code wiring;
-  the boundary this slice must respect.
-- **`docs/planning/eval-holdout-guard/`** — `contig eval-guard`, the frozen held-out corpus,
-  and the `--update-baseline` refreeze-as-a-deliberate-act convention.
-- **`docs/planning/self-heal-eval-guard/`** — `contig heal-guard`, `heal_scenarios.jsonl`, and
-  the outcome-match-vs-recovery-rate distinction.
+- **`docs/planning/qc-anomaly-verdict-trigger/`** — the slice that filed this follow-up;
+  its Phase 0 established the signature-safety approach this slice must re-verify, and its
+  `965e42b` dashboard fix is what this builds on.
+- **`docs/planning/reproduce-remote-intake/`** (slice 6) and
+  **`docs/planning/reproduce-checkout-hash/`** (slice 8) — the two prior signed-field
+  additions, including how each pinned the break with a
+  `test_pre_slice_N_signature_...no_longer_verifies` test.
+- **`docs/planning/somatic-empty-callset-fail/`** — the `verdict`-field signature-break
+  disclosure and its blast-radius framing.
 
-## Deferred (name in PRD, out of scope unless the dig argues otherwise)
+## Deferred (name in the PRD, out of scope unless the dig argues otherwise)
 
-- Folding the unlabeled C1 concordance / C3 plausibility corroboration signals into one eval
-  number (blocked on a labeling design — `CAPABILITY_ROADMAP.md:1024`).
-- Any dashboard card for the new class.
-- Band calibration of any QC threshold (this slice adds no new bands).
+- Type-constraining `RepairStep.outcome` into a `Literal` (a separate, wider change).
+- Cross-run "repair success-rate analytics" aggregation (`FEATURES.md:217`) — this slice
+  supplies the field it needs, not the view.
+- Folding C1/C3 corroboration signals into one eval number (blocked on a labeling design).
+- Any new repair strategy, failure class, band, or QC check.
 - Any Layer-1 (NL → workflow) surface.

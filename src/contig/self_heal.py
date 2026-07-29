@@ -1049,6 +1049,8 @@ def self_heal_run(
                             "because none can work: every task exited 0, so a -resume "
                             "retry is a 100% cache hit and re-derives an identical verdict."
                         ),
+                        # Nothing was proposed, so nothing could be enacted.
+                        patch_applied=False,
                     ),
                 )
                 # Same capture the exception path performs, so this class of
@@ -1112,7 +1114,9 @@ def self_heal_run(
                     _record_attempt(
                         run_dir,
                         repair_history,
-                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=None, outcome="gave_up"),
+                        # No patch at all: nothing to enact.
+                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=None,
+                                   outcome="gave_up", patch_applied=False),
                     )
                     return _finalize(
                         exc.record, repair_history, run_dir,
@@ -1126,7 +1130,10 @@ def self_heal_run(
                     _record_attempt(
                         run_dir,
                         repair_history,
-                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated, outcome="gave_up"),
+                        # The budget ran out BEFORE apply: the patch is carried as
+                        # what we would have tried, never as something we did.
+                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated,
+                                   outcome="gave_up", patch_applied=False),
                     )
                     return _finalize(
                         exc.record, repair_history, run_dir,
@@ -1149,7 +1156,13 @@ def self_heal_run(
                     _record_attempt(
                         run_dir,
                         repair_history,
-                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated, outcome=outcome, detail=detail),
+                        # `cont`, not "apply_patch returned": apply_patch is the FIRST
+                        # line of _apply_patch_and_maybe_build and is a no-op for
+                        # build_index, so a failed build or an unresolvable path would
+                        # otherwise read as applied. `cont` is True only on the branches
+                        # that enacted the fix and are proceeding to retry.
+                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated,
+                                   outcome=outcome, detail=detail, patch_applied=cont),
                     )
                     if not cont:
                         return _finalize(
@@ -1192,7 +1205,9 @@ def self_heal_run(
                         _record_attempt(
                             run_dir,
                             repair_history,
-                            RepairStep(attempt=attempt, diagnosis=diagnosis, patch=chosen, outcome=outcome, detail=detail),
+                            # `cont` for the same reason as the gated sites above.
+                            RepairStep(attempt=attempt, diagnosis=diagnosis, patch=chosen,
+                                       outcome=outcome, detail=detail, patch_applied=cont),
                         )
                         if not cont:
                             return _finalize(
@@ -1207,7 +1222,10 @@ def self_heal_run(
                     _record_attempt(
                         run_dir,
                         repair_history,
-                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated, outcome=outcome),
+                        # The choice was refused, so no candidate was enacted; the
+                        # best-ranked one is carried only to say what was on offer.
+                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated,
+                                   outcome=outcome, patch_applied=False),
                     )
                     return _finalize(
                         exc.record, repair_history, run_dir,
@@ -1243,7 +1261,13 @@ def self_heal_run(
                     _record_attempt(
                         run_dir,
                         repair_history,
-                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated, outcome=outcome, detail=detail),
+                        # `cont`, not "apply_patch returned": apply_patch is the FIRST
+                        # line of _apply_patch_and_maybe_build and is a no-op for
+                        # build_index, so a failed build or an unresolvable path would
+                        # otherwise read as applied. `cont` is True only on the branches
+                        # that enacted the fix and are proceeding to retry.
+                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated,
+                                   outcome=outcome, detail=detail, patch_applied=cont),
                     )
                     if not cont:
                         return _finalize(
@@ -1258,7 +1282,9 @@ def self_heal_run(
                 _record_attempt(
                     run_dir,
                     repair_history,
-                    RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated, outcome=outcome),
+                    # Rejected or timed out: the gate never opened, so apply never ran.
+                    RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated,
+                               outcome=outcome, patch_applied=False),
                 )
                 return _finalize(
                     exc.record, repair_history, run_dir,
@@ -1270,7 +1296,9 @@ def self_heal_run(
                 _record_attempt(
                     run_dir,
                     repair_history,
-                    RepairStep(attempt=attempt, diagnosis=diagnosis, patch=safe, outcome="gave_up"),
+                    # Budget exhausted BEFORE the apply_patch call below.
+                    RepairStep(attempt=attempt, diagnosis=diagnosis, patch=safe,
+                               outcome="gave_up", patch_applied=False),
                 )
                 return _finalize(
                     exc.record, repair_history, run_dir,
@@ -1281,8 +1309,10 @@ def self_heal_run(
             block = _resource_ceiling_block(diagnosis, current_target, resource_ceiling)
             if block is not None:
                 _record_attempt(run_dir, repair_history,
+                    # Blocked at the ceiling BEFORE the apply_patch call below.
                     RepairStep(attempt=attempt, diagnosis=diagnosis, patch=safe,
-                               outcome="gave_up_at_ceiling", detail=block))
+                               outcome="gave_up_at_ceiling", detail=block,
+                               patch_applied=False))
                 return _finalize(exc.record, repair_history, run_dir,
                     runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
                     harmonized_reference_direction=harmonized_reference_direction)
@@ -1308,8 +1338,14 @@ def self_heal_run(
             _record_attempt(
                 run_dir,
                 repair_history,
+                # Unconditionally True: apply_patch ran unguarded above and this
+                # branch always falls through to `attempt += 1`. True even when the
+                # clamp absorbed the whole bump, and even for a `retry` patch that
+                # mutates nothing — the claim is "enacted and proceeding", not
+                # "the target changed" (D2).
                 RepairStep(attempt=attempt, diagnosis=diagnosis, patch=safe,
-                           outcome="patched_and_retried", detail=detail),
+                           outcome="patched_and_retried", detail=detail,
+                           patch_applied=True),
             )
             attempt += 1
 

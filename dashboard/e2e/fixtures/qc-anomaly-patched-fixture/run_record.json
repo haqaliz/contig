@@ -45,30 +45,38 @@
       "diagnosis": {
         "failure_class": "oom",
         "root_cause": "Process killed: out of memory (exit 137).",
-        "evidence": ["Process killed: out of memory (exit 137)"],
+        "evidence": [
+          "Process killed: out of memory (exit 137)"
+        ],
         "confidence": 0.9
       },
       "patch": {
         "kind": "resource",
-        "operation": { "memory": "16 GB" },
+        "operation": {
+          "memory": "16 GB"
+        },
         "rationale": "Raise the memory ceiling above the observed peak and retry.",
         "risk": "safe",
         "expected_signal": "The task completes without an exit 137."
       },
       "outcome": "patched_and_retried",
-      "detail": "memory 8 GB -> 16 GB"
+      "detail": "memory 8 GB -> 16 GB",
+      "patch_applied": true
     },
     {
       "attempt": 2,
       "diagnosis": {
         "failure_class": "qc_anomaly",
         "root_cause": "1 of 1 non-informational QC checks FAILed on a run whose tasks all completed.",
-        "evidence": ["ts_tv_ratio:S1: fail (value 3.5, expected [1.8, 2.4])"],
+        "evidence": [
+          "ts_tv_ratio:S1: fail (value 3.5, expected [1.8, 2.4])"
+        ],
         "confidence": 1.0
       },
       "patch": null,
       "outcome": "qc_verdict_flagged",
-      "detail": "contig qc-anomaly: no repair attempted; a -resume retry is 100% cache-hit and would re-derive an identical verdict. assay=variant_calling failed_checks=ts_tv_ratio:S1"
+      "detail": "contig qc-anomaly: no repair attempted; a -resume retry is 100% cache-hit and would re-derive an identical verdict. assay=variant_calling failed_checks=ts_tv_ratio:S1",
+      "patch_applied": false
     }
   ],
   "verdict": "fail"

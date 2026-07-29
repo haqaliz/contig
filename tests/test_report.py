@@ -166,6 +166,41 @@ def test_report_shows_repair_chain_when_present() -> None:
     assert "patched_and_retried" in report
 
 
+def test_report_distinguishes_applied_from_proposed_repair_steps() -> None:
+    # R11. `patch_applied` means the patch was enacted and the loop proceeded to
+    # retry. A report that renders a proposed-but-rejected patch identically to an
+    # enacted one over-claims what the engine did, so each step must say which.
+    record = RunRecord(
+        run_id="r1",
+        pipeline="rnaseq",
+        pipeline_revision="3.26.0",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="ALIGN", status="COMPLETED", exit=0)],
+        repair_history=[
+            RepairStep(
+                attempt=1,
+                diagnosis=Diagnosis(failure_class="oom", root_cause="OOM", evidence=["exit 137"], confidence=0.9),
+                patch=Patch(kind="resource", operation={"multiply": {"memory": 2}}, rationale="bump", risk="safe", expected_signal="no OOM"),
+                outcome="patched_and_retried",
+                patch_applied=True,
+            ),
+            RepairStep(
+                attempt=2,
+                diagnosis=Diagnosis(failure_class="tool_crash", root_cause="crash", evidence=["exit 1"], confidence=0.6),
+                patch=Patch(kind="code", operation={"edit": "main.nf"}, rationale="fix", risk="needs_confirmation", expected_signal="no crash"),
+                outcome="rejected_by_user",
+                patch_applied=False,
+            ),
+        ],
+    )
+    report = render_run_report(record)
+    applied_line = next(l for l in report.splitlines() if "attempt 1" in l)
+    proposed_line = next(l for l in report.splitlines() if "attempt 2" in l)
+    assert "[applied]" in applied_line
+    assert "[not applied]" in proposed_line
+
+
 def test_report_includes_versions_and_input_count_when_set() -> None:
     record = RunRecord(
         run_id="r1",
@@ -246,6 +281,36 @@ def test_html_report_shows_repair_chain() -> None:
     html = render_run_report_html(_full_record())
     assert "oom" in html.lower()
     assert "patched_and_retried" in html
+
+
+def test_html_report_distinguishes_applied_from_proposed_repair_steps() -> None:
+    # R11, HTML side: the repair chain table must carry the applied/not-applied
+    # distinction per row, not just the outcome string.
+    record = _full_record()
+    record.repair_history.append(
+        RepairStep(
+            attempt=2,
+            diagnosis=Diagnosis(
+                failure_class="tool_crash", root_cause="crash", evidence=["exit 1"], confidence=0.6
+            ),
+            patch=Patch(
+                kind="code",
+                operation={"edit": "main.nf"},
+                rationale="fix",
+                risk="needs_confirmation",
+                expected_signal="no crash",
+            ),
+            outcome="rejected_by_user",
+            patch_applied=False,
+        )
+    )
+    record.repair_history[0].patch_applied = True
+    html = render_run_report_html(record)
+    applied_row = next(r for r in html.split("<tr>") if "patched_and_retried" in r)
+    proposed_row = next(r for r in html.split("<tr>") if "rejected_by_user" in r)
+    assert "not applied" not in applied_row
+    assert "applied" in applied_row
+    assert "not applied" in proposed_row
 
 
 def test_html_report_notes_when_there_are_no_repairs() -> None:
@@ -998,6 +1063,41 @@ def test_render_reproduction_shows_repair_note_when_repair_history_present():
     assert "env-repair" in text
     assert "numpy" in text
     assert "installed_and_retried" in text
+
+
+def test_render_reproduction_distinguishes_applied_from_proposed_env_repair():
+    # R11. `install_failed` proposed an install that never took effect; a retry that
+    # then failed still had its patch enacted (applied != successful). The line must
+    # say which, so a reader cannot read "we installed it" into a failed install.
+    def _step(attempt, outcome, applied):
+        return RepairStep(
+            attempt=attempt,
+            diagnosis=Diagnosis(
+                failure_class="missing_dependency",
+                root_cause="missing Python module 'numpy'",
+                evidence=["ModuleNotFoundError: No module named 'numpy'"],
+                confidence=0.8,
+            ),
+            patch=Patch(
+                kind="env",
+                operation={"install": "numpy"},
+                rationale="install numpy and retry",
+                risk="needs_confirmation",
+                expected_signal="run exits 0 after install",
+            ),
+            outcome=outcome,
+            detail="pip said no" if not applied else "installed numpy; retry exited 1",
+            patch_applied=applied,
+        )
+
+    record = _reproduce_record(
+        repair_history=[_step(1, "install_failed", False), _step(2, "retry_failed", True)]
+    )
+    text = render_reproduction(record)
+    failed_line = next(l for l in text.splitlines() if "install_failed" in l)
+    retried_line = next(l for l in text.splitlines() if "retry_failed" in l)
+    assert "[not applied]" in failed_line
+    assert "[applied]" in retried_line
 
 
 def test_render_reproduction_omits_repair_note_when_repair_history_empty():

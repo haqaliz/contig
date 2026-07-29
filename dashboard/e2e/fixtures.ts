@@ -97,6 +97,17 @@ export const FIXTURE_RUN_IDS = [
   // control for wasRepaired -- a patch genuinely was applied here, so this run
   // must still read as Repaired (see e2e/repair-truthfulness.spec.ts).
   "qc-anomaly-patched-fixture",
+  // The sharp case for wasRepaired: a run whose ONLY patch was proposed at the
+  // approval gate and REJECTED by the user (outcome rejected_by_user, non-null
+  // patch, patch_applied false). Nothing was enacted, so it must not read as
+  // Repaired, and its outcome must not be dressed as an engine give-up -- the
+  // engine did not fail, the human declined (see e2e/repair-truthfulness.spec.ts).
+  "rejected-patch-fixture",
+  // A cheap source of a `gave_up` outcome badge, so the give-up styling can be
+  // compared against without loading testpass2's 99KB, 234-event record. That page
+  // is heavy enough that two specs opening it concurrently time each other out
+  // under the suite's parallelism (see e2e/repair-truthfulness.spec.ts).
+  "giveup-fixture",
 ];
 
 // Mirror lib/runs.ts runsDir(): CONTIG_RUNS_DIR, else ../runs from the dashboard

@@ -1,0 +1,63 @@
+{
+  "run_id": "rejected-patch-fixture",
+  "pipeline": "nf-core/rnaseq",
+  "pipeline_revision": "3.26.0",
+  "target": {
+    "backend": "local",
+    "container_runtime": "docker",
+    "work_dir": "runs/rejected-patch-fixture/work",
+    "engine": "nextflow",
+    "credentials_ref": null,
+    "backend_options": {},
+    "resource_limits": {}
+  },
+  "input_checksums": {
+    "samplesheet.csv": "cafe"
+  },
+  "parameters": {
+    "genome": "GRCh38",
+    "outdir": "runs/rejected-patch-fixture/results"
+  },
+  "container_digests": {},
+  "nextflow_version": "26.04.4",
+  "contig_version": "0.1.0",
+  "assay": "rnaseq",
+  "events": [
+    {
+      "process": "STAR_GENOMEGENERATE",
+      "status": "FAILED",
+      "exit": 1,
+      "task_id": "1",
+      "name": "STAR_GENOMEGENERATE (GRCh38)"
+    }
+  ],
+  "qc_results": [],
+  "output_checksums": {},
+  "repair_history": [
+    {
+      "attempt": 1,
+      "diagnosis": {
+        "failure_class": "missing_reference",
+        "root_cause": "The pipeline needs a reference genome that is not on this machine and would be downloaded into the work dir.",
+        "evidence": [
+          "No fasta found for GRCh38 under the configured igenomes_base."
+        ],
+        "confidence": 0.74
+      },
+      "patch": {
+        "kind": "reference",
+        "operation": {
+          "genome": "GRCh38",
+          "download": true
+        },
+        "rationale": "Fetch the GRCh38 reference and re-run; this overwrites the existing partial reference directory.",
+        "risk": "destructive",
+        "expected_signal": "The reference is present and STAR_GENOMEGENERATE completes."
+      },
+      "outcome": "rejected_by_user",
+      "detail": null,
+      "patch_applied": false
+    }
+  ],
+  "verdict": "fail"
+}

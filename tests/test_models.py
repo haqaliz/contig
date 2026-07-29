@@ -567,3 +567,50 @@ def test_run_record_repair_history_defaults_empty_and_accepts_steps():
     rec2 = _minimal_record([], events=[_OK_TASK])
     rec2.repair_history.append(step)
     assert rec2.repair_history[0].outcome == "gave_up"
+
+
+def test_repair_step_defaults_patch_applied_false():
+    # A step that does not say whether the patch was enacted must under-claim,
+    # never over-claim.
+    from contig.models import Diagnosis, RepairStep
+
+    step = RepairStep(
+        attempt=1,
+        diagnosis=Diagnosis(failure_class="oom", root_cause="OOM", evidence=[], confidence=0.9),
+        outcome="gave_up",
+    )
+    assert step.patch_applied is False
+
+
+def test_repair_step_records_patch_applied():
+    from contig.models import Diagnosis, Patch, RepairStep
+
+    step = RepairStep(
+        attempt=1,
+        diagnosis=Diagnosis(failure_class="oom", root_cause="OOM", evidence=["exit 137"], confidence=0.9),
+        patch=Patch(
+            kind="resource",
+            operation={"set": {"memory": "8.GB"}},
+            rationale="bump memory",
+            risk="safe",
+            expected_signal="no OOM",
+        ),
+        outcome="patched_and_retried",
+        patch_applied=True,
+    )
+    restored = RepairStep.model_validate_json(step.model_dump_json())
+    assert restored.patch_applied is True
+
+
+def test_pre_field_repair_step_json_still_loads():
+    # A bundle written before the field existed must still load, reporting False.
+    from contig.models import RepairStep
+
+    pre_field = (
+        '{"attempt": 1, "diagnosis": {"failure_class": "oom", "root_cause": "OOM", '
+        '"evidence": ["exit 137"], "confidence": 0.9}, "patch": null, '
+        '"outcome": "gave_up", "detail": null}'
+    )
+    step = RepairStep.model_validate_json(pre_field)
+    assert step.outcome == "gave_up"
+    assert step.patch_applied is False

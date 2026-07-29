@@ -67,11 +67,21 @@ export interface Patch {
   expected_signal: string;
 }
 
+// One detect->diagnose->patch->outcome transition (mirror of RepairStep in
+// src/contig/models.py). Hand-maintained, and it currently omits the Python
+// model's `detail` field -- a pre-existing drift, not fixed here.
 export interface RepairStep {
   attempt: number;
   diagnosis: Diagnosis;
   patch: Patch | null;
   outcome: string;
+  // True iff the patch was ENACTED and the loop proceeded to retry. Not "the run's
+  // configuration was mutated" (a `retry` patch mutates nothing -- the re-run is
+  // the fix) and not "the patch worked" (reproduce's `retry_failed` is applied and
+  // still failed). Defaults to False on the Python model, so a pre-field bundle
+  // under-claims rather than over-claims -- and here an absent key is falsy, which
+  // reads the same way.
+  patch_applied: boolean;
 }
 
 // Per-task resource actuals parsed from Nextflow's trace.txt and recorded by the
@@ -362,6 +372,8 @@ export interface RepairStepLite {
   diagnosis: Diagnosis;
   patch: Patch | null;
   outcome: string;
+  // Same meaning as RepairStep.patch_applied above: enacted and retried.
+  patch_applied: boolean;
 }
 
 // A live snapshot of an in-flight (or just finished) run, derived server-side

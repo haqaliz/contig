@@ -312,6 +312,12 @@ class RepairStep(BaseModel):
     patch: Patch | None = None
     outcome: str
     detail: str | None = None
+    # True iff the patch was **enacted** and the loop proceeded to retry. NOT "the run's
+    # configuration was mutated" — `apply_patch` is a documented no-op for `code`/`retry`
+    # patches (self_heal.py:549), and a fully clamped resource bump can leave the target
+    # identical. NOT "the patch worked" — see reproduce's `retry_failed`. Defaults False so
+    # a pre-field bundle under-claims rather than over-claims.
+    patch_applied: bool = False
 
 
 class RunRecord(BaseModel):
@@ -564,6 +570,11 @@ class HealScenario(BaseModel):
     qc_artifact: Literal["empty_vcf_gz"] | None = None
     expected_recovered: bool
     expected_outcome: str
+    # Opt-in assertion on whether the loop actually enacted a patch (R7), checked
+    # against `any(step.patch_applied ...)` over the real repair history. None (the
+    # default) skips the check entirely, so a scenario omitting it scores exactly
+    # as it did before the field existed.
+    expected_patch_applied: bool | None = None
 
 
 class HealClassScore(BaseModel):

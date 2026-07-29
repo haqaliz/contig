@@ -96,3 +96,118 @@ def test_signature_excludes_itself_so_verification_is_stable():
     signature = sign_record(record, private_key)
 
     assert verify_signature(record, signature, public_key) is True
+
+
+# --- disclosed caveat: patch_applied breaks pre-field signatures, narrowly -----
+#
+# `RepairStep.patch_applied` is back-compatible for LOADING (a pre-field bundle
+# reads as False) but NOT for a signature made before the field existed:
+# `canonical_record_bytes` is `record.model_dump(mode="json")`, so every
+# repair_history entry now carries an extra key the old signed bytes never had.
+# Unlike the slice-6/slice-8 breaks this one is NESTED — the added key lives
+# inside a list of sub-models, not at the top level — which is why the strip
+# below has to recurse and why the break is narrow: a record with an EMPTY
+# repair_history serializes byte-identically and its old signature still
+# verifies. Both properties are pinned here as KNOWN, not left as surprises.
+
+
+def _record_with_repair_history(run_id: str = "r1") -> RunRecord:
+    from contig.models import Diagnosis, Patch, RepairStep
+
+    record = _record(run_id)
+    record.repair_history = [
+        RepairStep(
+            attempt=1,
+            diagnosis=Diagnosis(
+                failure_class="oom",
+                root_cause="Task killed for exceeding its memory allocation.",
+                evidence=["exit 137"],
+                confidence=0.9,
+            ),
+            patch=Patch(
+                kind="resource",
+                operation={"memory_gb": 16},
+                rationale="Double the memory and retry.",
+                risk="safe",
+                expected_signal="task completes",
+            ),
+            outcome="patched_and_retried",
+            patch_applied=True,
+        )
+    ]
+    return record
+
+
+def _pre_patch_applied_canonical_bytes(record: RunRecord) -> bytes:
+    """The canonical bytes this record would have produced before the field.
+
+    Drops exactly `patch_applied`, from every entry of `repair_history` — the
+    strip has to reach INTO the list, since that is where the new key lives. The
+    rest of the canonicalization (sorted keys, compact separators, UTF-8) is
+    copied from `signing.canonical_record_bytes` so the only difference under
+    test is the added key.
+    """
+    import json as _json
+
+    payload = record.model_dump(mode="json")
+    old = dict(payload)
+    old["repair_history"] = [
+        {k: v for k, v in step.items() if k != "patch_applied"}
+        for step in payload["repair_history"]
+    ]
+    # The strip must actually have removed something from every entry, or the
+    # test below would pass vacuously over unchanged bytes.
+    assert set(payload) == set(old)
+    for new_step, old_step in zip(payload["repair_history"], old["repair_history"]):
+        assert set(new_step) - set(old_step) == {"patch_applied"}
+    return _json.dumps(old, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+@requires_signing
+def test_pre_field_signature_over_a_record_with_repair_history_no_longer_verifies():
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    private_key, public_key = generate_keypair()
+    record = _record_with_repair_history()
+    assert record.repair_history  # the break needs at least one entry
+
+    # Sign the bytes an older Contig would have produced for this same record.
+    old_signature = (
+        Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key))
+        .sign(_pre_patch_applied_canonical_bytes(record))
+        .hex()
+    )
+
+    # The extra nested key changes the canonical payload, so the old signature
+    # does not verify -- even though nothing about the run itself changed.
+    assert verify_signature(record, old_signature, public_key) is False
+
+    # A fresh signature over today's bytes does verify, and differs: the break is
+    # the payload shape, not the signing machinery.
+    new_signature = sign_record(record, private_key)
+    assert verify_signature(record, new_signature, public_key) is True
+    assert new_signature != old_signature
+
+
+@requires_signing
+def test_pre_field_signature_over_a_record_with_no_repair_history_still_verifies():
+    # The narrowing. An empty repair_history has no entry to carry the new key,
+    # so the canonical bytes are byte-identical to what an older Contig produced
+    # and the old signature is still good. This is the whole basis for calling
+    # the break narrow: a clean run's signed bundle is unaffected.
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    private_key, public_key = generate_keypair()
+    record = _record()
+    assert record.repair_history == []
+
+    old_bytes = _pre_patch_applied_canonical_bytes(record)
+    assert old_bytes == canonical_record_bytes(record)
+
+    old_signature = (
+        Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key))
+        .sign(old_bytes)
+        .hex()
+    )
+
+    assert verify_signature(record, old_signature, public_key) is True

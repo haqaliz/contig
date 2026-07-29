@@ -1,0 +1,50 @@
+{
+  "run_id": "giveup-fixture",
+  "pipeline": "nf-core/rnaseq",
+  "pipeline_revision": "3.26.0",
+  "target": {
+    "backend": "local",
+    "container_runtime": "docker",
+    "work_dir": "runs/giveup-fixture/work",
+    "engine": "nextflow",
+    "credentials_ref": null,
+    "backend_options": {},
+    "resource_limits": {}
+  },
+  "input_checksums": {
+    "samplesheet.csv": "cafe"
+  },
+  "parameters": {
+    "outdir": "runs/giveup-fixture/results"
+  },
+  "container_digests": {},
+  "nextflow_version": "26.04.4",
+  "contig_version": "0.1.0",
+  "assay": "rnaseq",
+  "events": [
+    {
+      "process": "SALMON_QUANT",
+      "status": "FAILED",
+      "exit": 1,
+      "task_id": "1",
+      "name": "SALMON_QUANT (SAMPLE_A)"
+    }
+  ],
+  "qc_results": [],
+  "output_checksums": {},
+  "repair_history": [
+    {
+      "attempt": 1,
+      "diagnosis": {
+        "failure_class": "unknown",
+        "root_cause": "No matching failure signal.",
+        "evidence": [],
+        "confidence": 0.2
+      },
+      "patch": null,
+      "outcome": "gave_up",
+      "patch_applied": false
+    }
+  ],
+  "verdict": "fail"
+}
