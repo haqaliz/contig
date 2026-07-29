@@ -151,8 +151,12 @@ def run_heal_scenario(scenario: HealScenario, tmp_dir: Path) -> HealScenarioResu
             max_attempts=scenario.max_attempts,
             assay=scenario.assay,
         )
-        recovered = RunSummary.from_events(record.events).succeeded
+        # R8: `recovered` used to be event-derived alone, so a run that was green
+        # from attempt 1 counted as a recovery although nothing was ever repaired.
+        # A recovery is a run that both ended green AND had some patch enacted.
+        summary = RunSummary.from_events(record.events)
         patch_applied = any(s.patch_applied for s in record.repair_history)
+        recovered = summary.succeeded and patch_applied
         if record.repair_history:
             last = record.repair_history[-1]
             actual_outcome = last.outcome

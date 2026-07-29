@@ -223,9 +223,9 @@ def test_run_heal_scenario_qc_anomaly_flags_a_green_run(tmp_path):
     VCF drives the REAL `_discover_qc` to a FAIL verdict, so the loop's QC-anomaly
     trigger records one `qc_verdict_flagged` step -- no QC mocking anywhere.
 
-    `expected_recovered=True` is not a claim that anything was healed: the driver
-    computes `recovered` from event success (`heal.py:130`), and this run's single
-    task exits 0. See plan D8.
+    `expected_recovered=False`: nothing was healed here, and since R8 the driver
+    says so -- `recovered` now requires event success AND some enacted patch, and
+    this scenario's single `qc_verdict_flagged` step applies none.
     """
     scn = HealScenario(
         scenario_id="qc-anomaly-1",
@@ -235,7 +235,7 @@ def test_run_heal_scenario_qc_anomaly_flags_a_green_run(tmp_path):
         attempts=[AttemptSpec(status="COMPLETED", exit=0, log_text="done")],
         assay="variant_calling",
         qc_artifact="empty_vcf_gz",
-        expected_recovered=True,
+        expected_recovered=False,
         expected_outcome="qc_verdict_flagged",
     )
     result = run_heal_scenario(scn, tmp_path)
@@ -325,6 +325,51 @@ def test_patch_applied_match_is_not_a_divergence(tmp_path):
     assert result.matched is True
 
 
+def test_a_green_run_that_applied_no_patch_is_not_recovered(tmp_path):
+    """R8: `recovered` was event-derived, so a run that was green from attempt 1
+    reported recovered=True although nothing was ever repaired -- the artifact the
+    qc-anomaly slice disclosed rather than fixed (CAPABILITY_ROADMAP.md:1128-1132).
+
+    The QC-anomaly path is the live instance: one task exits 0, the REAL
+    `_discover_qc` reduces a header-only VCF to FAIL, and the loop records a single
+    `qc_verdict_flagged` step that proposes and applies nothing.
+    """
+    scn = HealScenario(
+        scenario_id="qc-anomaly-not-recovered",
+        description="Green sarek run whose empty VCF fails variant QC; no patch applied",
+        source="synthetic",
+        expected_class="qc_anomaly",
+        attempts=[AttemptSpec(status="COMPLETED", exit=0, log_text="done")],
+        assay="variant_calling",
+        qc_artifact="empty_vcf_gz",
+        expected_recovered=False,
+        expected_outcome="qc_verdict_flagged",
+    )
+    result = run_heal_scenario(scn, tmp_path)
+    assert result.recovered is False
+    assert result.matched is True, result.divergence
+
+
+def test_a_healed_run_is_still_recovered(tmp_path):
+    """R8 positive control: the redefinition must not demote a genuine heal. The
+    OOM path fails, applies a resource patch, and retries green."""
+    scn = HealScenario(
+        scenario_id="oom-still-recovered",
+        description="OOM is patched and retried",
+        source="synthetic",
+        expected_class="oom",
+        attempts=[
+            AttemptSpec(status="FAILED", exit=137, log_text="Process killed: out of memory (exit 137)"),
+            AttemptSpec(status="COMPLETED", exit=0, log_text="done"),
+        ],
+        expected_recovered=True,
+        expected_outcome="patched_and_retried",
+    )
+    result = run_heal_scenario(scn, tmp_path)
+    assert result.recovered is True
+    assert result.matched is True, result.divergence
+
+
 def test_evaluate_heal_aggregates_rates(tmp_path):
     oom_scn = HealScenario(
         scenario_id="oom-1",
@@ -400,11 +445,11 @@ def test_shipped_heal_scenarios_all_reproduce_their_declared_outcomes():
     assert report.outcome_match_rate == 1.0, [
         (m.scenario_id, m.divergence) for m in report.mismatches
     ]
-    # 6 of 9, not 5 of 8: `qc-anomaly-verdict-flagged` is green from attempt 1,
-    # so the driver counts it as recovered while nothing was repaired. An
-    # artifact of the metric's definition, deliberately not corrected (plan D8).
-    assert report.healed == 6
-    assert report.recovery_rate == pytest.approx(6 / 9)
+    # 5 of 9, down from 6 (R8): `qc-anomaly-verdict-flagged` is green from attempt
+    # 1 but repairs nothing, and `recovered` no longer counts that as a recovery.
+    # A correction of the metric, not a regression in the loop.
+    assert report.healed == 5
+    assert report.recovery_rate == pytest.approx(5 / 9)
 
     covered = {s.expected_class for s in scenarios}
     assert covered >= {
