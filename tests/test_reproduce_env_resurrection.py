@@ -13,7 +13,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from contig.bundle import load_reproduction, write_reproduce_bundle
 from contig.models import Diagnosis, ReproduceRecord
+from contig.signing import generate_keypair, signing_available, verify_signature
 from contig.verification.reproduce import Claim, detect_missing_module, run_reproduction
 
 # Mirrors the fixed synthetic run-start in tests/test_reproduce.py: a 1970-era
@@ -252,6 +256,123 @@ def test_run_reproduction_classifies_against_post_retry_results_not_stale(tmp_pa
 
     assert record.claim_results[0].status == "reproduced"
     assert record.claim_results[0].observed == 0.9
+
+
+# ---------------------------------------------------------------------------
+# patch_applied: did the patch's operation actually run? (R3)
+#
+# Truth here is `install_rc == 0`, NOT "the reproduction succeeded" -- see D2 in
+# docs/planning/repair-patch-applied/prd.md. `retry_failed` is the canonical
+# demonstration: the install was enacted, the retried run then failed, so the
+# step is applied-but-unsuccessful.
+# ---------------------------------------------------------------------------
+
+
+def test_install_failure_records_patch_not_applied(tmp_path):
+    claims = _claims(("auc", 0.9, 0.05))
+    executor = _ScriptedExecutor(script=[(1, "No module named 'numpy'")])
+    installer = _ScriptedInstaller(return_code=1)
+
+    record = _run(tmp_path, claims, executor, allow_install=True, installer=installer)
+
+    step = record.repair_history[0]
+    assert step.outcome == "install_failed"
+    assert step.patch_applied is False
+    # The patch was still PROPOSED -- the pair (patch non-null, not applied) is
+    # exactly the distinction this field exists to make.
+    assert step.patch is not None
+
+
+def test_retry_failure_records_the_patch_as_applied(tmp_path):
+    # The sharp case: pip install exited 0, so the patch WAS enacted; the
+    # retried run then failed on its own. applied != successful.
+    claims = _claims(("auc", 0.9, 0.05))
+    executor = _ScriptedExecutor(
+        script=[
+            (1, "No module named 'numpy'"),
+            (1, "some other error"),
+        ]
+    )
+    installer = _ScriptedInstaller(return_code=0)
+
+    record = _run(tmp_path, claims, executor, allow_install=True, installer=installer)
+
+    step = record.repair_history[0]
+    assert step.outcome == "retry_failed"
+    assert step.patch_applied is True
+    # ...while the reproduction itself is still an honest failure.
+    assert record.exit_code == 1
+    assert all(r.status == "unverified" for r in record.claim_results)
+
+
+def test_successful_install_and_retry_records_the_patch_as_applied(tmp_path):
+    claims = _claims(("auc", 0.9, 0.05))
+    executor = _ScriptedExecutor(
+        script=[
+            (1, "ModuleNotFoundError: No module named 'numpy'"),
+            (0, ""),
+        ],
+        results_by_call={2: {"auc": 0.9}},
+    )
+    installer = _ScriptedInstaller(return_code=0)
+
+    record = _run(tmp_path, claims, executor, allow_install=True, installer=installer)
+
+    step = record.repair_history[0]
+    assert step.outcome == "installed_and_retried"
+    assert step.patch_applied is True
+
+
+def test_patch_applied_round_trips_through_the_signed_reproduce_bundle(tmp_path, monkeypatch):
+    # The applied-but-unsuccessful case is the one worth attesting to, so it is
+    # the one driven through the bundle.
+    if not signing_available():
+        pytest.skip("cryptography not installed")
+    private_key, public_key = generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    dest = tmp_path / "bundle"
+    claims = _claims(("auc", 0.9, 0.05))
+    executor = _ScriptedExecutor(
+        script=[
+            (1, "No module named 'numpy'"),
+            (1, "some other error"),
+        ]
+    )
+    record = _run(
+        repo,
+        claims,
+        executor,
+        allow_install=True,
+        installer=_ScriptedInstaller(return_code=0),
+    )
+    assert record.repair_history[0].patch_applied is True
+
+    json_path = write_reproduce_bundle(record, dest)
+
+    # (a) it is in the serialized record on disk...
+    on_disk = json.loads(json_path.read_text())
+    assert on_disk["repair_history"][0]["patch_applied"] is True
+    # (b) ...it survives the load...
+    loaded = load_reproduction(dest)
+    assert loaded.repair_history[0].patch_applied is True
+    assert loaded == record
+    # (c) ...and it is inside the SIGNED canonical payload: the sidecar verifies
+    # over the record as recorded, and flipping the flag breaks verification.
+    sidecar = json.loads((dest / "signature.json").read_text())
+    assert sidecar["public_key"] == public_key
+    assert verify_signature(record, sidecar["signature"], sidecar["public_key"]) is True
+    lied = record.model_copy(deep=True)
+    lied.repair_history[0].patch_applied = False
+    assert verify_signature(lied, sidecar["signature"], sidecar["public_key"]) is False
+    # Boundary, pinned so it is not mistaken for an omission: `reproduce.json`
+    # is the small re-runnable manifest, not the attested record. It carries no
+    # repair data of any kind -- `patch_applied` lives in the SIGNED
+    # reproduce_record.json above, which is what load_reproduction() reads.
+    manifest = json.loads((dest / "reproduce.json").read_text())
+    assert "repair_history" not in manifest
 
 
 def test_reproduce_record_repair_history_defaults_and_backcompat():
