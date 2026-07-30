@@ -705,15 +705,18 @@ def test_shipped_heal_scenarios_all_reproduce_their_declared_outcomes():
     scenarios = load_heal_scenarios(default_heal_scenarios_path())
     report = evaluate_heal(scenarios)
 
-    assert report.total == 9
+    assert report.total == 16
     assert report.outcome_match_rate == 1.0, [
         (m.scenario_id, m.divergence) for m in report.mismatches
     ]
-    # 5 of 9, down from 6 (R8): `qc-anomaly-verdict-flagged` is green from attempt
-    # 1 but repairs nothing, and `recovered` no longer counts that as a recovery.
-    # A correction of the metric, not a regression in the loop.
-    assert report.healed == 5
-    assert report.recovery_rate == pytest.approx(5 / 9)
+    # 9 of 16, up from 5 of 9. This is a CORPUS-COMPOSITION change, not a
+    # behaviour change: the catalog-coverage slice added four recovering
+    # scenarios and three give-ups, and the ratio simply follows what was added.
+    # No pre-existing scenario changed its outcome. `recovery_rate` is
+    # informational-only and is never guarded (cli.py:2695) -- the guarded
+    # number is `outcome_match_rate`, which stayed at 1.0 across the move.
+    assert report.healed == 9
+    assert report.recovery_rate == pytest.approx(9 / 16)
 
     covered = {s.expected_class for s in scenarios}
     assert covered >= {
@@ -722,6 +725,10 @@ def test_shipped_heal_scenarios_all_reproduce_their_declared_outcomes():
         "missing_index",
         "tool_crash",
         "qc_anomaly",
+        "missing_reference",
+        "reference_not_bgzf",
+        "container_pull_failed",
+        "download_failed",
     }
 
 
@@ -732,11 +739,12 @@ def test_shipped_heal_baseline_matches_shipped_scenarios():
     baseline = load_heal_baseline(default_heal_baseline_path())
 
     assert baseline is not None
-    assert baseline.scenario_count == 9
+    assert baseline.scenario_count == 16
     assert baseline.outcome_match_rate == 1.0
-    # 5/9 since the R8 refreeze; 6/9 before it, when a green-but-unrepaired run
-    # still counted as a recovery.
-    assert baseline.recovery_rate == pytest.approx(5 / 9)
+    # 9/16 since the catalog-coverage refreeze; 5/9 before it. Again a
+    # CORPUS-COMPOSITION move -- four recovering scenarios and three give-ups
+    # were added -- not a behaviour change, and never a guarded number.
+    assert baseline.recovery_rate == pytest.approx(9 / 16)
     assert baseline.corpus_sha == sha256_file(scenarios_path)
     assert set(baseline.covered_classes) >= {
         "oom",
@@ -744,10 +752,15 @@ def test_shipped_heal_baseline_matches_shipped_scenarios():
         "missing_index",
         "tool_crash",
         "qc_anomaly",
+        "missing_reference",
+        "reference_not_bgzf",
+        "container_pull_failed",
+        "download_failed",
     }
-    # A15: seven covered classes exactly -- the six the no_progress slice left
-    # plus qc_anomaly. A silent drop here would mean a class lost its scenario.
-    assert len(baseline.covered_classes) == 7
+    # A15: eleven covered classes exactly -- the seven the qc_anomaly slice left
+    # plus catalog-coverage's four. A silent drop here would mean a class lost
+    # its scenario.
+    assert len(baseline.covered_classes) == 11
 
 
 def test_shipped_heal_report_does_not_regress_against_baseline():
