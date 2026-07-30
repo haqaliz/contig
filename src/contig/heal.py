@@ -51,6 +51,25 @@ def _write_qc_artifact(run_dir: Path, artifact: str) -> None:
             )
 
 
+def _write_fasta_artifact(tmp_dir: Path, artifact: str) -> Path:
+    """Write the named reference-FASTA fixture and return its path.
+
+    `plain_gzip` is a small FASTA written through stdlib `gzip.open`, which
+    emits a plain gzip member with NO `BC` FEXTRA subfield -- exactly what
+    `_gzip_kind` (`self_heal.py:722-751`) must classify as `"plain_gzip"`, and
+    what samtools faidx refuses to index. Writing a real file (rather than
+    synthesizing the recompress result) is the point: it lets the loop run the
+    real `_recompress_reference` end to end.
+    """
+    fixtures = Path(tmp_dir) / "fixtures"
+    fixtures.mkdir(parents=True, exist_ok=True)
+    path = fixtures / "ref.fa.gz"
+    with gzip.open(path, "wt") as fh:
+        fh.write(">chr1 test reference\nACGTACGTACGTACGTACGT\n")
+        fh.write(">chr2 test reference\nTTTTGGGGCCCCAAAATTTT\n")
+    return path
+
+
 def _write_attempt(
     trace_path: Path, attempt: AttemptSpec, qc_artifact: str | None = None
 ) -> None:
@@ -129,6 +148,14 @@ def run_heal_scenario(scenario: HealScenario, tmp_dir: Path) -> HealScenarioResu
     )
     runs_dir = Path(tmp_dir) / "runs"
 
+    # Only a scenario that names a fixture gets a `params` argument at all: with
+    # `fasta_artifact` unset the call is byte-identical to what it was before the
+    # field existed, so `current_params` stays `{}` (`self_heal.py:977`).
+    extra_kwargs: dict[str, object] = {}
+    if scenario.fasta_artifact is not None:
+        fasta_path = _write_fasta_artifact(Path(tmp_dir), scenario.fasta_artifact)
+        extra_kwargs["params"] = {"fasta": str(fasta_path)}
+
     diagnosed_class: str | None = None
     recovered = False
     actual_outcome: str | None = None
@@ -150,6 +177,7 @@ def run_heal_scenario(scenario: HealScenario, tmp_dir: Path) -> HealScenarioResu
             resource_ceiling=scenario.resource_ceiling,
             max_attempts=scenario.max_attempts,
             assay=scenario.assay,
+            **extra_kwargs,
         )
         # R8: `recovered` used to be event-derived alone, so a run that was green
         # from attempt 1 counted as a recovery although nothing was ever repaired.

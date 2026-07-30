@@ -6,6 +6,138 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`heal-guard` now replays the four failure classes whose repair is HONEST — and the five it
+  leaves out are the finding, not a shortfall against the brief.** The frozen scenario set went
+  **9 → 16 scenarios** and **`covered_classes` 7 → 11** (`missing_reference`,
+  `reference_not_bgzf`, `container_pull_failed`, `download_failed` added), with the **guarded
+  `outcome_match_rate` still 1.0** and the informational-only `recovery_rate` moving
+  **0.5556 → 0.5625 (9/16)**. `heal_baseline.json` was refrozen as a deliberate act
+  (`--update-baseline`, never a hand-edit): `corpus_sha 07c19e17…`, `contig_version 0.49.0`.
+  **`eval-guard` is unmoved at 92.3% (12/13)** with the same single known miss the guard prints
+  itself (`MISS holdout-qc-anomaly-1: expected qc_anomaly, predicted tool_crash`); the detector
+  corpora and `holdout_baseline.json` were **not touched**, and neither were `repair.py`,
+  `self_heal.py` or `detect.py`. Nothing here touches the signed record, the bundle, or any exit
+  code — **no signature break**.
+  - **Seven new frozen lines: four recovering, three give-ups.** Recovering —
+    `missing-reference-approved-heal` (`approved_and_retried`),
+    `reference-not-bgzf-recompress-heal` (`recompressed_reference_and_retried`),
+    `container-pull-retry-heal` and `download-failed-retry-heal` (`patched_and_retried`).
+    Give-ups — `missing-reference-rejected-giveup` (`rejected_by_user`),
+    `reference-not-bgzf-unresolvable-giveup` (`reference_recompress_unresolvable`),
+    `download-failed-budget-giveup` (`gave_up`). The **nine pre-existing JSONL lines are
+    byte-identical** (verified with `cmp`, not eyeballed).
+  - **Why these four and not others: their repair does something real.** `missing_reference`
+    merges a param that reaches the re-run argv and lands in `record.parameters`;
+    `reference_not_bgzf` really stream-decompresses through `_recompress_reference`;
+    `container_pull_failed` and `download_failed` are **honest `retry` no-ops where the re-run
+    itself IS the fix**, documented as such in the code (`self_heal.py:549`).
+  - **One additive mechanism change, and it is a named fixture directive rather than an injected
+    result.** `HealScenario.fasta_artifact: Literal["plain_gzip"] | None = None` follows the
+    `qc_artifact` precedent (`models.py:563-569`): the driver writes a **real** plain-gzip
+    (non-BGZF) FASTA to the scenario's temp dir and points `params["fasta"]` at it, so the loop
+    runs the **real** `_recompress_reference` instead of a mock of it. **No seam bypasses the
+    code under test** — the detector and `propose` are never stubbed. The field defaults to
+    `None`, and a scenario that omits it makes a call byte-identical to the pre-field one.
+  - **`heal-guard`'s honest-scope docstring now carries a reason per uncovered class, not one
+    undifferentiated backlog.** It had gone stale (still claiming 9 scenarios and 7 covered
+    classes, and still listing four now-covered classes as deferred). It now states what
+    *covered* means — the class has a frozen synthetic scenario whose declared outcome the loop
+    still reproduces, **not** that the engine handles that failure well in the field — and splits
+    the remaining 7 of 18 `FailureClass` literals into three groups with three different reasons:
+    inert-repair (5, deferred pending propose-vs-don't), reproduce-local (`missing_dependency`,
+    emitted only by `contig reproduce --allow-install` and by no detector rule), and non-target
+    (`unknown`, the detector's fallback).
+  - **THE FINDING — five of the nine uncovered repairs are INERT, and that is why only four
+    shipped.** The brief asked for all nine. The Phase-2 dig found that five classes emit a patch
+    whose operation is read by **nothing**. Four are `kind="env"` patches whose operation
+    `apply_patch` string-merges into `target.backend_options` (`self_heal.py:583-586`), out of
+    which `nfconfig.py:71-98` reads only `queue`/`region`/`partition`/`account`/`qos`/`time`. The
+    fifth is inert for a **different** reason, and the distinction is kept rather than flattened:
+
+    | Class | Patch kind | Operation | Only occurrence | What actually happens |
+    |---|---|---|---|---|
+    | `disk_full` | `env` | `clean_work_dir` | `repair.py:145` | nothing deletes a work dir; there is no `statvfs`, no space check |
+    | `permission_denied` | `env` | `fix_permissions` | `repair.py:169` | no `chmod`/`chown` exists anywhere |
+    | `conda_solve_failed` | `env` | `relax_or_pin_env` | `repair.py:123` | nothing relaxes or pins an env spec |
+    | `platform_unsupported` | `env` | `use_native_arch_backend` | `repair.py:109` | `target.backend` is unchanged, so the approved retry re-runs on the same host the patch's **own rationale** calls hopeless |
+    | `container_unavailable` | **`retry`** | `wait_seconds: 15` | `repair.py:50` | `apply_patch` is a **documented** no-op for retry patches, so the promised wait is silently dropped and the fix degenerates to the bare re-run already covered by `container_pull_failed` |
+
+    The loop's story for these is propose → "apply" → `patch_applied=True` → retry →
+    `Repaired`. **That is one layer below the bug v0.49.0 fixed:** the flag is now honest about
+    **enactment**, but enacting a no-op still renders as a repair on every surface. Covering
+    these five would have frozen into CI five expectations we already suspect are wrong —
+    a scenario asserting `expected_recovered: true` for `disk_full` would freeze the claim
+    *"Contig cleaned the work directory and recovered the run"* when nothing was cleaned and the
+    retry succeeded only because the scripted executor was told to return 0.
+    **The deferral is the finding.** It is also the slice's "defects surfaced" metric being met
+    before a line of code was written, and it is what narrowed the scope.
+  - **C2 follow-up filed, with propose-vs-don't as its FIRST question — not "how to
+    implement".** `repair.py:166-168` already says of `permission_denied` that *"only a human
+    can decide and do that safely"*, so the open question is whether these classes should
+    propose a patch **at all**. Implementing them is one answer; withdrawing the patch is the
+    other, and this slice deliberately does not pick.
+  - **Honest limits — none of them is softened:**
+    1. **Push, not demand-pull.** No user asked; Contig is pre-revenue. The organic frequency of
+       these classes in recorded runs is **unmeasured**, and nothing here claims otherwise.
+    2. **Synthetic throughout.** No real nf-core run, container registry, network, disk state or
+       permission state in CI — consistent with every prior heal scenario, and **no stronger
+       than any of them**.
+    3. **Self-graded.** We authored the fixtures for the classes we grade, exactly as the
+       `no_progress` and `qc_anomaly` slices disclosed of themselves.
+    4. **It recovers nothing new for a user.** It changes what CI **guards**, not what the
+       engine **does**. Calling this a self-heal improvement would be false.
+    5. **`covered_classes: 11` invites over-reading.** It means eleven classes have a frozen
+       synthetic scenario. It does **not** mean the engine handles those failures well — and for
+       the five excluded, it demonstrably does not.
+    6. **The narrowed scope is a judgement, not a proof.** We suspect the five inert repairs
+       should stop proposing rather than be implemented; that is **not established**. If the
+       suspicion is wrong, deferring them cost a release cycle of coverage.
+    7. **A process note worth recording: this was not ordinary TDD, and saying it was would be
+       false.** No genuine per-scenario RED was possible, because the slice adds no production
+       code beyond the `fasta_artifact` seam — every path the new scenarios drive already
+       existed, so a "failing first" test would have been theatre. Instead a
+       **deliberate-mismatch control** was run (scenario 5's shape with inverted expectations),
+       which came
+       back `matched=False` with all three divergences including `patch_applied` — proving the
+       check is live and non-vacuous rather than assuming it. Corpus-level RED **was** genuine:
+       the `total 9 → 16` assertion, the `corpus_sha` mismatch, and the stale-sha warning all
+       failed before the refreeze.
+    8. **The commit split left three baseline-coupled tests red at the first commit boundary** —
+       deliberate and disclosed, on the `648989c` precedent. Worth noting against it that the
+       `qc_anomaly` slice (`429693b`) bundled scenarios and refreeze into one commit for exactly
+       that reason.
+    9. **The informational `recovery_rate`'s new trend point is not comparable to the prior
+       ones.** It moved because the **corpus composition** changed (9 → 16 lines, three of them
+       give-ups), not because the loop recovers more. `heal_history.jsonl` is append-only and no
+       historical point was rewritten.
+  - **Revisit trigger, in both directions — otherwise the claim is unfalsifiable:**
+    1. **If any of the five inert repairs is implemented or withdrawn**, the deferral reason must
+       be revisited in that same commit, at which point those classes become coverable against
+       corrected behaviour. This is enforced by CI, not by review:
+       `test_five_inert_patch_operations_are_still_consumed_by_nothing` asserts that each of the
+       five operations is still emitted by `repair.py` **and** referenced nowhere else in
+       `src/contig/`, so closing the gap turns it red and names this trigger in the failure
+       message. The test exists to **fail** when the gap closes; that is its whole point.
+    2. **If the next 20 runs appended to the pending corpus contain no case diagnosed as any of
+       these nine classes**, the coverage claim is restated as **taxonomy** coverage only and no
+       further breadth is added on push alone. The counter is the pending-corpus append the loop
+       already performs on every diagnosed failure (`self_heal.py:1096`) — measurable today by
+       grouping that file by `failure_class`, with **no new instrumentation**. Precedent: the
+       `qc_anomaly` slice's "0 of 17 recorded runs".
+
+### Fixed
+
+- **Stale docs prose: the held-out-accuracy trend was still described as pending. It shipped.**
+  `FEATURES.md`'s C6 row and `docs/technical/CAPABILITY_ROADMAP.md`'s C6 summary row both still
+  listed "a held-out-accuracy trend" as future work alongside the genuinely-still-pending C1/C3
+  fold-in. The trend has been shipped and committed for several releases:
+  `src/contig/data/holdout_history.jsonl` and `src/contig/data/heal_history.jsonl`, the
+  `--snapshot`/`--history` flags on **both** guards, and
+  `dashboard/components/eval/{holdout-history,heal-history}.tsx`. Only the prose was wrong; the
+  C1/C3 fold-in remains correctly listed as pending, still blocked on labeling design.
+
 ## [0.49.0] - 2026-07-29
 
 ### Added

@@ -2678,21 +2678,48 @@ def heal_guard(
     exits 0. With --snapshot the result is also appended to the committed
     self-heal trend; with --history the recorded trend is printed instead.
 
-    Honest scope: the number is over **9 SYNTHETIC scenarios**, not a field
-    recovery rate. Covered failure classes: bad_param, missing_index, no_progress,
-    oom, qc_anomaly, time_limit, tool_crash. Not covered: container_pull_failed,
-    container_unavailable, conda_solve_failed, platform_unsupported, disk_full,
-    download_failed, permission_denied, missing_reference and reference_not_bgzf
-    have no scenario yet and are deferred follow-on slices. (missing_dependency
-    is emitted only by `contig reproduce --allow-install`, never by this loop, so
-    this guard cannot cover it; unknown is the detector's fallback, not a target.)
+    Honest scope: the number is over **16 SYNTHETIC scenarios**, not a field
+    recovery rate. **11 covered failure classes**: bad_param,
+    container_pull_failed, download_failed, missing_index, missing_reference,
+    no_progress, oom, qc_anomaly, reference_not_bgzf, time_limit, tool_crash.
+    `covered` means the class has a frozen synthetic scenario whose declared
+    outcome the loop still reproduces -- NOT that the engine handles that failure
+    well in the field.
+
+    The remaining 7 of the 18 FailureClass literals are uncovered, and each group
+    is uncovered for a DIFFERENT reason -- they are not one backlog:
+
+    - **Inert repair, deferred pending a propose-vs-don't decision (5):**
+      disk_full, permission_denied, conda_solve_failed, platform_unsupported,
+      container_unavailable. `propose_patches` emits a patch for each, but
+      applying it changes nothing the re-run can act on. For the four `env`
+      patches -- clean_work_dir (disk_full, repair.py:145), fix_permissions
+      (permission_denied, repair.py:169), relax_or_pin_env (conda_solve_failed,
+      repair.py:123) and use_native_arch_backend (platform_unsupported,
+      repair.py:109) -- `apply_patch` string-merges the operation into
+      `target.backend_options` (self_heal.py:583-586), and nfconfig.py reads only
+      queue/region/partition/account/qos/time out of that dict, so the operation
+      is consumed by nothing. container_unavailable is inert for a different
+      reason: its patch is `kind="retry"` (repair.py:50), and `apply_patch` is a
+      documented no-op for retry patches, so the `wait_seconds: 15` its rationale
+      promises is silently dropped and the fix degenerates to the bare re-run
+      already covered by container_pull_failed. Covering these five would freeze
+      five suspect expectations into CI, so they are deferred to a C2 follow-up
+      whose FIRST question is whether to stop proposing them at all, not how to
+      implement them.
+    - **Reproduce-local, structurally outside this loop (1):**
+      missing_dependency, emitted only by `contig reproduce --allow-install`
+      (verification/reproduce.py:1221) and by no detector rule, so this guard
+      cannot reach it however many scenarios are added.
+    - **Non-target (1):** unknown, the detector's fallback when no rule matches
+      (detect.py:399 and elsewhere), not a class to author a fix for.
 
     **No failure class is structurally unreachable any more.** qc_anomaly was the
     last one, and its scenario is one we authored for a class we made reachable --
     evidence that a taxonomy gap closed, not that a user was helped. Its recovery
     accounting is also an artifact: the scenario is green by construction (every
     task exits 0, only the QC verdict FAILs), so the informational-only
-    recovery count reads 6/9 while nothing was recovered.
+    recovery count reads 9/16 while nothing was recovered in that one.
     """
     scenarios_path = Path(scenarios) if scenarios else default_heal_scenarios_path()
     baseline_path = Path(baseline) if baseline else default_heal_baseline_path()

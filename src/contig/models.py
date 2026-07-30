@@ -568,6 +568,14 @@ class HealScenario(BaseModel):
     # and synthesizing the verdict would stop measuring the thing under test.
     # None (the default) leaves a scenario's behaviour exactly as it was.
     qc_artifact: Literal["empty_vcf_gz"] | None = None
+    # Opt-in: write a real plain-gzip (non-BGZF) reference FASTA and point
+    # `params["fasta"]` at it, so the REAL `_recompress_reference` has something
+    # to decompress. Deliberately a named fixture directive rather than an
+    # injectable recompress result -- the loop only needs a path and a gzip
+    # flavour on disk, and synthesizing the outcome would stop measuring the
+    # thing under test. None (the default) leaves a scenario's behaviour exactly
+    # as it was: the driver then passes no params at all.
+    fasta_artifact: Literal["plain_gzip"] | None = None
     expected_recovered: bool
     expected_outcome: str
     # Opt-in assertion on whether the loop actually enacted a patch (R7), checked
