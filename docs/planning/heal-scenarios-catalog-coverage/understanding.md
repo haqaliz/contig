@@ -23,18 +23,24 @@ directions, and the dig turned up a larger finding that reframes the slice.
 ## ⚠️ The main finding: five of the nine "repairs" are inert
 
 The loop records a repair, sets `patch_applied=True`, retries, and reports success — while
-the patch's stated operation is performed by **nothing**. `apply_patch` for `kind="env"`
-merges the operation into `target.backend_options` as strings (`self_heal.py:583-586`), and
-`nfconfig.py:71-98` only ever reads `queue`/`region`/`partition`/`account`/`qos`/`time`.
-Every other key is written and never read.
+the patch's stated operation is performed by **nothing**.
 
-| Class | Patch operation | What actually happens |
-|---|---|---|
-| `disk_full` | `{"clean_work_dir": True}` (`repair.py:145`) | Nothing deletes the work dir. The key appears **only** at `repair.py:145`. No `statvfs`, no space check. |
-| `permission_denied` | `{"fix_permissions": True}` (`repair.py:169`) | No `chmod`/`chown` anywhere. Key appears only at `repair.py:169`. |
-| `conda_solve_failed` | `{"relax_or_pin_env": True}` (`repair.py:124`) | Nothing relaxes or pins any env spec. |
-| `container_unavailable` | `{"retry": True, "wait_seconds": 15}` (`repair.py:50`) | `wait_seconds` is read by nothing — the loop never sleeps. A bare retry with a decorative field. |
-| `platform_unsupported` | `{"use_native_arch_backend": True}` (`repair.py:111`) | `target.backend` is **not** changed, so the approved retry re-runs on the same unsupported host — while the patch's own rationale says *"Re-running here won't help"*. |
+**Correction (post-implementation): they are inert for two different reasons, and flattening
+them into one was wrong.** Four are `kind="env"` patches, whose operation `apply_patch`
+merges into `target.backend_options` as strings (`self_heal.py:583-586`) while
+`nfconfig.py:71-98` reads only `queue`/`region`/`partition`/`account`/`qos`/`time` — so every
+other key is written and never read. `container_unavailable` is different: its patch is
+`kind="retry"` (`repair.py:48-50`), for which `apply_patch` is a **documented** no-op, so the
+promised `wait_seconds: 15` never reaches `backend_options` at all. The shipped `cli.py`
+docstring keeps this split; so should any future write-up.
+
+| Class | Patch operation | Kind | What actually happens |
+|---|---|---|---|
+| `disk_full` | `{"clean_work_dir": True}` (`repair.py:145`) | `env` | Nothing deletes the work dir. The key appears **only** at `repair.py:145`. No `statvfs`, no space check. |
+| `permission_denied` | `{"fix_permissions": True}` (`repair.py:169`) | `env` | No `chmod`/`chown` anywhere. Key appears only at `repair.py:169`. |
+| `conda_solve_failed` | `{"relax_or_pin_env": True}` (`repair.py:123`) | `env` | Nothing relaxes or pins any env spec. |
+| `platform_unsupported` | `{"use_native_arch_backend": True}` (`repair.py:109`) | `env` | `target.backend` is **not** changed, so the approved retry re-runs on the same unsupported host — while the patch's own rationale says *"Re-running here won't help"*. |
+| `container_unavailable` | `{"retry": True, "wait_seconds": 15}` (`repair.py:50`) | **`retry`** | `apply_patch` is a documented no-op for retry patches, so the promised 15-second wait is silently dropped and the fix degenerates to the bare re-run. **The weakest of the five** — a bare retry is a legitimate fix for a transient runtime outage, so only its *decorative field* is dishonest, not its whole premise. |
 
 For contrast, the four that do something real: `missing_reference` merges a param that
 reaches the re-run argv (`self_heal.py:575-582` → `runner.py:1118-1119`);

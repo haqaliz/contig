@@ -34,17 +34,26 @@ kind of defect — five self-heal paths recorded a non-null patch and returned b
 was `Repaired` (`CHANGELOG.md:11-30`). That bug lived in loop paths no scenario exercised.
 
 **And the Phase 2 dig found the next one before a line was written.** Five of the nine
-repairs are **inert**: the patch's operation is merged into `target.backend_options` as a
-string (`self_heal.py:583-586`) and read by nothing, because `nfconfig.py:71-98` consumes only
-`queue`/`region`/`partition`/`account`/`qos`/`time`.
+repairs are **inert**, for two distinct reasons. Four are `kind="env"` patches whose
+operation is merged into `target.backend_options` as a string (`self_heal.py:583-586`) and
+read by nothing, because `nfconfig.py:71-98` consumes only
+`queue`/`region`/`partition`/`account`/`qos`/`time`. The fifth is a `kind="retry"` patch, for
+which `apply_patch` is a **documented** no-op, so its operation never reaches
+`backend_options` at all.
 
-| Class | Operation | Only occurrence | Consumed by |
-|---|---|---|---|
-| `disk_full` | `clean_work_dir` | `repair.py:145` | nothing — no work dir is deleted, no `statvfs` |
-| `permission_denied` | `fix_permissions` | `repair.py:169` | nothing — no `chmod`/`chown` exists |
-| `conda_solve_failed` | `relax_or_pin_env` | `repair.py:124` | nothing — no env spec is relaxed or pinned |
-| `container_unavailable` | `wait_seconds: 15` | `repair.py:50` | nothing — the loop never sleeps |
-| `platform_unsupported` | `use_native_arch_backend` | `repair.py:111` | nothing — `target.backend` is unchanged, so the retry re-runs on the same host the patch's own rationale calls hopeless |
+| Class | Operation | Kind | Only occurrence | Consumed by |
+|---|---|---|---|---|
+| `disk_full` | `clean_work_dir` | `env` | `repair.py:145` | nothing — no work dir is deleted, no `statvfs` |
+| `permission_denied` | `fix_permissions` | `env` | `repair.py:169` | nothing — no `chmod`/`chown` exists |
+| `conda_solve_failed` | `relax_or_pin_env` | `env` | `repair.py:123` | nothing — no env spec is relaxed or pinned |
+| `platform_unsupported` | `use_native_arch_backend` | `env` | `repair.py:109` | nothing — `target.backend` is unchanged, so the retry re-runs on the same host the patch's own rationale calls hopeless |
+| `container_unavailable` | `wait_seconds: 15` | **`retry`** | `repair.py:50` | nothing — the loop never sleeps |
+
+**`container_unavailable` is the weakest member of the five**, and the deferral rests on less
+for it than for the other four: a bare retry is a legitimate fix for a transient runtime
+outage, so only the decorative `wait_seconds` is dishonest, not the premise. On a stricter
+reading it could have been covered alongside `container_pull_failed`. It is grouped with the
+deferred five so the propose-vs-don't question is answered for the whole family at once.
 
 The loop's story for these is propose → "apply" → `patch_applied=True` → retry → `Repaired`.
 That is one layer below the bug v0.49.0 fixed: the flag is now honest about **enactment**, but
@@ -226,7 +235,7 @@ from.
 2. **If the next 20 runs appended to the pending corpus contain no case whose diagnosed class
    is any of these nine**, the coverage claim is restated as *taxonomy* coverage only and no
    further breadth is added on push alone. The counter is the pending-corpus append the loop
-   already performs on every diagnosed failure (`self_heal.py:1095`) — measurable today by
+   already performs on every diagnosed failure (`self_heal.py:1096`) — measurable today by
    grouping that file by `failure_class`, with **no new instrumentation**. Stated precisely
    because the `qc_anomaly` slice's "0 of 17 recorded runs" precedent shows the number is
    checkable after the fact and worth checking.
