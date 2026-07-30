@@ -259,6 +259,270 @@ def test_heal_scenario_qc_artifact_defaults_to_none():
     assert scn.qc_artifact is None
 
 
+def test_heal_scenario_fasta_artifact_defaults_to_none():
+    """PRD R3: `fasta_artifact` is additive and default-inert. A scenario built
+    without it parses with the field at None, so the nine shipped JSONL lines
+    stay byte-identical and take a byte-identical path through the driver."""
+    scn = HealScenario(
+        scenario_id="no-fasta-artifact",
+        description="unchanged",
+        source="synthetic",
+        expected_class="oom",
+        attempts=[AttemptSpec(status="FAILED", exit=137)],
+        expected_recovered=False,
+        expected_outcome="gave_up",
+    )
+    assert scn.fasta_artifact is None
+
+
+def test_run_heal_scenario_reference_not_bgzf_recompresses_and_retries(tmp_path):
+    """PRD R4: `fasta_artifact="plain_gzip"` makes the driver write a REAL
+    non-BGZF gzip FASTA and point `params["fasta"]` at it, so the loop reaches
+    the real `_recompress_reference` success path instead of stopping at its
+    `reference_recompress_unresolvable` "no FASTA in params" guard.
+
+    The log is the shipped detector-corpus wording for `reference-not-bgzf`; the
+    trigger needle is `Cannot index files compressed with gzip`. The third line
+    carries `index` and `.fai` but none of `missing_index`'s absence needles, so
+    it is not stolen -- do not reword it toward "not found"/"missing".
+    """
+    scn = HealScenario(
+        scenario_id="reference-not-bgzf-recompress",
+        description="Plain-gzip reference FASTA is decompressed and the run retried",
+        source="synthetic",
+        expected_class="reference_not_bgzf",
+        attempts=[
+            AttemptSpec(
+                status="FAILED",
+                exit=1,
+                log_text=(
+                    "[E::fai_build_core] File truncated at line 1\n"
+                    "[E::fai_build3_core] Cannot index files compressed with gzip, "
+                    "please use bgzip\n"
+                    "[faidx] Could not build fai index /work/ref.fa.gz.fai"
+                ),
+            ),
+            AttemptSpec(status="COMPLETED", exit=0, log_text="done"),
+        ],
+        auto_approve=True,
+        fasta_artifact="plain_gzip",
+        expected_recovered=True,
+        expected_outcome="recompressed_reference_and_retried",
+        expected_patch_applied=True,
+    )
+    result = run_heal_scenario(scn, tmp_path)
+    assert result.matched is True, result.divergence
+    assert result.diagnosed_class == "reference_not_bgzf"
+    assert result.actual_outcome == "recompressed_reference_and_retried"
+    assert result.recovered is True
+
+
+def test_run_heal_scenario_missing_reference_approved_and_retried(tmp_path):
+    """PRD R1/R5: `missing_reference` reaches its real, honest repair -- the
+    `igenomes_ignore` param mutation (`repair.py:79-91`), gated on confirmation
+    and merged into the retry's params (`self_heal.py:575-582`).
+
+    The log is the shipped detector-corpus wording. It needs the full phrase
+    `no such file or directory` PLUS a reference token; it must NOT name an index
+    (`index`, `.fai`, `.bai`, `.tbi`, `.csi`, `.dict`, `genomeParameters.txt`) or
+    `missing_index` steals it, and must carry no `killed`/`oom` and no exit 137,
+    or the `oom` rule at `detect.py:90` steals it.
+
+    `auto_approve` is load-bearing (PRD R6): the patch is `needs_confirmation`,
+    so without it the driver falls back to the real file poll and the suite hangs
+    for the default 1800 s approval timeout.
+    """
+    scn = HealScenario(
+        scenario_id="missing-reference-approved",
+        description="Absent reference FASTA; igenomes_ignore is approved and the run retried",
+        source="synthetic",
+        expected_class="missing_reference",
+        attempts=[
+            AttemptSpec(
+                status="FAILED",
+                exit=1,
+                log_text="Error: No such file or directory: /data/genome.fasta",
+            ),
+            AttemptSpec(status="COMPLETED", exit=0, log_text="done"),
+        ],
+        auto_approve=True,
+        expected_recovered=True,
+        expected_outcome="approved_and_retried",
+        expected_patch_applied=True,
+    )
+    result = run_heal_scenario(scn, tmp_path)
+    assert result.matched is True, result.divergence
+    assert result.diagnosed_class == "missing_reference"
+    assert result.actual_outcome == "approved_and_retried"
+    assert result.recovered is True
+
+
+def test_run_heal_scenario_container_pull_failed_patched_and_retried(tmp_path):
+    """PRD R1/R5: `container_pull_failed` proposes a `safe` `{"retry": True}`
+    patch (`repair.py:36-45`), so there is no approval gate and the re-run itself
+    is the fix -- `apply_patch` is a documented no-op for a `retry` patch
+    (`self_heal.py:549`). `patch_applied` therefore means ENACTED, not effective.
+
+    The log is the shipped detector-corpus wording. It must NOT contain
+    `docker.sock`/`cannot connect to the docker daemon` or `permission denied`
+    (those rules are checked first), and no `killed`/`oom`/exit 137.
+    """
+    scn = HealScenario(
+        scenario_id="container-pull-retry",
+        description="Registry manifest error; the retry carries -resume and succeeds",
+        source="synthetic",
+        expected_class="container_pull_failed",
+        attempts=[
+            AttemptSpec(
+                status="FAILED",
+                exit=1,
+                log_text=(
+                    "failed to pull image quay.io/biocontainers/fastqc: manifest unknown"
+                ),
+            ),
+            AttemptSpec(status="COMPLETED", exit=0, log_text="done"),
+        ],
+        expected_recovered=True,
+        expected_outcome="patched_and_retried",
+        expected_patch_applied=True,
+    )
+    result = run_heal_scenario(scn, tmp_path)
+    assert result.matched is True, result.divergence
+    assert result.diagnosed_class == "container_pull_failed"
+    assert result.actual_outcome == "patched_and_retried"
+    assert result.recovered is True
+
+
+def test_run_heal_scenario_download_failed_patched_and_retried(tmp_path):
+    """PRD R1/R5: `download_failed` proposes the same `safe` `{"retry": True}`
+    patch (`repair.py:129-138`) -- ungated, and again a documented no-op whose
+    fix is the re-run itself (`self_heal.py:549`).
+
+    The log is the shipped detector-corpus wording. It must NOT contain
+    `failed to pull` (`container_pull_failed` is checked first) and no
+    `killed`/`oom`/exit 137.
+    """
+    scn = HealScenario(
+        scenario_id="download-failed-retry",
+        description="Transient foreign-file staging timeout; the retry succeeds",
+        source="synthetic",
+        expected_class="download_failed",
+        attempts=[
+            AttemptSpec(
+                status="FAILED",
+                exit=1,
+                log_text=(
+                    "Unable to stage foreign file https://example.org/genome.fa.gz: "
+                    "connection timed out"
+                ),
+            ),
+            AttemptSpec(status="COMPLETED", exit=0, log_text="done"),
+        ],
+        expected_recovered=True,
+        expected_outcome="patched_and_retried",
+        expected_patch_applied=True,
+    )
+    result = run_heal_scenario(scn, tmp_path)
+    assert result.matched is True, result.divergence
+    assert result.diagnosed_class == "download_failed"
+    assert result.actual_outcome == "patched_and_retried"
+    assert result.recovered is True
+
+
+def test_run_heal_scenario_missing_reference_rejected_by_user(tmp_path):
+    """PRD R12: the refusal path for a gated `missing_reference` patch. This is
+    the exact shape v0.49.0 fixed -- before it, a rejected patch was still
+    recorded with a non-null patch and rendered as `Repaired`. `patch_applied`
+    must be False here: nothing was enacted.
+    """
+    scn = HealScenario(
+        scenario_id="missing-reference-rejected",
+        description="Absent reference FASTA; the user rejects igenomes_ignore",
+        source="synthetic",
+        expected_class="missing_reference",
+        attempts=[
+            AttemptSpec(
+                status="FAILED",
+                exit=1,
+                log_text="Error: No such file or directory: /data/genome.fasta",
+            ),
+        ],
+        poll_decision="reject",
+        expected_recovered=False,
+        expected_outcome="rejected_by_user",
+        expected_patch_applied=False,
+    )
+    result = run_heal_scenario(scn, tmp_path)
+    assert result.matched is True, result.divergence
+    assert result.diagnosed_class == "missing_reference"
+    assert result.actual_outcome == "rejected_by_user"
+    assert result.recovered is False
+
+
+def test_run_heal_scenario_reference_not_bgzf_unresolvable(tmp_path):
+    """PRD R12: with NO `fasta_artifact`, the driver passes no params at all, so
+    `_recompress_reference` hits its first guard ("No FASTA in params") and gives
+    up honestly rather than claiming a repair (`self_heal.py:783-800`).
+    """
+    scn = HealScenario(
+        scenario_id="reference-not-bgzf-unresolvable",
+        description="Plain-gzip reference error with no reference path to act on",
+        source="synthetic",
+        expected_class="reference_not_bgzf",
+        attempts=[
+            AttemptSpec(
+                status="FAILED",
+                exit=1,
+                log_text=(
+                    "[E::fai_build_core] File truncated at line 1\n"
+                    "[E::fai_build3_core] Cannot index files compressed with gzip, "
+                    "please use bgzip\n"
+                    "[faidx] Could not build fai index /work/ref.fa.gz.fai"
+                ),
+            ),
+        ],
+        auto_approve=True,
+        expected_recovered=False,
+        expected_outcome="reference_recompress_unresolvable",
+        expected_patch_applied=False,
+    )
+    result = run_heal_scenario(scn, tmp_path)
+    assert result.matched is True, result.divergence
+    assert result.diagnosed_class == "reference_not_bgzf"
+    assert result.actual_outcome == "reference_recompress_unresolvable"
+    assert result.recovered is False
+
+
+def test_run_heal_scenario_download_failed_exhausts_budget(tmp_path):
+    """PRD R12: budget exhaustion. `max_attempts=1` means the first failure is
+    also the last, so the loop must give up instead of spending a retry."""
+    scn = HealScenario(
+        scenario_id="download-failed-budget",
+        description="Staging timeout with no retry budget left",
+        source="synthetic",
+        expected_class="download_failed",
+        attempts=[
+            AttemptSpec(
+                status="FAILED",
+                exit=1,
+                log_text=(
+                    "Unable to stage foreign file https://example.org/genome.fa.gz: "
+                    "connection timed out"
+                ),
+            ),
+        ],
+        max_attempts=1,
+        expected_recovered=False,
+        expected_outcome="gave_up",
+        expected_patch_applied=False,
+    )
+    result = run_heal_scenario(scn, tmp_path)
+    assert result.matched is True, result.divergence
+    assert result.diagnosed_class == "download_failed"
+    assert result.actual_outcome == "gave_up"
+    assert result.recovered is False
+
+
 def test_scenario_without_expected_patch_applied_is_unchanged(tmp_path):
     """R7 back-compat: `expected_patch_applied` is opt-in. A scenario omitting it
     parses with the field at None and scores exactly as it did before -- no new
