@@ -450,6 +450,34 @@ GRCh38 seed, known-sites/GTF-version consistency, a runtime `reference_mismatch`
 detector-corpus case, CRAM↔BAM conversion (the input-format-conversion class's second
 half), and pin conflict.
 
+**Deferred, and the highest-value of these — the five INERT repair strategies (filed by the
+C6 catalog-coverage slice against C2).** `propose_patches` emits a patch for
+`disk_full`, `permission_denied`, `conda_solve_failed`, `platform_unsupported` and
+`container_unavailable` whose stated operation is performed by **nothing**, so the loop
+records propose → "apply" → `patch_applied=True` → retry → **`Repaired`** having done
+nothing. Two mechanisms: the first four are `kind="env"` patches whose operation string-merges
+into `target.backend_options` (`self_heal.py:583-586`) where `nfconfig.py:71-98` reads only
+`queue`/`region`/`partition`/`account`/`qos`/`time` — so `clean_work_dir` (`repair.py:145`),
+`fix_permissions` (`repair.py:169`), `relax_or_pin_env` (`repair.py:123`) and
+`use_native_arch_backend` (`repair.py:109`) are written and never read; `container_unavailable`
+is `kind="retry"` (`repair.py:50`), for which `apply_patch` is a **documented** no-op, so its
+`wait_seconds: 15` never reaches `backend_options` at all. This is **one layer below** the bug
+v0.49.0 fixed: `patch_applied` is now honest about *enactment*, but enacting a no-op still
+renders as a repair on every surface.
+
+**The first question is propose-vs-don't, NOT how-to-implement.** `repair.py:166-168` already
+says of `permission_denied` that *"only a human can decide and do that safely"*, and
+`platform_unsupported`'s own rationale says re-running here won't help — so for several of
+these the honest fix may be to **stop proposing** and give up cleanly, not to build the
+operation. `container_unavailable` is the weakest member and may split from the other four: a
+bare retry is a legitimate fix for a transient runtime outage, so only its decorative field is
+dishonest, not its premise. Whichever way it resolves, the five become coverable by
+`heal-guard` **for free** against the corrected behavior — which is why the catalog-coverage
+slice deliberately left them uncovered rather than freezing five suspect expectations into CI.
+`tests/test_repair.py::test_five_inert_patch_operations_are_still_consumed_by_nothing` turns
+**red** the moment any of them is implemented or withdrawn, so this deferral cannot rot
+silently.
+
 Expand the failure-mode catalog and repair strategies well past the current set,
 and make repairs resource-aware. This is the most directly "gets better with
 better models" surface and the richest corpus fuel.
