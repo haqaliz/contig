@@ -705,19 +705,20 @@ def test_shipped_heal_scenarios_all_reproduce_their_declared_outcomes():
     scenarios = load_heal_scenarios(default_heal_scenarios_path())
     report = evaluate_heal(scenarios)
 
-    assert report.total == 16
+    assert report.total == 20
     assert report.outcome_match_rate == 1.0, [
         (m.scenario_id, m.divergence) for m in report.mismatches
     ]
-    # 9 of 16, up from 5 of 9. This is a CORPUS-COMPOSITION change, not a
-    # behaviour change: the catalog-coverage slice added four recovering
-    # scenarios and three give-ups, and the ratio simply follows what was added.
-    # No pre-existing scenario changed its outcome. `recovery_rate` is
-    # informational-only and is never guarded (heal.py:413-414 compares only
-    # outcome_match_rate) -- the guarded number is `outcome_match_rate`, which
-    # stayed at 1.0 across the move.
-    assert report.healed == 9
-    assert report.recovery_rate == pytest.approx(9 / 16)
+    # 10 of 20, up from 9 of 16. This is a CORPUS-COMPOSITION change, not a
+    # behaviour change: Task 6 added three advisory-approved scenarios (which
+    # never count as recovered -- an advisory enacts no patch, R8) and one
+    # genuinely-enacted container_unavailable scenario, and the ratio simply
+    # follows what was added. No pre-existing scenario changed its outcome.
+    # `recovery_rate` is informational-only and is never guarded
+    # (heal.py:413-414 compares only outcome_match_rate) -- the guarded number
+    # is `outcome_match_rate`, which stayed at 1.0 across the move.
+    assert report.healed == 10
+    assert report.recovery_rate == pytest.approx(10 / 20)
 
     covered = {s.expected_class for s in scenarios}
     assert covered >= {
@@ -730,6 +731,10 @@ def test_shipped_heal_scenarios_all_reproduce_their_declared_outcomes():
         "reference_not_bgzf",
         "container_pull_failed",
         "download_failed",
+        "disk_full",
+        "permission_denied",
+        "conda_solve_failed",
+        "container_unavailable",
     }
 
 
@@ -740,12 +745,13 @@ def test_shipped_heal_baseline_matches_shipped_scenarios():
     baseline = load_heal_baseline(default_heal_baseline_path())
 
     assert baseline is not None
-    assert baseline.scenario_count == 16
+    assert baseline.scenario_count == 20
     assert baseline.outcome_match_rate == 1.0
-    # 9/16 since the catalog-coverage refreeze; 5/9 before it. Again a
-    # CORPUS-COMPOSITION move -- four recovering scenarios and three give-ups
+    # 10/20 since the Task 6 refreeze; 9/16 before it. Again a
+    # CORPUS-COMPOSITION move -- three advisory-approved scenarios (never
+    # recovered, R8) and one genuinely-enacted container_unavailable scenario
     # were added -- not a behaviour change, and never a guarded number.
-    assert baseline.recovery_rate == pytest.approx(9 / 16)
+    assert baseline.recovery_rate == pytest.approx(10 / 20)
     assert baseline.corpus_sha == sha256_file(scenarios_path)
     assert set(baseline.covered_classes) >= {
         "oom",
@@ -757,11 +763,21 @@ def test_shipped_heal_baseline_matches_shipped_scenarios():
         "reference_not_bgzf",
         "container_pull_failed",
         "download_failed",
+        "disk_full",
+        "permission_denied",
+        "conda_solve_failed",
+        "container_unavailable",
     }
-    # A15: eleven covered classes exactly -- the seven the qc_anomaly slice left
-    # plus catalog-coverage's four. A silent drop here would mean a class lost
-    # its scenario.
-    assert len(baseline.covered_classes) == 11
+    # Fifteen covered classes exactly -- the eleven the catalog-coverage slice
+    # left plus Task 6's four newly-honest classes (disk_full,
+    # permission_denied, conda_solve_failed, container_unavailable).
+    # platform_unsupported stays uncovered: detect.py:353 requires a failed
+    # event with exit is None, but AttemptSpec.exit is a required int
+    # (models.py:543) used both as the trace column (heal.py:62) and the
+    # executor return code (:82) -- reaching it needs an additive
+    # model/driver change, which is out of scope here. A silent drop here
+    # would mean a class lost its scenario.
+    assert len(baseline.covered_classes) == 15
 
 
 def test_shipped_heal_report_does_not_regress_against_baseline():
@@ -834,3 +850,47 @@ def test_run_heal_scenario_handles_pipeline_execution_error(monkeypatch, tmp_pat
     assert result.actual_outcome == "no_record"
     assert result.diagnosed_class is None
     assert result.matched is False
+
+
+# --- container_unavailable's wait_seconds is honored (Task 6) --------------
+
+
+def test_container_unavailable_wait_is_honored_with_a_recording_sleeper(tmp_path):
+    """`evaluate_heal` always drives scenarios through the shared no-op sleeper
+    (`heal.py:_no_sleep`), so the frozen `container-unavailable-wait-and-retry-heal`
+    scenario can only pin the terminal outcome -- it cannot prove the 15s wait
+    (repair.py:46-55, self_heal.py:1442-1448) actually happened. This test calls
+    `run_heal_scenario` directly with an injected recording sleeper to assert
+    that, keeping the two concerns distinct: the frozen scenario pins the
+    outcome, this test pins the wait.
+    """
+    calls: list[float] = []
+
+    def recording_sleeper(seconds: float) -> None:
+        calls.append(seconds)
+
+    scn = HealScenario(
+        scenario_id="container-unavailable-wait-proof",
+        description="Docker daemon unreachable; an injected sleeper proves the 15s wait happened",
+        source="synthetic",
+        expected_class="container_unavailable",
+        attempts=[
+            AttemptSpec(
+                status="FAILED",
+                exit=1,
+                log_text=(
+                    "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. "
+                    "Is the docker daemon running?"
+                ),
+            ),
+            AttemptSpec(status="COMPLETED", exit=0, log_text="done"),
+        ],
+        expected_recovered=True,
+        expected_outcome="patched_and_retried",
+        expected_patch_applied=True,
+    )
+
+    result = run_heal_scenario(scn, tmp_path, sleeper=recording_sleeper)
+
+    assert result.matched is True, result.divergence
+    assert calls == [15]
