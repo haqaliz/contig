@@ -56,5 +56,5 @@ rewrite. The baseline refreeze is last and is a deliberate act.
 - R-Open-1: advisory `operation` dict contents (`operation` is a required
   `dict[str, object]`).
 - R-Open-2: `platform_unsupported` stays `heal-guard`-uncovered — confirm and record the
-  reason (`detect.py:353` needs `exit is None`; `AttemptSpec.exit` is a required `int`).
+  reason (`detect.py:355` needs `exit is None`; `AttemptSpec.exit` is a required `int`).
 - R-Open-3: `approval-gate.tsx:163` copy is misleading for an advisory.

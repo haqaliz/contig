@@ -33,7 +33,7 @@ import { OUTCOME_META } from "../components/run/repair-timeline";
 // classes DIFFER -- rather than pinning a Tailwind string, which would test the
 // stylesheet rather than the behaviour, and would go vacuous on any restyle.
 
-// Every outcome literal the engine emits: 15 recorded by src/contig/self_heal.py,
+// Every outcome literal the engine emits: 16 recorded by src/contig/self_heal.py,
 // 3 by src/contig/verification/reproduce.py (which shares the RepairStep type via
 // ReproduceRecord.repair_history). Grouped by what actually happened to the patch.
 //

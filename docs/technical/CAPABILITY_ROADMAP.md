@@ -448,35 +448,89 @@ assembly-signature form of reference/build mismatch (no sample-side contig signa
 FASTQ or finished bundle), exhaustive per-assembly alias-table completeness beyond the
 GRCh38 seed, known-sites/GTF-version consistency, a runtime `reference_mismatch`
 detector-corpus case, CRAM↔BAM conversion (the input-format-conversion class's second
-half), and pin conflict.
+half), and pin conflict. Also deferred, filed by the inert-repair-honesty slice (C2), none
+fixed here: **(a)** `read_task_errors` hardcodes `Path(run_dir)/"work"` (`runner.py:1070`)
+while Nextflow is actually given `target.work_dir` (`nfconfig.py:100`) — the detector goes
+blind on a custom `--work-dir`; **(b)** `risk="destructive"` is a no-op to the engine — no
+code branches on it and `--auto-approve` has no carve-out, so only the dashboard honors it;
+**(c)** `_write_pending_choice` (the ambiguous-choice gate) has no advisory branch and still
+writes `operation` unconditionally — unreachable today, since all four advisory classes are
+single-candidate at confidence ≥ 0.7 while `_is_ambiguous` needs <0.5 or >1 candidate, and if
+one ever reached it `apply_patch`'s advisory guard raises loudly rather than silently
+re-enacting.
 
-**Deferred, and the highest-value of these — the five INERT repair strategies (filed by the
-C6 catalog-coverage slice against C2).** `propose_patches` emits a patch for
-`disk_full`, `permission_denied`, `conda_solve_failed`, `platform_unsupported` and
-`container_unavailable` whose stated operation is performed by **nothing**, so the loop
-records propose → "apply" → `patch_applied=True` → retry → **`Repaired`** having done
-nothing. Two mechanisms: the first four are `kind="env"` patches whose operation string-merges
-into `target.backend_options` (`self_heal.py:583-586`) where `nfconfig.py:71-98` reads only
-`queue`/`region`/`partition`/`account`/`qos`/`time` — so `clean_work_dir` (`repair.py:145`),
-`fix_permissions` (`repair.py:169`), `relax_or_pin_env` (`repair.py:123`) and
-`use_native_arch_backend` (`repair.py:109`) are written and never read; `container_unavailable`
-is `kind="retry"` (`repair.py:50`), for which `apply_patch` is a **documented** no-op, so its
-`wait_seconds: 15` never reaches `backend_options` at all. This is **one layer below** the bug
-v0.49.0 fixed: `patch_applied` is now honest about *enactment*, but enacting a no-op still
-renders as a repair on every surface.
+**Resolved (Unreleased) — the five INERT repair strategies (filed by the C6 catalog-coverage
+slice against C2), four made honest advisories, one genuinely enacted.** `propose_patches`
+used to emit a patch for `disk_full`, `permission_denied`, `conda_solve_failed`,
+`platform_unsupported` and `container_unavailable` whose stated operation was performed by
+**nothing**, so the loop recorded propose → "apply" → `patch_applied=True` → retry →
+**`Repaired`** having done nothing. Two mechanisms: the first four were `kind="env"` patches
+whose operation string-merged into `target.backend_options` (`self_heal.py:583-586`) where
+`nfconfig.py:71-98` reads only `queue`/`region`/`partition`/`account`/`qos`/`time` — so
+`clean_work_dir`, `fix_permissions`, `relax_or_pin_env` and `use_native_arch_backend` were
+written and never read; `container_unavailable` was `kind="retry"` (`repair.py:50`), for which
+`apply_patch` is a **documented** no-op, so its `wait_seconds: 15` never reached
+`backend_options` at all. That was **one layer below** the bug v0.49.0 fixed: `patch_applied`
+was already honest about *enactment*, but enacting a no-op still rendered as a repair on every
+surface.
 
-**The first question is propose-vs-don't, NOT how-to-implement.** `repair.py:166-168` already
-says of `permission_denied` that *"only a human can decide and do that safely"*, and
-`platform_unsupported`'s own rationale says re-running here won't help — so for several of
-these the honest fix may be to **stop proposing** and give up cleanly, not to build the
-operation. `container_unavailable` is the weakest member and may split from the other four: a
-bare retry is a legitimate fix for a transient runtime outage, so only its decorative field is
-dishonest, not its premise. Whichever way it resolves, the five become coverable by
-`heal-guard` **for free** against the corrected behavior — which is why the catalog-coverage
-slice deliberately left them uncovered rather than freezing five suspect expectations into CI.
-`tests/test_repair.py::test_five_inert_patch_operations_are_still_consumed_by_nothing` turns
-**red** the moment any of them is implemented or withdrawn, so this deferral cannot rot
-silently.
+**The first question was propose-vs-don't, not how-to-implement, and it resolved differently
+per class.** `repair.py:166-168` already said of `permission_denied` that *"only a human can
+decide and do that safely"*, and `platform_unsupported`'s own rationale said re-running here
+won't help — so the four `env` classes became a new `Patch.kind = "advisory"`: a diagnosis
+plus human-executable guidance, never machine-applicable, with the inert operation withdrawn
+rather than reassigned. The self-heal loop now branches on `kind == "advisory"` **before** the
+applier; `apply_patch` raises if one ever reaches it (defensive, unreachable in practice). An
+approved advisory records the deliberately observational `advisory_acknowledged_and_retried`
+(Contig cannot verify the human actually fixed anything, only that they approved and the retry
+ran) with `patch_applied=False` and `recovered=False` — the recovery is attributed to the
+human, which is what happened. `--auto-approve` (no human in the loop) now makes an advisory
+`gave_up` honestly with the rationale and **no retry**, rather than re-entering the same false
+claim through the unattended path. The approval gate (`pending_approval.json`) stops
+serializing an `operation` dict for work Contig will not do. `container_unavailable` was the
+weakest member and did split from the other four: a bare retry is a legitimate fix for a
+transient runtime outage, so only its decorative field was dishonest, not its premise — it now
+**genuinely waits** `wait_seconds` through an injected clock seam (precedent: the stall
+watchdog's `sleeper: Callable[[float], None]`, `runner.py:673`) threaded through
+`self_heal_run` **and** `heal.py`'s evaluator, so CI never really sleeps.
+
+`heal-guard` `covered_classes` moved **11 → 15** (`disk_full`, `permission_denied`,
+`conda_solve_failed`, `container_unavailable` newly covered; `platform_unsupported` stays
+deliberately **un**covered — reaching it needs a failed event with `exit is None`
+(`detect.py:355`), but `AttemptSpec.exit` is a required `int` (`models.py:543`) used as both
+the trace column (`heal.py:82`) and the executor return code (`heal.py:100`), an additive
+model/driver change out of scope here), guarded outcome-match held at **1.0** over 20
+scenarios, `heal_baseline.json` refrozen as a deliberate act
+(`--update-baseline`, never a hand-edit). The pinning guard that reddened on any change
+(`tests/test_repair.py::test_five_inert_patch_operations_are_still_consumed_by_nothing`) is
+**retired deliberately**, not deleted for green, and replaced by one pinning the new contract:
+no advisory carries a withdrawn operation key, and `wait_seconds` is consumed.
+
+**Read honestly, against our own interest — every metric that could flatter this is either
+unmoved or moved for a reason that is not "more failures recovered."** This is push, not
+demand-pull, and now demonstrably so: **0 of 20** pending-corpus cases and **0 of 15** real
+runs were ever diagnosed into any of these five classes — the only classes ever diagnosed in
+the field remain `oom`, `tool_crash`, `missing_index`, `unknown`. `eval-guard` **cannot move
+and did not**: nothing here touches a detector or a corpus, and the pending-corpus append
+(`self_heal.py:1096`) happens **before** `propose` (`:1106`), so proposer changes write zero
+bytes to it — unmoved at 92.3% (12/13), same known miss. The informational `recovery_rate`
+move (9/16 → 10/20) is **corpus composition**, not loop behaviour, and stays never-guarded.
+Every scenario is self-graded — we authored the fixtures for the classes we then grade — with
+no real nf-core run in CI. Withdrawing the four inert operations is also a **provenance
+change**, not only a proposer change: those keys were written into every affected run's
+`record.target.backend_options` and now never are. And **this recovers nothing new for a
+user** except a transient Docker-daemon blip.
+
+**Revisit trigger, in both directions**, following the `no_progress` and `qc_anomaly`
+precedent, because G1–G4 all reduce to "a test we wrote asserts behaviour we defined" and none
+of them distinguishes *made the record honest* from *made the record differently-shaped*.
+**(a)** If the next 20 diagnosed failures appended to the pending corpus contain **no** case in
+any of the five classes, the advisory abstraction is restated as taxonomy-only, and no further
+breadth is built for these classes on push alone — counted by grouping
+`runs/pending_corpus.jsonl` by `failure_class`, no new instrumentation. **(b)** If
+`container_unavailable` fires and the enacted wait does **not** recover it, the wait is
+removed rather than lengthened — a longer guess would be the same unvalidated reasoning at a
+bigger number.
 
 Expand the failure-mode catalog and repair strategies well past the current set,
 and make repairs resource-aware. This is the most directly "gets better with

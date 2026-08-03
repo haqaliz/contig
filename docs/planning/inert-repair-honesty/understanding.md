@@ -163,7 +163,7 @@ Revisit trigger (b) at `CAPABILITY_ROADMAP.md:1287-1291` asks for the pending co
 - **`platform_unsupported` is the sharpest case.** Its training case is the rare one sourced
   `live:realtest (2026-06-20)` and its `log_text` is byte-identical to a real
   `.command.err`. But the real run was diagnosed **`tool_crash`, `gave_up`** — the case's
-  `events: [{exit: null}]`, which `detect.py:353` requires, was **authored**. `detect.py:411`
+  `events: [{exit: null}]`, which `detect.py:355` requires, was **authored**. `detect.py:411`
   already concedes the rule *"rests on a warning that appears on healthy tasks too"*, and
   `diagnose_failure_strict` (`detect.py:431`) demotes it unconditionally.
 
@@ -240,7 +240,7 @@ design decision, and the main thing to settle in the PRD.
    contract per class, not deleted for green.
 6. **Do the five then get `heal-guard` scenarios?** That was the stated downstream unlock
    (`CAPABILITY_ROADMAP.md:474-476`). Note `platform_unsupported` cannot be driven through the
-   existing driver — `detect.py:353` needs `exit is None` while `AttemptSpec.exit` is a required
+   existing driver — `detect.py:355` needs `exit is None` while `AttemptSpec.exit` is a required
    `int` (`models.py:543`) — so covering it needs an additive driver change, which prior slices
    treat as a mechanism change requiring its own justification.
 

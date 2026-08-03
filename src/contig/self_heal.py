@@ -550,8 +550,13 @@ def apply_patch(
       `_apply_patch_and_maybe_build` (which actually builds the index — that build
       IS the fix); `apply_patch` itself stays a no-op for it, so the re-run picks
       up the freshly built index.
-    - `env`: merge the operation into the target's backend_options (string-coerced
-      so it rides into the generated config / re-run target).
+    - `env`: merge the operation into the target's backend_options, string-coerced.
+      No live `kind="env"` patch remains as of the advisory withdrawal (`repair.py`) --
+      this branch exists only for the type and is not on any reachable path. Even
+      before that withdrawal, string-coercion into `backend_options` never "rode
+      into the generated config": `nfconfig.py:71-98` reads only six named keys
+      (`queue`, `region`, `partition`, `account`, `qos`, `time`) by `.get()`, never
+      iterates the dict, and does not consult `backend_options` at all on `local`.
     - `code`/`retry`: change nothing. The re-run itself is the fix.
     - `advisory`: never enacted -- there is no machine operation to apply, only
       human advice carried in `rationale`. An advisory reaching this function

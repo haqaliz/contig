@@ -62,7 +62,7 @@ honest about enactment, but enacting a no-op still renders as a repair everywher
 - **`platform_unsupported` is the sharpest case.** Its training case is sourced
   `live:realtest (2026-06-20)` and its `log_text` is byte-identical to a real `.command.err`
   — but the real run was diagnosed **`tool_crash`, `gave_up`**. The case's `events: [{exit:
-  null}]`, which `detect.py:353` requires, was **authored**.
+  null}]`, which `detect.py:355` requires, was **authored**.
 
 So this is **push, not demand-pull**, and now demonstrably so. The honest phrasing is that
 organic frequency is unmeasured *because the instrument has recorded nothing* — not because
@@ -303,10 +303,10 @@ path. It is also the path CI and any non-interactive user takes. Candidate resol
 `dict[str, object]` (`models.py:301`). Options: `{}`, or a non-actionable descriptor. Must not
 be shaped like a machine operation. *Decide in tech-plan.*
 
-**R-Open-2 — `platform_unsupported` cannot be driven through `heal-guard`.** `detect.py:353`
+**R-Open-2 — `platform_unsupported` cannot be driven through `heal-guard`.** `detect.py:355`
 requires a failed event with `exit is None`, while `AttemptSpec.exit` is a required `int`
-(`models.py:543`) used both as the trace column and the executor return code (`heal.py:62`,
-`:82`). Covering it needs an additive model/driver change, which prior slices treat as a
+(`models.py:543`) used both as the trace column and the executor return code (`heal.py:82`,
+`:100`). Covering it needs an additive model/driver change, which prior slices treat as a
 mechanism change requiring its own justification. **Proposed: leave it uncovered and record
 the reason** (hence `covered_classes` 15, not 16). *Confirm in tech-plan.*
 

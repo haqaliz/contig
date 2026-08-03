@@ -510,10 +510,16 @@ def test_apply_patch_param_merges_set_param_into_params(tmp_path):
 
 
 def test_apply_patch_env_merges_operation_into_backend_options(tmp_path):
-    patch = Patch(kind="env", operation={"relax_or_pin_env": True},
+    # R12: no live `kind="env"` patch exists any more -- `relax_or_pin_env` and its
+    # three siblings were withdrawn to `kind="advisory"` (repair.py), so this key no
+    # longer reaches `record.target.backend_options` in any real run. That withdrawal
+    # is a provenance change, not only a proposer change: those four keys used to be
+    # written into every affected run's bundle and now never are. This test pins the
+    # generic merge mechanism with a synthetic key, not a live operation.
+    patch = Patch(kind="env", operation={"some_env_key": True},
                   rationale="x", risk="needs_confirmation", expected_signal="s")
     target, params = apply_patch(_t(), patch, {})
-    assert target.backend_options["relax_or_pin_env"] == "True"
+    assert target.backend_options["some_env_key"] == "True"
 
 
 def test_apply_patch_reference_build_index_is_rerun_only(tmp_path):
