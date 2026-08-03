@@ -2695,9 +2695,9 @@ def heal_guard(
       withdrawn because nothing in the codebase switches container
       architectures. What keeps it out of this guard is narrower and purely
       mechanical: reaching it needs a failed event with `exit is None`
-      (`detect.py:353`), but `AttemptSpec.exit` is a required `int`
-      (`models.py:543`) used both as the trace column (`heal.py:62`) and the
-      executor return code (`:82`). Giving a scenario an unset exit needs an
+      (`detect.py:355`), but `AttemptSpec.exit` is a required `int`
+      (`models.py:543`) used both as the trace column (`heal.py:82`) and the
+      executor return code (`:100`). Giving a scenario an unset exit needs an
       additive model/driver change, which is a mechanism change with its own
       justification -- not something to work around here just to close this
       count.
