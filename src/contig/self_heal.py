@@ -57,6 +57,7 @@ from contig.runner import (
     Executor,
     IndexBuilder,
     PipelineExecutionError,
+    Sleeper,
     default_executor,
     default_index_builder,
     read_run_log,
@@ -979,6 +980,7 @@ def self_heal_run(
     notify_webhook: str | None = None,
     resource_ceiling: dict[str, int] | None = None,
     harmonized_reference_direction: str | None = None,
+    sleeper: Sleeper = time.sleep,
 ) -> RunRecord:
     """Run a pipeline and auto-recover from recoverable failures, logging the chain.
 
@@ -1432,6 +1434,18 @@ def self_heal_run(
                            outcome="patched_and_retried", detail=detail,
                            patch_applied=True),
             )
+            # Only container_unavailable's patch carries wait_seconds
+            # (repair.py:46-55); every other safe retry has none, so this must
+            # never become a blanket backoff. Guard the type: only a positive
+            # real number sleeps (bool is an int subclass, so excluded
+            # explicitly -- a stray `True` must never be read as `1`).
+            wait_seconds = safe.operation.get("wait_seconds")
+            if (
+                isinstance(wait_seconds, (int, float))
+                and not isinstance(wait_seconds, bool)
+                and wait_seconds > 0
+            ):
+                sleeper(wait_seconds)
             attempt += 1
 
 

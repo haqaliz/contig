@@ -85,6 +85,99 @@ def test_self_heal_oom_bump_emits_bumped_resourcelimits(tmp_path):
     assert "process.resourceLimits = [ memory: 16.GB ]" in state["retry_cfg"]
 
 
+def test_container_unavailable_heal_waits_via_injected_sleeper(tmp_path):
+    # The wait is the load-bearing part of container_unavailable's fix
+    # (repair.py:46-55): an immediate retry against a down daemon fails
+    # identically. The sleeper is injected so the wait is provable without
+    # costing real wall-clock time.
+    calls = []
+
+    def sleeper(seconds):
+        calls.append(seconds)
+
+    state = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(
+                trace_path,
+                TRACE_TOOL,
+                "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. "
+                "Is the docker daemon running?",
+            )
+            return 1
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor, sleeper=sleeper)
+    assert calls == [15]
+    assert RunSummary.from_events(record.events).succeeded is True
+    step = record.repair_history[0]
+    assert step.diagnosis.failure_class == "container_unavailable"
+    assert step.outcome == "patched_and_retried"
+    assert step.patch_applied is True
+
+
+def test_container_pull_failed_heal_sleeps_zero_times(tmp_path):
+    # wait_seconds rides only on container_unavailable's patch (repair.py:50).
+    # This pins that threading the sleeper did NOT become a blanket backoff on
+    # every safe retry -- a patch with no wait_seconds must sleep zero times.
+    calls = []
+
+    def sleeper(seconds):
+        calls.append(seconds)
+
+    state = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, TRACE_TOOL, "failed to pull image: manifest unknown")
+            return 1
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor, sleeper=sleeper)
+    assert calls == []
+    assert RunSummary.from_events(record.events).succeeded is True
+    step = record.repair_history[0]
+    assert step.diagnosis.failure_class == "container_pull_failed"
+
+
+def test_container_unavailable_heal_never_sleeps_for_real(tmp_path, monkeypatch):
+    # Real time must never pass in CI: the injected sleeper is what stands in
+    # for the wait, and the real time.sleep self_heal.py falls back to by
+    # default must not be reached when a fake is supplied.
+    def _forbidden_sleep(seconds):
+        raise AssertionError(f"real time.sleep called with {seconds}")
+
+    monkeypatch.setattr("contig.self_heal.time.sleep", _forbidden_sleep)
+
+    calls = []
+
+    def sleeper(seconds):
+        calls.append(seconds)
+
+    state = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(
+                trace_path,
+                TRACE_TOOL,
+                "Cannot connect to the Docker daemon at unix:///var/run/docker.sock.",
+            )
+            return 1
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor, sleeper=sleeper)
+    assert calls == [15]
+    assert RunSummary.from_events(record.events).succeeded is True
+
+
 def test_self_heal_writes_status_running_then_finished(tmp_path):
     # The dashboard reads status.json to know a run is in flight (run_record.json
     # only appears at the end). It must say "running" during, "finished" after.
