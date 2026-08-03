@@ -2,8 +2,9 @@
 
 ## ⚠️ The design decision this plan turns on — read before Phase 1
 
-`patch_applied` is sourced **solely** from `_apply_patch_and_maybe_build`'s `continue_`
-(`self_heal.py:1164-1165`, `:1208`, `:1264-1268`). That was v0.49.0's whole point: correct by
+`patch_applied` is sourced **solely** from `_apply_patch_and_maybe_build`'s `continue_`, at its
+three call sites in `self_heal.py::self_heal_run` (auto-approve `:1244-1262`, choice-gate approve
+`:1292-1307`, single-gate approve `:1348-1367`). That was v0.49.0's whole point: correct by
 construction, not by review.
 
 But this feature needs **`patch_applied=False` AND a retry** on an approved advisory — and

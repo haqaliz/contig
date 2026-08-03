@@ -467,7 +467,7 @@ slice just made advisory-honest, so the relabel channel that would let a human c
 misdiagnosed case before it is counted has no route to either label, leaving the §"Revisit
 trigger" (a) grouping of `runs/pending_corpus.jsonl` by `failure_class` dependent solely on
 the detector's raw (possibly wrong) diagnosis for these two classes; **(e)** the enacted
-`container_unavailable` wait leaves no trace in the record — `self_heal.py:1453` sleeps
+`container_unavailable` wait leaves no trace in the record — `self_heal.py:1452-1458` sleeps
 `wait_seconds` but `RepairStep.detail` stays `None`, so no surface says "waited 15s". This is
 an *under*-claim (the record says less than what happened), and fixing it is a behaviour
 change deliberately left out of this slice's scope.
@@ -478,7 +478,7 @@ used to emit a patch for `disk_full`, `permission_denied`, `conda_solve_failed`,
 `platform_unsupported` and `container_unavailable` whose stated operation was performed by
 **nothing**, so the loop recorded propose → "apply" → `patch_applied=True` → retry →
 **`Repaired`** having done nothing. Two mechanisms: the first four were `kind="env"` patches
-whose operation string-merged into `target.backend_options` (`self_heal.py:607-610`) where
+whose operation string-merged into `target.backend_options` (`self_heal.py:610-613`) where
 `nfconfig.py:71-98` reads only `queue`/`region`/`partition`/`account`/`qos`/`time` — so
 `clean_work_dir`, `fix_permissions`, `relax_or_pin_env` and `use_native_arch_backend` were
 written and never read; `container_unavailable` was `kind="retry"` (`repair.py:50`), for which
@@ -525,7 +525,7 @@ demand-pull, and now demonstrably so: **0 of 20** pending-corpus cases and **0 o
 runs were ever diagnosed into any of these five classes — the only classes ever diagnosed in
 the field remain `oom`, `tool_crash`, `missing_index`, `unknown`. `eval-guard` **cannot move
 and did not**: nothing here touches a detector or a corpus, and the pending-corpus append
-(`self_heal.py:1121`) happens **before** `propose` (`:1131`), so proposer changes write zero
+(`self_heal.py:1124-1133`) happens **before** `propose` (`:1134`), so proposer changes write zero
 bytes to it — unmoved at 92.3% (12/13), same known miss. The informational `recovery_rate`
 move (9/16 → 10/20) is **corpus composition**, not loop behaviour, and stays never-guarded.
 Every scenario is self-graded — we authored the fixtures for the classes we then grade — with
