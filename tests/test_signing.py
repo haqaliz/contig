@@ -211,3 +211,79 @@ def test_pre_field_signature_over_a_record_with_no_repair_history_still_verifies
     )
 
     assert verify_signature(record, old_signature, public_key) is True
+
+
+# --- widening Patch.kind to add "advisory" is not a signature break -----------
+#
+# `Patch.kind` grew a seventh Literal member, `"advisory"` (models.py:300), as
+# part of the inert-repair-honesty slice. Unlike `patch_applied` (a genuinely
+# new key), a `Literal` only constrains what pydantic validates on input -- it
+# has no representation of its own in `model_dump(mode="json")`, so an existing
+# value like `"env"` must serialize byte-identically whether or not "advisory"
+# is also a legal value. Pin that directly, rather than assuming it: a record
+# built under an independently-reconstructed OLD (six-member) Literal, carrying
+# an "env" patch, produces the exact same canonical bytes as today's code.
+
+
+def _pre_advisory_literal_canonical_bytes(record: RunRecord) -> bytes:
+    """The canonical bytes a pre-advisory-literal Contig would have produced.
+
+    Rebuilds every `repair_history` entry's patch through an independent model
+    carrying the OLD six-member `Literal` (no "advisory"), so the comparison
+    against today's `canonical_record_bytes` is genuine -- not just re-deriving
+    the same code path twice.
+    """
+    import json as _json
+    from typing import Literal as _Literal
+
+    from pydantic import BaseModel as _BaseModel
+
+    class _OldPatch(_BaseModel):
+        kind: _Literal["param", "resource", "env", "reference", "retry", "code"]
+        operation: dict[str, object]
+        rationale: str
+        risk: _Literal["safe", "needs_confirmation", "destructive"]
+        expected_signal: str
+
+    payload = record.model_dump(mode="json")
+    old_steps = []
+    for new_step, orig_step in zip(payload["repair_history"], record.repair_history):
+        rebuilt = dict(new_step)
+        if orig_step.patch is not None:
+            rebuilt["patch"] = _OldPatch(**orig_step.patch.model_dump()).model_dump(
+                mode="json"
+            )
+        old_steps.append(rebuilt)
+    old_payload = dict(payload)
+    old_payload["repair_history"] = old_steps
+    return _json.dumps(old_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+@requires_signing
+def test_pre_advisory_literal_signature_over_an_env_kind_patch_still_verifies():
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    from contig.models import Patch
+
+    private_key, public_key = generate_keypair()
+    record = _record_with_repair_history()
+    # "env" existed in the Literal before "advisory" was added -- exactly the
+    # value the widening must not disturb.
+    record.repair_history[0].patch = Patch(
+        kind="env",
+        operation={"queue": "long"},
+        rationale="Route to a longer-running queue.",
+        risk="safe",
+        expected_signal="task completes",
+    )
+
+    old_bytes = _pre_advisory_literal_canonical_bytes(record)
+    assert old_bytes == canonical_record_bytes(record)  # nothing changed
+
+    old_signature = (
+        Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key))
+        .sign(old_bytes)
+        .hex()
+    )
+
+    assert verify_signature(record, old_signature, public_key) is True

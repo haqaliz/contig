@@ -16,7 +16,8 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { RepairStep } from "@/lib/types";
 
-// Friendly labels for the engine's machine failure classes.
+// Friendly labels for the engine's machine failure classes (kept in sync with
+// the running view and the approval gate so every surface reads the same).
 const FAILURE_LABELS: Record<string, string> = {
   oom: "Out of memory",
   tool_crash: "Tool crashed",
@@ -24,6 +25,10 @@ const FAILURE_LABELS: Record<string, string> = {
   reference_mismatch: "Reference mismatch",
   missing_input: "Missing input",
   qc_anomaly: "QC anomaly",
+  conda_solve_failed: "Conda solve failed",
+  platform_unsupported: "Platform unsupported",
+  disk_full: "Disk full",
+  permission_denied: "Permission denied",
   unknown: "Unknown failure",
 };
 

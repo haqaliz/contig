@@ -326,9 +326,10 @@ def test_self_heal_pauses_for_approval_on_needs_confirmation(tmp_path):
 def _advisory_propose(diagnosis):
     """A fake `propose` that always offers a single advisory patch.
 
-    Used to pin the structural guarantee (design-decision.md) across every
-    gate decision without depending on which real failure class the detector
-    happens to phrase a log line into.
+    Used to pin the structural guarantee
+    (docs/planning/inert-repair-honesty/advisory-repairs/design-decision.md)
+    across every gate decision without depending on which real failure class
+    the detector happens to phrase a log line into.
     """
     return [
         Patch(
@@ -341,25 +342,17 @@ def _advisory_propose(diagnosis):
     ]
 
 
-def _heal_or_raised(tmp_path, executor, **over):
-    """Run self_heal_run, tolerating a raise (both outcomes are valid ways to
-    satisfy "no RepairStep records an enacted advisory" -- see the structural
-    pin's docstring above the caller)."""
-    try:
-        return _heal(tmp_path, executor, **over)
-    except Exception:
-        return None
-
-
 def test_advisory_patch_never_recorded_as_applied_through_the_loop(tmp_path):
-    # The structural pin (design-decision.md): patch_applied is sourced solely
-    # from _apply_patch_and_maybe_build's `continue_`, so for EVERY gate
-    # decision (approve / reject / timeout / auto-approve), no recorded
-    # RepairStep may have both patch.kind == "advisory" and patch_applied is
-    # True. Today, before self_heal_run has its own advisory branch, an
-    # approved/auto-approved advisory still reaches apply_patch -- which must
-    # then raise rather than let the loop silently continue and wrongly mark
-    # it applied.
+    # The structural pin
+    # (docs/planning/inert-repair-honesty/advisory-repairs/design-decision.md):
+    # patch_applied is sourced solely from _apply_patch_and_maybe_build's
+    # `continue_`, so for EVERY gate decision (approve / reject / timeout /
+    # auto-approve), no recorded RepairStep may have both patch.kind ==
+    # "advisory" and patch_applied True. self_heal_run's own advisory branch
+    # (kind == "advisory", ahead of apply_patch) handles all four gate
+    # decisions without ever calling apply_patch/_apply_patch_and_maybe_build,
+    # so the loop always returns normally here -- there is no raising path
+    # left to tolerate.
     def executor(cmd, trace_path):
         _write(trace_path, TRACE_TOOL, "boom")
         return 1
@@ -371,9 +364,7 @@ def test_advisory_patch_never_recorded_as_applied_through_the_loop(tmp_path):
         dict(run_id="r-auto", auto_approve=True),
     ]
     for kwargs in gate_kwargs:
-        record = _heal_or_raised(tmp_path, executor, propose=_advisory_propose, **kwargs)
-        if record is None:
-            continue  # raised rather than mis-recording -- also satisfies the pin
+        record = _heal(tmp_path, executor, propose=_advisory_propose, **kwargs)
         assert not any(
             step.patch is not None and step.patch.kind == "advisory" and step.patch_applied
             for step in record.repair_history
@@ -542,8 +533,9 @@ def test_apply_patch_reference_set_param_swaps_the_reference_param(tmp_path):
 
 
 def test_apply_patch_advisory_raises_instead_of_silently_no_opping(tmp_path):
-    # design-decision.md: an advisory reaching the applier must be a loud bug,
-    # never a quiet re-enactment. Before this, an unrecognized kind fell
+    # docs/planning/inert-repair-honesty/advisory-repairs/design-decision.md:
+    # an advisory reaching the applier must be a loud bug, never a quiet
+    # re-enactment. Before this, an unrecognized kind fell
     # through to the `return target, params` fallback -- a silent no-op that
     # would have let the caller wrongly treat it as continuable.
     patch = Patch(kind="advisory", operation={},
@@ -1431,7 +1423,8 @@ _CONDA_LOG = "ResolvePackageNotFound:\n  - bioconductor-dupradar=1.38"
 
 def test_self_heal_advisory_approve_records_acknowledged_and_retries(tmp_path):
     # The loop now branches on kind == "advisory" BEFORE the applier
-    # (design-decision.md), so an approved advisory no longer reaches
+    # (docs/planning/inert-repair-honesty/advisory-repairs/design-decision.md),
+    # so an approved advisory no longer reaches
     # apply_patch at all: it records the observational outcome and retries
     # directly. Restores the behavioral specificity the interim guard-pinning
     # test (this test replaces) could not assert: succeeded, failure_class,
@@ -1478,8 +1471,9 @@ def test_self_heal_advisory_reject_and_timeout_never_claim_enactment(tmp_path):
 
 def test_self_heal_auto_approve_advisory_gives_up_honestly_without_retry(tmp_path):
     # --auto-approve has no human to acknowledge the guidance, and there is no
-    # machine operation to apply on its own (design-decision.md): the only
-    # honest move is a give-up that carries the guidance, not a fabricated
+    # machine operation to apply on its own
+    # (docs/planning/inert-repair-honesty/advisory-repairs/design-decision.md):
+    # the only honest move is a give-up that carries the guidance, not a fabricated
     # retry. The executor must be called exactly once -- the failing attempt
     # itself -- never a second time.
     state = {"n": 0}

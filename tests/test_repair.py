@@ -343,7 +343,9 @@ def test_wait_seconds_is_consumed_outside_repair_py() -> None:
 
 def test_apply_patch_raises_for_an_advisory() -> None:
     """Assertion 3: an advisory reaching `apply_patch` is a caller bug, never
-    a silent no-op (design-decision.md). Narrower duplicate of
+    a silent no-op
+    (docs/planning/inert-repair-honesty/advisory-repairs/design-decision.md).
+    Narrower duplicate of
     test_self_heal.py's fuller coverage, kept here because the replaced
     guard's contract names this explicitly as part of what "advisory, not
     inert-and-hidden" means.

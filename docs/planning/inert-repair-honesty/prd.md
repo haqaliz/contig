@@ -299,6 +299,16 @@ path. It is also the path CI and any non-interactive user takes. Candidate resol
 - **(c) Advisory still retries under auto-approve**, but the outcome says only that a retry
   happened, asserting no acknowledgement.
 
+**Resolved — (a), approved 2026-08-03.** `--auto-approve` on an advisory now gives up honestly
+with the guidance recorded, no retry claimed. **(b)** was the cleaner literal on paper — a
+dedicated `advisory_unattended` would have named the "unattended, nothing acknowledged" case
+precisely instead of reusing an outcome that elsewhere means "we tried a fix and lost" — but
+**(a)** was taken because it reuses two existing "nothing tried" precedents already recorded
+under `gave_up` (`self_heal.py:1147`, no patch at all to try; `self_heal.py:1164`, budget
+exhausted before apply), rather than adding a new outcome literal to the dashboard's pinned
+`OUTCOME_META` contract (`repair-timeline.tsx`) for a case that is semantically the same as
+those two: no human in the loop, nothing enacted, give up.
+
 **R-Open-1 — What does an advisory `Patch.operation` contain?** `operation` is a required
 `dict[str, object]` (`models.py:301`). Options: `{}`, or a non-actionable descriptor. Must not
 be shaped like a machine operation. *Decide in tech-plan.*

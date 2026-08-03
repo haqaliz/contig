@@ -449,7 +449,7 @@ FASTQ or finished bundle), exhaustive per-assembly alias-table completeness beyo
 GRCh38 seed, known-sites/GTF-version consistency, a runtime `reference_mismatch`
 detector-corpus case, CRAM↔BAM conversion (the input-format-conversion class's second
 half), and pin conflict. Also deferred, filed by the inert-repair-honesty slice (C2), none
-fixed here: **(a)** `read_task_errors` hardcodes `Path(run_dir)/"work"` (`runner.py:1070`)
+fixed here: **(a)** `read_task_errors` hardcodes `Path(run_dir)/"work"` (`runner.py:1077`)
 while Nextflow is actually given `target.work_dir` (`nfconfig.py:100`) — the detector goes
 blind on a custom `--work-dir`; **(b)** `risk="destructive"` is a no-op to the engine — no
 code branches on it and `--auto-approve` has no carve-out, so only the dashboard honors it;
@@ -457,7 +457,20 @@ code branches on it and `--auto-approve` has no carve-out, so only the dashboard
 writes `operation` unconditionally — unreachable today, since all four advisory classes are
 single-candidate at confidence ≥ 0.7 while `_is_ambiguous` needs <0.5 or >1 candidate, and if
 one ever reached it `apply_patch`'s advisory guard raises loudly rather than silently
-re-enacting.
+re-enacting; **(d)** PRD R-Open-4 — `dashboard/lib/derive.ts`'s `FAILURE_CLASSES` (the corpus
+relabel dropdown's source of truth, server-validated in
+`dashboard/app/api/corpus/promote/route.ts`) still omits `disk_full`, `permission_denied`,
+`download_failed`, `reference_not_bgzf`, and `missing_dependency` — pre-existing, not
+introduced by this slice, but now more than a stale mirror: a human reviewing a pending case
+cannot promote it labelled `disk_full` or `permission_denied`, two of the four classes this
+slice just made advisory-honest, so the relabel channel that would let a human correct a
+misdiagnosed case before it is counted has no route to either label, leaving the §"Revisit
+trigger" (a) grouping of `runs/pending_corpus.jsonl` by `failure_class` dependent solely on
+the detector's raw (possibly wrong) diagnosis for these two classes; **(e)** the enacted
+`container_unavailable` wait leaves no trace in the record — `self_heal.py:1453` sleeps
+`wait_seconds` but `RepairStep.detail` stays `None`, so no surface says "waited 15s". This is
+an *under*-claim (the record says less than what happened), and fixing it is a behaviour
+change deliberately left out of this slice's scope.
 
 **Resolved (Unreleased) — the five INERT repair strategies (filed by the C6 catalog-coverage
 slice against C2), four made honest advisories, one genuinely enacted.** `propose_patches`
@@ -465,7 +478,7 @@ used to emit a patch for `disk_full`, `permission_denied`, `conda_solve_failed`,
 `platform_unsupported` and `container_unavailable` whose stated operation was performed by
 **nothing**, so the loop recorded propose → "apply" → `patch_applied=True` → retry →
 **`Repaired`** having done nothing. Two mechanisms: the first four were `kind="env"` patches
-whose operation string-merged into `target.backend_options` (`self_heal.py:583-586`) where
+whose operation string-merged into `target.backend_options` (`self_heal.py:607-610`) where
 `nfconfig.py:71-98` reads only `queue`/`region`/`partition`/`account`/`qos`/`time` — so
 `clean_work_dir`, `fix_permissions`, `relax_or_pin_env` and `use_native_arch_backend` were
 written and never read; `container_unavailable` was `kind="retry"` (`repair.py:50`), for which
@@ -475,7 +488,7 @@ was already honest about *enactment*, but enacting a no-op still rendered as a r
 surface.
 
 **The first question was propose-vs-don't, not how-to-implement, and it resolved differently
-per class.** `repair.py:166-168` already said of `permission_denied` that *"only a human can
+per class.** `repair.py:173-176` already said of `permission_denied` that *"only a human can
 decide and do that safely"*, and `platform_unsupported`'s own rationale said re-running here
 won't help — so the four `env` classes became a new `Patch.kind = "advisory"`: a diagnosis
 plus human-executable guidance, never machine-applicable, with the inert operation withdrawn
@@ -491,7 +504,7 @@ serializing an `operation` dict for work Contig will not do. `container_unavaila
 weakest member and did split from the other four: a bare retry is a legitimate fix for a
 transient runtime outage, so only its decorative field was dishonest, not its premise — it now
 **genuinely waits** `wait_seconds` through an injected clock seam (precedent: the stall
-watchdog's `sleeper: Callable[[float], None]`, `runner.py:673`) threaded through
+watchdog's `sleeper: Callable[[float], None]`, `runner.py:679`) threaded through
 `self_heal_run` **and** `heal.py`'s evaluator, so CI never really sleeps.
 
 `heal-guard` `covered_classes` moved **11 → 15** (`disk_full`, `permission_denied`,
@@ -512,7 +525,7 @@ demand-pull, and now demonstrably so: **0 of 20** pending-corpus cases and **0 o
 runs were ever diagnosed into any of these five classes — the only classes ever diagnosed in
 the field remain `oom`, `tool_crash`, `missing_index`, `unknown`. `eval-guard` **cannot move
 and did not**: nothing here touches a detector or a corpus, and the pending-corpus append
-(`self_heal.py:1096`) happens **before** `propose` (`:1106`), so proposer changes write zero
+(`self_heal.py:1121`) happens **before** `propose` (`:1131`), so proposer changes write zero
 bytes to it — unmoved at 92.3% (12/13), same known miss. The informational `recovery_rate`
 move (9/16 → 10/20) is **corpus composition**, not loop behaviour, and stays never-guarded.
 Every scenario is self-graded — we authored the fixtures for the classes we then grade — with
@@ -1306,7 +1319,7 @@ covers. The loop's story for all five is propose → "apply" → `patch_applied=
 `Repaired`,
 which is **one layer below** the bug the `patch_applied` slice fixed: the flag is now honest
 about *enactment*, but enacting a no-op still renders as a repair on every surface. Covering
-them would have frozen five expectations we already suspect are wrong into CI. `repair.py:166-168`
+them would have frozen five expectations we already suspect are wrong into CI. `repair.py:173-176`
 already says of `permission_denied` that *"only a human can decide and do that safely"*, so the
 **C2 follow-up is filed with propose-vs-don't as its first question**, not "how to implement".
 

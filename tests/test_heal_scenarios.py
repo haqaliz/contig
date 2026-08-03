@@ -771,10 +771,10 @@ def test_shipped_heal_baseline_matches_shipped_scenarios():
     # Fifteen covered classes exactly -- the eleven the catalog-coverage slice
     # left plus Task 6's four newly-honest classes (disk_full,
     # permission_denied, conda_solve_failed, container_unavailable).
-    # platform_unsupported stays uncovered: detect.py:353 requires a failed
+    # platform_unsupported stays uncovered: detect.py:355 requires a failed
     # event with exit is None, but AttemptSpec.exit is a required int
-    # (models.py:543) used both as the trace column (heal.py:62) and the
-    # executor return code (:82) -- reaching it needs an additive
+    # (models.py:543) used both as the trace column (heal.py:82) and the
+    # executor return code (:100) -- reaching it needs an additive
     # model/driver change, which is out of scope here. A silent drop here
     # would mean a class lost its scenario.
     assert len(baseline.covered_classes) == 15

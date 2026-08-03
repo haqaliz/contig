@@ -551,8 +551,11 @@ def apply_patch(
       IS the fix); `apply_patch` itself stays a no-op for it, so the re-run picks
       up the freshly built index.
     - `env`: merge the operation into the target's backend_options, string-coerced.
-      No live `kind="env"` patch remains as of the advisory withdrawal (`repair.py`) --
-      this branch exists only for the type and is not on any reachable path. Even
+      No live `kind="env"` patch remains from this module's own proposer
+      (`repair.py`) as of the advisory withdrawal -- this branch exists only for
+      the type and is not on any reachable path through the self-heal loop.
+      (`verification/reproduce.py`'s independent env-resurrection path does still
+      construct a `kind="env"` Patch, but it never calls this function.) Even
       before that withdrawal, string-coercion into `backend_options` never "rode
       into the generated config": `nfconfig.py:71-98` reads only six named keys
       (`queue`, `region`, `partition`, `account`, `qos`, `time`) by `.get()`, never
@@ -560,10 +563,11 @@ def apply_patch(
     - `code`/`retry`: change nothing. The re-run itself is the fix.
     - `advisory`: never enacted -- there is no machine operation to apply, only
       human advice carried in `rationale`. An advisory reaching this function
-      at all is a bug in the caller (design-decision.md: the loop must branch
-      on it before the gate/applier, never here), so this raises loudly
-      instead of silently falling through to a no-op that a caller could
-      mistake for "applied, continue."
+      at all is a bug in the caller
+      (docs/planning/inert-repair-honesty/advisory-repairs/design-decision.md:
+      the loop must branch on it before the gate/applier, never here), so this
+      raises loudly instead of silently falling through to a no-op that a
+      caller could mistake for "applied, continue."
     """
     if patch.kind == "advisory":
         raise ValueError(
@@ -1167,10 +1171,11 @@ def self_heal_run(
 
                 # An advisory carries no machine-applicable operation (repair.py):
                 # there is nothing for `_apply_patch_and_maybe_build` to enact, so
-                # it must never be called for one (design-decision.md). Branch here,
-                # ahead of the auto-approve and gate logic, rather than widening
-                # `_apply_patch_and_maybe_build`'s 5-tuple for four failure classes
-                # that never produce a machine fix.
+                # it must never be called for one
+                # (docs/planning/inert-repair-honesty/advisory-repairs/
+                # design-decision.md). Branch here, ahead of the auto-approve and
+                # gate logic, rather than widening `_apply_patch_and_maybe_build`'s
+                # 5-tuple for four failure classes that never produce a machine fix.
                 if gated.kind == "advisory":
                     if auto_approve:
                         # No human to acknowledge the guidance, and nothing to
