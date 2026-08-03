@@ -67,10 +67,18 @@ const GAVE_UP_OUTCOMES = [
   "reference_recompress_unresolvable",
   "install_failed",
 ];
+// An advisory (kind="advisory", operation={}) has no machine fix -- only human
+// guidance. A human acknowledged it (outside Contig) and asked the loop to
+// retry. This is a fifth case, distinct from all three families above: not
+// APPLIED (patch_applied is always False for an advisory), not DECLINED (the
+// human did not refuse), not GAVE_UP (the loop went on). See
+// components/run/repair-timeline.tsx's ACKNOWLEDGED family comment.
+const ADVISORY_OUTCOMES = ["advisory_acknowledged_and_retried"];
 const LIVE_OUTCOMES = [
   ...APPLIED_OUTCOMES,
   ...DECLINED_OUTCOMES,
   ...GAVE_UP_OUTCOMES,
+  ...ADVISORY_OUTCOMES,
   // A finding on a green run: outside all three families, and already covered by
   // its own tests below.
   "qc_verdict_flagged",
@@ -109,7 +117,7 @@ test("every live outcome literal has prose, and none renders as snake_case", () 
   // covers the other fourteen at the source of the defect: an unmapped literal is
   // rendered verbatim by the fallback, so "mapped" and "not snake_case" together
   // are exactly the guarantee.
-  expect(LIVE_OUTCOMES.length).toBe(18);
+  expect(LIVE_OUTCOMES.length).toBe(19);
   for (const outcome of LIVE_OUTCOMES) {
     const meta = OUTCOME_META[outcome];
     expect(meta, `${outcome} is not mapped in OUTCOME_META`).toBeDefined();
@@ -121,7 +129,7 @@ test("every live outcome literal has prose, and none renders as snake_case", () 
   expect(Object.keys(OUTCOME_META).sort()).toEqual([...LIVE_OUTCOMES].sort());
 });
 
-test("the three outcome families are visually distinct from each other", () => {
+test("the outcome families are visually distinct from each other", () => {
   // Declined must not read as a give-up (the engine did not fail), and applied
   // must not read as either. Asserted as inequality between the families' own
   // tokens rather than against pinned Tailwind strings, so a restyle cannot make
@@ -130,22 +138,32 @@ test("the three outcome families are visually distinct from each other", () => {
   const applied = classOf(APPLIED_OUTCOMES[0]);
   const declined = classOf(DECLINED_OUTCOMES[0]);
   const gaveUp = classOf(GAVE_UP_OUTCOMES[0]);
+  const advisory = classOf(ADVISORY_OUTCOMES[0]);
 
   expect(declined).not.toEqual(gaveUp);
   expect(applied).not.toEqual(gaveUp);
   expect(applied).not.toEqual(declined);
+  // The advisory/acknowledged family must not collapse into any of the three:
+  // not applied (nothing was enacted), not declined (the human did not refuse),
+  // not gave-up (the loop went on, not stopped).
+  expect(advisory).not.toEqual(applied);
+  expect(advisory).not.toEqual(declined);
+  expect(advisory).not.toEqual(gaveUp);
 
   // And each family is internally consistent, so a new member cannot quietly
   // land in the wrong one.
   for (const o of APPLIED_OUTCOMES) expect(classOf(o)).toEqual(applied);
   for (const o of DECLINED_OUTCOMES) expect(classOf(o)).toEqual(declined);
   for (const o of GAVE_UP_OUTCOMES) expect(classOf(o)).toEqual(gaveUp);
+  for (const o of ADVISORY_OUTCOMES) expect(classOf(o)).toEqual(advisory);
 
-  // qc_verdict_flagged is none of the three, and must not borrow their styling.
+  // qc_verdict_flagged is none of these, and must not borrow their styling --
+  // in particular it must not reuse the advisory/acknowledged colour either.
   const flagged = classOf("qc_verdict_flagged");
   expect(flagged).not.toEqual(applied);
   expect(flagged).not.toEqual(declined);
   expect(flagged).not.toEqual(gaveUp);
+  expect(flagged).not.toEqual(advisory);
 });
 
 test("a green QC-flagged run does not claim a repair", async ({ page }) => {
@@ -173,6 +191,18 @@ test("a run whose only patch was rejected does not claim a repair", async ({
   // nothing was enacted. A non-null patch is on the record; patch_applied is not.
   await page.goto("/runs");
   const row = runRow(page, "rejected-patch-fixture");
+  await expect(row).toBeVisible();
+  await expect(row.getByText("Repaired", { exact: true })).toHaveCount(0);
+});
+
+test("a run whose only step was an advisory does not claim a repair", async ({
+  page,
+}) => {
+  // The engine has no machine fix for an advisory -- only guidance -- so
+  // patch_applied is always False here, the same as a rejected patch. Nothing
+  // was enacted, so this must not read as Repaired.
+  await page.goto("/runs");
+  const row = runRow(page, "advisory-fixture");
   await expect(row).toBeVisible();
   await expect(row.getByText("Repaired", { exact: true })).toHaveCount(0);
 });
@@ -251,6 +281,36 @@ test("a declined patch is not styled as a give-up", async ({ page }) => {
   expect(rejected).not.toBeNull();
 
   expect(rejected).not.toEqual(gaveUp);
+});
+
+test("an advisory renders as acknowledged guidance, not a raw literal or a patch", async ({
+  page,
+}) => {
+  await openSelfHealTab(
+    page,
+    "advisory-fixture",
+    "You acknowledged this guidance; retried",
+  );
+
+  // Prose, not the machine literal.
+  await expect(
+    page.getByText("You acknowledged this guidance; retried", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("advisory_acknowledged_and_retried", { exact: true }),
+  ).toHaveCount(0);
+
+  // The guidance itself is on the record...
+  await expect(
+    page.getByText(
+      "Out of disk; clean the work directory to reclaim space, then retry.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+
+  // ...but the empty operation ({}) must render as nothing, not the literal
+  // "{}" -- rendering it would read as "an empty change was applied".
+  await expect(page.getByText("{}", { exact: true })).toHaveCount(0);
 });
 
 test("a real patch and a QC flag keep their own outcome labels side by side", async ({

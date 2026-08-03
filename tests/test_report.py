@@ -201,6 +201,43 @@ def test_report_distinguishes_applied_from_proposed_repair_steps() -> None:
     assert "[not applied]" in proposed_line
 
 
+def test_report_shows_advisory_step_as_not_applied_with_guidance() -> None:
+    # R5: an advisory (disk_full, permission_denied, conda_solve_failed,
+    # platform_unsupported) carries no machine-applicable operation -- only human
+    # guidance in Patch.rationale. apply_patch is never called for kind="advisory",
+    # so the report must say the patch was not applied, and must surface the
+    # guidance itself rather than leaving the reader to guess what "advisory" means.
+    record = RunRecord(
+        run_id="r1",
+        pipeline="rnaseq",
+        pipeline_revision="3.26.0",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="ALIGN", status="COMPLETED", exit=0)],
+        repair_history=[
+            RepairStep(
+                attempt=1,
+                diagnosis=Diagnosis(
+                    failure_class="disk_full", root_cause="disk full", evidence=[], confidence=0.9
+                ),
+                patch=Patch(
+                    kind="advisory",
+                    operation={},
+                    rationale="Out of disk; clean the work directory to reclaim space, then retry.",
+                    risk="needs_confirmation",
+                    expected_signal="free disk space available",
+                ),
+                outcome="advisory_acknowledged_and_retried",
+                patch_applied=False,
+            )
+        ],
+    )
+    report = render_run_report(record)
+    advisory_line = next(l for l in report.splitlines() if "attempt 1" in l)
+    assert "[not applied]" in advisory_line
+    assert "Out of disk; clean the work directory to reclaim space, then retry." in report
+
+
 def test_report_includes_versions_and_input_count_when_set() -> None:
     record = RunRecord(
         run_id="r1",
@@ -311,6 +348,34 @@ def test_html_report_distinguishes_applied_from_proposed_repair_steps() -> None:
     assert "not applied" not in applied_row
     assert "applied" in applied_row
     assert "not applied" in proposed_row
+
+
+def test_html_report_shows_advisory_step_as_not_applied_with_guidance() -> None:
+    # HTML side of R5: the repair chain table must not just say "not applied" for
+    # an advisory row -- it must surface the guidance (Patch.rationale) so a
+    # reader knows what a human is meant to do, not just that nothing was enacted.
+    record = _full_record()
+    record.repair_history = [
+        RepairStep(
+            attempt=1,
+            diagnosis=Diagnosis(
+                failure_class="permission_denied", root_cause="perm denied", evidence=[], confidence=0.9
+            ),
+            patch=Patch(
+                kind="advisory",
+                operation={},
+                rationale="Permission denied; fix the path ownership or permissions, then retry.",
+                risk="needs_confirmation",
+                expected_signal="path writable",
+            ),
+            outcome="advisory_acknowledged_and_retried",
+            patch_applied=False,
+        )
+    ]
+    html = render_run_report_html(record)
+    row = next(r for r in html.split("<tr>") if "advisory_acknowledged_and_retried" in r)
+    assert "not applied" in row
+    assert "Permission denied; fix the path ownership or permissions, then retry." in row
 
 
 def test_html_report_notes_when_there_are_no_repairs() -> None:

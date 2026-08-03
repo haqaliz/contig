@@ -61,7 +61,14 @@ export interface Diagnosis {
 
 export interface Patch {
   kind: string;
-  operation: Record<string, unknown>;
+  // Absent for an advisory patch: pending_approval.json omits the key entirely
+  // rather than write `{}`, which a consumer could mistake for "nothing to
+  // change" instead of "there is no operation to offer" (self_heal.py
+  // _write_pending_approval). A run-record RepairStep always carries `{}` for
+  // an advisory, so a consumer reading THAT source still gets an object, never
+  // undefined -- this is optional because the two JSON sources disagree, not
+  // because every caller must re-check for a missing key.
+  operation?: Record<string, unknown>;
   rationale: string;
   risk: string;
   expected_signal: string;

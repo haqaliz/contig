@@ -108,6 +108,21 @@ export const FIXTURE_RUN_IDS = [
   // is heavy enough that two specs opening it concurrently time each other out
   // under the suite's parallelism (see e2e/repair-truthfulness.spec.ts).
   "giveup-fixture",
+  // A run whose ONLY step is an advisory (kind="advisory", operation={}): no
+  // machine-applicable fix exists, only human guidance in Patch.rationale. The
+  // human acknowledged it and the loop retried (outcome
+  // advisory_acknowledged_and_retried), but Contig enacted nothing --
+  // patch_applied is False, same as rejected-patch-fixture. This must not read
+  // as Repaired, and its operation must render as nothing, not the literal "{}"
+  // (see e2e/repair-truthfulness.spec.ts).
+  "advisory-fixture",
+  // A run paused on an advisory patch (pending_approval.json, kind="advisory").
+  // The engine omits the `operation` key entirely for an advisory rather than
+  // writing `{}` (see _write_pending_approval), so this fixture also proves the
+  // gate never dereferences it. Used by e2e/approval-gate.spec.ts to check the
+  // gate's copy does not claim anything is applied, and that the failure-class
+  // label renders as prose, not the raw literal.
+  "advisory-awaiting-fixture",
 ];
 
 // Mirror lib/runs.ts runsDir(): CONTIG_RUNS_DIR, else ../runs from the dashboard

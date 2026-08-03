@@ -181,6 +181,12 @@ def render_run_report(record: RunRecord) -> str:
                 f"  - attempt {step.attempt}: {step.diagnosis.failure_class} "
                 f"→ {patch_kind} patch {_applied_tag(step)} → {step.outcome}"
             )
+            if step.patch is not None and step.patch.kind == "advisory":
+                # An advisory carries no machine-applicable operation -- only
+                # human guidance (Patch.rationale). "[not applied]" alone would
+                # leave a reader knowing nothing happened but not what to do
+                # about it, so surface the guidance itself.
+                lines.append(f"    guidance: {step.patch.rationale}")
     return "\n".join(lines)
 
 
@@ -360,7 +366,16 @@ def render_run_report_html(
             "<th>What was patched</th><th>Enacted?</th><th>Outcome</th></tr></thead><tbody>"
         )
         for step in record.repair_history:
-            patched = step.patch.kind if step.patch else "none"
+            if step.patch is None:
+                patched = "none"
+            elif step.patch.kind == "advisory":
+                # No machine-applicable operation -- only human guidance. Put
+                # the guidance in the "what was patched" cell rather than the
+                # bare kind, so "not applied" doesn't leave the reader guessing
+                # what to do about it.
+                patched = f"advisory — {step.patch.rationale}"
+            else:
+                patched = step.patch.kind
             parts.append(
                 f"<tr><td>{step.attempt}</td>"
                 f"<td>{escape(step.diagnosis.failure_class)}</td>"

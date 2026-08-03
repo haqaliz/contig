@@ -3,7 +3,7 @@
 // class, root cause, confidence, evidence), the proposed patch (or "no automatic
 // patch"), and the outcome. The detector logic lives in Python, this only renders
 // what it recorded.
-import { CheckCircle2, Flag, Hand, HelpCircle, RotateCcw } from "lucide-react";
+import { CheckCircle2, Flag, Hand, HelpCircle, RotateCcw, UserCheck } from "lucide-react";
 
 import {
   Card,
@@ -49,6 +49,14 @@ function failureLabel(failureClass: string): string {
 // whose tasks all succeeded -- nothing failed and nothing was patched -- so it
 // keeps its own amber. That amber is now unique: the previous holder of the token,
 // stopped_for_confirmation, was emitted NOWHERE in src/ and has been deleted.
+//
+// A fifth case fits none of the above: ACKNOWLEDGED is an advisory patch
+// (kind="advisory", operation={}) a human read and acted on OUTSIDE Contig, then
+// told the engine to retry. It is not APPLIED (patch_applied is always False for
+// an advisory -- Contig enacted nothing). It is not DECLINED (the human did not
+// refuse; they acknowledged and asked for the retry). It is not GAVE_UP (the loop
+// went on, not stopped). It must not borrow qc_verdict_flagged's amber either --
+// that token means "a green run's QC failed", an unrelated claim.
 const APPLIED =
   "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-300";
 const DECLINED =
@@ -57,10 +65,12 @@ const GAVE_UP =
   "border-slate-300 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300";
 const FLAGGED =
   "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300";
+const ACKNOWLEDGED =
+  "border-violet-300 bg-violet-50 text-violet-800 dark:border-violet-800 dark:bg-violet-950 dark:text-violet-300";
 
 // Outcome -> presentation (icon, label, color). Color is never the only signal:
 // every outcome carries an icon and text. Every literal the engine emits is mapped
-// here -- 15 from self_heal.py, 3 from verification/reproduce.py (which shares the
+// here -- 16 from self_heal.py, 3 from verification/reproduce.py (which shares the
 // RepairStep type through ReproduceRecord.repair_history). The fallback below is
 // kept as a defensive path, but no known literal should reach it.
 export const OUTCOME_META: Record<
@@ -168,6 +178,14 @@ export const OUTCOME_META: Record<
     icon: Flag,
     className: FLAGGED,
   },
+
+  // --- an advisory: no machine fix exists, only human guidance; a human ------
+  // --- acknowledged it (outside Contig) and asked the loop to retry ----------
+  advisory_acknowledged_and_retried: {
+    label: "You acknowledged this guidance; retried",
+    icon: UserCheck,
+    className: ACKNOWLEDGED,
+  },
 };
 
 function OutcomeBadge({ outcome }: { outcome: string }) {
@@ -262,9 +280,16 @@ function StepCard({ step }: { step: RepairStep }) {
                 <RiskBadge risk={patch.risk} />
               </div>
               <p className="text-sm">{patch.rationale}</p>
-              <pre className="overflow-x-auto rounded bg-muted/60 px-2 py-1.5 font-mono text-xs">
-                {JSON.stringify(patch.operation, null, 2)}
-              </pre>
+              {/* An advisory carries no machine-applicable operation (kind ===
+                  "advisory" always serializes {} in a run record, and omits the
+                  key entirely in pending_approval.json). Rendering "{}" would
+                  read as "an empty change was applied" rather than "there is no
+                  operation to show" -- so render nothing at all. */}
+              {patch.operation && Object.keys(patch.operation).length > 0 ? (
+                <pre className="overflow-x-auto rounded bg-muted/60 px-2 py-1.5 font-mono text-xs">
+                  {JSON.stringify(patch.operation, null, 2)}
+                </pre>
+              ) : null}
               <p className="text-xs text-muted-foreground">
                 Expected signal: {patch.expected_signal}
               </p>

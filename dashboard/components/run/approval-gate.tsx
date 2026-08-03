@@ -37,6 +37,8 @@ const FAILURE_LABELS: Record<string, string> = {
   container_unavailable: "Container unavailable",
   conda_solve_failed: "Conda solve failed",
   platform_unsupported: "Platform unsupported",
+  disk_full: "Disk full",
+  permission_denied: "Permission denied",
   tool_crash: "Tool crashed",
   no_progress: "No progress",
   qc_anomaly: "QC anomaly",
@@ -160,7 +162,9 @@ export function ApprovalGate({
         <p className="text-sm text-muted-foreground">
           {options
             ? "The diagnosis was ambiguous, so Contig is holding the run until you choose a fix. Nothing is applied without your say."
-            : "A safe fix was not available, so Contig is holding the run until you approve or reject this repair. Nothing risky is applied without your say."}
+            : pending.patch.kind === "advisory"
+              ? "Contig has no automatic fix for this -- only guidance. It is holding the run until you acknowledge the guidance below (or reject). Acknowledging does not apply anything; it just tells Contig to retry."
+              : "A safe fix was not available, so Contig is holding the run until you approve or reject this repair. Nothing risky is applied without your say."}
         </p>
 
         {/* The diagnosis this decision answers. */}
