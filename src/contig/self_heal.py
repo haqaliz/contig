@@ -334,14 +334,19 @@ def _write_pending_approval(
                 "diagnosis": {
                     "failure_class": diagnosis.failure_class,
                     "root_cause": diagnosis.root_cause,
+                    "evidence": diagnosis.evidence,
                     "confidence": diagnosis.confidence,
                 },
                 "patch": {
                     "kind": patch.kind,
                     "risk": patch.risk,
                     "rationale": patch.rationale,
-                    "operation": patch.operation,
                     "expected_signal": patch.expected_signal,
+                    # An advisory carries no machine-applicable operation (PRD
+                    # R5) -- omit the key entirely rather than write `{}`,
+                    # which a dashboard could mistake for "nothing to change"
+                    # instead of "there is no operation to offer".
+                    **({} if patch.kind == "advisory" else {"operation": patch.operation}),
                 },
             }
         )
@@ -1146,6 +1151,74 @@ def self_heal_run(
                         # what we would have tried, never as something we did.
                         RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated,
                                    outcome="gave_up", patch_applied=False),
+                    )
+                    return _finalize(
+                        exc.record, repair_history, run_dir,
+                        runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                        harmonized_reference_direction=harmonized_reference_direction,
+                    )
+
+                # An advisory carries no machine-applicable operation (repair.py):
+                # there is nothing for `_apply_patch_and_maybe_build` to enact, so
+                # it must never be called for one (design-decision.md). Branch here,
+                # ahead of the auto-approve and gate logic, rather than widening
+                # `_apply_patch_and_maybe_build`'s 5-tuple for four failure classes
+                # that never produce a machine fix.
+                if gated.kind == "advisory":
+                    if auto_approve:
+                        # No human to acknowledge the guidance, and nothing to
+                        # auto-apply: the only honest move is an outright give-up
+                        # that still carries the guidance, never a fabricated retry.
+                        _record_attempt(
+                            run_dir,
+                            repair_history,
+                            RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated,
+                                       outcome="gave_up", detail=gated.rationale,
+                                       patch_applied=False),
+                        )
+                        return _finalize(
+                            exc.record, repair_history, run_dir,
+                            runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                            harmonized_reference_direction=harmonized_reference_direction,
+                        )
+
+                    # Interactive: pause exactly as the single-gate path below does.
+                    _write_pending_approval(
+                        run_dir, run_id, attempt, diagnosis, gated, approval_timeout
+                    )
+                    _write_status(run_dir, "awaiting_approval")
+                    emit_event(
+                        runs_dir, run_id, "awaiting_approval",
+                        f"Run {run_id} is paused for approval on a {gated.kind} patch.",
+                        webhook=notify_webhook,
+                    )
+                    result = poll(run_dir, approval_timeout)
+                    _clear_pending_approval(run_dir)
+                    decision = (result or {}).get("decision") if result else None
+
+                    if decision == "approve":
+                        # Never calls apply_patch/`_apply_patch_and_maybe_build`:
+                        # there is no operation to enact, only an acknowledgement
+                        # that a human saw the guidance and wants the retry to run.
+                        # Observational, not a claim that anything was fixed
+                        # (PRD R-Risk-3) -- Contig cannot verify that.
+                        _write_status(run_dir, "running")
+                        _record_attempt(
+                            run_dir,
+                            repair_history,
+                            RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated,
+                                       outcome="advisory_acknowledged_and_retried",
+                                       patch_applied=False),
+                        )
+                        attempt += 1
+                        continue
+
+                    outcome = "rejected_by_user" if decision == "reject" else "approval_timed_out"
+                    _record_attempt(
+                        run_dir,
+                        repair_history,
+                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated,
+                                   outcome=outcome, patch_applied=False),
                     )
                     return _finalize(
                         exc.record, repair_history, run_dir,

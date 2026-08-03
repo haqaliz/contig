@@ -1284,27 +1284,96 @@ def test_self_heal_applied_reference_patch_reaches_the_rerun_command(tmp_path):
     assert "True" in seen["cmd"]
 
 
-def test_self_heal_conda_solve_failed_is_advisory_not_applied(tmp_path):
-    # A conda_solve_failed failure used to propose an `env` patch that
-    # apply_patch merged into backend_options -- but nothing ever consumed
-    # that knob downstream, so the merge was a claimed fix that never actually
-    # happened. It's advisory now (repair.py), which carries no machine
-    # operation. Until the loop grows its own advisory branch (a later task),
-    # auto-approving one still reaches apply_patch, which raises loudly rather
-    # than silently re-enacting the old no-op (design-decision.md). That later
-    # task must replace this test: once the loop branches before the applier,
-    # auto-approving an advisory will no longer raise at all.
-    #
-    # The old test's behavioral specificity (succeeded, failure_class,
-    # patch.kind, the backend_options value) is structurally gone here -- the
-    # call raises out of _heal(...) before any record exists to inspect -- so
-    # pinning the guard's specific type and message is the most this test can
-    # honestly assert in its current form.
+_CONDA_LOG = "ResolvePackageNotFound:\n  - bioconductor-dupradar=1.38"
+
+
+def test_self_heal_advisory_approve_records_acknowledged_and_retries(tmp_path):
+    # The loop now branches on kind == "advisory" BEFORE the applier
+    # (design-decision.md), so an approved advisory no longer reaches
+    # apply_patch at all: it records the observational outcome and retries
+    # directly. Restores the behavioral specificity the interim guard-pinning
+    # test (this test replaces) could not assert: succeeded, failure_class,
+    # patch.kind, and now repair_history's outcome/patch_applied/call count.
     state = {"n": 0}
-    log = "ResolvePackageNotFound:\n  - bioconductor-dupradar=1.38"
-    executor = _failing_then_capturing(state, log, lambda cmd, tp: None)
-    with pytest.raises(ValueError, match="advisories carry no machine operation"):
-        _heal(tmp_path, executor, auto_approve=True, params={"input": "sheet.csv"})
+
+    def poll(run_dir, timeout_sec):
+        return {"decision": "approve", "decided_at": "2026-08-03T00:00:00+00:00"}
+
+    executor = _failing_then_capturing(state, _CONDA_LOG, lambda cmd, tp: None)
+    record = _heal(tmp_path, executor, poll=poll, params={"input": "sheet.csv"})
+    assert RunSummary.from_events(record.events).succeeded is True
+    step = record.repair_history[0]
+    assert step.diagnosis.failure_class == "conda_solve_failed"
+    assert step.patch.kind == "advisory"
+    assert step.outcome == "advisory_acknowledged_and_retried"
+    assert step.patch_applied is False
+    assert state["n"] == 2  # the acknowledged retry actually ran
+
+
+def test_self_heal_advisory_reject_and_timeout_never_claim_enactment(tmp_path):
+    # Pin the reject/timeout behavior for an advisory so the new approve
+    # branch above cannot regress it: both are non-enactment, terminal.
+    for decision, expected_outcome in [
+        ("reject", "rejected_by_user"),
+        (None, "approval_timed_out"),
+    ]:
+        state = {"n": 0}
+
+        def poll(run_dir, timeout_sec, decision=decision):
+            return {"decision": decision} if decision else None
+
+        executor = _failing_then_capturing(state, _CONDA_LOG, lambda cmd, tp: None)
+        record = _heal(
+            tmp_path, executor, poll=poll, params={"input": "sheet.csv"},
+            run_id=f"r-{expected_outcome}",
+        )
+        step = record.repair_history[-1]
+        assert step.patch.kind == "advisory"
+        assert step.outcome == expected_outcome
+        assert step.patch_applied is False
+        assert state["n"] == 1  # never retried
+
+
+def test_self_heal_auto_approve_advisory_gives_up_honestly_without_retry(tmp_path):
+    # --auto-approve has no human to acknowledge the guidance, and there is no
+    # machine operation to apply on its own (design-decision.md): the only
+    # honest move is a give-up that carries the guidance, not a fabricated
+    # retry. The executor must be called exactly once -- the failing attempt
+    # itself -- never a second time.
+    state = {"n": 0}
+    executor = _failing_then_capturing(state, _CONDA_LOG, lambda cmd, tp: None)
+    record = _heal(tmp_path, executor, auto_approve=True, params={"input": "sheet.csv"})
+    assert RunSummary.from_events(record.events).succeeded is False
+    step = record.repair_history[-1]
+    assert step.diagnosis.failure_class == "conda_solve_failed"
+    assert step.patch.kind == "advisory"
+    assert step.outcome == "gave_up"
+    assert step.patch_applied is False
+    assert step.detail == step.patch.rationale  # the guidance travels with the give-up
+    assert state["n"] == 1
+    final = json.loads((tmp_path / "runs" / "r" / "status.json").read_text())
+    assert final["state"] == "finished"
+
+
+def test_self_heal_advisory_pending_approval_has_no_operation_key(tmp_path):
+    # PRD R5: an advisory's pending_approval.json must never claim a machine
+    # operation is on offer (there is none), but must still carry the
+    # rationale and the diagnosis's evidence so a human has something to act
+    # on.
+    captured = {}
+
+    def poll(run_dir, timeout_sec):
+        captured["pending"] = json.loads((Path(run_dir) / "pending_approval.json").read_text())
+        return None  # time out; we only need the written request
+
+    state = {"n": 0}
+    executor = _failing_then_capturing(state, _CONDA_LOG, lambda cmd, tp: None)
+    _heal(tmp_path, executor, poll=poll, params={"input": "sheet.csv"})
+    pending = captured["pending"]
+    assert pending["diagnosis"]["failure_class"] == "conda_solve_failed"
+    assert pending["diagnosis"]["evidence"]  # non-empty: the matched log lines
+    assert pending["patch"]["rationale"]
+    assert "operation" not in pending["patch"]
 
 
 def test_self_heal_respects_max_attempts(tmp_path):
