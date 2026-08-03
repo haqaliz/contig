@@ -187,6 +187,63 @@ def test_self_heal_pauses_for_approval_on_needs_confirmation(tmp_path):
     assert record.repair_history[0].outcome == "approval_timed_out"
 
 
+def _advisory_propose(diagnosis):
+    """A fake `propose` that always offers a single advisory patch.
+
+    Used to pin the structural guarantee (design-decision.md) across every
+    gate decision without depending on which real failure class the detector
+    happens to phrase a log line into.
+    """
+    return [
+        Patch(
+            kind="advisory",
+            operation={},
+            rationale="A human must resolve this; nothing here is machine-applicable.",
+            risk="needs_confirmation",
+            expected_signal="a human resolves it",
+        )
+    ]
+
+
+def _heal_or_raised(tmp_path, executor, **over):
+    """Run self_heal_run, tolerating a raise (both outcomes are valid ways to
+    satisfy "no RepairStep records an enacted advisory" -- see the structural
+    pin's docstring above the caller)."""
+    try:
+        return _heal(tmp_path, executor, **over)
+    except Exception:
+        return None
+
+
+def test_advisory_patch_never_recorded_as_applied_through_the_loop(tmp_path):
+    # The structural pin (design-decision.md): patch_applied is sourced solely
+    # from _apply_patch_and_maybe_build's `continue_`, so for EVERY gate
+    # decision (approve / reject / timeout / auto-approve), no recorded
+    # RepairStep may have both patch.kind == "advisory" and patch_applied is
+    # True. Today, before self_heal_run has its own advisory branch, an
+    # approved/auto-approved advisory still reaches apply_patch -- which must
+    # then raise rather than let the loop silently continue and wrongly mark
+    # it applied.
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_TOOL, "boom")
+        return 1
+
+    gate_kwargs = [
+        dict(run_id="r-reject", poll=lambda run_dir, timeout_sec: {"decision": "reject"}),
+        dict(run_id="r-timeout", poll=lambda run_dir, timeout_sec: None),
+        dict(run_id="r-approve", poll=lambda run_dir, timeout_sec: {"decision": "approve"}),
+        dict(run_id="r-auto", auto_approve=True),
+    ]
+    for kwargs in gate_kwargs:
+        record = _heal_or_raised(tmp_path, executor, propose=_advisory_propose, **kwargs)
+        if record is None:
+            continue  # raised rather than mis-recording -- also satisfies the pin
+        assert not any(
+            step.patch is not None and step.patch.kind == "advisory" and step.patch_applied
+            for step in record.repair_history
+        ), f"advisory recorded as applied for {kwargs}"
+
+
 def test_self_heal_bwa_missing_index_gives_up_unresolvable(tmp_path):
     # Classic bwa missing-index signature (bwa_idx_load_from_disk) IS detected
     # as missing_index, but its evidence line carries no parseable index path
@@ -340,6 +397,17 @@ def test_apply_patch_reference_set_param_swaps_the_reference_param(tmp_path):
     assert params["genome"] == "GRCh38"
     assert params["input"] == "sheet.csv"  # other params preserved
     assert target.resource_limits == {}  # target untouched
+
+
+def test_apply_patch_advisory_raises_instead_of_silently_no_opping(tmp_path):
+    # design-decision.md: an advisory reaching the applier must be a loud bug,
+    # never a quiet re-enactment. Before this, an unrecognized kind fell
+    # through to the `return target, params` fallback -- a silent no-op that
+    # would have let the caller wrongly treat it as continuable.
+    patch = Patch(kind="advisory", operation={},
+                  rationale="x", risk="needs_confirmation", expected_signal="s")
+    with pytest.raises(Exception):
+        apply_patch(_t(), patch, {"input": "sheet.csv"})
 
 
 def test_self_heal_resume_passes_resume_on_first_execute(tmp_path):
@@ -1216,19 +1284,19 @@ def test_self_heal_applied_reference_patch_reaches_the_rerun_command(tmp_path):
     assert "True" in seen["cmd"]
 
 
-def test_self_heal_applied_env_patch_reaches_the_rerun_target(tmp_path):
-    # A conda_solve_failed failure proposes an env patch; the env knob must land
-    # on the target that the retry runs against (it rides backend_options into the
-    # generated config). The final record carries the patched target, proving the
-    # applied env change reached the re-run.
+def test_self_heal_conda_solve_failed_is_advisory_not_applied(tmp_path):
+    # A conda_solve_failed failure used to propose an `env` patch that
+    # apply_patch merged into backend_options -- but nothing ever consumed
+    # that knob downstream, so the merge was a claimed fix that never actually
+    # happened. It's advisory now (repair.py), which carries no machine
+    # operation. Until the loop grows its own advisory branch (a later task),
+    # auto-approving one still reaches apply_patch, which raises loudly rather
+    # than silently re-enacting the old no-op (design-decision.md).
     state = {"n": 0}
     log = "ResolvePackageNotFound:\n  - bioconductor-dupradar=1.38"
     executor = _failing_then_capturing(state, log, lambda cmd, tp: None)
-    record = _heal(tmp_path, executor, auto_approve=True, params={"input": "sheet.csv"})
-    assert RunSummary.from_events(record.events).succeeded is True
-    assert record.repair_history[0].diagnosis.failure_class == "conda_solve_failed"
-    assert record.repair_history[0].patch.kind == "env"
-    assert record.target.backend_options.get("relax_or_pin_env") == "True"
+    with pytest.raises(Exception):
+        _heal(tmp_path, executor, auto_approve=True, params={"input": "sheet.csv"})
 
 
 def test_self_heal_respects_max_attempts(tmp_path):

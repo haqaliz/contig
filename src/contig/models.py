@@ -297,7 +297,7 @@ class Patch(BaseModel):
     whether it auto-applies. `expected_signal` is how DETECT confirms it worked.
     """
 
-    kind: Literal["param", "resource", "env", "reference", "retry", "code"]
+    kind: Literal["param", "resource", "env", "reference", "retry", "code", "advisory"]
     operation: dict[str, object]
     rationale: str
     risk: Literal["safe", "needs_confirmation", "destructive"]

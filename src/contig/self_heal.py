@@ -547,7 +547,19 @@ def apply_patch(
     - `env`: merge the operation into the target's backend_options (string-coerced
       so it rides into the generated config / re-run target).
     - `code`/`retry`: change nothing. The re-run itself is the fix.
+    - `advisory`: never enacted -- there is no machine operation to apply, only
+      human advice carried in `rationale`. An advisory reaching this function
+      at all is a bug in the caller (design-decision.md: the loop must branch
+      on it before the gate/applier, never here), so this raises loudly
+      instead of silently falling through to a no-op that a caller could
+      mistake for "applied, continue."
     """
+    if patch.kind == "advisory":
+        raise ValueError(
+            "apply_patch got an advisory patch: advisories carry no machine "
+            "operation and must never reach the applier. This is a caller bug -- "
+            "the self-heal loop must branch on kind == 'advisory' before gating."
+        )
     if ceiling is None:
         ceiling = {"memory": CEILING_MEMORY_GB, "time": CEILING_TIME_H}
     params = dict(params or {})

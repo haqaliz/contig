@@ -9,13 +9,29 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from contig.models import Diagnosis
+from contig.models import Diagnosis, Patch
 from contig.repair import has_safe_patch, propose_patches
 
 
 def diag(failure_class: str) -> Diagnosis:
     """A minimal real Diagnosis for the given failure class."""
     return Diagnosis(failure_class=failure_class, root_cause="test", confidence=0.9)
+
+
+def test_advisory_is_a_valid_patch_kind() -> None:
+    # `kind="advisory"` marks human-only advice that carries no machine
+    # operation -- `operation` is `{}` by design (R-Open-1): inventing a
+    # descriptor key would read as an operation to the next reader, which is
+    # the exact bug this kind exists to fix.
+    p = Patch(
+        kind="advisory",
+        operation={},
+        rationale="test rationale",
+        risk="needs_confirmation",
+        expected_signal="a human resolves it",
+    )
+    assert p.kind == "advisory"
+    assert p.operation == {}
 
 
 def test_oom_proposes_safe_memory_increase() -> None:
@@ -93,13 +109,19 @@ def test_bad_param_needs_confirmation_sets_corrected_param() -> None:
     assert p.operation == {"set_param": {"validate_params": False}}
 
 
-def test_conda_solve_failed_needs_confirmation_env() -> None:
+def test_conda_solve_failed_is_advisory() -> None:
+    # Nothing in the codebase relaxes or pins an env spec: recording this as an
+    # enacted `env` patch claimed a fix that never happened. It becomes advice
+    # only -- kept verbatim -- with no machine-applicable operation.
     patches = propose_patches(diag("conda_solve_failed"))
     assert len(patches) == 1
     p = patches[0]
-    assert p.kind == "env"
+    assert p.kind == "advisory"
     assert p.risk == "needs_confirmation"
-    assert p.operation == {"relax_or_pin_env": True}
+    assert p.operation == {}
+    assert "relax_or_pin_env" not in p.operation
+    assert p.rationale == "Conda solve failed; relax or pin the environment spec."
+    assert has_safe_patch(diag("conda_solve_failed")) is False
 
 
 def test_download_failed_proposes_safe_retry() -> None:
@@ -112,27 +134,34 @@ def test_download_failed_proposes_safe_retry() -> None:
     assert p.operation == {"retry": True}
 
 
-def test_disk_full_proposes_needs_confirmation_cleanup() -> None:
-    # Freeing space means deleting the work dir's intermediates: destructive, so
-    # it must NOT auto-apply.
+def test_disk_full_is_advisory() -> None:
+    # Nothing in the codebase cleans the work dir: recording this as an enacted
+    # `env` patch claimed a fix that never happened. It becomes advice only --
+    # kept verbatim -- with no machine-applicable operation. (Freeing space is
+    # destructive too, which is separately why it could never auto-apply.)
     patches = propose_patches(diag("disk_full"))
     assert len(patches) == 1
     p = patches[0]
-    assert p.kind == "env"
+    assert p.kind == "advisory"
     assert p.risk == "needs_confirmation"
-    assert p.operation == {"clean_work_dir": True}
+    assert p.operation == {}
+    assert "clean_work_dir" not in p.operation
+    assert p.rationale == "Out of disk; clean the work directory to reclaim space, then retry."
     assert has_safe_patch(diag("disk_full")) is False
 
 
-def test_permission_denied_proposes_needs_confirmation_manual_fix() -> None:
-    # A filesystem permission problem needs a human to fix the path/ownership; a
-    # retry on the same host will not help, so it must NOT auto-apply.
+def test_permission_denied_is_advisory() -> None:
+    # Nothing in the codebase fixes path ownership/permissions: recording this
+    # as an enacted `env` patch claimed a fix that never happened. It becomes
+    # advice only -- kept verbatim -- with no machine-applicable operation.
     patches = propose_patches(diag("permission_denied"))
     assert len(patches) == 1
     p = patches[0]
-    assert p.kind == "env"
+    assert p.kind == "advisory"
     assert p.risk == "needs_confirmation"
-    assert p.operation == {"fix_permissions": True}
+    assert p.operation == {}
+    assert "fix_permissions" not in p.operation
+    assert p.rationale == "Permission denied; fix the path ownership or permissions, then retry."
     assert has_safe_patch(diag("permission_denied")) is False
 
 
@@ -150,11 +179,25 @@ def test_has_safe_patch_distinguishes_auto_apply_classes() -> None:
     assert has_safe_patch(diag("unknown")) is False
 
 
-def test_platform_unsupported_proposes_needs_confirmation_not_safe() -> None:
+def test_platform_unsupported_is_advisory() -> None:
+    # Nothing in the codebase switches to a native-arch backend: recording this
+    # as an enacted `env` patch claimed a fix that never happened. It becomes
+    # advice only -- kept verbatim -- with no machine-applicable operation.
+    # (Retrying on the same machine won't help either, which is separately why
+    # it could never auto-apply.)
     d = diag("platform_unsupported")
     patches = propose_patches(d)
-    assert patches and patches[0].risk == "needs_confirmation"
-    # retrying on the same machine won't help, so it must NOT auto-apply
+    assert len(patches) == 1
+    p = patches[0]
+    assert p.kind == "advisory"
+    assert p.risk == "needs_confirmation"
+    assert p.operation == {}
+    assert "use_native_arch_backend" not in p.operation
+    assert p.rationale == (
+        "A step's container has no image for this host's CPU architecture "
+        "(e.g. nf-core amd64 images on Apple Silicon). Re-running here won't "
+        "help: run on an x86_64 host or a cloud backend."
+    )
     assert has_safe_patch(d) is False
 
 
