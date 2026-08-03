@@ -2689,24 +2689,25 @@ def heal_guard(
     The remaining 7 of the 18 FailureClass literals are uncovered, and each group
     is uncovered for a DIFFERENT reason -- they are not one backlog:
 
-    - **Inert repair, deferred pending a propose-vs-don't decision (5):**
-      disk_full, permission_denied, conda_solve_failed, platform_unsupported,
-      container_unavailable. `propose_patches` emits a patch for each, but
-      applying it changes nothing the re-run can act on. For the four `env`
-      patches -- clean_work_dir (disk_full, repair.py:145), fix_permissions
-      (permission_denied, repair.py:169), relax_or_pin_env (conda_solve_failed,
-      repair.py:123) and use_native_arch_backend (platform_unsupported,
-      repair.py:109) -- `apply_patch` string-merges the operation into
-      `target.backend_options` (self_heal.py:583-586), and nfconfig.py reads only
-      queue/region/partition/account/qos/time out of that dict, so the operation
-      is consumed by nothing. container_unavailable is inert for a different
-      reason: its patch is `kind="retry"` (repair.py:50), and `apply_patch` is a
-      documented no-op for retry patches, so the `wait_seconds: 15` its rationale
-      promises is silently dropped and the fix degenerates to the bare re-run
-      already covered by container_pull_failed. Covering these five would freeze
-      five suspect expectations into CI, so they are deferred to a C2 follow-up
-      whose FIRST question is whether to stop proposing them at all, not how to
-      implement them.
+    - **Advisory only, by design (4):** disk_full, permission_denied,
+      conda_solve_failed, platform_unsupported. `propose_patches` emits
+      `kind="advisory"` with `operation={}` for each -- clean_work_dir
+      (disk_full), fix_permissions (permission_denied), relax_or_pin_env
+      (conda_solve_failed) and use_native_arch_backend (platform_unsupported)
+      were withdrawn, not merely uncovered: nothing in the codebase cleans a
+      work dir, fixes ownership, relaxes a conda spec, or switches container
+      architectures, and for disk_full and permission_denied acting
+      automatically would be destructive or unsafe even if it could. That
+      resolves the propose-vs-don't decision these four used to be deferred
+      on -- the answer was don't, and `repair.py` now says so. None has a
+      frozen heal scenario yet for the human-acknowledged path advisories take
+      (`advisory_acknowledged_and_retried`, self_heal.py:1212); that is a
+      backlog item, not a reason to distrust the patch.
+    - **Live repair pending a heal scenario (1):** container_unavailable.
+      Its `kind="retry"` patch's `wait_seconds: 15` (repair.py:50) is honored
+      now -- `self_heal.py:1442-1448` sleeps before the retry -- so it is no
+      longer inert. It is uncovered only because no scenario has been
+      authored for it yet.
     - **Reproduce-local, structurally outside this loop (1):**
       missing_dependency, emitted only by `contig reproduce --allow-install`
       (verification/reproduce.py:1221) and by no detector rule, so this guard
@@ -2718,8 +2719,9 @@ def heal_guard(
     last one, and its scenario is one we authored for a class we made reachable --
     evidence that a taxonomy gap closed, not that a user was helped. Its recovery
     accounting is also an artifact: the scenario is green by construction (every
-    task exits 0, only the QC verdict FAILs), so the informational-only
-    recovery count reads 9/16 while nothing was recovered in that one.
+    task exits 0, only the QC verdict FAILs), so it counts toward the corpus-wide
+    informational-only recovery count (9/16) even though nothing was recovered in
+    that one scenario specifically.
     """
     scenarios_path = Path(scenarios) if scenarios else default_heal_scenarios_path()
     baseline_path = Path(baseline) if baseline else default_heal_baseline_path()

@@ -713,8 +713,9 @@ def test_shipped_heal_scenarios_all_reproduce_their_declared_outcomes():
     # behaviour change: the catalog-coverage slice added four recovering
     # scenarios and three give-ups, and the ratio simply follows what was added.
     # No pre-existing scenario changed its outcome. `recovery_rate` is
-    # informational-only and is never guarded (cli.py:2695) -- the guarded
-    # number is `outcome_match_rate`, which stayed at 1.0 across the move.
+    # informational-only and is never guarded (heal.py:413-414 compares only
+    # outcome_match_rate) -- the guarded number is `outcome_match_rate`, which
+    # stayed at 1.0 across the move.
     assert report.healed == 9
     assert report.recovery_rate == pytest.approx(9 / 16)
 

@@ -9,8 +9,11 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from contig.models import Diagnosis, Patch
+import pytest
+
+from contig.models import Diagnosis, ExecutionTarget, Patch
 from contig.repair import has_safe_patch, propose_patches
+from contig.self_heal import apply_patch
 
 
 def diag(failure_class: str) -> Diagnosis:
@@ -215,35 +218,43 @@ def test_no_progress_proposes_safe_retry() -> None:
     assert has_safe_patch(diag("no_progress")) is True
 
 
-# --- Gap-pinning guard over the inert repairs (PRD R14) ----------------------
+# --- Advisory-contract guard, replacing the retired inertness guard (PRD R14, R8) --
 
-# The five operations `propose_patches` emits that nothing consumes, each with
-# the class that proposes it and the repair.py line it is emitted from.
-_INERT_OPERATIONS = (
-    "clean_work_dir",           # disk_full             (repair.py:145)
-    "fix_permissions",          # permission_denied     (repair.py:169)
-    "relax_or_pin_env",         # conda_solve_failed    (repair.py:123)
-    "use_native_arch_backend",  # platform_unsupported  (repair.py:109)
-    "wait_seconds",             # container_unavailable (repair.py:50)
+# The gap the retired guard existed to pin has closed: `clean_work_dir`,
+# `fix_permissions`, `relax_or_pin_env` and `use_native_arch_backend` are no
+# longer emitted at all (their classes propose `kind="advisory"` with
+# `operation={}` instead), and `wait_seconds` -- the fifth -- now has a real
+# consumer in self_heal.py. That tripped BOTH of the old guard's assertions at
+# once, which is what a closed gap looks like; deleting the guard to get green
+# would have thrown away the thing its own docstring forbade throwing away.
+# This replaces it with three assertions pinning the NEW contract, so it is
+# this guard's job now to go RED the moment that contract regresses:
+#  1. none of the four withdrawn keys reappears in an advisory's operation;
+#  2. `wait_seconds` keeps a consumer outside repair.py (the exact inverse of
+#     the retired guard's consumer-side check);
+#  3. `apply_patch` still refuses an advisory rather than silently no-opping.
+_WITHDRAWN_OPERATIONS = (
+    "clean_work_dir",           # disk_full             -- withdrawn (repair.py: advisory)
+    "fix_permissions",          # permission_denied     -- withdrawn (repair.py: advisory)
+    "relax_or_pin_env",         # conda_solve_failed    -- withdrawn (repair.py: advisory)
+    "use_native_arch_backend",  # platform_unsupported  -- withdrawn (repair.py: advisory)
 )
 
-# `lifecycle.py` uses the bare name `wait_seconds` for an unrelated SIGTERM
-# grace period (verified: it is the only such collision among the five), so for
-# that one -- and only that one -- the scan narrows to the string-literal form,
-# which is how a real consumer would read it back out of `patch.operation`.
-# Narrowing is what keeps this guard from being a permanent false positive;
-# dropping the name outright would leave container_unavailable's inertness
-# unpinned.
-_STRING_LITERAL_ONLY = frozenset({"wait_seconds"})
+_ADVISORY_CLASSES = (
+    "disk_full",
+    "permission_denied",
+    "conda_solve_failed",
+    "platform_unsupported",
+)
 
 
 def _code_references(path: Path) -> tuple[set[str], set[str]]:
     """The (identifiers, string literals) a module's CODE mentions.
 
     Docstrings, bare prose strings and comments are excluded deliberately:
-    `cli.py`'s heal-guard docstring names all five of these operations when it
-    explains why their classes are uncovered, and so does the guard below.
-    Naming an operation in prose is not consuming it.
+    `cli.py`'s heal-guard docstring names `wait_seconds` when it explains
+    container_unavailable's history. Naming an operation in prose is not
+    consuming it.
     """
     tree = ast.parse(path.read_text(encoding="utf-8"))
     prose = {
@@ -270,56 +281,62 @@ def _code_references(path: Path) -> tuple[set[str], set[str]]:
     return identifiers, strings
 
 
-def test_five_inert_patch_operations_are_still_consumed_by_nothing() -> None:
-    """This test exists to FAIL when the gap closes. That is its whole point.
+def test_no_advisory_carries_a_withdrawn_operation_key() -> None:
+    """Assertion 1: disk_full, permission_denied, conda_solve_failed and
+    platform_unsupported must stay `kind="advisory"` with `operation={}` --
+    none of the four operation keys the retired guard pinned as inert may
+    reappear. RED here means one of these classes grew a machine operation
+    again without a real consumer being verified for it first (which is the
+    whole reason the retired guard used to fire on the proposer side).
+    """
+    for failure_class in _ADVISORY_CLASSES:
+        patches = propose_patches(diag(failure_class))
+        assert len(patches) == 1
+        p = patches[0]
+        assert p.kind == "advisory"
+        assert p.operation == {}
+        for key in _WITHDRAWN_OPERATIONS:
+            assert key not in p.operation, (
+                f"{failure_class}'s advisory carries withdrawn key {key!r} again -- "
+                "verify a real consumer exists before treating this as progress."
+            )
 
-    `propose_patches` emits an operation for disk_full, permission_denied,
-    conda_solve_failed, platform_unsupported and container_unavailable -- and
-    nothing else in `src/contig/` reads any of them. The four `env` ones are
-    string-merged into `ExecutionTarget.backend_options`
-    (`self_heal.py:583-586`), out of which `nfconfig.py` reads only
-    queue/region/partition/account/qos/time. `wait_seconds` rides on a
-    `kind="retry"` patch, for which `apply_patch` is a documented no-op, so the
-    "wait briefly and retry" its rationale promises never happens.
 
-    That inertness is why the catalog-coverage slice froze scenarios for 11
-    failure classes and not 16: freezing an inert repair's outcome into CI would
-    have pinned five suspect expectations as correct.
-
-    RED means the situation changed -- an operation grew a consumer
-    (implemented) or left `repair.py` (withdrawn). Either way that is the FIRST
-    of the two revisit triggers in
-    `docs/planning/heal-scenarios-catalog-coverage/prd.md` ("Revisit trigger,
-    both directions"), so do not delete this test to get green. Revisit the
-    deferral reason in the same commit, correct the heal-guard honest-scope
-    docstring in `cli.py`, and give the now-live class a heal scenario.
+def test_wait_seconds_is_consumed_outside_repair_py() -> None:
+    """Assertion 2: the exact inverse of the retired guard's consumer-side
+    check. container_unavailable's `wait_seconds: 15` (repair.py:50) used to
+    be a documented no-op for a `kind="retry"` patch; self_heal.py now sleeps
+    on it before the retry (self_heal.py:1442-1448). RED here means
+    `wait_seconds` lost its only consumer outside repair.py -- i.e. this
+    repair went inert again.
     """
     src_root = Path(__file__).resolve().parents[1] / "src" / "contig"
     repair_py = src_root / "repair.py"
     assert repair_py.is_file(), f"src layout moved; this guard needs fixing ({src_root})"
 
-    # A rename would otherwise make the guard silently vacuous, so pin the
-    # proposer side first: every operation must still be emitted from repair.py.
-    _, repair_strings = _code_references(repair_py)
-    assert set(_INERT_OPERATIONS) <= repair_strings, (
-        "An inert operation is no longer emitted by repair.py: "
-        f"{sorted(set(_INERT_OPERATIONS) - repair_strings)}. If it was withdrawn, "
-        "that is revisit trigger #1 -- update this guard and the cli.py docstring."
-    )
-
-    consumers: dict[str, list[str]] = {}
+    consumers = []
     for path in sorted(src_root.rglob("*.py")):
         if path == repair_py:
             continue
-        identifiers, strings = _code_references(path)
-        for op in _INERT_OPERATIONS:
-            if op in strings or (op not in _STRING_LITERAL_ONLY and op in identifiers):
-                consumers.setdefault(op, []).append(str(path.relative_to(src_root)))
+        _, strings = _code_references(path)
+        if "wait_seconds" in strings:
+            consumers.append(str(path.relative_to(src_root)))
 
-    assert consumers == {}, (
-        "An inert patch operation is now referenced outside repair.py: "
-        f"{consumers}. If it was implemented, the class it repairs is no longer "
-        "inert -- that is revisit trigger #1 in the catalog-coverage PRD. Revisit "
-        "the deferral, correct cli.py's heal-guard honest-scope docstring, and add "
-        "a heal scenario for the class before relaxing this guard."
+    assert consumers, (
+        "wait_seconds is no longer referenced as a string literal anywhere "
+        "outside repair.py -- container_unavailable's wait is inert again."
     )
+
+
+def test_apply_patch_raises_for_an_advisory() -> None:
+    """Assertion 3: an advisory reaching `apply_patch` is a caller bug, never
+    a silent no-op (design-decision.md). Narrower duplicate of
+    test_self_heal.py's fuller coverage, kept here because the replaced
+    guard's contract names this explicitly as part of what "advisory, not
+    inert-and-hidden" means.
+    """
+    p = Patch(kind="advisory", operation={}, rationale="x",
+               risk="needs_confirmation", expected_signal="s")
+    target = ExecutionTarget(backend="local", container_runtime="docker", work_dir="w")
+    with pytest.raises(ValueError, match="advisories carry no machine operation"):
+        apply_patch(target, p, {})
