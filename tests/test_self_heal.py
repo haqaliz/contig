@@ -178,6 +178,49 @@ def test_container_unavailable_heal_never_sleeps_for_real(tmp_path, monkeypatch)
     assert RunSummary.from_events(record.events).succeeded is True
 
 
+@pytest.mark.parametrize(
+    "wait_seconds",
+    [0, -5, "soon", True],
+    ids=["zero", "negative", "non_numeric", "bool_true"],
+)
+def test_safe_retry_wait_seconds_guard_branches_sleep_zero_times(tmp_path, wait_seconds):
+    # Only container_unavailable's real patch carries wait_seconds, and only
+    # with 15 -- no real failure class ever proposes 0, a negative number, a
+    # non-numeric value, or a bare `True` (bool is an int subclass, so an
+    # unguarded `True > 0` would sleep). Construct the Patch directly via a
+    # fake `propose` so each guard branch (self_heal.py's wait_seconds check)
+    # is pinned regardless of what the detector can produce.
+    def propose(diagnosis):
+        return [
+            Patch(
+                kind="retry",
+                operation={"retry": True, "wait_seconds": wait_seconds},
+                rationale="test",
+                risk="safe",
+                expected_signal="retried",
+            )
+        ]
+
+    calls = []
+
+    def sleeper(seconds):
+        calls.append(seconds)
+
+    state = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, TRACE_TOOL, "boom")
+            return 1
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor, sleeper=sleeper, propose=propose)
+    assert calls == []
+    assert RunSummary.from_events(record.events).succeeded is True
+
+
 def test_self_heal_writes_status_running_then_finished(tmp_path):
     # The dashboard reads status.json to know a run is in flight (run_record.json
     # only appears at the end). It must say "running" during, "finished" after.
