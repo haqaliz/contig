@@ -105,8 +105,10 @@ def propose_patches(diagnosis: Diagnosis) -> list[Patch]:
     if diagnosis.failure_class == "platform_unsupported":
         return [
             Patch(
-                kind="env",
-                operation={"use_native_arch_backend": True},
+                kind="advisory",
+                # No machine-applicable operation: nothing switches backends.
+                # This is human advice, not a fix apply_patch can enact.
+                operation={},
                 rationale=(
                     "A step's container has no image for this host's CPU architecture "
                     "(e.g. nf-core amd64 images on Apple Silicon). Re-running here won't "
@@ -119,8 +121,10 @@ def propose_patches(diagnosis: Diagnosis) -> list[Patch]:
     if diagnosis.failure_class == "conda_solve_failed":
         return [
             Patch(
-                kind="env",
-                operation={"relax_or_pin_env": True},
+                kind="advisory",
+                # No machine-applicable operation: nothing relaxes or pins an
+                # env spec. This is human advice, not a fix apply_patch can enact.
+                operation={},
                 rationale="Conda solve failed; relax or pin the environment spec.",
                 risk="needs_confirmation",
                 expected_signal="env solved",
@@ -139,10 +143,12 @@ def propose_patches(diagnosis: Diagnosis) -> list[Patch]:
     if diagnosis.failure_class == "disk_full":
         return [
             Patch(
-                kind="env",
-                # Reclaiming space deletes the work dir's intermediates: this
-                # destroys data, so it can never auto-apply.
-                operation={"clean_work_dir": True},
+                kind="advisory",
+                # No machine-applicable operation: nothing cleans the work
+                # dir. This is human advice, not a fix apply_patch can enact --
+                # and reclaiming space this way would destroy data anyway, so
+                # it could never have auto-applied.
+                operation={},
                 rationale="Out of disk; clean the work directory to reclaim space, then retry.",
                 risk="needs_confirmation",
                 expected_signal="free disk space available",
@@ -163,10 +169,12 @@ def propose_patches(diagnosis: Diagnosis) -> list[Patch]:
     if diagnosis.failure_class == "permission_denied":
         return [
             Patch(
-                kind="env",
-                # The fix is to correct the path's ownership/permissions; only a
-                # human can decide and do that safely.
-                operation={"fix_permissions": True},
+                kind="advisory",
+                # No machine-applicable operation: nothing fixes path
+                # ownership/permissions. This is human advice, not a fix
+                # apply_patch can enact -- only a human can decide and do that
+                # safely anyway.
+                operation={},
                 rationale="Permission denied; fix the path ownership or permissions, then retry.",
                 risk="needs_confirmation",
                 expected_signal="path writable",

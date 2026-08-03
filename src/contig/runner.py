@@ -614,6 +614,13 @@ Installer = Callable[[list[str], Path], int]
 # resolved commit is read -- and that commit is the whole point of the slice.
 Fetcher = Callable[[list[str], Path], tuple[int, str]]
 
+# A sleeper pauses for the given number of seconds (e.g. a retry patch's
+# `wait_seconds`). The default is the real `time.sleep`; tests inject a fake
+# so no real time passes in CI (mirrors Executor / IndexBuilder / Installer /
+# Fetcher). Direct precedent: `make_watchdog_executor`'s `sleeper` parameter
+# below, which this alias names retroactively.
+Sleeper = Callable[[float], None]
+
 
 class PipelineExecutionError(RuntimeError):
     """Raised when the workflow manager exits nonzero (DETECT, ARCHITECTURE §5.1).

@@ -30,7 +30,7 @@ from contig.models import (
     HealSnapshot,
     RunSummary,
 )
-from contig.runner import IndexBuilder, PipelineExecutionError, default_index_builder
+from contig.runner import IndexBuilder, PipelineExecutionError, Sleeper, default_index_builder
 from contig.self_heal import _poll_approval_file, self_heal_run
 
 
@@ -133,13 +133,30 @@ def _scripted_poll(scenario: HealScenario):
     return poll
 
 
-def run_heal_scenario(scenario: HealScenario, tmp_dir: Path) -> HealScenarioResult:
+def _no_sleep(seconds: float) -> None:
+    """Default sleeper for scripted heal scenarios: never pauses for real.
+
+    The scenario corpus runs through `evaluate_heal` in CI on every commit, so
+    a wait_seconds retry (e.g. container_unavailable) must not cost real
+    wall-clock time here -- mirrors why executor/index_builder/poll below are
+    scripted rather than real. A caller that wants to prove the wait actually
+    happened (a heal scenario covering container_unavailable) injects its own
+    recording sleeper via `run_heal_scenario`'s `sleeper` kwarg.
+    """
+    return None
+
+
+def run_heal_scenario(
+    scenario: HealScenario, tmp_dir: Path, *, sleeper: Sleeper = _no_sleep
+) -> HealScenarioResult:
     """Drive the real `self_heal_run` with `scenario`'s scripted seams and score
     the terminal outcome against the scenario's expectations.
 
     Only executor/index_builder/poll are synthesized. `propose` and the failure
     detector are left at their real defaults (PRD R2): this measures the actual
-    loop, not a mock of it.
+    loop, not a mock of it. `sleeper` defaults to a no-op (see `_no_sleep`) so
+    a wait_seconds retry never costs real time in CI; pass a recording fake to
+    assert the wait happened.
     """
     target = ExecutionTarget(
         backend="local",
@@ -173,6 +190,7 @@ def run_heal_scenario(scenario: HealScenario, tmp_dir: Path) -> HealScenarioResu
             executor=_scripted_executor(scenario),
             index_builder=_scripted_index_builder(scenario),
             poll=_scripted_poll(scenario),
+            sleeper=sleeper,
             auto_approve=scenario.auto_approve,
             resource_ceiling=scenario.resource_ceiling,
             max_attempts=scenario.max_attempts,

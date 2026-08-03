@@ -85,6 +85,142 @@ def test_self_heal_oom_bump_emits_bumped_resourcelimits(tmp_path):
     assert "process.resourceLimits = [ memory: 16.GB ]" in state["retry_cfg"]
 
 
+def test_container_unavailable_heal_waits_via_injected_sleeper(tmp_path):
+    # The wait is the load-bearing part of container_unavailable's fix
+    # (repair.py:46-55): an immediate retry against a down daemon fails
+    # identically. The sleeper is injected so the wait is provable without
+    # costing real wall-clock time.
+    calls = []
+
+    def sleeper(seconds):
+        calls.append(seconds)
+
+    state = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(
+                trace_path,
+                TRACE_TOOL,
+                "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. "
+                "Is the docker daemon running?",
+            )
+            return 1
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor, sleeper=sleeper)
+    assert calls == [15]
+    assert RunSummary.from_events(record.events).succeeded is True
+    step = record.repair_history[0]
+    assert step.diagnosis.failure_class == "container_unavailable"
+    assert step.outcome == "patched_and_retried"
+    assert step.patch_applied is True
+
+
+def test_container_pull_failed_heal_sleeps_zero_times(tmp_path):
+    # wait_seconds rides only on container_unavailable's patch (repair.py:50).
+    # This pins that threading the sleeper did NOT become a blanket backoff on
+    # every safe retry -- a patch with no wait_seconds must sleep zero times.
+    calls = []
+
+    def sleeper(seconds):
+        calls.append(seconds)
+
+    state = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, TRACE_TOOL, "failed to pull image: manifest unknown")
+            return 1
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor, sleeper=sleeper)
+    assert calls == []
+    assert RunSummary.from_events(record.events).succeeded is True
+    step = record.repair_history[0]
+    assert step.diagnosis.failure_class == "container_pull_failed"
+
+
+def test_container_unavailable_heal_never_sleeps_for_real(tmp_path, monkeypatch):
+    # Real time must never pass in CI: the injected sleeper is what stands in
+    # for the wait, and the real time.sleep self_heal.py falls back to by
+    # default must not be reached when a fake is supplied.
+    def _forbidden_sleep(seconds):
+        raise AssertionError(f"real time.sleep called with {seconds}")
+
+    monkeypatch.setattr("contig.self_heal.time.sleep", _forbidden_sleep)
+
+    calls = []
+
+    def sleeper(seconds):
+        calls.append(seconds)
+
+    state = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(
+                trace_path,
+                TRACE_TOOL,
+                "Cannot connect to the Docker daemon at unix:///var/run/docker.sock.",
+            )
+            return 1
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor, sleeper=sleeper)
+    assert calls == [15]
+    assert RunSummary.from_events(record.events).succeeded is True
+
+
+@pytest.mark.parametrize(
+    "wait_seconds",
+    [0, -5, "soon", True],
+    ids=["zero", "negative", "non_numeric", "bool_true"],
+)
+def test_safe_retry_wait_seconds_guard_branches_sleep_zero_times(tmp_path, wait_seconds):
+    # Only container_unavailable's real patch carries wait_seconds, and only
+    # with 15 -- no real failure class ever proposes 0, a negative number, a
+    # non-numeric value, or a bare `True` (bool is an int subclass, so an
+    # unguarded `True > 0` would sleep). Construct the Patch directly via a
+    # fake `propose` so each guard branch (self_heal.py's wait_seconds check)
+    # is pinned regardless of what the detector can produce.
+    def propose(diagnosis):
+        return [
+            Patch(
+                kind="retry",
+                operation={"retry": True, "wait_seconds": wait_seconds},
+                rationale="test",
+                risk="safe",
+                expected_signal="retried",
+            )
+        ]
+
+    calls = []
+
+    def sleeper(seconds):
+        calls.append(seconds)
+
+    state = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, TRACE_TOOL, "boom")
+            return 1
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor, sleeper=sleeper, propose=propose)
+    assert calls == []
+    assert RunSummary.from_events(record.events).succeeded is True
+
+
 def test_self_heal_writes_status_running_then_finished(tmp_path):
     # The dashboard reads status.json to know a run is in flight (run_record.json
     # only appears at the end). It must say "running" during, "finished" after.
@@ -185,6 +321,54 @@ def test_self_heal_pauses_for_approval_on_needs_confirmation(tmp_path):
     record = _heal(tmp_path, executor, poll=lambda run_dir, timeout_sec: None)
     assert record.repair_history[0].diagnosis.failure_class == "missing_index"
     assert record.repair_history[0].outcome == "approval_timed_out"
+
+
+def _advisory_propose(diagnosis):
+    """A fake `propose` that always offers a single advisory patch.
+
+    Used to pin the structural guarantee
+    (docs/planning/inert-repair-honesty/advisory-repairs/design-decision.md)
+    across every gate decision without depending on which real failure class
+    the detector happens to phrase a log line into.
+    """
+    return [
+        Patch(
+            kind="advisory",
+            operation={},
+            rationale="A human must resolve this; nothing here is machine-applicable.",
+            risk="needs_confirmation",
+            expected_signal="a human resolves it",
+        )
+    ]
+
+
+def test_advisory_patch_never_recorded_as_applied_through_the_loop(tmp_path):
+    # The structural pin
+    # (docs/planning/inert-repair-honesty/advisory-repairs/design-decision.md):
+    # patch_applied is sourced solely from _apply_patch_and_maybe_build's
+    # `continue_`, so for EVERY gate decision (approve / reject / timeout /
+    # auto-approve), no recorded RepairStep may have both patch.kind ==
+    # "advisory" and patch_applied True. self_heal_run's own advisory branch
+    # (kind == "advisory", ahead of apply_patch) handles all four gate
+    # decisions without ever calling apply_patch/_apply_patch_and_maybe_build,
+    # so the loop always returns normally here -- there is no raising path
+    # left to tolerate.
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_TOOL, "boom")
+        return 1
+
+    gate_kwargs = [
+        dict(run_id="r-reject", poll=lambda run_dir, timeout_sec: {"decision": "reject"}),
+        dict(run_id="r-timeout", poll=lambda run_dir, timeout_sec: None),
+        dict(run_id="r-approve", poll=lambda run_dir, timeout_sec: {"decision": "approve"}),
+        dict(run_id="r-auto", auto_approve=True),
+    ]
+    for kwargs in gate_kwargs:
+        record = _heal(tmp_path, executor, propose=_advisory_propose, **kwargs)
+        assert not any(
+            step.patch is not None and step.patch.kind == "advisory" and step.patch_applied
+            for step in record.repair_history
+        ), f"advisory recorded as applied for {kwargs}"
 
 
 def test_self_heal_bwa_missing_index_gives_up_unresolvable(tmp_path):
@@ -317,10 +501,16 @@ def test_apply_patch_param_merges_set_param_into_params(tmp_path):
 
 
 def test_apply_patch_env_merges_operation_into_backend_options(tmp_path):
-    patch = Patch(kind="env", operation={"relax_or_pin_env": True},
+    # R12: no live `kind="env"` patch exists any more -- `relax_or_pin_env` and its
+    # three siblings were withdrawn to `kind="advisory"` (repair.py), so this key no
+    # longer reaches `record.target.backend_options` in any real run. That withdrawal
+    # is a provenance change, not only a proposer change: those four keys used to be
+    # written into every affected run's bundle and now never are. This test pins the
+    # generic merge mechanism with a synthetic key, not a live operation.
+    patch = Patch(kind="env", operation={"some_env_key": True},
                   rationale="x", risk="needs_confirmation", expected_signal="s")
     target, params = apply_patch(_t(), patch, {})
-    assert target.backend_options["relax_or_pin_env"] == "True"
+    assert target.backend_options["some_env_key"] == "True"
 
 
 def test_apply_patch_reference_build_index_is_rerun_only(tmp_path):
@@ -340,6 +530,18 @@ def test_apply_patch_reference_set_param_swaps_the_reference_param(tmp_path):
     assert params["genome"] == "GRCh38"
     assert params["input"] == "sheet.csv"  # other params preserved
     assert target.resource_limits == {}  # target untouched
+
+
+def test_apply_patch_advisory_raises_instead_of_silently_no_opping(tmp_path):
+    # docs/planning/inert-repair-honesty/advisory-repairs/design-decision.md:
+    # an advisory reaching the applier must be a loud bug, never a quiet
+    # re-enactment. Before this, an unrecognized kind fell
+    # through to the `return target, params` fallback -- a silent no-op that
+    # would have let the caller wrongly treat it as continuable.
+    patch = Patch(kind="advisory", operation={},
+                  rationale="x", risk="needs_confirmation", expected_signal="s")
+    with pytest.raises(ValueError, match="advisories carry no machine operation"):
+        apply_patch(_t(), patch, {"input": "sheet.csv"})
 
 
 def test_self_heal_resume_passes_resume_on_first_execute(tmp_path):
@@ -1216,19 +1418,98 @@ def test_self_heal_applied_reference_patch_reaches_the_rerun_command(tmp_path):
     assert "True" in seen["cmd"]
 
 
-def test_self_heal_applied_env_patch_reaches_the_rerun_target(tmp_path):
-    # A conda_solve_failed failure proposes an env patch; the env knob must land
-    # on the target that the retry runs against (it rides backend_options into the
-    # generated config). The final record carries the patched target, proving the
-    # applied env change reached the re-run.
+_CONDA_LOG = "ResolvePackageNotFound:\n  - bioconductor-dupradar=1.38"
+
+
+def test_self_heal_advisory_approve_records_acknowledged_and_retries(tmp_path):
+    # The loop now branches on kind == "advisory" BEFORE the applier
+    # (docs/planning/inert-repair-honesty/advisory-repairs/design-decision.md),
+    # so an approved advisory no longer reaches
+    # apply_patch at all: it records the observational outcome and retries
+    # directly. Restores the behavioral specificity the interim guard-pinning
+    # test (this test replaces) could not assert: succeeded, failure_class,
+    # patch.kind, and now repair_history's outcome/patch_applied/call count.
     state = {"n": 0}
-    log = "ResolvePackageNotFound:\n  - bioconductor-dupradar=1.38"
-    executor = _failing_then_capturing(state, log, lambda cmd, tp: None)
-    record = _heal(tmp_path, executor, auto_approve=True, params={"input": "sheet.csv"})
+
+    def poll(run_dir, timeout_sec):
+        return {"decision": "approve", "decided_at": "2026-08-03T00:00:00+00:00"}
+
+    executor = _failing_then_capturing(state, _CONDA_LOG, lambda cmd, tp: None)
+    record = _heal(tmp_path, executor, poll=poll, params={"input": "sheet.csv"})
     assert RunSummary.from_events(record.events).succeeded is True
-    assert record.repair_history[0].diagnosis.failure_class == "conda_solve_failed"
-    assert record.repair_history[0].patch.kind == "env"
-    assert record.target.backend_options.get("relax_or_pin_env") == "True"
+    step = record.repair_history[0]
+    assert step.diagnosis.failure_class == "conda_solve_failed"
+    assert step.patch.kind == "advisory"
+    assert step.outcome == "advisory_acknowledged_and_retried"
+    assert step.patch_applied is False
+    assert state["n"] == 2  # the acknowledged retry actually ran
+
+
+def test_self_heal_advisory_reject_and_timeout_never_claim_enactment(tmp_path):
+    # Pin the reject/timeout behavior for an advisory so the new approve
+    # branch above cannot regress it: both are non-enactment, terminal.
+    for decision, expected_outcome in [
+        ("reject", "rejected_by_user"),
+        (None, "approval_timed_out"),
+    ]:
+        state = {"n": 0}
+
+        def poll(run_dir, timeout_sec, decision=decision):
+            return {"decision": decision} if decision else None
+
+        executor = _failing_then_capturing(state, _CONDA_LOG, lambda cmd, tp: None)
+        record = _heal(
+            tmp_path, executor, poll=poll, params={"input": "sheet.csv"},
+            run_id=f"r-{expected_outcome}",
+        )
+        step = record.repair_history[-1]
+        assert step.patch.kind == "advisory"
+        assert step.outcome == expected_outcome
+        assert step.patch_applied is False
+        assert state["n"] == 1  # never retried
+
+
+def test_self_heal_auto_approve_advisory_gives_up_honestly_without_retry(tmp_path):
+    # --auto-approve has no human to acknowledge the guidance, and there is no
+    # machine operation to apply on its own
+    # (docs/planning/inert-repair-honesty/advisory-repairs/design-decision.md):
+    # the only honest move is a give-up that carries the guidance, not a fabricated
+    # retry. The executor must be called exactly once -- the failing attempt
+    # itself -- never a second time.
+    state = {"n": 0}
+    executor = _failing_then_capturing(state, _CONDA_LOG, lambda cmd, tp: None)
+    record = _heal(tmp_path, executor, auto_approve=True, params={"input": "sheet.csv"})
+    assert RunSummary.from_events(record.events).succeeded is False
+    step = record.repair_history[-1]
+    assert step.diagnosis.failure_class == "conda_solve_failed"
+    assert step.patch.kind == "advisory"
+    assert step.outcome == "gave_up"
+    assert step.patch_applied is False
+    assert step.detail == step.patch.rationale  # the guidance travels with the give-up
+    assert state["n"] == 1
+    final = json.loads((tmp_path / "runs" / "r" / "status.json").read_text())
+    assert final["state"] == "finished"
+
+
+def test_self_heal_advisory_pending_approval_has_no_operation_key(tmp_path):
+    # PRD R5: an advisory's pending_approval.json must never claim a machine
+    # operation is on offer (there is none), but must still carry the
+    # rationale and the diagnosis's evidence so a human has something to act
+    # on.
+    captured = {}
+
+    def poll(run_dir, timeout_sec):
+        captured["pending"] = json.loads((Path(run_dir) / "pending_approval.json").read_text())
+        return None  # time out; we only need the written request
+
+    state = {"n": 0}
+    executor = _failing_then_capturing(state, _CONDA_LOG, lambda cmd, tp: None)
+    _heal(tmp_path, executor, poll=poll, params={"input": "sheet.csv"})
+    pending = captured["pending"]
+    assert pending["diagnosis"]["failure_class"] == "conda_solve_failed"
+    assert pending["diagnosis"]["evidence"]  # non-empty: the matched log lines
+    assert pending["patch"]["rationale"]
+    assert "operation" not in pending["patch"]
 
 
 def test_self_heal_respects_max_attempts(tmp_path):

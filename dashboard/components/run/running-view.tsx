@@ -36,6 +36,8 @@ const FAILURE_LABELS: Record<string, string> = {
   container_unavailable: "Container unavailable",
   conda_solve_failed: "Conda solve failed",
   platform_unsupported: "Platform unsupported",
+  disk_full: "Disk full",
+  permission_denied: "Permission denied",
   tool_crash: "Tool crashed",
   no_progress: "No progress",
   qc_anomaly: "QC anomaly",

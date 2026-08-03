@@ -8,6 +8,81 @@ All notable changes to Contig are recorded here. The format follows
 
 ### Added
 
+- **The five inert self-heal repairs are resolved — four made honest advisories, one genuinely
+  enacted.** `propose_patches` used to emit a patch for `disk_full`, `permission_denied`,
+  `conda_solve_failed`, `platform_unsupported` and `container_unavailable` whose stated
+  operation was performed by **nothing**, so the loop recorded propose → "apply" →
+  `patch_applied=True` → retry → **`Repaired`**, having done nothing (filed by the C6
+  catalog-coverage slice). A new `Patch.kind = "advisory"` now marks the first four: a
+  diagnosis plus human-executable guidance, never machine-applicable. Their inert operations
+  (`clean_work_dir`, `fix_permissions`, `relax_or_pin_env`, `use_native_arch_backend`) are
+  **withdrawn**, not reassigned, and rationales carry over **verbatim**. The self-heal loop
+  branches on `kind == "advisory"` **before** the applier; `apply_patch` raises if one ever
+  reaches it (defensive — unreachable in practice, since the loop's own branch is the only
+  path). An approved advisory now records the deliberately observational
+  `advisory_acknowledged_and_retried` — Contig cannot verify the human fixed anything, only
+  that they approved and the retry ran — with `patch_applied=False` and `recovered=False`: the
+  recovery is attributed to the human, which is what actually happened. `--auto-approve` (no
+  human in the loop) now makes an advisory `gave_up` honestly with the rationale and **no
+  retry**, closing the door by which the unattended path would otherwise re-record the same
+  false claim. `pending_approval.json` stops serializing an `operation` dict for work Contig
+  will not do; the human sees guidance and evidence instead. `container_unavailable` — the one
+  class with a sound premise — now **genuinely waits** its `wait_seconds` through an injected
+  clock seam (the stall watchdog's `Sleeper` precedent, `runner.py`), threaded through
+  `self_heal_run` **and** `heal.py`'s evaluator, so CI never really sleeps.
+  - Dashboard: `repair-timeline.tsx`'s `OUTCOME_META` grows **18 → 19** with a new violet
+    ACKNOWLEDGED family for `advisory_acknowledged_and_retried`; `wasRepaired` and the timeline
+    now agree, and reports show the guidance rather than a bare "not applied." `types.ts`'s
+    `Patch.operation` becomes optional. `repair-truthfulness.spec.ts` pins `LIVE_OUTCOMES.length
+    === 19`.
+  - `heal-guard` `covered_classes` moved **11 → 15** (`disk_full`, `permission_denied`,
+    `conda_solve_failed`, `container_unavailable` newly covered; `platform_unsupported` stays
+    deliberately uncovered — reaching it needs a failed event with `exit is None`
+    (`detect.py:355`), but `AttemptSpec.exit` is a required `int` (`models.py:543`) used as both
+    the trace column (`heal.py:82`) and the executor return code (`heal.py:100`), an additive
+    model/driver change out of scope here). Guarded `outcome_match_rate` held at **1.0** over
+    **20** scenarios, `corpus_sha b16454fe…`, `heal_baseline.json` refrozen as a deliberate act
+    (`--update-baseline`, never a hand-edit).
+  - **The inertness-pinning guard is retired deliberately, not deleted for green**, and replaced
+    by three assertions pinning the new contract: none of the four withdrawn keys reappears in
+    an advisory's operation, an advisory's `operation` is `{}`, and `apply_patch` still refuses
+    an advisory rather than silently no-opping. `cli.py`'s honest-scope docstring corrected in
+    the same commit.
+  - **R7 — two shipped falsehoods, corrected.** `self_heal.py`'s `apply_patch` docstring claimed
+    an `env` operation was "string-coerced so it rides into the generated config" — false for
+    every backend (`nfconfig.py` reads six named keys by `.get()` and never consults
+    `backend_options` on `local` at all) and now moot besides, since no live `kind="env"` patch
+    remains after the advisory withdrawal. `tests/test_self_heal.py` repeated the same
+    falsehood in a comment beside an assertion pinning `backend_options["relax_or_pin_env"] ==
+    "True"` — the assertion was correct, only the comment lied, and the assertion itself now
+    changes (**R12**): withdrawing the four inert operations is a provenance change, not only a
+    proposer change, since those keys were written into every affected run's
+    `record.target.backend_options` and now never are. The test now pins the generic merge
+    mechanism with a synthetic key, not a live operation.
+  - **Two incidental defects found in the dig are filed, not fixed** (`CAPABILITY_ROADMAP.md`'s
+    C2 deferral list): `read_task_errors` hardcodes `Path(run_dir)/"work"` while Nextflow is
+    actually given `target.work_dir`, so the detector goes blind on a custom `--work-dir`; and
+    `risk="destructive"` is a no-op to the engine — no code branches on it and `--auto-approve`
+    has no carve-out, so only the dashboard honors it. A third is recorded alongside:
+    `_write_pending_choice` (the ambiguous-choice gate) has no advisory branch and still writes
+    `operation` unconditionally, unreachable today (all four advisory classes are
+    single-candidate at confidence ≥ 0.7) and defended by `apply_patch`'s advisory guard if it
+    ever were reached.
+  - **Read honestly, against our own interest.** Push, not demand-pull, and now demonstrably
+    so: **0 of 20** pending-corpus cases and **0 of 15** real runs were ever diagnosed into any
+    of these five classes — the only classes ever diagnosed in the field remain `oom`,
+    `tool_crash`, `missing_index`, `unknown`. `eval-guard` **cannot move and did not**: nothing
+    here touches a detector or corpus, and the pending-corpus append happens **before**
+    `propose`, so proposer changes write zero bytes to it — unmoved at 92.3% (12/13), same
+    known miss. The informational `recovery_rate` move (9/16 → 10/20) is **corpus
+    composition**, not loop behaviour, and stays never-guarded. Every scenario is self-graded —
+    we authored the fixtures for the classes we then grade — with no real nf-core run in CI.
+    **This recovers nothing new for a user** except a transient Docker-daemon blip. A committed
+    revisit trigger runs in both directions, following the `no_progress`/`qc_anomaly`
+    precedent: if the next 20 diagnosed failures contain no case in any of the five classes,
+    the advisory abstraction is restated as taxonomy-only; if `container_unavailable`'s wait
+    fires and does not recover it, the wait is removed rather than lengthened.
+
 - **`heal-guard` now replays the four failure classes whose repair is HONEST — and the five it
   leaves out are the finding, not a shortfall against the brief.** The frozen scenario set went
   **9 → 16 scenarios** and **`covered_classes` 7 → 11** (`missing_reference`,

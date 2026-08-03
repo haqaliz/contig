@@ -98,3 +98,33 @@ test("Reject POSTs a reject decision", async ({ page }) => {
 
   await expect.poll(() => rejectBody).toContain("reject");
 });
+
+test("an advisory patch's gate never claims anything is applied", async ({
+  page,
+}) => {
+  // advisory-awaiting-fixture's pending_approval.json omits `operation`
+  // entirely (self_heal.py never writes {} for an advisory), so this also
+  // proves the gate renders without dereferencing a field that isn't there.
+  await page.goto("/runs/advisory-awaiting-fixture");
+
+  await expect(
+    page.getByText("This run is paused for your approval"),
+  ).toBeVisible();
+
+  // The failure-class label is prose, not the raw literal (FAILURE_LABELS was
+  // missing disk_full/permission_denied).
+  await expect(page.getByText("Disk full")).toBeVisible();
+  await expect(page.getByText("disk_full", { exact: true })).toHaveCount(0);
+
+  // The guidance itself is shown...
+  await expect(
+    page.getByText(
+      /Out of disk; clean the work directory to reclaim space, then retry\./,
+    ),
+  ).toBeVisible();
+
+  // ...but the copy must not claim anything risky (or anything at all) is
+  // applied -- there is no machine fix here, only guidance.
+  await expect(page.getByText(/Nothing risky is applied/)).toHaveCount(0);
+  await expect(page.getByText(/does not apply anything/)).toBeVisible();
+});

@@ -297,7 +297,7 @@ class Patch(BaseModel):
     whether it auto-applies. `expected_signal` is how DETECT confirms it worked.
     """
 
-    kind: Literal["param", "resource", "env", "reference", "retry", "code"]
+    kind: Literal["param", "resource", "env", "reference", "retry", "code", "advisory"]
     operation: dict[str, object]
     rationale: str
     risk: Literal["safe", "needs_confirmation", "destructive"]
@@ -314,7 +314,7 @@ class RepairStep(BaseModel):
     detail: str | None = None
     # True iff the patch was **enacted** and the loop proceeded to retry. NOT "the run's
     # configuration was mutated" — `apply_patch` is a documented no-op for `code`/`retry`
-    # patches (self_heal.py:549), and a fully clamped resource bump can leave the target
+    # patches (self_heal.py:563), and a fully clamped resource bump can leave the target
     # identical. NOT "the patch worked" — see reproduce's `retry_failed`. Defaults False so
     # a pre-field bundle under-claims rather than over-claims.
     patch_applied: bool = False

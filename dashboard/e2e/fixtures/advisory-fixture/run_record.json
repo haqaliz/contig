@@ -1,0 +1,60 @@
+{
+  "run_id": "advisory-fixture",
+  "pipeline": "nf-core/rnaseq",
+  "pipeline_revision": "3.26.0",
+  "target": {
+    "backend": "local",
+    "container_runtime": "docker",
+    "work_dir": "runs/advisory-fixture/work",
+    "engine": "nextflow",
+    "credentials_ref": null,
+    "backend_options": {},
+    "resource_limits": {}
+  },
+  "input_checksums": {
+    "samplesheet.csv": "cafe"
+  },
+  "parameters": {
+    "genome": "GRCh38",
+    "outdir": "runs/advisory-fixture/results"
+  },
+  "container_digests": {},
+  "nextflow_version": "26.04.4",
+  "contig_version": "0.1.0",
+  "assay": "rnaseq",
+  "events": [
+    {
+      "process": "STAR_ALIGN",
+      "status": "COMPLETED",
+      "exit": 0,
+      "task_id": "1",
+      "name": "STAR_ALIGN (S1)"
+    }
+  ],
+  "qc_results": [],
+  "output_checksums": {},
+  "repair_history": [
+    {
+      "attempt": 1,
+      "diagnosis": {
+        "failure_class": "disk_full",
+        "root_cause": "The work directory ran out of disk space.",
+        "evidence": [
+          "No space left on device (errno 28)."
+        ],
+        "confidence": 0.85
+      },
+      "patch": {
+        "kind": "advisory",
+        "operation": {},
+        "rationale": "Out of disk; clean the work directory to reclaim space, then retry.",
+        "risk": "needs_confirmation",
+        "expected_signal": "free disk space available"
+      },
+      "outcome": "advisory_acknowledged_and_retried",
+      "detail": null,
+      "patch_applied": false
+    }
+  ],
+  "verdict": "unverified"
+}

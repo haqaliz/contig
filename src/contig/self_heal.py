@@ -57,6 +57,7 @@ from contig.runner import (
     Executor,
     IndexBuilder,
     PipelineExecutionError,
+    Sleeper,
     default_executor,
     default_index_builder,
     read_run_log,
@@ -334,14 +335,19 @@ def _write_pending_approval(
                 "diagnosis": {
                     "failure_class": diagnosis.failure_class,
                     "root_cause": diagnosis.root_cause,
+                    "evidence": diagnosis.evidence,
                     "confidence": diagnosis.confidence,
                 },
                 "patch": {
                     "kind": patch.kind,
                     "risk": patch.risk,
                     "rationale": patch.rationale,
-                    "operation": patch.operation,
                     "expected_signal": patch.expected_signal,
+                    # An advisory carries no machine-applicable operation (PRD
+                    # R5) -- omit the key entirely rather than write `{}`,
+                    # which a dashboard could mistake for "nothing to change"
+                    # instead of "there is no operation to offer".
+                    **({} if patch.kind == "advisory" else {"operation": patch.operation}),
                 },
             }
         )
@@ -544,10 +550,31 @@ def apply_patch(
       `_apply_patch_and_maybe_build` (which actually builds the index — that build
       IS the fix); `apply_patch` itself stays a no-op for it, so the re-run picks
       up the freshly built index.
-    - `env`: merge the operation into the target's backend_options (string-coerced
-      so it rides into the generated config / re-run target).
+    - `env`: merge the operation into the target's backend_options, string-coerced.
+      No live `kind="env"` patch remains from this module's own proposer
+      (`repair.py`) as of the advisory withdrawal -- this branch exists only for
+      the type and is not on any reachable path through the self-heal loop.
+      (`verification/reproduce.py`'s independent env-resurrection path does still
+      construct a `kind="env"` Patch, but it never calls this function.) Even
+      before that withdrawal, string-coercion into `backend_options` never "rode
+      into the generated config": `nfconfig.py:71-98` reads only six named keys
+      (`queue`, `region`, `partition`, `account`, `qos`, `time`) by `.get()`, never
+      iterates the dict, and does not consult `backend_options` at all on `local`.
     - `code`/`retry`: change nothing. The re-run itself is the fix.
+    - `advisory`: never enacted -- there is no machine operation to apply, only
+      human advice carried in `rationale`. An advisory reaching this function
+      at all is a bug in the caller
+      (docs/planning/inert-repair-honesty/advisory-repairs/design-decision.md:
+      the loop must branch on it before the gate/applier, never here), so this
+      raises loudly instead of silently falling through to a no-op that a
+      caller could mistake for "applied, continue."
     """
+    if patch.kind == "advisory":
+        raise ValueError(
+            "apply_patch got an advisory patch: advisories carry no machine "
+            "operation and must never reach the applier. This is a caller bug -- "
+            "the self-heal loop must branch on kind == 'advisory' before gating."
+        )
     if ceiling is None:
         ceiling = {"memory": CEILING_MEMORY_GB, "time": CEILING_TIME_H}
     params = dict(params or {})
@@ -962,6 +989,7 @@ def self_heal_run(
     notify_webhook: str | None = None,
     resource_ceiling: dict[str, int] | None = None,
     harmonized_reference_direction: str | None = None,
+    sleeper: Sleeper = time.sleep,
 ) -> RunRecord:
     """Run a pipeline and auto-recover from recoverable failures, logging the chain.
 
@@ -1134,6 +1162,75 @@ def self_heal_run(
                         # what we would have tried, never as something we did.
                         RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated,
                                    outcome="gave_up", patch_applied=False),
+                    )
+                    return _finalize(
+                        exc.record, repair_history, run_dir,
+                        runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                        harmonized_reference_direction=harmonized_reference_direction,
+                    )
+
+                # An advisory carries no machine-applicable operation (repair.py):
+                # there is nothing for `_apply_patch_and_maybe_build` to enact, so
+                # it must never be called for one (see
+                # docs/planning/inert-repair-honesty/advisory-repairs/design-decision.md).
+                # Branch here, ahead of the auto-approve and gate logic, rather than
+                # widening `_apply_patch_and_maybe_build`'s 5-tuple for four failure
+                # classes that never produce a machine fix.
+                if gated.kind == "advisory":
+                    if auto_approve:
+                        # No human to acknowledge the guidance, and nothing to
+                        # auto-apply: the only honest move is an outright give-up
+                        # that still carries the guidance, never a fabricated retry.
+                        _record_attempt(
+                            run_dir,
+                            repair_history,
+                            RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated,
+                                       outcome="gave_up", detail=gated.rationale,
+                                       patch_applied=False),
+                        )
+                        return _finalize(
+                            exc.record, repair_history, run_dir,
+                            runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                            harmonized_reference_direction=harmonized_reference_direction,
+                        )
+
+                    # Interactive: pause exactly as the single-gate path below does.
+                    _write_pending_approval(
+                        run_dir, run_id, attempt, diagnosis, gated, approval_timeout
+                    )
+                    _write_status(run_dir, "awaiting_approval")
+                    emit_event(
+                        runs_dir, run_id, "awaiting_approval",
+                        f"Run {run_id} is paused for approval on a {gated.kind} patch.",
+                        webhook=notify_webhook,
+                    )
+                    result = poll(run_dir, approval_timeout)
+                    _clear_pending_approval(run_dir)
+                    decision = (result or {}).get("decision") if result else None
+
+                    if decision == "approve":
+                        # Never calls apply_patch/`_apply_patch_and_maybe_build`:
+                        # there is no operation to enact, only an acknowledgement
+                        # that a human saw the guidance and wants the retry to run.
+                        # Observational, not a claim that anything was fixed
+                        # (PRD R-Risk-3) -- Contig cannot verify that.
+                        _write_status(run_dir, "running")
+                        _record_attempt(
+                            run_dir,
+                            repair_history,
+                            RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated,
+                                       outcome="advisory_acknowledged_and_retried",
+                                       patch_applied=False),
+                        )
+                        attempt += 1
+                        continue
+
+                    outcome = "rejected_by_user" if decision == "reject" else "approval_timed_out"
+                    _record_attempt(
+                        run_dir,
+                        repair_history,
+                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated,
+                                   outcome=outcome, patch_applied=False),
                     )
                     return _finalize(
                         exc.record, repair_history, run_dir,
@@ -1347,6 +1444,18 @@ def self_heal_run(
                            outcome="patched_and_retried", detail=detail,
                            patch_applied=True),
             )
+            # Only container_unavailable's patch carries wait_seconds
+            # (repair.py:46-55); every other safe retry has none, so this must
+            # never become a blanket backoff. Guard the type: only a positive
+            # real number sleeps (bool is an int subclass, so excluded
+            # explicitly -- a stray `True` must never be read as `1`).
+            wait_seconds = safe.operation.get("wait_seconds")
+            if (
+                isinstance(wait_seconds, (int, float))
+                and not isinstance(wait_seconds, bool)
+                and wait_seconds > 0
+            ):
+                sleeper(wait_seconds)
             attempt += 1
 
 
