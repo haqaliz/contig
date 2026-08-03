@@ -2701,7 +2701,7 @@ def heal_guard(
       resolves the propose-vs-don't decision these four used to be deferred
       on -- the answer was don't, and `repair.py` now says so. None has a
       frozen heal scenario yet for the human-acknowledged path advisories take
-      (`advisory_acknowledged_and_retried`, self_heal.py:1212); that is a
+      (`advisory_acknowledged_and_retried`, self_heal.py:1211-1213); that is a
       backlog item, not a reason to distrust the patch.
     - **Live repair pending a heal scenario (1):** container_unavailable.
       Its `kind="retry"` patch's `wait_seconds: 15` (repair.py:50) is honored

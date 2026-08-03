@@ -304,11 +304,22 @@ def test_no_advisory_carries_a_withdrawn_operation_key() -> None:
 
 def test_wait_seconds_is_consumed_outside_repair_py() -> None:
     """Assertion 2: the exact inverse of the retired guard's consumer-side
-    check. container_unavailable's `wait_seconds: 15` (repair.py:50) used to
-    be a documented no-op for a `kind="retry"` patch; self_heal.py now sleeps
-    on it before the retry (self_heal.py:1442-1448). RED here means
-    `wait_seconds` lost its only consumer outside repair.py -- i.e. this
-    repair went inert again.
+    check, and with the identical limitation the retired guard had on that
+    side -- this is a string-presence scan, not a liveness check. It proves
+    `wait_seconds` is referenced as a string literal somewhere outside
+    repair.py; it would NOT catch that reference being moved into dead code
+    or an unrelated read (verified: gating the sleep behind `if False:` in
+    self_heal.py leaves the literal in place and this test green).
+
+    The actual behavioural guarantee -- that container_unavailable's
+    `wait_seconds: 15` (repair.py:50) makes self_heal.py really sleep before
+    the retry (self_heal.py:1442-1448) -- is protected by
+    `tests/test_self_heal.py::test_container_unavailable_heal_waits_via_injected_sleeper`,
+    which DOES fail under that same mutation (asserts the injected sleeper was
+    called with 15, not the empty list a stubbed-out call leaves behind). RED
+    here means `wait_seconds` dropped out of the source text entirely outside
+    repair.py; RED there means the wait stopped actually happening. Both
+    matter, but they are not the same test.
     """
     src_root = Path(__file__).resolve().parents[1] / "src" / "contig"
     repair_py = src_root / "repair.py"
@@ -324,7 +335,9 @@ def test_wait_seconds_is_consumed_outside_repair_py() -> None:
 
     assert consumers, (
         "wait_seconds is no longer referenced as a string literal anywhere "
-        "outside repair.py -- container_unavailable's wait is inert again."
+        "outside repair.py -- that is at least a text-level regression, and "
+        "test_self_heal.py::test_container_unavailable_heal_waits_via_injected_sleeper "
+        "should be checked too, since it protects the behaviour this scan can't see."
     )
 
 
