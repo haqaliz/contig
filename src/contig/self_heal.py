@@ -1171,11 +1171,11 @@ def self_heal_run(
 
                 # An advisory carries no machine-applicable operation (repair.py):
                 # there is nothing for `_apply_patch_and_maybe_build` to enact, so
-                # it must never be called for one
-                # (docs/planning/inert-repair-honesty/advisory-repairs/
-                # design-decision.md). Branch here, ahead of the auto-approve and
-                # gate logic, rather than widening `_apply_patch_and_maybe_build`'s
-                # 5-tuple for four failure classes that never produce a machine fix.
+                # it must never be called for one (see
+                # docs/planning/inert-repair-honesty/advisory-repairs/design-decision.md).
+                # Branch here, ahead of the auto-approve and gate logic, rather than
+                # widening `_apply_patch_and_maybe_build`'s 5-tuple for four failure
+                # classes that never produce a machine fix.
                 if gated.kind == "advisory":
                     if auto_approve:
                         # No human to acknowledge the guidance, and nothing to
