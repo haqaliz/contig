@@ -406,7 +406,7 @@ def test_apply_patch_advisory_raises_instead_of_silently_no_opping(tmp_path):
     # would have let the caller wrongly treat it as continuable.
     patch = Patch(kind="advisory", operation={},
                   rationale="x", risk="needs_confirmation", expected_signal="s")
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError, match="advisories carry no machine operation"):
         apply_patch(_t(), patch, {"input": "sheet.csv"})
 
 
@@ -1291,11 +1291,19 @@ def test_self_heal_conda_solve_failed_is_advisory_not_applied(tmp_path):
     # happened. It's advisory now (repair.py), which carries no machine
     # operation. Until the loop grows its own advisory branch (a later task),
     # auto-approving one still reaches apply_patch, which raises loudly rather
-    # than silently re-enacting the old no-op (design-decision.md).
+    # than silently re-enacting the old no-op (design-decision.md). That later
+    # task must replace this test: once the loop branches before the applier,
+    # auto-approving an advisory will no longer raise at all.
+    #
+    # The old test's behavioral specificity (succeeded, failure_class,
+    # patch.kind, the backend_options value) is structurally gone here -- the
+    # call raises out of _heal(...) before any record exists to inspect -- so
+    # pinning the guard's specific type and message is the most this test can
+    # honestly assert in its current form.
     state = {"n": 0}
     log = "ResolvePackageNotFound:\n  - bioconductor-dupradar=1.38"
     executor = _failing_then_capturing(state, log, lambda cmd, tp: None)
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError, match="advisories carry no machine operation"):
         _heal(tmp_path, executor, auto_approve=True, params={"input": "sheet.csv"})
 
 
