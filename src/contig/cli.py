@@ -71,11 +71,13 @@ from contig.snapshot_history import append_jsonl, load_jsonl
 from contig.verify_corpus import (
     compare_verify_to_baseline,
     default_verify_baseline_path,
+    default_verify_golden_path,
     default_verify_history_path,
     default_verify_holdout_path,
     evaluate_verify,
     load_verify_baseline,
     load_verify_cases,
+    promote_pending_verify_case,
     save_verify_baseline,
     snapshot_from_verify_report,
 )
@@ -2427,6 +2429,67 @@ def corpus_promote(
         history_path,
     )
     typer.echo(f"Promoted {promoted.case_id} ({promoted.expected_class}) into the golden corpus.")
+
+
+@app.command(name="verify-case-promote")
+def verify_case_promote(
+    case_id: str = typer.Argument(..., help="The pending verification case id to promote."),
+    expected_verdict: str = typer.Option(None, "--expected-verdict", help="Confirm or correct the expected verdict (pass|warn|fail|unverified). Omit to confirm without assigning a label."),
+    pending: str = typer.Option("runs/pending_verify_corpus.jsonl", "--pending", help="Pending verification corpus JSONL."),
+    golden: str = typer.Option(None, "--golden", help="Golden verification corpus JSONL (default: the shipped one)."),
+    history_file: str = typer.Option(None, "--history-file", help="Verification history JSONL (defaults to the shipped one)."),
+) -> None:
+    """Promote a reviewed pending verification case into the golden corpus (C6 fold-in, PRD R5).
+
+    The reviewer confirms the pending case or corrects its expected verdict
+    with --expected-verdict (pass|warn|fail|unverified); omitting it confirms
+    the case without assigning a label. The case then moves from pending into
+    the golden corpus (`source` pending: -> confirmed:) that the informational
+    verify-eval scores. After a successful promote, a fresh verify-eval of the
+    golden corpus is appended to the verify history so the trend reflects the
+    grown corpus (corpus-promote precedent). This channel -- a real run's
+    WARN/FAIL verdict confirmed or corrected by a human -- is the only path
+    that makes the verification corpus non-tautological.
+    """
+    if expected_verdict is not None and expected_verdict not in (
+        "pass",
+        "warn",
+        "fail",
+        "unverified",
+    ):
+        typer.echo(
+            f"Invalid --expected-verdict {expected_verdict!r}: must be one of "
+            "pass, warn, fail, unverified.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        promoted = promote_pending_verify_case(
+            case_id,
+            pending_path=pending,
+            golden_path=golden,
+            expected_verdict=expected_verdict,  # type: ignore[arg-type]
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        typer.echo(f"Could not promote {case_id}: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    # Auto-snapshot: eval the now-grown golden corpus and append it to the trend.
+    golden_path = Path(golden) if golden else default_verify_golden_path()
+    history_path = Path(history_file) if history_file else default_verify_history_path()
+    cases = load_verify_cases(golden_path)
+    append_jsonl(
+        snapshot_from_verify_report(
+            evaluate_verify(cases),
+            corpus_sha=sha256_file(golden_path),
+            contig_version=_pkg_version("contig"),
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        ),
+        history_path,
+    )
+    label = promoted.expected_verdict or "unlabeled"
+    typer.echo(f"Promoted {promoted.case_id} ({label}) into the golden corpus.")
 
 
 def _print_trend(rows, *, title):
