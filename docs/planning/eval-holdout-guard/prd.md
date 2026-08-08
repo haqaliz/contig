@@ -119,6 +119,11 @@ than asserted (`CLAUDE.md` constraint #3; model-swap harness already shipped, `F
   roadmap's "one accuracy number over C1–C5" (`CAPABILITY_ROADMAP.md:402`) is a **later slice**
   needing its own labeling design. This slice scores the **labeled failure-class detector
   corpus only.**
+  ***(SUPERSEDED — shipped 2026-08 by the `eval-corroboration-fold-in` slice:* the labeling
+  design (verdict-level labels on pre-band metric inputs), the `contig verify-guard`
+  verdict-match guard over a labeled verification holdout, and the real-run
+  capture/promote channel all shipped; the annotation M5 deferral record was restated in the
+  same slice. This PRD's reasoning stood at the time; the deferral it records no longer holds.)***
 - **Self-heal (end-to-end repair) accuracy.** The guard measures **detector classification**
   accuracy, not whole-loop repair success. Repair-outcome scoring is future C6 work.
 - **Auto-refreshing / auto-growing the held-out set** from live runs. The held-out set is
