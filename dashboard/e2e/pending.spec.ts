@@ -47,3 +47,36 @@ test("a pending case shows confirm and correct actions", async ({ page }) => {
     else await fs.rm(pendingFile, { force: true });
   }
 });
+
+test("a pending case can be relabeled to a previously-missing failure class", async ({ page }) => {
+  // The Correct label menu is built from FAILURE_CLASSES (dashboard/lib/derive.ts),
+  // so a class that was missing there never appeared as an option. Same fixture
+  // dance as the sibling test; we only assert the option renders, we do not
+  // click it (that would promote into the golden corpus).
+  let backup: string | null = null;
+  try {
+    backup = await fs.readFile(pendingFile, "utf8");
+  } catch {
+    backup = null;
+  }
+  const fixture = {
+    case_id: "e2e-pending-relabel-1",
+    description: "fixture",
+    source: "pending:e2e",
+    events: [{ process: "STAR", status: "FAILED", exit: 1 }],
+    log_text: "boom",
+    expected_class: "tool_crash",
+  };
+  await fs.mkdir(runsDir, { recursive: true });
+  await fs.writeFile(pendingFile, JSON.stringify(fixture) + "\n");
+  try {
+    await page.goto("/pending");
+    await page.getByRole("button", { name: /Correct label/ }).click();
+    await expect(
+      page.getByRole("menuitem", { name: "disk_full" }),
+    ).toBeVisible();
+  } finally {
+    if (backup !== null) await fs.writeFile(pendingFile, backup);
+    else await fs.rm(pendingFile, { force: true });
+  }
+});
