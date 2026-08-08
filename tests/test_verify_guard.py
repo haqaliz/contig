@@ -59,6 +59,19 @@ def _freeze(tmp_path, **over):
 # --- (a) tmp baseline passes clean, human summary ---------------------------
 
 
+def test_verify_guard_default_committed_baseline_passes_clean():
+    """The real entry point: `contig verify-guard` (no args) must pass against
+    the committed baseline + shipped synthetic holdout, with no spurious sha
+    warning -- locks 'committed baseline sha == shipped holdout sha' so a
+    future holdout edit without --update-baseline cannot silently rot the
+    guard."""
+    result = runner.invoke(app, ["verify-guard"])
+    assert result.exit_code == 0
+    assert "verify-guard PASS" in result.output
+    assert "verdict-match 95.5%" in result.output
+    assert "changed" not in result.output.lower()  # no holdout-sha mismatch
+
+
 def test_verify_guard_passes_clean_against_tmp_baseline(tmp_path):
     baseline_path, _ = _freeze(tmp_path)
 

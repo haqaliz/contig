@@ -13,11 +13,13 @@ logged into. Do not run `gh release create` by hand; let the workflow do it.
    ```bash
    uv run contig eval-guard --snapshot
    uv run contig heal-guard --snapshot
+   uv run contig verify-guard --snapshot
    ```
 
-   and include the updated `src/contig/data/holdout_history.jsonl` and
-   `src/contig/data/heal_history.jsonl` in the release commit. CI stays bare (it never
-   writes history), so this is the deliberate step that grows the held-out/heal trend.
+   and include the updated `src/contig/data/holdout_history.jsonl`,
+   `src/contig/data/heal_history.jsonl`, and `src/contig/data/verify_history.jsonl`
+   in the release commit. CI stays bare (it never writes history), so this is the
+   deliberate step that grows the held-out/heal/verify trend.
 3. Commit and push to `master`. Make sure CI is green.
 4. Tag and push the tag (this is a plain git push, it uses the repo's git identity):
 

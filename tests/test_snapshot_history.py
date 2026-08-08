@@ -6,7 +6,7 @@ from pathlib import Path
 
 from contig.heal import default_heal_baseline_path, load_heal_baseline
 from contig.holdout import default_baseline_path, load_baseline
-from contig.models import EvalSnapshot, HealSnapshot
+from contig.models import EvalSnapshot, HealSnapshot, VerifySnapshot
 from contig.snapshot_history import append_jsonl, load_jsonl
 
 EVAL_SNAPSHOT_A = EvalSnapshot(
@@ -155,6 +155,29 @@ def test_heal_baseline_matches_a_recorded_trend_point() -> None:
     assert baseline is not None
     assert any(
         s.outcome_match_rate == baseline.outcome_match_rate
+        and s.corpus_sha == baseline.corpus_sha
+        for s in snapshots
+    )
+
+
+def test_verify_baseline_matches_a_recorded_trend_point() -> None:
+    from contig.verify_corpus import (
+        default_verify_baseline_path,
+        default_verify_history_path,
+        load_verify_baseline,
+    )
+
+    # Same reasoning as the two siblings above: the verification baseline must
+    # be backed by an actually-measured trend point (on verdict_match_rate +
+    # corpus_sha), not pinned to line 0 or to a version -- the aspect-2
+    # deliberate freeze appended that point via the real --update-baseline
+    # command, and --snapshot grows the trend at every release.
+    snapshots = load_jsonl(VerifySnapshot, default_verify_history_path())
+    assert len(snapshots) >= 1
+    baseline = load_verify_baseline(default_verify_baseline_path())
+    assert baseline is not None
+    assert any(
+        s.verdict_match_rate == baseline.verdict_match_rate
         and s.corpus_sha == baseline.corpus_sha
         for s in snapshots
     )
