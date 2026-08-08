@@ -130,7 +130,14 @@ def test_verify_guard_update_baseline_writes_and_plain_guard_does_not(tmp_path):
 
 def test_verify_guard_update_baseline_message(tmp_path):
     baseline_path, _ = _freeze(tmp_path)
-    freeze = runner.invoke(app, ["verify-guard", "--update-baseline", "--baseline", str(baseline_path)])
+    # A second freeze WITHOUT --history-file would hit the COMMITTED
+    # verify_history.jsonl -- every history path in this file is isolated
+    # under tmp_path (test_guard_trend.py precedent), so pass it explicitly.
+    freeze = runner.invoke(
+        app,
+        ["verify-guard", "--update-baseline", "--baseline", str(baseline_path),
+         "--history-file", str(tmp_path / "history.jsonl")],
+    )
     assert freeze.exit_code == 0
     assert "Baseline updated" in freeze.output
     assert "verdict-match 95.5%" in freeze.output
