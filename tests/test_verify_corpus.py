@@ -11,11 +11,22 @@ from __future__ import annotations
 
 import pytest
 
-from contig.models import VerificationCase
+from contig.models import VerificationCase, VerifyEvalReport, VerifySnapshot
 from contig.verify_corpus import (
     _FAMILY_PACKS,
+    append_verify_case,
+    compare_verify_to_baseline,
+    default_verify_baseline_path,
+    default_verify_golden_path,
+    default_verify_history_path,
+    default_verify_holdout_path,
     evaluate_verify,
     evaluate_verify_case,
+    load_verify_baseline,
+    load_verify_cases,
+    save_verify_baseline,
+    save_verify_cases,
+    snapshot_from_verify_report,
 )
 from contig.verification.rule_pack import (
     ANNOTATION_PLAUSIBILITY_PACK,
@@ -284,3 +295,183 @@ def test_evaluate_verify_per_family_scores():
     assert report.per_family["multiqc"].total == 1
     assert report.per_family["multiqc"].matched == 1
     assert [m.case_id for m in report.mismatches] == ["verify-b"]
+
+
+# --- Phase 3: corpus I/O + baseline compare (mirrors holdout.py) ----------------
+
+
+def _report(verdict_match_rate: float) -> VerifyEvalReport:
+    return VerifyEvalReport(
+        total=10,
+        correct=round(verdict_match_rate * 10),
+        verdict_match_rate=verdict_match_rate,
+        per_family={},
+        mismatches=[],
+    )
+
+
+def _baseline(
+    verdict_match_rate: float, *, corpus_sha: str = "sha-a"
+) -> VerifySnapshot:
+    return VerifySnapshot(
+        timestamp="2026-08-09T00:00:00+00:00",
+        case_count=10,
+        corpus_sha=corpus_sha,
+        verdict_match_rate=verdict_match_rate,
+        per_family={},
+        contig_version="0.39.0",
+    )
+
+
+def test_default_paths_differ_and_named_correctly():
+    assert default_verify_holdout_path() != default_verify_baseline_path()
+    assert default_verify_holdout_path().name == "verify_corpus_holdout.jsonl"
+    assert default_verify_baseline_path().name == "verify_baseline.json"
+    assert default_verify_history_path().name == "verify_history.jsonl"
+    assert default_verify_golden_path().name == "verify_corpus.jsonl"
+    for p in (
+        default_verify_holdout_path(),
+        default_verify_baseline_path(),
+        default_verify_history_path(),
+        default_verify_golden_path(),
+    ):
+        assert "verify" in p.name
+
+
+def test_save_and_load_verify_cases_round_trip(tmp_path):
+    cases = [
+        _case("germline", {"ts_tv": 2.0}, expected="pass", case_id="verify-a"),
+        _case("germline", {"ts_tv": 0.5}, expected="fail", case_id="verify-b"),
+    ]
+    path = tmp_path / "cases.jsonl"
+    save_verify_cases(cases, path)
+    assert load_verify_cases(path) == cases
+
+
+def test_load_verify_cases_skips_blank_and_malformed_lines(tmp_path):
+    case_json = (
+        '{"case_id": "verify-a", "description": "d", "source": "synthetic", '
+        '"assay": "variant_calling", "inputs": {}, "expected_verdict": "pass"}'
+    )
+    path = tmp_path / "cases.jsonl"
+    path.write_text(f"\n{case_json}\nnot json at all\n\n{case_json}\n")
+    cases = load_verify_cases(path)
+    assert len(cases) == 2
+    assert cases[0].case_id == "verify-a"
+
+
+def test_append_verify_case_adds_one_line(tmp_path):
+    path = tmp_path / "cases.jsonl"
+    save_verify_cases([_case("germline", {"ts_tv": 2.0}, expected="pass", case_id="verify-a")], path)
+    append_verify_case(_case("germline", {"ts_tv": 0.5}, expected="fail", case_id="verify-b"), path)
+    cases = load_verify_cases(path)
+    assert [c.case_id for c in cases] == ["verify-a", "verify-b"]
+
+
+def test_save_and_load_verify_baseline_round_trip(tmp_path):
+    path = tmp_path / "baseline.json"
+    assert load_verify_baseline(path) is None  # missing file -> None, not an error
+    snapshot = _baseline(0.9)
+    save_verify_baseline(snapshot, path)
+    assert load_verify_baseline(path) == snapshot
+
+
+def test_snapshot_from_verify_report_projects_fields():
+    report = _report(0.8)
+    snapshot = snapshot_from_verify_report(
+        report,
+        corpus_sha="sha-seed",
+        contig_version="0.39.0",
+        timestamp="2026-08-09T00:00:00+00:00",
+    )
+    assert snapshot.case_count == 10
+    assert snapshot.corpus_sha == "sha-seed"
+    assert snapshot.verdict_match_rate == pytest.approx(0.8)
+    assert snapshot.contig_version == "0.39.0"
+    assert snapshot.per_family == {}
+
+
+def test_compare_verify_no_baseline():
+    result = compare_verify_to_baseline(
+        _report(0.5), baseline=None, corpus_sha="sha-a", tolerance=1e-9
+    )
+    assert result.has_baseline is False
+    assert result.regressed is False
+    assert result.improved is False
+    assert result.baseline_rate is None
+    assert result.delta is None
+    assert result.baseline_sha is None
+    assert result.sha_mismatch is False
+    assert result.verdict_match_rate == pytest.approx(0.5)
+    assert result.corpus_sha == "sha-a"
+
+
+def test_compare_verify_equal_rate():
+    baseline = _baseline(0.9)
+    result = compare_verify_to_baseline(
+        _report(0.9), baseline=baseline, corpus_sha="sha-a", tolerance=1e-9
+    )
+    assert result.regressed is False
+    assert result.improved is False
+    assert result.has_baseline is True
+    assert result.baseline_rate == pytest.approx(0.9)
+    assert result.delta == pytest.approx(0.0)
+    assert result.sha_mismatch is False
+
+
+def test_compare_verify_regression():
+    baseline = _baseline(0.9)
+    result = compare_verify_to_baseline(
+        _report(0.5), baseline=baseline, corpus_sha="sha-a", tolerance=1e-9
+    )
+    assert result.regressed is True
+    assert result.improved is False
+    assert result.delta < 0
+
+
+def test_compare_verify_improvement():
+    baseline = _baseline(0.5)
+    result = compare_verify_to_baseline(
+        _report(0.9), baseline=baseline, corpus_sha="sha-a", tolerance=1e-9
+    )
+    assert result.improved is True
+    assert result.regressed is False
+    assert result.delta > 0
+
+
+def test_compare_verify_tolerance_absorbs_float_noise():
+    baseline = _baseline(0.9)
+    # Exactly half the tolerance below baseline: must not count as a regression.
+    result = compare_verify_to_baseline(
+        _report(0.9 - 0.05), baseline=baseline, corpus_sha="sha-a", tolerance=0.1
+    )
+    assert result.regressed is False
+
+
+def test_compare_verify_sha_mismatch():
+    baseline = _baseline(0.9, corpus_sha="sha-old")
+    result = compare_verify_to_baseline(
+        _report(0.9), baseline=baseline, corpus_sha="sha-new", tolerance=1e-9
+    )
+    assert result.sha_mismatch is True
+    assert result.baseline_sha == "sha-old"
+
+
+def test_compare_verify_carries_mismatches_through():
+    from contig.models import VerifyCaseResult
+
+    mismatch = VerifyCaseResult(
+        case_id="verify-b",
+        predicted_verdict="fail",
+        expected_verdict="warn",
+        matched=False,
+        families={"germline": "fail"},
+        divergence=["expected warn but predicted fail"],
+    )
+    report = VerifyEvalReport(
+        total=1, correct=0, verdict_match_rate=0.0, mismatches=[mismatch]
+    )
+    result = compare_verify_to_baseline(
+        report, baseline=_baseline(0.9), corpus_sha="sha-a", tolerance=1e-9
+    )
+    assert result.mismatches == [mismatch]

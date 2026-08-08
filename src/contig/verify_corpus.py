@@ -19,7 +19,11 @@ channel (aspect 3, PRD R4/R5).
 
 from __future__ import annotations
 
+from os import PathLike
+from pathlib import Path
 from typing import Iterable
+
+from pydantic import ValidationError
 
 from contig.models import (
     FamilyScore,
@@ -28,6 +32,8 @@ from contig.models import (
     VerificationCase,
     VerifyCaseResult,
     VerifyEvalReport,
+    VerifyGuardResult,
+    VerifySnapshot,
 )
 from contig.verification.annotation_concordance import (
     _MIN_SHARED_VARIANTS,
@@ -256,4 +262,164 @@ def evaluate_verify(
         verdict_match_rate=correct / total if total else 0.0,
         per_family=per_family,
         mismatches=[r for r in results if not r.matched],
+    )
+
+
+# --- corpus + baseline I/O and pure compare (mirrors holdout.py/heal.py) -------
+# The guard command (aspect 2) consumes exactly these entry points, the same
+# way eval-guard consumes holdout.py and heal-guard consumes heal.py: a frozen
+# holdout corpus, a committed single-object baseline, an append-only history,
+# and a pure comparator that decides regressed/improved without touching disk.
+
+
+def default_verify_holdout_path() -> Path:
+    """Path to the frozen verification holdout corpus shipped with the package."""
+    return Path(__file__).parent / "data" / "verify_corpus_holdout.jsonl"
+
+
+def default_verify_baseline_path() -> Path:
+    """Path to the committed verification baseline shipped with the package.
+
+    A single `VerifySnapshot` serialized as one pretty-printed JSON object
+    (NOT JSONL) -- there is exactly one frozen baseline to compare against,
+    not a trend.
+    """
+    return Path(__file__).parent / "data" / "verify_baseline.json"
+
+
+def default_verify_history_path() -> Path:
+    """Committed verification verdict-match trend (JSONL, one VerifySnapshot per line)."""
+    return Path(__file__).parent / "data" / "verify_history.jsonl"
+
+
+def default_verify_golden_path() -> Path:
+    """Path to the golden (real-run, human-promoted) verification corpus.
+
+    Deliberately never the default of `verify-guard` (that falls back to the
+    frozen holdout), so golden cases never leak into the regression guard.
+    """
+    return Path(__file__).parent / "data" / "verify_corpus.jsonl"
+
+
+def load_verify_cases(path: str | PathLike[str]) -> list[VerificationCase]:
+    """Read a JSONL verification corpus back into VerificationCase objects.
+
+    Blank and malformed lines are skipped (snapshot_history.py precedent), so
+    a hand-edited or half-written file never crashes the guard; the committed
+    corpus sha is pinned by its own test.
+    """
+    text = Path(path).read_text()
+    cases: list[VerificationCase] = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            cases.append(VerificationCase.model_validate_json(line))
+        except ValidationError:
+            continue  # skip a malformed/half-written line; rest is valid
+    return cases
+
+
+def save_verify_cases(cases: list[VerificationCase], path: str | PathLike[str]) -> None:
+    """Write the corpus as JSONL (one VerificationCase per line)."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("".join(case.model_dump_json() + "\n" for case in cases))
+
+
+def append_verify_case(case: VerificationCase, path: str | PathLike[str]) -> None:
+    """Append one VerificationCase as a JSONL line (creates the file/dirs if needed)."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "a") as fh:
+        fh.write(case.model_dump_json() + "\n")
+
+
+def save_verify_baseline(snapshot: VerifySnapshot, path: str | PathLike[str]) -> None:
+    """Write the baseline as one pretty-printed JSON object (diffs cleanly)."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(snapshot.model_dump_json(indent=2) + "\n")
+
+
+def load_verify_baseline(path: str | PathLike[str]) -> VerifySnapshot | None:
+    """Read the committed baseline; a missing file means "no baseline yet"."""
+    p = Path(path)
+    if not p.exists():
+        return None
+    return VerifySnapshot.model_validate_json(p.read_text())
+
+
+def snapshot_from_verify_report(
+    report: VerifyEvalReport,
+    *,
+    corpus_sha: str,
+    contig_version: str | None,
+    timestamp: str,
+) -> VerifySnapshot:
+    """Build a VerifySnapshot from a verify-eval report plus the corpus identity.
+
+    The timestamp and corpus_sha are passed in (computed by the caller) so
+    this stays a pure projection of the report -- mirrors
+    `eval_history.py:snapshot_from_report` and
+    `heal.py:snapshot_from_heal_report`.
+    """
+    return VerifySnapshot(
+        timestamp=timestamp,
+        case_count=report.total,
+        corpus_sha=corpus_sha,
+        verdict_match_rate=report.verdict_match_rate,
+        per_family=report.per_family,
+        contig_version=contig_version,
+    )
+
+
+def compare_verify_to_baseline(
+    report: VerifyEvalReport,
+    *,
+    baseline: VerifySnapshot | None,
+    corpus_sha: str,
+    tolerance: float,
+) -> VerifyGuardResult:
+    """Compare a verify-eval report to the committed baseline (pure, no I/O).
+
+    A real drop below `baseline.verdict_match_rate - tolerance` is
+    `regressed`; a real rise above `baseline.verdict_match_rate + tolerance`
+    is `improved`; the tolerance band between the two absorbs float noise so
+    an unchanged rate is neither. `sha_mismatch` flags when the comparison
+    crosses a different corpus than the baseline was measured against --
+    informational, not a failure by itself (the CLI layer decides what to do
+    with a missing baseline or this warning). Mirrors
+    `holdout.py:compare_to_baseline` and `heal.py:compare_heal_to_baseline`.
+    """
+    if baseline is None:
+        return VerifyGuardResult(
+            case_count=report.total,
+            verdict_match_rate=report.verdict_match_rate,
+            baseline_rate=None,
+            delta=None,
+            tolerance=tolerance,
+            regressed=False,
+            improved=False,
+            corpus_sha=corpus_sha,
+            baseline_sha=None,
+            sha_mismatch=False,
+            has_baseline=False,
+            mismatches=report.mismatches,
+        )
+
+    delta = report.verdict_match_rate - baseline.verdict_match_rate
+    return VerifyGuardResult(
+        case_count=report.total,
+        verdict_match_rate=report.verdict_match_rate,
+        baseline_rate=baseline.verdict_match_rate,
+        delta=delta,
+        tolerance=tolerance,
+        regressed=report.verdict_match_rate < baseline.verdict_match_rate - tolerance,
+        improved=report.verdict_match_rate > baseline.verdict_match_rate + tolerance,
+        corpus_sha=corpus_sha,
+        baseline_sha=baseline.corpus_sha,
+        sha_mismatch=corpus_sha != baseline.corpus_sha,
+        has_baseline=True,
+        mismatches=report.mismatches,
     )
