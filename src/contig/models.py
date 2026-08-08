@@ -663,6 +663,111 @@ class HealGuardResult(BaseModel):
     mismatches: list[HealScenarioResult] = []
 
 
+# --- Verification-signal eval + guard (C6 fold-in: verify-guard) ---------------
+# The labeling design for the verification side of the moat (PRD R1): a
+# VerificationCase is a pre-band signal value set plus a human-confirmed
+# verdict label, so the guard can re-derive each case's verdict under the
+# CURRENT rule packs and measure whether the bands are right -- the analogue
+# of FailureCase/EvalSnapshot/HoldoutGuardResult and HealScenario/
+# HealSnapshot/HealGuardResult, but for the QC/concordance verification
+# signals rather than the detector or the self-heal loop.
+# Honest scope (stated per R1): the first corpus is synthetic and self-graded
+# (we author the fixtures we grade -- same disclosure as every prior eval
+# slice); the corpus only becomes non-tautological as real runs feed it via
+# the capture/promote channel (aspects 2-3).
+# All new fields are additive with defaults: bundles serialized before the
+# fold-in load unchanged.
+
+
+class VerificationCase(BaseModel):
+    """One labeled verification datapoint: pre-band inputs + expected verdict.
+
+    `inputs` is the family -> sample -> metric -> value dict the verdict was
+    DERIVED FROM (the pre-band signal values, never stored statuses) -- the
+    threshold-sensitivity contract (PRD R1): the guard re-derives statuses
+    from these values under the current bands, so a case whose stored value
+    crosses a changed band must flip status. `expected_verdict` is the
+    human-confirmed correct verdict; None until a pending case is promoted.
+    `known_miss` marks the deliberate seed fixture (PRD R2a) whose expected
+    verdict the CURRENT rules get wrong, keeping the committed baseline < 1.0
+    so the guard demonstrably flags a real defect from day one.
+    """
+
+    case_id: str
+    description: str  # honesty note: what the case pins
+    source: str  # "synthetic" | "pending:<run_id>" | "confirmed:<run_id>"
+    assay: str
+    inputs: dict[str, dict[str, dict[str, float]]]
+    expected_verdict: QCStatus | None = None  # None until promoted
+    known_miss: bool = False
+
+
+class FamilyScore(BaseModel):
+    """Per-family verdict-match rate over the labeled corpus (informational)."""
+
+    matched: int
+    total: int
+    rate: float
+
+
+class VerifyCaseResult(BaseModel):
+    """One case's re-derivation outcome; mirrors DetectorMismatch/HealScenarioResult."""
+
+    case_id: str
+    predicted_verdict: QCStatus
+    expected_verdict: QCStatus | None
+    matched: bool
+    families: dict[str, str]  # family -> reduced status
+    divergence: list[str] = []  # unverified families and/or expected-vs-predicted on a miss
+
+
+class VerifyEvalReport(BaseModel):
+    """The result of replaying the verification rules over a case corpus."""
+
+    total: int  # labeled cases only; unlabeled are excluded, never counted wrong
+    correct: int
+    verdict_match_rate: float
+    per_family: dict[str, FamilyScore] = {}
+    mismatches: list[VerifyCaseResult] = []
+
+
+class VerifySnapshot(BaseModel):
+    """One verify-eval result tied to a corpus version; mirrors EvalSnapshot.
+
+    Serialized two ways: as the single committed baseline (one pretty-printed
+    JSON object, NOT JSONL) that the verdict-match rate is compared against on
+    every run, and -- via `contig.snapshot_history`, same as EvalSnapshot --
+    appended one-per-line to a committed JSONL trend.
+    """
+
+    timestamp: str
+    case_count: int
+    corpus_sha: str
+    verdict_match_rate: float
+    per_family: dict[str, FamilyScore] = {}
+    contig_version: str | None = None
+
+
+class VerifyGuardResult(BaseModel):
+    """The result of scoring the verification rules against a frozen held-out
+    case set and comparing it to a committed baseline; mirrors
+    HoldoutGuardResult/HealGuardResult (C6 fold-in: the verify regression guard).
+    """
+
+    case_count: int
+    verdict_match_rate: float
+    baseline_rate: float | None = None
+    delta: float | None = None  # verdict_match_rate - baseline_rate
+    tolerance: float
+    regressed: bool = False
+    improved: bool = False
+    corpus_sha: str
+    baseline_sha: str | None = None
+    sha_mismatch: bool = False
+    has_baseline: bool = True
+    mismatches: list[VerifyCaseResult] = []
+
+
 # --- Reproduce published work (C8 slice 1: pure data models) --------------------
 # A "claim" is one quantitative assertion pulled from a published paper/repo (e.g.
 # "F1 = 0.91"). Reproducing a paper means re-running its pipeline and checking each
