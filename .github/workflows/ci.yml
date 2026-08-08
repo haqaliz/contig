@@ -25,6 +25,10 @@ jobs:
       # outcome-match rate on the frozen synthetic scenarios drops below the
       # committed baseline (heal_baseline.json).
       - run: uv run contig heal-guard
+      # C6 fold-in regression guard: fail the build if the verification rules'
+      # verdict-match rate on the frozen synthetic holdout drops below the
+      # committed baseline (verify_baseline.json).
+      - run: uv run contig verify-guard
 
   dashboard:
     name: Dashboard (tsc, lint, e2e)

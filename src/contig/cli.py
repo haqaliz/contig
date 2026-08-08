@@ -68,6 +68,19 @@ from contig.heal import (
     snapshot_from_heal_report,
 )
 from contig.snapshot_history import append_jsonl, load_jsonl
+from contig.verify_corpus import (
+    compare_verify_to_baseline,
+    default_verify_baseline_path,
+    default_verify_golden_path,
+    default_verify_history_path,
+    default_verify_holdout_path,
+    evaluate_verify,
+    load_verify_baseline,
+    load_verify_cases,
+    promote_pending_verify_case,
+    save_verify_baseline,
+    snapshot_from_verify_report,
+)
 from contig.bundle import compute_output_checksums, compute_tree_sha256, write_reproduce_bundle
 from contig.cost import cost_report
 from contig.signing import generate_keypair, signing_available, verify_signature
@@ -81,6 +94,7 @@ from contig.models import (
     LaunchManifest,
     RunRecord,
     RunSummary,
+    VerifySnapshot,
     sha256_file,
 )
 from contig.nfconfig import ConfigGenerationError, preflight_aws_batch, preflight_slurm
@@ -2417,6 +2431,67 @@ def corpus_promote(
     typer.echo(f"Promoted {promoted.case_id} ({promoted.expected_class}) into the golden corpus.")
 
 
+@app.command(name="verify-case-promote")
+def verify_case_promote(
+    case_id: str = typer.Argument(..., help="The pending verification case id to promote."),
+    expected_verdict: str = typer.Option(None, "--expected-verdict", help="Confirm or correct the expected verdict (pass|warn|fail|unverified). Omit to confirm without assigning a label."),
+    pending: str = typer.Option("runs/pending_verify_corpus.jsonl", "--pending", help="Pending verification corpus JSONL."),
+    golden: str = typer.Option(None, "--golden", help="Golden verification corpus JSONL (default: the shipped one)."),
+    history_file: str = typer.Option(None, "--history-file", help="Verification history JSONL (defaults to the shipped one)."),
+) -> None:
+    """Promote a reviewed pending verification case into the golden corpus (C6 fold-in, PRD R5).
+
+    The reviewer confirms the pending case or corrects its expected verdict
+    with --expected-verdict (pass|warn|fail|unverified); omitting it confirms
+    the case without assigning a label. The case then moves from pending into
+    the golden corpus (`source` pending: -> confirmed:) that the informational
+    verify-eval scores. After a successful promote, a fresh verify-eval of the
+    golden corpus is appended to the verify history so the trend reflects the
+    grown corpus (corpus-promote precedent). This channel -- a real run's
+    WARN/FAIL verdict confirmed or corrected by a human -- is the only path
+    that makes the verification corpus non-tautological.
+    """
+    if expected_verdict is not None and expected_verdict not in (
+        "pass",
+        "warn",
+        "fail",
+        "unverified",
+    ):
+        typer.echo(
+            f"Invalid --expected-verdict {expected_verdict!r}: must be one of "
+            "pass, warn, fail, unverified.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        promoted = promote_pending_verify_case(
+            case_id,
+            pending_path=pending,
+            golden_path=golden,
+            expected_verdict=expected_verdict,  # type: ignore[arg-type]
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        typer.echo(f"Could not promote {case_id}: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    # Auto-snapshot: eval the now-grown golden corpus and append it to the trend.
+    golden_path = Path(golden) if golden else default_verify_golden_path()
+    history_path = Path(history_file) if history_file else default_verify_history_path()
+    cases = load_verify_cases(golden_path)
+    append_jsonl(
+        snapshot_from_verify_report(
+            evaluate_verify(cases),
+            corpus_sha=sha256_file(golden_path),
+            contig_version=_pkg_version("contig"),
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        ),
+        history_path,
+    )
+    label = promoted.expected_verdict or "unlabeled"
+    typer.echo(f"Promoted {promoted.case_id} ({label}) into the golden corpus.")
+
+
 def _print_trend(rows, *, title):
     """Render a metric trend oldest->newest with a per-version delta column.
 
@@ -2839,6 +2914,157 @@ def heal_guard(
         typer.echo(
             f"Heal-guard PASS: outcome-match {result.outcome_match_rate:.0%} "
             f"≥ baseline {result.baseline_match_rate:.0%}."
+        )
+
+
+@app.command(name="verify-guard")
+def verify_guard(
+    corpus: str = typer.Option(None, "--corpus", help="Verification holdout JSONL (defaults to the shipped synthetic seed)."),
+    baseline: str = typer.Option(None, "--baseline", help="Baseline JSON (defaults to the shipped one)."),
+    tolerance: float = typer.Option(1e-9, "--tolerance", help="Float tolerance; verdict-match rate below (baseline - tolerance) is a regression."),
+    update_baseline: bool = typer.Option(False, "--update-baseline", help="(Re)freeze the baseline to the current verdict-match rate. Deliberate, reviewed act."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the guard result as JSON."),
+    snapshot: bool = typer.Option(False, "--snapshot", help="Append this guard run to the verdict-match trend (C6 fold-in)."),
+    show_history: bool = typer.Option(False, "--history", help="Print the recorded verdict-match trend instead of guarding. Ignores --snapshot."),
+    history_file: str = typer.Option(None, "--history-file", help="Verdict-match history JSONL (defaults to the shipped one)."),
+) -> None:
+    """Guard the verification rules' verdict-match rate against a frozen synthetic holdout (C6 fold-in).
+
+    Re-derives each held-out case's verdict from its PRE-BAND stored signal
+    values under the CURRENT rule packs and concordance thresholds (never from
+    stored statuses) and compares the verdict-match rate to a committed
+    baseline, exiting non-zero on a real regression so a band change that
+    starts diverging from the labeled corpus is caught instead of being a
+    silent judgement call. `--update-baseline` deliberately (re)freezes the
+    baseline instead of guarding; that always exits 0. With --snapshot the
+    result is also appended to the committed verdict-match trend; with
+    --history the recorded trend is printed instead.
+
+    Honest scope: the number is over **22 SYNTHETIC, self-graded cases** (we
+    author the fixtures we grade -- same disclosure as every prior eval
+    slice). The corpus only becomes non-tautological as real runs feed it
+    through the pending-capture/promote channel. The seed deliberately
+    carries ONE known-miss fixture (PRD R2a) that the current bands get
+    wrong, so the committed baseline is < 1.0 and the guard's first
+    demonstration of liveness is flagging that case as a MISS. The guard is
+    band-sensitive: a changed band flips a stored value's status (pinned by
+    the scorer's mutation-control test), which is what separates it from a
+    tautology.
+    """
+    corpus_path = Path(corpus) if corpus else default_verify_holdout_path()
+    baseline_path = Path(baseline) if baseline else default_verify_baseline_path()
+    history_path = Path(history_file) if history_file else default_verify_history_path()
+
+    if show_history:
+        history = load_jsonl(VerifySnapshot, history_path)
+        if json_out:
+            typer.echo("[" + ",".join(s.model_dump_json() for s in history) + "]")
+            return
+        if not history:
+            typer.echo(f"No verification verdict-match snapshots recorded yet in {history_path}.")
+            return
+        _print_trend(
+            [(s.timestamp, s.verdict_match_rate,
+              f"verdict-match {s.verdict_match_rate:.1%}  (corpus {s.case_count})",
+              s.contig_version or "unknown") for s in history],
+            title="Verification verdict-match over time:",
+        )
+        return
+
+    try:
+        cases = load_verify_cases(corpus_path)
+    except FileNotFoundError:
+        typer.echo(f"Verification holdout not found: {corpus_path}", err=True)
+        raise typer.Exit(code=1)
+
+    report = evaluate_verify(cases)
+    corpus_sha = sha256_file(corpus_path)
+
+    if update_baseline:
+        snap = snapshot_from_verify_report(
+            report,
+            corpus_sha=corpus_sha,
+            contig_version=_pkg_version("contig"),
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+        save_verify_baseline(snap, baseline_path)
+        append_jsonl(snap, history_path)
+        typer.echo(
+            f"Baseline updated: verdict-match {report.verdict_match_rate:.1%} over "
+            f"{report.total} verification cases (sha {corpus_sha[:12]}...)"
+        )
+        return
+
+    if snapshot:
+        append_jsonl(
+            snapshot_from_verify_report(
+                report,
+                corpus_sha=corpus_sha,
+                contig_version=_pkg_version("contig"),
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            ),
+            history_path,
+        )
+
+    baseline_snapshot = load_verify_baseline(baseline_path)
+    result = compare_verify_to_baseline(
+        report,
+        baseline=baseline_snapshot,
+        corpus_sha=corpus_sha,
+        tolerance=tolerance,
+    )
+
+    if json_out:
+        typer.echo(result.model_dump_json())
+
+    if not result.has_baseline:
+        typer.echo(
+            f"No verify-guard baseline at {baseline_path}; run 'contig verify-guard "
+            "--update-baseline' to freeze one.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if result.sha_mismatch:
+        typer.echo(
+            f"Verification holdout changed (sha {corpus_sha[:12]} != baseline "
+            f"{(result.baseline_sha or '')[:12]}); the delta crosses different sets — "
+            "refreeze with --update-baseline.",
+            err=True,
+        )
+
+    if not json_out:
+        delta_pp = (result.delta or 0.0) * 100
+        typer.echo(
+            f"Verify-guard: verdict-match {result.verdict_match_rate:.1%} vs baseline "
+            f"{result.baseline_rate:.1%} (delta {delta_pp:+.1f}pp) over "
+            f"{result.case_count} verification cases"
+        )
+        for m in result.mismatches:
+            typer.echo(f"  MISS {m.case_id}: expected {m.expected_verdict}, predicted {m.predicted_verdict}")
+
+    if result.regressed:
+        delta_pp = (result.delta or 0.0) * 100
+        mismatch_ids = ", ".join(m.case_id for m in result.mismatches)
+        typer.echo(
+            f"REGRESSION: verdict-match {result.verdict_match_rate:.1%} below baseline "
+            f"{result.baseline_rate:.1%} (delta {delta_pp:+.1f}pp): {mismatch_ids}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if result.improved:
+        if not json_out:
+            typer.echo(
+                f"Verify-guard improved (verdict-match {result.verdict_match_rate:.1%} > baseline "
+                f"{result.baseline_rate:.1%}); consider --update-baseline to lock it in."
+            )
+        return
+
+    if not json_out:
+        typer.echo(
+            f"verify-guard PASS: verdict-match {result.verdict_match_rate:.1%} "
+            f"≥ baseline {result.baseline_rate:.1%}."
         )
 
 

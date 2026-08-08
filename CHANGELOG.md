@@ -6,6 +6,38 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **The C6 fold-in ships: verification accuracy is now measured and regression-guarded
+  (the five "blocked on labeling design" deferrals are settled).** The roadmap's last
+  pending C6 capability — folding the C1 concordance / C3 plausibility / annotation
+  corroboration signals into the eval flywheel — is built as the labeling design plus a
+  new sibling guard. A `VerificationCase` (pre-band metric inputs → human-confirmed
+  expected verdict) is the label artifact, and the guard is **band-sensitive by
+  construction**: it re-derives verdicts under the *current* rule packs and thresholds,
+  never from stored statuses, so a band change measurably moves the number (pinned by a
+  mutation control test — the anti-tautology guarantee). `contig verify-guard` scores a
+  frozen synthetic holdout (`verify_corpus_holdout.jsonl`, 22 cases, ids `verify-*`) and
+  guards `verdict_match_rate` against a committed baseline — deliberately **0.9545, not
+  1.0**, because the seed carries one known-miss case (a `ts_tv = 0.5` germline fixture
+  labeled `warn` that today's band FAILs) as the instrument's first demonstration —
+  with the full `--update-baseline` / `--snapshot` / `--history` / `--json` surface,
+  sha pinning, and CI wiring after `heal-guard`. The real-run channel makes the corpus
+  non-tautological over time: `RunRecord` gains an additive `verification_inputs`
+  capture (pre-band metric dicts for the multiqc, plausibility, composition, scrnaseq,
+  methylseq/ampliseq/mag, and germline families — concordance-family capture deferred),
+  QC-driven WARN/FAIL runs append pending cases to `pending_verify_corpus.jsonl` (the
+  `qc_anomaly` events-guard precedent, always on), and `contig verify-case-promote`
+  confirms or corrects the verdict and moves cases into the golden corpus with an
+  auto-snapshot. **Read honestly:** the guarded number starts **synthetic and
+  self-graded** (we authored the fixtures we grade — the standing disclosure), push not
+  demand-pull, and it only compounds as real runs get labeled; the dashboard trend card
+  is deferred. **Incidental fix in the same slice:** the dashboard `FAILURE_CLASSES`
+  taxonomy was missing 5 of the 18 `FailureClass` literals (`reference_not_bgzf`,
+  `missing_dependency`, `disk_full`, `download_failed`, `permission_denied`), so the
+  relabel UI could not correct those pending cases — it now covers all 18 (Python
+  order), pinned by tests with a relabel round-trip.
+
 ## [0.50.0] - 2026-08-03
 
 ### Added

@@ -35,6 +35,11 @@ design (concordance/plausibility signals carry no ground-truth labels). **Self-h
 outcomes are cleanly labelable** (each scenario has a declared expected outcome), so
 this slice carves off the unblocked half.
 
+*(SUPERSEDED — the C1/C3 half shipped 2026-08 as `eval-corroboration-fold-in`: the
+labeling design (verdict-level labels on pre-band metric inputs, kept band-sensitive
+by a mutation control), `contig verify-guard` over a labeled verification holdout, and
+the real-run capture/promote channel. The "one number" fold is no longer pending.)*
+
 **Evidence it's real and buildable:** every seam a benchmark needs is already
 injectable on `self_heal_run` (`self_heal.py:793`: `executor`, `index_builder`,
 `poll`, `propose`, `auto_approve`, `resource_ceiling`, `max_attempts`), and
@@ -268,6 +273,8 @@ end researcher:
 
 - Folding the **unlabeled** C1 concordance / C3 plausibility signals into the guard
   (deferred — needs a labeling design; the roadmap's "one number" fold).
+  *(SUPERSEDED — shipped 2026-08 as `eval-corroboration-fold-in`; the labeling design
+  and the `verify-guard` verdict-match guard now exist.)*
 - Any **real-run / field** recovery metric or telemetry aggregation across real bundles
   (the separate "repair success-rate analytics" dashboard item, on real data).
 - `heal-guard --history` and shared-eval-history folding (deferred — settled).
