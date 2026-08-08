@@ -359,6 +359,14 @@ class RunRecord(BaseModel):
     # bundles simply lack the key and load with None -- no validator needed,
     # mirroring ReferenceIdentity's back-compat idiom.
     sex_inference: SexInference | None = None
+    # Pre-band verification inputs captured at QC time (C6 fold-in, PRD R4):
+    # family -> sample -> metric -> value, keyed by the verify-corpus scorer's
+    # family names exactly. This is what a pending VerificationCase is built
+    # from -- the stored signal VALUES the verdict was derived from, never the
+    # stored statuses (the threshold-sensitivity contract). None/absent for
+    # legacy bundles (back-compat) and for runs with nothing capturable; an
+    # empty dict is normalized to None at the capture site.
+    verification_inputs: dict[str, dict[str, dict[str, float]]] | None = None
 
     @field_validator("annotation_identity", mode="before")
     @classmethod

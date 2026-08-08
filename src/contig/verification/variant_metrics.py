@@ -149,7 +149,10 @@ def _rule_by_check(check_name: str) -> dict:
 
 
 def evaluate_variant_plausibility(
-    vcf_path: str | os.PathLike, sample: str = "sample"
+    vcf_path: str | os.PathLike,
+    sample: str = "sample",
+    *,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list[QCResult]:
     """Evaluate the germline plausibility rules over a VCF.
 
@@ -165,6 +168,12 @@ def evaluate_variant_plausibility(
     variant_count is always an int, so it is always computable — a real 0 (empty
     call set) rides the band as a FAIL (below fail_below 1) and never routes into
     the unverified branch. Every result is kind "metric".
+
+    `capture_metrics` is an optional out-param for the pre-band verification
+    inputs capture (PRD R4): when passed, it is populated with
+    `{sample: {metric: value}}` for the COMPUTABLE metrics (the uncomputable
+    ratios are omitted — they carry no value to re-derive from). Additive and
+    back-compat: absent, behavior is exactly as before.
     """
     metrics = variant_metrics(vcf_path)
     rules = [_rule_by_check(name) for name in _PLAUSIBILITY_CHECKS]
@@ -179,6 +188,8 @@ def evaluate_variant_plausibility(
     computable = {
         metric: value for metric, value in by_metric.items() if value is not None
     }
+    if capture_metrics is not None:
+        capture_metrics[sample] = computable
 
     results = evaluate({sample: computable}, rules)
 
