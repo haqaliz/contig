@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-08-09
+
 ### Added
 
 - **The C6 fold-in ships: verification accuracy is now measured and regression-guarded
@@ -3238,6 +3240,7 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.51.0]: https://github.com/haqaliz/contig/releases/tag/v0.51.0
 [0.50.0]: https://github.com/haqaliz/contig/releases/tag/v0.50.0
 [0.49.0]: https://github.com/haqaliz/contig/releases/tag/v0.49.0
 [0.48.0]: https://github.com/haqaliz/contig/releases/tag/v0.48.0
