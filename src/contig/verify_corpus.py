@@ -29,11 +29,14 @@ from contig.models import (
     FamilyScore,
     QCResult,
     QCStatus,
+    RunRecord,
+    RunSummary,
     VerificationCase,
     VerifyCaseResult,
     VerifyEvalReport,
     VerifyGuardResult,
     VerifySnapshot,
+    overall_verdict,
 )
 from contig.verification.annotation_concordance import (
     _MIN_SHARED_VARIANTS,
@@ -423,3 +426,100 @@ def compare_verify_to_baseline(
         has_baseline=True,
         mismatches=report.mismatches,
     )
+
+
+# --- real-run capture + promote (PRD R4/R5: the non-tautological channel) ------
+# The guard scores a frozen synthetic holdout; these builders turn a REAL run's
+# pre-band inputs into a pending VerificationCase (captured at finalize when the
+# verdict is fail/warn, the signals a human can judge) and promote a reviewed
+# case into the golden corpus -- the step that makes the corpus non-tautological.
+
+
+def should_capture_verification(record: RunRecord) -> bool:
+    """Whether a finished run earns a pending verification case (PRD R4).
+
+    True only when the tasks all succeeded (a crashed run's `verdict == "fail"`
+    is a failure, not a verification judgement -- same guard as the qc_anomaly
+    capture, self_heal.py:1041-1045), QC results exist and reduce to fail or
+    warn (the verdicts a human can judge; WARN included because the
+    concordance/plausibility checks can only WARN), and pre-band inputs were
+    captured (nothing band-relevant to label otherwise -- honest skip, never a
+    fabricated case). `verification_inputs` present but empty reduces to the
+    same skip.
+    """
+    return (
+        RunSummary.from_events(record.events).succeeded
+        and bool(record.qc_results)
+        and overall_verdict(record.qc_results) in {"fail", "warn"}
+        and bool(record.verification_inputs)
+    )
+
+
+def verification_case_from_run(record: RunRecord) -> VerificationCase:
+    """Build a pending VerificationCase from a run record (mirrors
+    corpus.py:failure_case_from_run).
+
+    The inputs are the PRE-BAND metric values captured at QC time (never the
+    stored statuses), so the scorer can re-derive the verdict under the current
+    bands when a reviewer promotes the case. `expected_verdict` stays None
+    until a human confirms or corrects it; the description states the assay,
+    the driving verdict, and the captured families so the reviewer can judge
+    the case without opening the run.
+    """
+    verdict = overall_verdict(record.qc_results)
+    families = ", ".join(sorted(record.verification_inputs or {}))
+    return VerificationCase(
+        case_id=f"{record.run_id}-verify",
+        description=(
+            f"captured from run {record.run_id} ({record.pipeline}): verdict {verdict} "
+            f"over captured verification inputs (families: {families})"
+        ),
+        source=f"pending:{record.run_id}",
+        assay=record.assay or "unknown",
+        inputs=record.verification_inputs or {},
+        expected_verdict=None,
+        known_miss=False,
+    )
+
+
+def promote_pending_verify_case(
+    case_id: str,
+    *,
+    pending_path: str | PathLike[str],
+    golden_path: str | PathLike[str],
+    expected_verdict: QCStatus | None = None,
+) -> VerificationCase:
+    """Promote a human-reviewed pending verification case into the golden corpus
+    (PRD R5; mirrors corpus.py:promote_pending_case).
+
+    The reviewer confirms the provisional shape or corrects the verdict with
+    `expected_verdict` (pass|warn|fail|unverified); a label-less promote is a
+    pure confirmation and keeps `expected_verdict=None`. The case then moves
+    from the pending file into the golden corpus (source `pending:` ->
+    `confirmed:`), where `verify-eval` can score it. A case is promoted at
+    most once (deduped by case_id).
+    """
+    golden = Path(golden_path)
+    pending = list(load_verify_cases(pending_path))
+
+    case = next((c for c in pending if c.case_id == case_id), None)
+    if case is None:
+        raise ValueError(f"no pending verification case with id {case_id!r}")
+
+    golden_cases = load_verify_cases(golden) if golden.exists() else []
+    if any(c.case_id == case_id for c in golden_cases):
+        raise ValueError(f"case {case_id!r} is already in the golden corpus")
+
+    source = case.source
+    confirmed_source = (
+        "confirmed:" + source[len("pending:") :]
+        if source.startswith("pending:")
+        else "confirmed"
+    )
+    promoted = case.model_copy(
+        update={"expected_verdict": expected_verdict, "source": confirmed_source}
+    )
+
+    append_verify_case(promoted, golden)
+    save_verify_cases([c for c in pending if c.case_id != case_id], pending_path)
+    return promoted

@@ -125,3 +125,140 @@ def test_run_record_verification_inputs_round_trips():
 
 
 # --- Phase 2: pending capture at finalize --------------------------------------
+
+
+def _record(
+    *,
+    events: list[TaskEvent],
+    qc_results: list[QCResult],
+    verification_inputs: dict[str, dict[str, dict[str, float]]] | None,
+) -> RunRecord:
+    return RunRecord(
+        run_id="r",
+        pipeline="nf-core/rnaseq",
+        pipeline_revision="3.14.0",
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_checksums={},
+        parameters={},
+        events=events,
+        qc_results=qc_results,
+        assay="rnaseq",
+        verification_inputs=verification_inputs,
+    )
+
+
+def _green(verdict: str) -> list[QCResult]:
+    return [QCResult(check=f"x:{verdict}", status=verdict, message=verdict, kind="metric")]  # type: ignore[arg-type]
+
+
+def _finalize(tmp_path, record: RunRecord) -> Path:
+    from contig.self_heal import _finalize
+
+    run_dir = tmp_path / "runs" / "r"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    pending_path = tmp_path / "pending_verify_corpus.jsonl"
+    _finalize(
+        record, [], run_dir,
+        runs_dir=tmp_path / "runs", run_id="r",
+        pending_verify_corpus=pending_path,
+    )
+    return pending_path
+
+
+def test_should_capture_verification_predicate():
+    from contig.verify_corpus import should_capture_verification
+
+    inputs = {"multiqc": {"S1": {"percent_assigned": 50.0}}}
+    fail = _record(events=[TaskEvent(process="P", status="COMPLETED", exit=0)],
+                   qc_results=_green("fail"), verification_inputs=inputs)
+    warn = _record(events=[TaskEvent(process="P", status="COMPLETED", exit=0)],
+                   qc_results=_green("warn"), verification_inputs=inputs)
+    assert should_capture_verification(fail) is True
+    assert should_capture_verification(warn) is True
+
+    passed = _record(events=[TaskEvent(process="P", status="COMPLETED", exit=0)],
+                     qc_results=_green("pass"), verification_inputs=inputs)
+    assert should_capture_verification(passed) is False
+
+    crashed = _record(events=[TaskEvent(process="P", status="FAILED", exit=1)],
+                      qc_results=_green("fail"), verification_inputs=inputs)
+    assert should_capture_verification(crashed) is False
+
+    no_inputs = _record(events=[TaskEvent(process="P", status="COMPLETED", exit=0)],
+                        qc_results=_green("fail"), verification_inputs=None)
+    assert should_capture_verification(no_inputs) is False
+
+    empty_inputs = _record(events=[TaskEvent(process="P", status="COMPLETED", exit=0)],
+                           qc_results=_green("fail"), verification_inputs={})
+    assert should_capture_verification(empty_inputs) is False
+
+
+def test_verification_case_from_run_builder_shape():
+    from contig.verify_corpus import verification_case_from_run
+
+    inputs = {"multiqc": {"S1": {"percent_assigned": 50.0}}}
+    record = _record(events=[TaskEvent(process="P", status="COMPLETED", exit=0)],
+                     qc_results=_green("fail"), verification_inputs=inputs)
+    case = verification_case_from_run(record)
+
+    assert case.case_id == "r-verify"
+    assert case.source == "pending:r"
+    assert case.expected_verdict is None  # unlabeled until promoted
+    assert case.known_miss is False
+    assert case.inputs == inputs  # pre-band inputs copied verbatim
+    assert "rnaseq" in case.description  # assay stated
+    assert "fail" in case.description  # driving verdict stated
+    assert "multiqc" in case.description  # captured families stated
+
+
+def test_finalize_appends_one_pending_case_for_fail(tmp_path):
+    from contig.verify_corpus import load_verify_cases
+
+    record = _record(events=[TaskEvent(process="P", status="COMPLETED", exit=0)],
+                     qc_results=_green("fail"),
+                     verification_inputs={"multiqc": {"S1": {"percent_assigned": 50.0}}})
+    pending_path = _finalize(tmp_path, record)
+
+    cases = load_verify_cases(pending_path)
+    assert len(cases) == 1
+    assert cases[0].case_id == "r-verify"
+    assert cases[0].source == "pending:r"
+    assert cases[0].expected_verdict is None
+    assert cases[0].inputs["multiqc"]["S1"]["percent_assigned"] == 50.0
+
+
+def test_finalize_appends_one_pending_case_for_warn(tmp_path):
+    from contig.verify_corpus import load_verify_cases
+
+    record = _record(events=[TaskEvent(process="P", status="COMPLETED", exit=0)],
+                     qc_results=_green("warn"),
+                     verification_inputs={"multiqc": {"S1": {"percent_assigned": 50.0}}})
+    pending_path = _finalize(tmp_path, record)
+
+    assert len(load_verify_cases(pending_path)) == 1
+
+
+def test_finalize_appends_nothing_for_pass(tmp_path):
+    record = _record(events=[TaskEvent(process="P", status="COMPLETED", exit=0)],
+                     qc_results=_green("pass"),
+                     verification_inputs={"multiqc": {"S1": {"percent_assigned": 90.0}}})
+    pending_path = _finalize(tmp_path, record)
+
+    assert not pending_path.exists()
+
+
+def test_finalize_appends_nothing_for_a_crashed_run(tmp_path):
+    record = _record(events=[TaskEvent(process="P", status="FAILED", exit=137)],
+                     qc_results=_green("fail"),
+                     verification_inputs={"multiqc": {"S1": {"percent_assigned": 50.0}}})
+    pending_path = _finalize(tmp_path, record)
+
+    assert not pending_path.exists()
+
+
+def test_finalize_appends_nothing_without_verification_inputs(tmp_path):
+    record = _record(events=[TaskEvent(process="P", status="COMPLETED", exit=0)],
+                     qc_results=_green("fail"), verification_inputs=None)
+    pending_path = _finalize(tmp_path, record)
+
+    assert not pending_path.exists()

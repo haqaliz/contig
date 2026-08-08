@@ -46,6 +46,11 @@ from contig.notify import emit_event
 from contig.reference_check import fasta_contigs, gtf_contigs
 from contig.registry import VARIANT_ASSAYS, assay_for_pipeline
 from contig.repair import propose_patches
+from contig.verify_corpus import (
+    append_verify_case,
+    should_capture_verification,
+    verification_case_from_run,
+)
 from contig.resource_sizing import (
     PEAK_RSS_SAFETY_FACTOR,
     WALLTIME_SAFETY_FACTOR,
@@ -1491,6 +1496,7 @@ def _finalize(
     run_id: str,
     webhook: str | None = None,
     harmonized_reference_direction: str | None = None,
+    pending_verify_corpus: Path | None = None,
 ) -> RunRecord:
     """Attach the repair history to the final record, persist it, and notify.
 
@@ -1498,6 +1504,13 @@ def _finalize(
     events show success, otherwise `failed` (a give-up, rejection, or timeout all
     finalize a failed record). A trace-less run produces no record and no
     terminal notification: there is nothing to report yet.
+
+    Also captures a pending verification case (PRD R4) when the finalized
+    record's tasks all succeeded and its QC verdict is fail/warn with captured
+    pre-band inputs -- the real-run channel that makes the verification corpus
+    non-tautological. `pending_verify_corpus` is additive and defaults to
+    `<runs_dir>/pending_verify_corpus.jsonl`, so every existing caller is
+    unchanged.
     """
     if record is None:
         # The run failed before producing any trace; nothing was captured.
@@ -1551,6 +1564,18 @@ def _finalize(
             status="warn",
             message=message,
         ))
+    # Pending verification-case capture (PRD R4): appended AFTER the
+    # harmonized-reference warn above so the case reflects the final verdict.
+    # The predicate gates on green events + a fail/warn QC verdict + captured
+    # pre-band inputs, so a crash, a pass, or an uncapturable run never files
+    # a case. Always on, no flag (qc_anomaly capture precedent).
+    if should_capture_verification(record):
+        pending_path = (
+            pending_verify_corpus
+            if pending_verify_corpus is not None
+            else Path(runs_dir) / "pending_verify_corpus.jsonl"
+        )
+        append_verify_case(verification_case_from_run(record), pending_path)
     trace_path = Path(run_dir) / "trace.txt"
     if trace_path.exists():
         record.resource_usage = parse_resource_usage_file(trace_path)
