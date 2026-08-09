@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-08-09T10:06:43.855394+00:00",
-  "scenario_count": 21,
-  "corpus_sha": "4afc351333b9f554316ef538d72948154f7ea8cc1b31067be4010fd892732808",
+  "timestamp": "2026-08-09T16:43:47.708648+00:00",
+  "scenario_count": 22,
+  "corpus_sha": "c39917544c59273d7834c519e7def7031c8128bd3dda5bdb56f163565469818b",
   "outcome_match_rate": 1.0,
-  "recovery_rate": 0.5238095238095238,
+  "recovery_rate": 0.5,
   "per_class": {
     "oom": {
       "matched": 1,
@@ -79,9 +79,15 @@
       "matched": 1,
       "total": 1,
       "rate": 1.0
+    },
+    "alignment_format_mismatch": {
+      "matched": 1,
+      "total": 1,
+      "rate": 1.0
     }
   },
   "covered_classes": [
+    "alignment_format_mismatch",
     "bad_param",
     "conda_solve_failed",
     "container_pull_failed",

@@ -1,37 +1,39 @@
-# Issue Card: stale-index self-heal
+# Issue Card: self-heal CRAM↔BAM conversion
 
-## Brief (inline, from contig-next recommendation)
+## Brief (inline, from the contig-next recommendation)
 
-Build the C2 stale-index slice: detect a supplied index whose build predates its
-reference (htslib's "The index file is older than the data file" family) and rebuild
-it via the shipped IndexBuilder seam, retrying the run — mirroring the missing-index
-build-and-retry contract (honest `index_unresolvable`/`index_build_failed` give-ups,
-bounded to one rebuild per path, golden corpus case seeded, detector guard held at
-100%).
+Build the C2 CRAM↔BAM conversion slice: a run supplied with the wrong alignment format
+(CRAM where a tool needs BAM, or vice versa) is detected, converted via the shipped
+scratch/redirect seam (bgzip-reference precedent: `<run_id>/healed_reference/`, in-memory
+`params` redirect, bounded to one conversion per run), and retried with honest
+`format_convert_failed`-style give-ups — never a false pass. New `FailureClass` + one
+golden corpus case + one heal-guard scenario, detector guard held at 100%,
+`--update-baseline` refreeze.
 
-Caveats from contig-next:
+Caveats to resolve in the dig:
 
 - This is push, not demand-pull — organic frequency is unmeasured.
-- Anchor the detector on htslib's specific phrase with a narrow AND-guard, so it
-  neither over-matches nor collides with the shipped `missing_index` branch.
-- Keep the wrong-reference-index flavor (index built against a different FASTA) out
-  of scope — mtime-stale case first.
-- Stay test-first with injected executors (no real nf-core in CI).
-- Template: `docs/planning/self-heal-missing-index/` and the bgzip-reference slice's
-  detector/scratch/redirect pattern.
+- Confirm a reachable live trigger inside a Contig-launched pipeline (sarek's CRAM input
+  path is the prime candidate); if none exists, ship detector-only like the bwa-mem2 slice
+  (v0.11.0).
+- Decide the direction scope first (CRAM→BAM is the common case).
+- Keep it stdlib/subprocess-only, and test-first with injected executors — no real
+  nf-core in CI.
 
 Sources in the roadmap:
 
-- `docs/technical/CAPABILITY_ROADMAP.md` (C2): "the still-missing single-file index
-  kind (the BAM/CRAM form of `.csi`) plus **stale-index detection on the same seam**"
-  — deferred, unblocked.
-- The shipped `IndexBuilder` seam: `runner.py:655`, `default_index_builder`, and the
-  `build_index` repair path in `self_heal.py` / `repair.py:60`.
-- The `missing_index` FailureClass detector + golden corpus cases seeded per kind
-  (`.fai`, `.bai`, `.tbi`, `.csi`, `.dict`), and the STAR directory-index slice.
+- `docs/technical/CAPABILITY_ROADMAP.md` (C2, bgzip-reference slice): "**Deferred:**
+  CRAM↔BAM conversion (the other half of this class)."
+- The bgzip-reference slice's detector/scratch/redirect pattern:
+  `_recompress_reference`, `_gzip_kind` classifier, `reference_not_bgzf` `FailureClass`
+  (`models.py`), `healed_reference/` scratch.
+- The bwa-mem2 slice (v0.11.0) as the detector-only precedent if no live trigger exists.
+- The `heal-guard` scenario pattern (catalog-coverage slice: `covered_classes` 11 → 15;
+  `fasta_artifact` fixture directive precedent).
 
 ## Decision record
 
-- Feature slug: `stale-index-heal` (docs/planning/stale-index-heal/)
-- Branch: `feat/stale-index-heal/aliz`
+- Feature slug: `self-heal-cram-bam-conversion` (docs/planning/self-heal-cram-bam-conversion/)
+- Branch: `feat/self-heal-cram-bam-conversion/aliz`
 - Owner: aliz
+- Worktree: `.claude/worktrees/feat-self-heal-cram-bam-conversion`

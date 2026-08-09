@@ -403,6 +403,34 @@ def diagnose_failure(events: list[TaskEvent], log_text: str) -> Diagnosis:
             confidence=0.85,
         )
 
+    # CRAM-as-input decode failures: htslib/samtools cannot decode the CRAM
+    # without the reference FASTA it was aligned against (CRAM->BAM flavor).
+    # The signatures below are REASONED from real htslib error strings, not
+    # observed in a corpus fixture. Scope is CRAM-as-input only; BAM->CRAM
+    # (writing CRAM output) is out of scope -- those failures surface as
+    # index/reference problems with a different fix. Narrow on purpose: a
+    # matched line must carry a decode-anchor phrase AND the log must name a
+    # .cram file, so the bare token "cram" in a filename never fires.
+    cram_decode_lines = _matching_lines(
+        log_text,
+        (
+            "cram_decode_slice",
+            "for cram decoding",
+            "required for cram",
+        ),
+    )
+    if cram_decode_lines and _has_any(log_text, (".cram",)):
+        return Diagnosis(
+            failure_class="alignment_format_mismatch",
+            root_cause=(
+                "A CRAM input could not be decoded: htslib lacks the reference "
+                "FASTA needed for CRAM-to-BAM conversion, or the CRAM itself "
+                "is malformed."
+            ),
+            evidence=cram_decode_lines,
+            confidence=0.85,
+        )
+
     # No specific signal matched. If a task did fail, the tool itself crashed
     # for a reason we could not classify; otherwise we have nothing to go on.
     if any(e.is_failure for e in events):
