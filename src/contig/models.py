@@ -584,6 +584,16 @@ class HealScenario(BaseModel):
     # thing under test. None (the default) leaves a scenario's behaviour exactly
     # as it was: the driver then passes no params at all.
     fasta_artifact: Literal["plain_gzip"] | None = None
+    # Opt-in: drop a stale single-file index sidecar into the run dir so the
+    # REAL `_rebuild_stale_index` (self_heal.py:877) has a stale file to
+    # atomically replace. The value is the sidecar path the scenario's
+    # log_text names, relative to run_dir -- the diagnosis's parsed index path
+    # resolves against run_dir, so the file must already exist there for the
+    # replace to succeed. Deliberately a named fixture directive rather than an
+    # injectable build result -- the loop only needs a file on disk, and
+    # synthesizing the repair would stop measuring the thing under test. None
+    # (the default) leaves a scenario's behaviour exactly as it was.
+    stale_index_artifact: str | None = None
     expected_recovered: bool
     expected_outcome: str
     # Opt-in assertion on whether the loop actually enacted a patch (R7), checked

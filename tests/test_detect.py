@@ -96,6 +96,67 @@ def test_missing_csi_is_missing_index() -> None:
     assert any(".csi" in e for e in d.evidence)
 
 
+# --- stale single-file index: OLDER than the data it indexes (htslib) ---------
+
+
+def test_stale_bai_index_is_missing_index() -> None:
+    # htslib refuses an index that is OLDER than the data it indexes
+    # (hts_idx_load3). The message carries no absence phrase ("not found"/
+    # "missing"), so the generic branch below misses it and it would fall to
+    # tool_crash; the freshness branch must catch it.
+    events = [TaskEvent(process="SAMTOOLS", status="FAILED", exit=1)]
+    log = "[E::hts_idx_load3] The index file is older than the data file: /ref/aln.bam.bai"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "missing_index"
+    assert any(".bai" in e for e in d.evidence)
+
+
+def test_stale_fai_tbi_csi_indexes_classify() -> None:
+    # One stale line per supported single-file kind must classify the same way.
+    events = [TaskEvent(process="SAMTOOLS", status="FAILED", exit=1)]
+    for line in (
+        "[E::fai_load] The index file is older than the FASTA file: ref.fa.fai",
+        "[E::hts_idx_load3] The index file is older than the data file: calls.vcf.gz.tbi",
+        "[E::hts_idx_load3] The index file is older than the data file: calls.vcf.gz.csi",
+    ):
+        d = diagnose_failure(events, log_text=line)
+        assert d.failure_class == "missing_index", line
+
+
+def test_stale_absent_index_phrasing_still_generic() -> None:
+    # An absence-phrased line (no freshness wording) must STILL classify via the
+    # generic branch, root_cause unchanged -- the stale branch must not steal it.
+    events = [TaskEvent(process="SAMTOOLS", status="FAILED", exit=1)]
+    log = 'samtools index: failed to open "aln.bam.bai": No such file or directory'
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "missing_index"
+    assert d.root_cause == "A required index file is missing."
+
+
+def test_mixed_missing_or_older_classifies_stale() -> None:
+    # A line carrying BOTH absence and freshness wording must classify
+    # STALE-first: the freshness branch is ordered before the generic one, and
+    # the rebuild+replace repair covers both flavors.
+    events = [TaskEvent(process="SAMTOOLS", status="FAILED", exit=1)]
+    log = (
+        "[E::hts_idx_load3] The index file is missing or older than the "
+        "data file: /ref/aln.bam.bai"
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "missing_index"
+    assert d.root_cause == "An index file is older than the data it indexes."
+
+
+def test_benign_older_than_mention_is_not_missing_index() -> None:
+    # The AND-guard must hold: "older than" alone is not enough. A line with no
+    # index token and no "index file" wording must fall through, never
+    # missing_index.
+    events = [TaskEvent(process="PREPARE_GENOME", status="FAILED", exit=1)]
+    log = "the reference was updated, so this sample sheet is older than the expected revision"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class != "missing_index"
+
+
 def test_missing_genome_fasta_is_missing_reference() -> None:
     events = [TaskEvent(process="ALIGN", status="FAILED", exit=1)]
     log = "Error: No such file or directory: /data/genome.fasta"

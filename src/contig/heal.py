@@ -70,6 +70,18 @@ def _write_fasta_artifact(tmp_dir: Path, artifact: str) -> Path:
     return path
 
 
+def _write_stale_index_artifact(run_dir: Path, artifact: str) -> None:
+    """Write the named stale-index sidecar fixture into the run dir, so the
+    REAL `_rebuild_stale_index` (`self_heal.py:877`) has a stale file to
+    atomically replace: the diagnosis's parsed index path resolves against
+    run_dir, so the artifact path is relative to it, and the file must already
+    exist for the repair's `os.replace` to land anywhere.
+    """
+    path = Path(run_dir) / artifact
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"stale-index-artifact")
+
+
 def _write_attempt(
     trace_path: Path, attempt: AttemptSpec, qc_artifact: str | None = None
 ) -> None:
@@ -110,8 +122,35 @@ def _scripted_index_builder(scenario: HealScenario) -> IndexBuilder:
 
     result = scenario.index_builder_result
 
+    # Simulate the tool succeeding AND producing its output file: on "success"
+    # the builder touches the artifact the real tool would leave next to its
+    # input (argv[-1] is the indexed file). The extension maps from the argv
+    # tool name; an unknown tool creates nothing, so existing scenarios are
+    # unaffected (the missing-index repair never checks for the file). The
+    # stale rebuild DOES check -- `_rebuild_stale_index` gives up honestly when
+    # the scratch sidecar is absent -- so the simulation must create it there.
+    _TOOL_EXT: dict[tuple[str, ...], str] = {
+        ("samtools", "faidx"): ".fai",
+        ("samtools", "index"): ".bai",
+        ("tabix",): ".tbi",
+        ("bcftools", "index"): ".csi",
+    }
+
     def index_builder(cmd: list[str], cwd: Path) -> int:
-        return 0 if result == "success" else 1
+        if result != "success":
+            return 1
+        for tool, ext in _TOOL_EXT.items():
+            if cmd[: len(tool)] == list(tool):
+                out = Path(cmd[-1])
+                # Relative inputs resolve against the builder's cwd (the run
+                # dir), so a stray file never lands in the caller's process
+                # cwd; the stale rebuild's scratch input is absolute anyway.
+                if not out.is_absolute():
+                    out = Path(cwd) / out
+                out.parent.mkdir(parents=True, exist_ok=True)
+                (out.parent / (out.name + ext)).touch()
+                break
+        return 0
 
     return index_builder
 
@@ -172,6 +211,14 @@ def run_heal_scenario(
     if scenario.fasta_artifact is not None:
         fasta_path = _write_fasta_artifact(Path(tmp_dir), scenario.fasta_artifact)
         extra_kwargs["params"] = {"fasta": str(fasta_path)}
+    # run_dir is deterministic (`runs_dir / f"heal-{scenario_id}"`, resolved
+    # in self_heal_run), so a scenario that names a stale sidecar can
+    # pre-create it there before the real loop runs -- the repair then
+    # atomically replaces it with the freshly built sidecar.
+    if scenario.stale_index_artifact is not None:
+        run_dir = Path(runs_dir) / f"heal-{scenario.scenario_id}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        _write_stale_index_artifact(run_dir, scenario.stale_index_artifact)
 
     diagnosed_class: str | None = None
     recovered = False

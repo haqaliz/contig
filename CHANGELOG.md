@@ -6,6 +6,53 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **A stale single-file index is now detected, rebuilt, and swapped — htslib's "index file
+  is older than the data file" family stops being an opaque `tool_crash`.** htslib refuses
+  an index built from an older version of the data it indexes
+  (`[E::hts_idx_load3] The index file is older than the data file: X`). The message carries
+  no absence phrase, so every shipped `missing_index` branch missed it and the run died
+  undiagnosed — and its inverse, "missing **or** older" phrasing, was swallowed by the
+  generic missing-index branch, aiming a rebuild at an index that already exists. A new
+  detector branch now classifies the stale flavor `missing_index` **first**: AND-guarded on
+  the freshness phrase (`"older than"`) plus an index token (`.fai`/`.bai`/`.tbi`/`.csi` or
+  "index file"), ordered **before** the generic notfound branch so a "missing or older"
+  message classifies stale-first, at confidence 0.85. The repair is dispatched by
+  **evidence, not a model change**: `_is_stale_evidence` scans the diagnosis's evidence
+  lines for the freshness phrase, so `Diagnosis` and the signed record are untouched — no
+  signature break. The rebuild runs into run-scoped scratch (`<run_id>/healed_index/<kind>`):
+  the resolved source is **symlinked into scratch** and the unchanged `_INDEX_BUILD` argv
+  (`.fai`→`samtools faidx`, `.bai`→`samtools index`, `.tbi`→`tabix -p vcf`, `.csi`→`bcftools
+  index`) runs against the symlink, so the rebuilt sidecar lands in scratch; only on rc 0
+  **and** a produced artifact does `os.replace` atomically swap the user's stale file
+  (same-dir dot-temp copy + rename fallback on a cross-device `OSError`). A failed build
+  leaves the user's file byte-identical — never half-written; give-ups are honest
+  (`index_unresolvable` on an unparseable path or unresolvable source,
+  `index_build_failed` on a failed build or an "exited 0 but produced no index" empty
+  build); build-once-per-path bounds the loop; success reuses the `built_index_and_retried`
+  outcome literal with old/new mtimes and the applied argv in `RepairStep.detail`.
+  - Guards: **`eval-guard` unmoved at 92.3% (12/13)** — the new branch's corpus case
+    landed in the training set, the holdout is untouched; **`heal-guard` at 1.0 over 21
+    scenarios** with `covered_classes` 15 unchanged (`missing_index` was already covered —
+    this adds a scenario, not a class). The `stale-index-heal` scenario replays the REAL
+    repair end to end: attempt 1 fails with the htslib line → scratch build → atomic
+    replace → retry succeeds → `built_index_and_retried`, `expected_patch_applied` true;
+    `heal_baseline.json` refrozen as a deliberate act (`--update-baseline`, never a
+    hand-edit; `corpus_sha 4afc3513…`). The scenario caught a real integration bug the
+    unit tests could not: the dangling scratch **symlink** to the data file would trip the
+    retry's QC `**/*.bam` glob on an otherwise green run — the scratch kind-dir is now
+    removed on success (the `healed_index` root is kept when non-empty, so a STAR scratch
+    sitting alongside survives).
+  - **Read honestly.** Push, not demand-pull: organic frequency is unmeasured and no real
+    Contig-launched run has ever produced this failure — the field corpus has only ever
+    diagnosed `oom`, `tool_crash`, `missing_index`, `unknown`. The needle is **reasoned,
+    not observed**: no real nf-core in CI, and a non-matching stale message still degrades
+    to `tool_crash`. And `samtools faidx` silently rebuilds a stale `.fai`, so the hard-fail
+    surface this actually helps is the htslib `hts_idx_load3` family
+    (`.bai`/`.csi`/`.tbi`), with `.fai` covered defensively. The wrong-reference index
+    masquerade stays out of scope — mtime cannot distinguish it.
+
 ## [0.51.0] - 2026-08-09
 
 ### Added
