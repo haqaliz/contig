@@ -478,6 +478,30 @@ produced this failure (the field corpus has only ever diagnosed
 helps is the htslib `hts_idx_load3` family (`.bai`/`.csi`/`.tbi`), with `.fai` covered
 defensively. The wrong-reference index masquerade stays out of scope (mtime cannot
 distinguish it).
+**Shipped (alignment-format detector slice — Unreleased):** the input-format-conversion
+class's second half (CRAM↔BAM) ships as the **detector-only** `alignment_format_mismatch`
+slice, by the bwa-mem2 verdict: **no Contig-launched run can produce a CRAM/BAM format
+failure today** — the samplesheet models are FASTQ-only (`samplesheet.py:11-15, 18-32`; a
+BAM/CRAM sarek sheet is refused at pre-flight as missing `fastq_1`), the launch argv is
+mechanically `--key value` over params, and even a hypothetical alignment-input seam would
+be suppressed by sarek's wired `--fasta` reference. A new `FailureClass` literal (18 → 19)
+plus a narrow branch — AND-guarded on a CRAM-specific decode phrase (`cram_decode_slice` /
+`for cram decoding` / `required for cram`) plus a `.cram` token, placed after the
+`reference_not_bgzf` branch and before the `tool_crash` fallthrough, confidence 0.85 — names
+the class that previously died as a 0.4 `tool_crash`. Two control tests pin the boundaries
+both ways (a stale-index log still classifies `missing_index`; a CRAM line containing an
+absence phrase still classifies `alignment_format_mismatch`). One golden training case
+(htslib framing) + one **independently authored holdout twin** (GATK framing, written
+before the needles); `eval-guard` refrozen deliberately at **92.9% (13/14)** — a
+composition change, not an improvement, only miss unchanged (`holdout-qc-anomaly-1`). One
+heal-guard give-up scenario drives the real loop to honest `gave_up` (no patch by design);
+`covered_classes` 15 → **16**, outcome-match still 1.0 over 22 scenarios; both baselines
+refrozen via `--update-baseline` as deliberate acts. Dashboard `FAILURE_CLASSES` synced
+(19, Python order). **Honest limits:** push, not demand-pull; organic frequency unmeasured;
+needle reasoned-not-observed; self-graded fixtures; **recovers nothing** — the CRAM→BAM
+conversion repair stays deferred behind a committed revisit trigger (first real CRAM-format
+failure in a Contig-launched run, or an alignment-input seam), BAM→CRAM out of scope. No
+verdict/exit-code/manifest/signature change; no new dependency.
 **Deferred to later C2 slices:** bwa-mem2 **build/redirect** (detection shipped v0.11.0;
 build blocked until a live trigger exists) and the classic-vs-mem2 aligner-mismatch heal;
 classic-BWA index build/redirect (needs a supported `bwa index` target, e.g. sarek

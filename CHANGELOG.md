@@ -48,10 +48,52 @@ All notable changes to Contig are recorded here. The format follows
     Contig-launched run has ever produced this failure — the field corpus has only ever
     diagnosed `oom`, `tool_crash`, `missing_index`, `unknown`. The needle is **reasoned,
     not observed**: no real nf-core in CI, and a non-matching stale message still degrades
-    to `tool_crash`. And `samtools faidx` silently rebuilds a stale `.fai`, so the hard-fail
-    surface this actually helps is the htslib `hts_idx_load3` family
-    (`.bai`/`.csi`/`.tbi`), with `.fai` covered defensively. The wrong-reference index
-    masquerade stays out of scope — mtime cannot distinguish it.
+  to `tool_crash`. And `samtools faidx` silently rebuilds a stale `.fai`, so the hard-fail
+  surface this actually helps is the htslib `hts_idx_load3` family
+  (`.bai`/`.csi`/`.tbi`), with `.fai` covered defensively. The wrong-reference index
+  masquerade stays out of scope — mtime cannot distinguish it.
+- **An alignment-file format error now has a name — the input-format-conversion class's
+  second half ships as the `alignment_format_mismatch` detector.** A tool killed because it
+  cannot decode a CRAM alignment (the htslib `[E::cram_decode_slice]` reference-required
+  family / GATK "Reference is required for CRAM") previously died as an opaque `tool_crash`
+  at confidence 0.4. A new `FailureClass` literal and a narrow detector branch — AND-guarded
+  on a CRAM-specific decode phrase (`cram_decode_slice` / `for cram decoding` / `required
+  for cram`) plus a `.cram` token, so the bare word never fires — now classify it
+  `alignment_format_mismatch` at confidence 0.85 with a root cause naming the format
+  problem. Placement (after the `reference_not_bgzf` branch, before the `tool_crash`
+  fallthrough) plus the AND-guard is pinned by two control tests: a stale-index log still
+  classifies `missing_index`, and a CRAM error line that also contains an absence phrase
+  still classifies `alignment_format_mismatch`. The class is **detector-only**: there is no
+  repair, by design — see "Read honestly".
+  - **Corpus + guards.** One golden training case (`cram-reference-required`, htslib
+    framing) and one **independently authored holdout twin**
+    (`holdout-cram-reference-required`, GATK framing — written before the needles, so it
+    tests the branch against wording it was not fitted to). `eval-guard` refrozen as a
+    deliberate act (`--update-baseline` after a loud `sha_mismatch`): **92.9% (13/14)** —
+    the twin classified, so the move from 92.3% is a **corpus-composition change, not an
+    accuracy improvement**; the only miss remains the pre-existing
+    `holdout-qc-anomaly-1`. One heal-guard scenario (`alignment-format-mismatch-give-up`)
+    drives the **real** loop: diagnosed, no patch proposed by design, honest `gave_up`,
+    `patch_applied` false; `covered_classes` 15 → **16** over 22 scenarios with
+    `outcome_match_rate` still **1.0**; `heal_baseline.json` refrozen deliberately. Both
+    history files are append-only (`holdout_history.jsonl` line 11, `heal_history.jsonl`
+    line 14). Dashboard: `FAILURE_CLASSES` (the pending-review relabel source, server-
+    validated in the promote route) gains the 19th literal in Python order, pinned by the
+    `failure-classes.spec.ts` order test and a relabel round-trip.
+  - **Read honestly.** Push, not demand-pull: organic frequency is unmeasured and no real
+    Contig-launched run has ever produced this failure — the field corpus has only ever
+    diagnosed `oom`, `tool_crash`, `missing_index`, `unknown`. The needle is **reasoned,
+    not observed**: no real nf-core in CI, no real CRAM error in the repo, and a
+    non-matching CRAM error still degrades to `tool_crash`. The accuracy gain is
+    **self-graded** (we authored the fixtures we grade; the holdout twin's independent
+    framing is the mitigation, not the cure). **It recovers nothing for a user** — it
+    changes what the record *says* (a named class and root cause instead of a 0.4
+    `tool_crash`), not what the engine *does*. The **CRAM→BAM conversion repair
+    (detect → `samtools view -b` → scratch redirect → retry) is deferred, not dropped**,
+    with a committed revisit trigger: the first real CRAM-format failure observed in a
+    Contig-launched run, or the day an alignment-input seam lands (the bwa-mem2
+    build/redirect deferral precedent). BAM→CRAM is out of scope (no plausible consumer).
+    No verdict / exit-code / manifest / signature change; no new dependency.
 
 ## [0.51.0] - 2026-08-09
 
