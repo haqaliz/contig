@@ -148,6 +148,13 @@ def _parse_missing_index(diagnosis: Diagnosis) -> tuple[str, str] | None:
     return None
 
 
+def _is_stale_evidence(diagnosis: Diagnosis) -> bool:
+    """True when the diagnosis evidence names a STALE index (the freshness
+    phrase), distinguishing the scratch-build+atomic-replace repair from the
+    in-place missing-index repair. Pure — scans evidence lines only."""
+    return any("older than" in line.lower() for line in diagnosis.evidence)
+
+
 # How to find the *source* an index is built from, given the index path. Most
 # kinds just strip the index suffix; .dict must probe the filesystem for a
 # companion FASTA (its source is not the indexed-path-minus-suffix).
@@ -867,6 +874,158 @@ def _recompress_reference(
     return target, params, "recompressed_reference_and_retried", detail, True
 
 
+def _rebuild_stale_index(
+    target: ExecutionTarget,
+    params: dict[str, object],
+    *,
+    index_path: str,
+    ext: str,
+    run_dir: Path,
+    index_builder: IndexBuilder,
+    built_paths: set[str],
+) -> tuple[ExecutionTarget, dict[str, object], str, str | None, bool]:
+    """Rebuild a STALE single-file index into scratch and replace it atomically.
+
+    A stale index (htslib ``hts_idx_load3`` family: "The index file is older
+    than the data file") exists but was built from an OLDER version of the data
+    it indexes. The build IS the fix, but unlike the missing-index repair it
+    must not run in place: the user's stale sidecar must be replaced only by a
+    successful build. The resolved source is symlinked into run-scoped scratch
+    (``<run_dir>/healed_index/<kind>/``, fresh-wiped, STAR precedent) and the
+    UNCHANGED ``_INDEX_BUILD`` argv runs against the symlink, so the rebuilt
+    sidecar lands in scratch next to its input. On rc 0 AND the scratch sidecar
+    existing, ``os.replace`` atomically swaps it over the user's stale file; a
+    cross-device ``OSError`` falls back to a same-dir dot-temp copy + rename.
+
+    Branches honestly (mirrors ``_build_star_index``'s shape):
+      * already rebuilt this run (``index_path in built_paths``) → give up:
+        ``("index_build_failed", "Already rebuilt …; failure persists.", False)``.
+      * unresolvable source (deriver returns None) → ``("index_unresolvable", …)``.
+      * symlink setup fails            → ``index_build_failed``
+      * non-zero build                 → ``("index_build_failed", …, False)``.
+      * rc 0 but no scratch sidecar    → ``("index_build_failed", …, False)``
+                                         (the honest "exited 0 but produced
+                                         nothing" give-up -- never a false pass).
+      * atomic replace + fallback fail → ``("index_build_failed", …, False)``.
+      * success → ``("built_index_and_retried", detail with mtime evidence +
+        the applied argv, True)`` -- the loop retries against the replaced file.
+
+    Bounded to ONE rebuild per run: ``index_path`` (and the scratch dir, STAR
+    precedent) join ``built_paths`` BEFORE the builder runs, so a persisting
+    stale failure gives up instead of looping.
+    """
+    sidecar = Path(index_path)
+    if not sidecar.is_absolute():
+        # Relative index paths resolve against run_dir (mirrors
+        # _resolve_dict_source's run_dir probing).
+        sidecar = Path(run_dir) / sidecar
+    if index_path in built_paths:
+        return (
+            target,
+            params,
+            "index_build_failed",
+            f"Already rebuilt {index_path}; failure persists.",
+            False,
+        )
+    deriver, _argv_fn = _INDEX_BUILD[ext]
+    source = deriver(str(sidecar), ext, run_dir)
+    if not source:
+        return (
+            target,
+            params,
+            "index_unresolvable",
+            f"Could not resolve a source to rebuild {index_path}.",
+            False,
+        )
+    scratch_dir = Path(run_dir) / "healed_index" / ext.lstrip(".")
+    # Fresh scratch dir: wipe any residue so the success gate below reflects
+    # only THIS build's output (STAR precedent).
+    shutil.rmtree(scratch_dir, ignore_errors=True)
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+    # The symlink is named after the SOURCE data file (e.g. aln.bam) -- NOT the
+    # sidecar name -- so the suffix-strip deriver turns it into the path the
+    # tool actually indexes, and the tool's sidecar lands in scratch as
+    # <data-name><ext>.
+    src_link = scratch_dir / Path(source).name
+    try:
+        os.symlink(source, src_link)
+    except OSError as exc:
+        return (
+            target,
+            params,
+            "index_build_failed",
+            f"Could not symlink the source for {index_path}: {exc}.",
+            False,
+        )
+    cmd = _index_build_command(str(src_link), ext, run_dir)
+    if cmd is None:
+        return (
+            target,
+            params,
+            "index_unresolvable",
+            f"Could not resolve a source to build {index_path}.",
+            False,
+        )
+    # Bound the rebuild to ONE per run: mark both the index path and the
+    # scratch dir as built before invoking the builder.
+    built_paths.add(index_path)
+    built_paths.add(str(scratch_dir))
+    rc = index_builder(cmd, run_dir)
+    if rc != 0:
+        return (
+            target,
+            params,
+            "index_build_failed",
+            f"Building the index for {index_path} failed (exit {rc}).",
+            False,
+        )
+    built_sidecar = scratch_dir / (src_link.name + ext)
+    if not built_sidecar.exists():
+        return (
+            target,
+            params,
+            "index_build_failed",
+            "The build exited 0 but produced no index; giving up honestly.",
+            False,
+        )
+    old_mtime = None
+    try:
+        old_mtime = sidecar.stat().st_mtime
+    except OSError:
+        pass
+    try:
+        os.replace(str(built_sidecar), str(sidecar))
+    except OSError:
+        # Cross-device replace (EXDEV): copy into a same-dir dot-temp (same
+        # filesystem by construction) then rename over the stale file.
+        dot_temp = sidecar.parent / f".{sidecar.name}.contig-heal-{os.getpid()}"
+        try:
+            shutil.copy2(built_sidecar, dot_temp)
+            os.replace(str(dot_temp), str(sidecar))
+        except OSError as exc:
+            try:
+                dot_temp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return (
+                target,
+                params,
+                "index_build_failed",
+                f"Replacing the stale index {index_path} failed: {exc}.",
+                False,
+            )
+    new_mtime = None
+    try:
+        new_mtime = sidecar.stat().st_mtime
+    except OSError:
+        pass
+    detail = (
+        f"Rebuilt stale {index_path} (index older than its data; "
+        f"mtime {old_mtime} → {new_mtime}); argv: {' '.join(cmd)}"
+    )
+    return target, params, "built_index_and_retried", detail, True
+
+
 def _apply_patch_and_maybe_build(
     target: ExecutionTarget,
     patch: Patch,
@@ -936,6 +1095,19 @@ def _apply_patch_and_maybe_build(
             built_paths=built_paths,
         )
     ext = kind
+    if _is_stale_evidence(diagnosis):
+        # STALE flavor: the index exists but is older than its data. Rebuild
+        # into scratch and atomically replace the user's sidecar (see
+        # _rebuild_stale_index); the in-place path below is the MISSING flavor.
+        return _rebuild_stale_index(
+            target,
+            params,
+            index_path=index_path,
+            ext=ext,
+            run_dir=run_dir,
+            index_builder=index_builder,
+            built_paths=built_paths,
+        )
     if index_path in built_paths:
         # We already built this exact index once this run and the failure came
         # back the same way (e.g. a wrong reference masquerading as a missing
