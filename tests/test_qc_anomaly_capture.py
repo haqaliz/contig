@@ -162,15 +162,18 @@ def test_propose_patches_offers_nothing_for_a_qc_anomaly():
     assert propose_patches(diagnosis) == []
 
 
-def test_committed_holdout_baseline_still_reads_0_923():
+def test_committed_holdout_baseline_still_reads_0_929():
     # A16: the non-goal, asserted rather than assumed. Making `qc_anomaly`
     # reachable at runtime deliberately does NOT touch the detector corpora --
     # a zero-exit structural failure cannot be represented as (events, log_text),
     # so a case added while `detect.py` is untouched would misclassify and
-    # LOWER this number. Any movement here means someone traded that away
-    # without saying so.
+    # LOWER this number. The one deliberate move here is the C2 holdout-twin
+    # append (holdout-cram-reference-required, refrozen 2026-08-09): 13 -> 14
+    # cases and 0.923 -> 0.929 is a disclosed corpus-composition change (the
+    # twin classifies), not a detector improvement -- the qc_anomaly miss is
+    # still the only one.
     baseline = load_baseline(default_baseline_path())
 
     assert baseline is not None
-    assert round(baseline.accuracy, 3) == 0.923
+    assert round(baseline.accuracy, 3) == 0.929
     assert baseline.detector == "rules"

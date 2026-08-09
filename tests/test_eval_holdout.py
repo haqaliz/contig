@@ -72,6 +72,18 @@ def test_holdout_case_ids_prefixed():
         assert case.case_id.startswith("holdout-")
 
 
+def test_holdout_contains_cram_reference_required_twin():
+    # R3 (C2): the alignment_format_mismatch holdout twin ships so the eval-guard
+    # covers the class against independently-framed wording (GATK, not the
+    # htslib wording of the training case). If the twin is missing, the class's
+    # guarded accuracy silently covers one author's phrasing only.
+    cases = {c.case_id: c for c in load_corpus(default_holdout_path())}
+    case = cases.get("holdout-cram-reference-required")
+    assert case is not None
+    assert case.source == "holdout:synthetic"
+    assert case.expected_class == "alignment_format_mismatch"
+
+
 def test_rules_detector_scores_high_on_holdout():
     # Not a hardcoded number: just a sanity floor so an obviously-broken
     # authoring pass (e.g. copy-paste wording that never matches a rule) is
