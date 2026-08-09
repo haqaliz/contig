@@ -909,6 +909,9 @@ def _rebuild_stale_index(
       * atomic replace + fallback fail → ``("index_build_failed", …, False)``.
       * success → ``("built_index_and_retried", detail with mtime evidence +
         the applied argv, True)`` -- the loop retries against the replaced file.
+        The scratch dir is removed on success: the built sidecar has been moved
+        out, and the dangling data-file symlink left behind would otherwise
+        trip a QC ``**/*.bam`` glob on the green retry.
 
     Bounded to ONE rebuild per run: ``index_path`` (and the scratch dir, STAR
     precedent) join ``built_paths`` BEFORE the builder runs, so a persisting
@@ -1017,6 +1020,18 @@ def _rebuild_stale_index(
     new_mtime = None
     try:
         new_mtime = sidecar.stat().st_mtime
+    except OSError:
+        pass
+    # The built sidecar has been moved onto the user's file; the scratch
+    # symlink is now dead weight. It must not outlive the repair: the retry
+    # re-verifies the run dir, and a QC scan that globs `**/*.bam` (runner.py)
+    # would find the dangling data-file symlink here and FAIL the green run
+    # with a spurious output_present check. Remove the kind dir, and the
+    # `healed_index` root too when it is now empty (rmdir fails on a
+    # non-empty root, e.g. when a STAR scratch sits alongside -- safe).
+    shutil.rmtree(scratch_dir, ignore_errors=True)
+    try:
+        scratch_dir.parent.rmdir()
     except OSError:
         pass
     detail = (

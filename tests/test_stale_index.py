@@ -132,6 +132,11 @@ def test_self_heal_rebuilds_stale_bai_and_retries(tmp_path):
     assert " ".join(calls["cmd"]) in last.detail  # the applied build argv
     assert "healed_index" in str(calls["cmd"])  # the symlink was used
     assert calls["n"] == 1  # exactly one build
+    # The scratch residue is removed on success: the built sidecar has been
+    # moved onto the user's file, and the dangling data-file symlink left in
+    # scratch would trip a QC `**/*.bam` glob on the green retry
+    # (disclosed by the stale-index-heal scenario replay).
+    assert not (tmp_path / "runs" / "r" / "healed_index").exists()
 
 
 def test_stale_build_failure_leaves_user_file_byte_identical(tmp_path):
