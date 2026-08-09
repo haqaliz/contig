@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-08-09
+
 ### Added
 
 - **A stale single-file index is now detected, rebuilt, and swapped — htslib's "index file
@@ -3366,6 +3368,7 @@ compute. Pre-revenue, validation phase.
 [0.14.0]: https://github.com/haqaliz/contig/releases/tag/v0.14.0
 [0.13.0]: https://github.com/haqaliz/contig/releases/tag/v0.13.0
 [0.12.0]: https://github.com/haqaliz/contig/releases/tag/v0.12.0
+[0.52.0]: https://github.com/haqaliz/contig/releases/tag/v0.52.0
 [0.10.0]: https://github.com/haqaliz/contig/releases/tag/v0.10.0
 [0.9.0]: https://github.com/haqaliz/contig/releases/tag/v0.9.0
 [0.7.0]: https://github.com/haqaliz/contig/releases/tag/v0.7.0
