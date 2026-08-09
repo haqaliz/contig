@@ -383,6 +383,49 @@ def test_vcf_please_use_bgzip_without_faidx_token_is_not_reference_not_bgzf() ->
     assert d.failure_class != "reference_not_bgzf"
 
 
+# --- CRAM decode failures: alignment format mismatch (C2) ----------------------
+
+
+def test_cram_decode_slice_without_reference_is_alignment_format_mismatch() -> None:
+    # samtools view on a CRAM input fails at decode time when htslib has no
+    # reference FASTA for CRAM->BAM conversion. Distinct and actionable
+    # (supply the reference / point at the right CRAM), not an opaque crash.
+    events = [TaskEvent(process="SAMTOOLS_VIEW", status="FAILED", exit=1)]
+    log = (
+        "[E::cram_decode_slice] No reference file specified for CRAM decoding\n"
+        "samtools view failed on /work/aln.cram"
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "alignment_format_mismatch"
+    assert d.confidence == 0.85
+    assert "CRAM" in d.root_cause.upper()
+    assert any("cram_decode_slice" in e.lower() for e in d.evidence)
+
+
+def test_cram_decode_line_that_also_says_reference_not_found_is_alignment_format_mismatch() -> None:
+    # The absence phrase ("reference not found") shares a line with the decode
+    # error. The CRAM branch's AND-guard must beat the missing_index absence
+    # needles (which require an index token on the line) and must not fall
+    # through to tool_crash.
+    events = [TaskEvent(process="SAMTOOLS_VIEW", status="FAILED", exit=1)]
+    log = (
+        "samtools view: [E::cram_decode_slice] Reference file is required for "
+        "CRAM decoding: reference not found for /data/aln.cram"
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "alignment_format_mismatch"
+
+
+def test_bare_cram_filename_without_decode_phrase_is_tool_crash() -> None:
+    # The branch must not fire on the bare token "cram" inside a filename; only
+    # a CRAM decode-failure phrase triggers it. Without one, this stays an
+    # unrecognized crash.
+    events = [TaskEvent(process="SAMTOOLS_VIEW", status="FAILED", exit=1)]
+    log = "Error processing /data/aln.cram: invalid argument"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "tool_crash"
+
+
 # --- broader failure classes for common nf-core failures (contract D) ----------
 
 
