@@ -1,9 +1,37 @@
-# feat eval-corroboration-fold-in
+# Issue Card: stale-index self-heal
 
-## Brief
+## Brief (inline, from contig-next recommendation)
 
-Fold the C1/C3/annotation corroboration signals (concordance WARN/PASS, plausibility outcomes, VEP-vs-SnpEff agreement) into the C6 eval loop so verification accuracy — not just detector/heal-loop accuracy — is measured and regression-guarded. This is the single capability the roadmap still marks pending (CAPABILITY_ROADMAP.md C6; FEATURES.md C6 row; C7 M5 deferral). Caveat to dig first: the docs name a blocker across four deferrals — these signals carry no ground-truth labels, so slice 1 is the labeling design itself, probably reusing the shipped pending-review/corpus-promote channel; if the dig concludes no honest labeling exists, the correct outcome is a declined-by-design record (inert-repair precedent), which still settles the deferral. Build test-first, CI-observable, no network, and state honestly in the PRD that this is push, not demand-pull.
+Build the C2 stale-index slice: detect a supplied index whose build predates its
+reference (htslib's "The index file is older than the data file" family) and rebuild
+it via the shipped IndexBuilder seam, retrying the run — mirroring the missing-index
+build-and-retry contract (honest `index_unresolvable`/`index_build_failed` give-ups,
+bounded to one rebuild per path, golden corpus case seeded, detector guard held at
+100%).
 
-## Source
+Caveats from contig-next:
 
-Picked by `contig-next` (2026-08-09) from the repo's own planning files; not filed as a GitHub issue. No `gh` fetch performed.
+- This is push, not demand-pull — organic frequency is unmeasured.
+- Anchor the detector on htslib's specific phrase with a narrow AND-guard, so it
+  neither over-matches nor collides with the shipped `missing_index` branch.
+- Keep the wrong-reference-index flavor (index built against a different FASTA) out
+  of scope — mtime-stale case first.
+- Stay test-first with injected executors (no real nf-core in CI).
+- Template: `docs/planning/self-heal-missing-index/` and the bgzip-reference slice's
+  detector/scratch/redirect pattern.
+
+Sources in the roadmap:
+
+- `docs/technical/CAPABILITY_ROADMAP.md` (C2): "the still-missing single-file index
+  kind (the BAM/CRAM form of `.csi`) plus **stale-index detection on the same seam**"
+  — deferred, unblocked.
+- The shipped `IndexBuilder` seam: `runner.py:655`, `default_index_builder`, and the
+  `build_index` repair path in `self_heal.py` / `repair.py:60`.
+- The `missing_index` FailureClass detector + golden corpus cases seeded per kind
+  (`.fai`, `.bai`, `.tbi`, `.csi`, `.dict`), and the STAR directory-index slice.
+
+## Decision record
+
+- Feature slug: `stale-index-heal` (docs/planning/stale-index-heal/)
+- Branch: `feat/stale-index-heal/aliz`
+- Owner: aliz

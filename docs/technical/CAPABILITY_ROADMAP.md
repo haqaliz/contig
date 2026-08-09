@@ -438,12 +438,51 @@ the same point) — no precedent to reuse; a dashboard surface; per-task stall d
 (Nextflow owns task-level retry); and **on-by-default operation**, whose revisit trigger is
 committed: the first real report of a false positive keeps it off/loosens it, N real stalls
 recovered makes it worth reconsidering.
+**Shipped (stale-index slice — Unreleased):** an index that is OLDER than the data it
+indexes — the htslib `hts_idx_load3` family's `[E::hts_idx_load3] The index file is older
+than the data file: X` — previously died as an opaque `tool_crash` (the message carries no
+absence phrase, so the generic missing-index branch missed it entirely), and its inverse,
+an absence+staleness mashup ("is missing **or** older than the data file"), was swallowed
+by the generic branch and aimed a rebuild at an index that already exists. A new detector
+branch now classifies the stale flavor `missing_index` **first**: AND-guarded on a
+freshness phrase (`"older than"`) **plus** an index token (`.fai`/`.bai`/`.tbi`/`.csi` or
+"index file"), ordered **before** the generic notfound branch so a "missing or older"
+message classifies stale-first (the rebuild+replace repair covers both flavors), emitting
+`root_cause="An index file is older than the data it indexes."` at confidence 0.85. The
+repair dispatches on **evidence, not a model change**: `_is_stale_evidence` scans the
+diagnosis's evidence lines for the freshness phrase, so `Diagnosis` gains no field and the
+signed record is untouched — **no signature break**. The stale sidecar is rebuilt into
+run-scoped scratch (`<run_id>/healed_index/<kind>`, fresh-wiped, STAR precedent) by
+**symlinking the resolved source into scratch** and running the **unchanged** `_INDEX_BUILD`
+argv against the symlink, so the tool's sidecar lands in scratch next to its input; only on
+rc 0 **and** a produced artifact (honest "exited 0 but produced no index" give-up
+otherwise) does `os.replace` atomically swap the user's stale file — a cross-device
+`OSError` falls back to a same-dir dot-temp copy + rename (same filesystem by
+construction), fallback failure is an honest `index_build_failed`, and the user's file is
+**never half-written**. Build-once-per-path bounds the loop; `index_unresolvable` covers
+an unparseable path or unresolvable source. Success reuses the `built_index_and_retried`
+outcome literal with old/new mtimes and the applied argv in `RepairStep.detail`. One
+golden `stale-bai` corpus case (`case_id: "stale-bai"`, seeded per the family's one-per-kind
+tradition) and one `stale-index-heal` heal-guard scenario (21 scenarios, `covered_classes`
+15 unchanged — `missing_index` was already covered, this adds a scenario not a class;
+baseline refrozen as a deliberate act, `corpus_sha 4afc3513…`). The scenario's real repair
+caught and fixed an integration bug the unit tests could not: the dangling scratch
+**symlink** to the data file would trip the retry's QC `**/*.bam` glob on an otherwise
+green run, so the scratch kind-dir is removed on success (the `healed_index` root is kept
+when non-empty, so a STAR scratch sitting alongside survives). Read honestly — push, not
+demand-pull: organic frequency is unmeasured and no real Contig-launched run has ever
+produced this failure (the field corpus has only ever diagnosed
+`oom`/`tool_crash`/`missing_index`/`unknown`); the needle is **reasoned, not observed**
+(no real nf-core in CI; a non-matching stale message still degrades to `tool_crash`); and
+`samtools faidx` silently rebuilds a stale `.fai`, so the hard-fail surface this actually
+helps is the htslib `hts_idx_load3` family (`.bai`/`.csi`/`.tbi`), with `.fai` covered
+defensively. The wrong-reference index masquerade stays out of scope (mtime cannot
+distinguish it).
 **Deferred to later C2 slices:** bwa-mem2 **build/redirect** (detection shipped v0.11.0;
 build blocked until a live trigger exists) and the classic-vs-mem2 aligner-mismatch heal;
 classic-BWA index build/redirect (needs a supported `bwa index` target, e.g. sarek
 `--aligner bwa-mem`); a corrupt/partial STAR index signature; the still-missing single-file
-index kind (the BAM/CRAM form of
-`.csi`) plus stale-index detection on the same seam; and the wider failure catalog — the
+index kind (the BAM/CRAM form of `.csi`); and the wider failure catalog — the
 assembly-signature form of reference/build mismatch (no sample-side contig signal in raw
 FASTQ or finished bundle), exhaustive per-assembly alias-table completeness beyond the
 GRCh38 seed, known-sites/GTF-version consistency, a runtime `reference_mismatch`
@@ -2034,7 +2073,7 @@ raw-data egress — runs on the user's / CI compute; only hashes and claim diffs
 | ID | Capability | Window | Leverage |
 |----|-----------|--------|----------|
 | C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) + somatic slice (Unreleased) + single-cell slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap + somatic auto `somatic_site_overlap` PASS-site Jaccard, Mutect2 vs Strelka2, no user input + single-cell `--concordance-sc-counts` pseudobulk gene-level Spearman/fraction-agreeing over a stdlib `.mtx` triplet loader + single-cell **autorun** `--concordance-sc-counts-auto` running STARsolo behind an injectable seam, turnkey; single-cell cluster-stability deferred) |
-| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; per-contig alias harmonization (mito `M`↔`MT` + GRCh38 scaffold seed) shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); peak-RSS-informed OOM memory scaling shipped (Unreleased, honest two-tier: own-peak → blind fallback; sibling rescue deferred); walltime-informed `time_limit` scaling shipped (Unreleased, floored at blind — censored realtime, tail-only win + field instrument); **input-format-conversion class's first slice shipped (Unreleased): bgzip'd (non-BGZF) reference FASTA self-heal, sarek-scoped (rnaseq immune by construction), stream-decompress to uncompressed `.fa` + retry; CRAM↔BAM conversion is the deferred second half**; **opt-in heartbeat stall watchdog shipped (Unreleased): `--detect-stalls`/`--stall-timeout` (default 3600 s, OFF by default) supervise the child over a composite `trace.txt`/`.nextflow.log`/`run.log` heartbeat, terminate a stalled run's process group, and make `no_progress` reachable by the detector for the first time — honest limits: never observed on a real run, uncalibrated window, no real Nextflow in CI, Nextflow-only, not persisted to the launch manifest (D4)**; bwa-mem2/classic-BWA build+redirect, assembly-signature + exhaustive per-assembly alias completeness, stall-window calibration + on-by-default pending) | Unattended-completion rate, corpus fuel |
+| C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; per-contig alias harmonization (mito `M`↔`MT` + GRCh38 scaffold seed) shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); peak-RSS-informed OOM memory scaling shipped (Unreleased, honest two-tier: own-peak → blind fallback; sibling rescue deferred); walltime-informed `time_limit` scaling shipped (Unreleased, floored at blind — censored realtime, tail-only win + field instrument); **input-format-conversion class's first slice shipped (Unreleased): bgzip'd (non-BGZF) reference FASTA self-heal, sarek-scoped (rnaseq immune by construction), stream-decompress to uncompressed `.fa` + retry; CRAM↔BAM conversion is the deferred second half**; **opt-in heartbeat stall watchdog shipped (Unreleased): `--detect-stalls`/`--stall-timeout` (default 3600 s, OFF by default) supervise the child over a composite `trace.txt`/`.nextflow.log`/`run.log` heartbeat, terminate a stalled run's process group, and make `no_progress` reachable by the detector for the first time — honest limits: never observed on a real run, uncalibrated window, no real Nextflow in CI, Nextflow-only, not persisted to the launch manifest (D4)**; **stale-index rebuild slice shipped (Unreleased): an index older than the data it indexes (htslib `hts_idx_load3` family) classifies `missing_index` via a freshness-anchored branch ordered before the generic missing-index branch (confidence 0.85), rebuilt into scratch via a symlinked source + the unchanged `_INDEX_BUILD` table and atomically swapped (same-dir dot-temp fallback on cross-device) — user's file never half-written, build-once, honest give-ups, `built_index_and_retried` with mtime+argv detail; golden `stale-bai` corpus case + `stale-index-heal` heal-guard scenario (21 scenarios, covered_classes 15, baseline refrozen 4afc3513…); honest scope: push not demand-pull, needle reasoned not observed, `.fai` covered defensively (samtools silently rebuilds a stale `.fai` — hard-fail surface is `.bai`/`.csi`/`.tbi`); no signature break**; bwa-mem2/classic-BWA build+redirect, assembly-signature + exhaustive per-assembly alias completeness, stall-window calibration + on-by-default pending) | Unattended-completion rate, corpus fuel |
 | C3 | Biological-plausibility verification | SHIPPED v0.3.0 (germline) + RNA-seq (v0.6.0) + single-cell ingestion (Unreleased) + germline sex-check (Unreleased) + RNA-seq mapping-composition (Unreleased) + germline variant-count (Unreleased) + germline plausibility FAIL-severity (Unreleased) + somatic empty-call-set FAIL floor (Unreleased) + RNA-seq plausibility ingestion fix (Unreleased) | Verdict gets smarter about biology (germline Ti/Tv, het/hom, sex-check, variant-count band — germline Ti/Tv, het/hom, and variant-count now **FAIL** on gross implausibility via WES-safe bands; somatic `variant_count` now **FAILs** on an empty call set; a FAIL verdict reaches the exit code only under the opt-in `--fail-on-verdict`; RNA-seq `duplication_rate` now correctly keyed to MultiQC's `PERCENT_DUPLICATION`/a 0-1 fraction — informational-only, no band by design — after never once firing under its old wrong key/unit; `rRNA` remains a guessed slug, WARN-capped; + exonic/intronic/unassigned read-composition from RSeQC read_distribution; single-cell cell-QC now *fires* via STARsolo/Cell Ranger ingestion — was a dormant no-op; gene-body-coverage/mito/doublet deferred; **somatic-VAF and RNA-seq FAIL severity declined by design, not deferred** — tumor VAF's expectation depends on unobserved purity/clonality, and every RNA-seq extreme is a legitimate protocol; annotation-pack FAIL severity is a separate C7 item, still deferred) |
 | C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased) + Strelka2-native VAF slice (Unreleased) + empty-call-set FAIL floor (Unreleased — `somatic_variant_count fail_below: 1`; **VAF/PON FAIL bands declined by design, not deferred**: tumor VAF depends on unobserved purity/clonality, `strelka_median_vaf` is bounded to [0,1] so a ceiling is dead code, `pon_applied` is a non-numeric 3-state string) + swapped-pair smell-test slice (Unreleased — `normal_median_vaf`, the median VAF over the Mutect2 VCF's NORMAL column via a new never-guessing `##normal_sample=` resolver, WARN-capped at `warn_above: 0.30`, UNVERIFIED-when-unresolvable; a *smell*, not a determination — swap, mislabel, and tumor-in-normal contamination give the same number and the message names all three; the call-set-depleting form of a swap is already covered by the `fail_below: 1` floor); PON reference wiring deferred | Breadth, depth-first, new corpus |
 | C5 | Reference and input-data integrity | M5 (reference-identity **capture** slice shipped — explicit `sha256` + iGenomes key-only, rendered in methods/panel; pre-flight **mismatch detector**, known-sites, GTF version, RO-Crate pending) | Kills a silent-failure class, deepens reproduce |
