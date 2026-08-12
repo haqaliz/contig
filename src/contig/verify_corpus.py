@@ -77,9 +77,16 @@ _FAMILY_PACKS: dict[str, list[dict]] = {
     "mag": MAG_RULE_PACK,
 }
 
-# The concordance families (PRD R4a: capture deferred, status DERIVATION in
-# scope) re-derive status from stored signal values -- {"value", "n_shared"}
-# per sample -- under the modules' current thresholds, one family per kind.
+# The concordance families (PRD R4a) re-derive status from stored signal
+# values -- {"value", "n_shared"} per sample -- under the modules' current
+# thresholds, one family per kind. Capture is SHIPPED for
+# `concordance_somatic_overlap` and `concordance_consequence` (runner.py
+# `_discover_qc`, wired v0.53.0) and still deferred for `concordance_spearman`
+# (RNA-seq/single-cell) and `concordance_genotype` (germline): their second
+# call set / count matrix exists only at `contig verify` time (user-supplied
+# or autorun), not in the run dir. Revisit the day a second set is
+# run-dir-derivable for those assays, or a verify-time capture channel that
+# does not break the signed payload.
 _CONCORDANCE_FAMILY_KINDS: dict[str, str] = {
     "concordance_spearman": "spearman",
     "concordance_genotype": "genotype",
