@@ -209,6 +209,8 @@ def evaluate_strelka_vaf_plausibility(
     snv_vcf: str | os.PathLike | None = None,
     indel_vcf: str | os.PathLike | None = None,
     sample: str | None = None,
+    *,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list[QCResult]:
     """Evaluate the Strelka2 tumor-VAF plausibility rule, capped at WARN.
 
@@ -237,6 +239,12 @@ def evaluate_strelka_vaf_plausibility(
 
     The sample label is ``sample`` if given, else the literal ``TUMOR`` column
     name when one was found in either VCF, else ``"sample"``.
+
+    `capture_metrics` is an optional out-param for the pre-band verification
+    inputs capture (PRD R4a): when passed, it is populated with
+    `{sample label: {"strelka_median_vaf": value}}` when the median is
+    computable, keyed by the same label the `<check>:<sample>` naming uses.
+    Additive and back-compat: absent, behavior is exactly as before.
     """
     median, tumor_found = strelka_median_vaf(snv_vcf, indel_vcf)
     label = sample or ("TUMOR" if tumor_found else None) or "sample"
@@ -245,6 +253,8 @@ def evaluate_strelka_vaf_plausibility(
     computable = {
         metric: value for metric, value in by_metric.items() if value is not None
     }
+    if capture_metrics is not None:
+        capture_metrics[label] = computable
 
     results = [
         result.model_copy(update={"message": f"Strelka2: {result.message}"})

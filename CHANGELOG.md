@@ -6,6 +6,39 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **The C6 fold-in's R4a deferral closes: the four run-dir-derived corroboration
+  families are now captured into `RunRecord.verification_inputs`.** The v0.51.0 fold-in
+  deferred concordance-family capture and left the somatic/annotation plausibility
+  gaps open — this slice captures **all four** from the run dir at `_discover_qc` time
+  (`somatic_plausibility`, `annotation_plausibility`, `concordance_somatic_overlap`,
+  `concordance_consequence`), each via the evaluator's `capture_metrics` out-param
+  mirroring the germline `capture_metrics` precedent: the pre-band metric dicts the
+  checks are derived from, keyed by the verify-corpus scorer's family names, written
+  into `verification_inputs` after all the calls (additive, back-compat, absent the
+  parameter nothing is collected). The somatic evaluators share a single tumor sample
+  label, so each fills its own out-param dict and the family dict is merged below —
+  the evaluators assign, never merge, per sample key. The verify-corpus scorer pins the
+  round-trip: capture → `pending_verify_corpus.jsonl` → promote replays through the
+  scorer's family-key enumeration (`concordance_somatic_overlap` /
+  `concordance_consequence` re-derive from stored `{"value", "n_shared"}` signals under
+  the modules' current thresholds, one family per kind), with round-trip and per-kind
+  status-consistency pins plus a family-key enumeration pin.
+  - **Guards unmoved, no baseline refreeze:** `verify-guard` stays at **95.5%**,
+    `eval-guard` at **92.9%**, `heal-guard` at **100%** — the capture is additive and
+    never moves the guarded number, so no `verify_baseline.json` /
+    `holdout_baseline.json` / `heal_baseline.json` change.
+  - **Read honestly.** Concordance remains **WARN-only** in the verdict, low-`n_shared`
+    still re-derives **unverified** (never a false pass), capture never alters any QC
+    result or the signed record — no signature break, no new dependency. The honest
+    limits persist: germline (`concordance_genotype`) and RNA-seq/single-cell
+    (`concordance_spearman`) concordance capture **remains deferred** — their second
+    call set / count matrix exists only at `contig verify` time (user-supplied or
+    autorun), not in the run dir — with the committed revisit trigger: the day a
+    second set is run-dir-derivable for those assays, or a verify-time capture channel
+    that does not break the signed payload. No real nf-core in CI.
+
 ## [0.52.0] - 2026-08-09
 
 ### Added

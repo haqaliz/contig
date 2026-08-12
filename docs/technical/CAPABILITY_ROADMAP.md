@@ -105,8 +105,11 @@ shared genes, never changes the exit code; a located-but-unparseable matrix is o
 `sc_count_concordance` UNVERIFIED, an `.h5ad`-only run skips. Pure-stdlib (no `anndata`/`h5py`),
 `filtered/`-over-`raw/` primary preference. **Deferred:** `.h5ad` parsing (dependency-gated);
 cell-count and cluster-stability agreement (need a downstream clustering step Contig doesn't run);
-FAIL severity on calibrated bands; a dashboard "corroborated by" line. (The second-quantifier
-**autorun** has since shipped — see the single-cell autorun slice below.)
+FAIL severity on calibrated bands; a dashboard "corroborated by" line. (The
+second-quantifier **autorun** has since shipped — see the single-cell autorun slice
+below.) *(The pre-band capture prerequisite for calibration shipped in the
+`eval-concordance-capture` slice — calibration itself remains gated on real-run
+accumulation.)*
 
 **Shipped (single-cell autorun slice — Unreleased).** The single-cell concordance axis is now
 turnkey: `contig verify --concordance-sc-counts-auto --reads <sheet> --index <STAR genome dir>
@@ -714,7 +717,9 @@ never a clinical determination), and round-tripped through reproduce with
 back-compat. At most WARN, never FAIL, never changes the exit code. **Deferred:**
 reported-vs-inferred concordance (needs a sample-sheet sex column — so this slice
 catches only cross-sex swaps and aneuploidy), per-sample multi-sample sex,
-FAIL severity on calibrated bands, and a dashboard card.
+FAIL severity on calibrated bands, and a dashboard card. *(The pre-band capture
+prerequisite for calibration shipped in the `eval-concordance-capture` slice —
+calibration itself remains gated on real-run accumulation.)*
 
 **Shipped (germline variant-count slice, Unreleased).** The germline verdict now
 catches a grossly-off **call-set size** — a near-zero count from failed/truncated
@@ -1233,7 +1238,19 @@ guarded number is over a **synthetic, self-graded** seed; the corpus only become
 non-tautological as real runs are labeled through the promote channel (band-sensitive by
 construction — a mutation control pins that a band change flips a stored value's verdict);
 concordance-family *capture* remains deferred (PRD R4a); the dashboard trend card is a
-deferred nice-to-have.)*
+deferred nice-to-have.)* *(Superseded a fourth time by the `eval-concordance-capture`
+slice (Unreleased): the R4a deferral now **closes for the run-dir-derived families** —
+`somatic_plausibility`, `annotation_plausibility`, `concordance_somatic_overlap`, and
+`concordance_consequence` are captured into `RunRecord.verification_inputs` straight
+from `_discover_qc` (the two plausibility capture gaps close with them), guarded by
+round-trip / per-kind status-consistency / family-key enumeration pins; the guards did
+not move (95.5% / 92.9% / 100%, no baseline refreeze). `concordance_spearman`
+(RNA-seq/single-cell) and `concordance_genotype` (germline) capture **remains
+deferred**: their second call set / count matrix exists only at `contig verify` time
+(user-supplied or autorun), not in the run dir — S1 revisit trigger, the day a second
+set is run-dir-derivable for those assays or a verify-time capture channel arrives that
+does not break the signed payload. The dashboard trend card is still a deferred
+nice-to-have.)*
 
 **Both guards moved for the first time (heartbeat stall watchdog slice — Unreleased).**
 The C2 stall-watchdog slice above made `no_progress` emittable by the `rules` detector,

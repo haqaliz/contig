@@ -293,12 +293,14 @@ def _discover_qc(
     somatic VAF/count/PON), each gated to its own assay.
 
     `capture_inputs` is an optional out-param for the pre-band verification
-    inputs capture (C6 fold-in, PRD R4): when passed, it is populated with the
-    same metric dicts the checks here are derived from, keyed by the
+    inputs capture (C6 fold-in, PRD R4/R4a): when passed, it is populated with
+    the same metric dicts the checks here are derived from, keyed by the
     verify-corpus scorer's family names (`multiqc`, `rnaseq_plausibility`,
     `rnaseq_composition`, `scrnaseq`, `methylseq`, `ampliseq`, `mag`,
-    `germline`). Additive and back-compat: the return shape is unchanged, and
-    absent the parameter nothing is collected.
+    `germline`, and the R4a families `somatic_plausibility`,
+    `concordance_somatic_overlap`, `annotation_plausibility`,
+    `concordance_consequence`). Additive and back-compat: the return shape is
+    unchanged, and absent the parameter nothing is collected.
     """
     results: list[QCResult] = []
     multiqc = next(run_dir.glob("**/multiqc_data.json"), None)
@@ -363,10 +365,16 @@ def _discover_qc(
             evaluate_annotation_structural,
         )
 
+        annotation_plausibility_capture: dict[str, dict[str, float]] = {}
+        annotation_concordance_capture: dict[str, dict[str, float]] = {}
         for vcf in sorted(run_dir.rglob("*.vcf.gz")):
             if annotation_metrics(vcf).info_key is not None:
                 results.extend(evaluate_annotation_structural(vcf))
-                results.extend(evaluate_annotation_plausibility(vcf))
+                results.extend(
+                    evaluate_annotation_plausibility(
+                        vcf, capture_metrics=annotation_plausibility_capture
+                    )
+                )
                 break
         # Cross-tool VEP-vs-SnpEff annotation concordance (capability C7 M4):
         # auto-discovers the annotation source(s) under the run (single-vcf-both
@@ -375,7 +383,17 @@ def _discover_qc(
         # cross-caller concordance auto-wiring below. Clean `[]` skip when no
         # annotated VCF is found at all; honest UNVERIFIED (never a false pass)
         # when only one annotator ran or the layout is ambiguous.
-        results.extend(evaluate_annotation_concordance_from_run(run_dir))
+        results.extend(
+            evaluate_annotation_concordance_from_run(
+                run_dir, capture_metrics=annotation_concordance_capture
+            )
+        )
+        if capture_inputs is not None and annotation_plausibility_capture:
+            capture_inputs["annotation_plausibility"] = {
+                s: m for s, m in annotation_plausibility_capture.items() if m
+            }
+        if capture_inputs is not None and annotation_concordance_capture:
+            capture_inputs["concordance_consequence"] = annotation_concordance_capture
     # Somatic biological-plausibility checks (capability C4 follow-on): VAF
     # distribution, somatic variant count, and panel-of-normals presence, all
     # computed from the tumor column of the Mutect2 VCF. Gated strictly to the
@@ -387,6 +405,20 @@ def _discover_qc(
         pattern = manifest_for("somatic_variant_calling").required[0]  # "*.vcf.gz"
         vcfs = sorted(p for p in run_dir.rglob(pattern) if p.is_file())
         if vcfs:
+            # R4a capture out-params: the pre-band metric dicts these checks are
+            # derived from, written into `capture_inputs` after all the calls
+            # below (guarded exactly like the germline capture precedent). The
+            # three plausibility evaluators each capture under their own sample
+            # label (tumor, normal, strelka-TUMOR) -- but two of them can share
+            # the SAME tumor sample label, so each evaluator fills its own
+            # out-param dict and the family dict is merged below (the evaluators
+            # assign, not merge, per sample key -- sharing one dict would
+            # clobber the tumor metrics).
+            somatic_plausibility_capture: dict[str, dict[str, float]] = {}
+            somatic_concordance_capture: dict[str, dict[str, float]] = {}
+            tumor_capture: dict[str, dict[str, float]] = {}
+            swap_capture: dict[str, dict[str, float]] = {}
+            strelka_capture: dict[str, dict[str, float]] = {}
             # Match "mutect2" as a path COMPONENT below the run dir (sarek writes the
             # VCF under a `mutect2/` directory), not as a substring of the absolute
             # path — otherwise a "mutect2" in an ancestor workspace/run-id name would
@@ -400,7 +432,11 @@ def _discover_qc(
                 None,
             )
             if mutect2 is not None:
-                results.extend(evaluate_somatic_plausibility(mutect2))
+                results.extend(
+                    evaluate_somatic_plausibility(
+                        mutect2, capture_metrics=tumor_capture
+                    )
+                )
                 # Tumor/normal swap smell test (swap-verdict, C4 follow-on):
                 # reads the same Mutect2 VCF's NORMAL column (##normal_sample=)
                 # for an implausibly high median VAF -- the somatic signal
@@ -408,7 +444,9 @@ def _discover_qc(
                 # heavily contaminated pair. WARN-capped (no fail_*) and
                 # UNVERIFIED-when-unresolvable, so it can never change the
                 # exit code or silently drop.
-                results.extend(evaluate_swap_plausibility(mutect2))
+                results.extend(
+                    evaluate_swap_plausibility(mutect2, capture_metrics=swap_capture)
+                )
             else:
                 results.append(
                     QCResult(
@@ -425,7 +463,11 @@ def _discover_qc(
             # appended after, and independent of, VAF plausibility above — it
             # reuses the same globbed VCF list but self-selects both callers'
             # files and skips cleanly (or reports UNVERIFIED) on its own terms.
-            results.extend(evaluate_somatic_concordance_from_run(run_dir, vcfs))
+            results.extend(
+                evaluate_somatic_concordance_from_run(
+                    run_dir, vcfs, capture_metrics=somatic_concordance_capture
+                )
+            )
             # Strelka2 tumor-VAF plausibility (capability C4 follow-on, PRD S1):
             # mirrors the Mutect2 median_vaf gate above, but sourced from
             # Strelka2's own tier-count VAF definition (AU/CU/GU/TU for SNVs,
@@ -445,7 +487,11 @@ def _discover_qc(
             if strelka:
                 snv = next((p for p in strelka if "snv" in p.name.lower()), None)
                 indel = next((p for p in strelka if "indel" in p.name.lower()), None)
-                results.extend(evaluate_strelka_vaf_plausibility(snv, indel))
+                results.extend(
+                    evaluate_strelka_vaf_plausibility(
+                        snv, indel, capture_metrics=strelka_capture
+                    )
+                )
             elif strelka_reason is not None and any(
                 "strelka" in {part.lower() for part in p.relative_to(run_dir).parts}
                 for p in vcfs
@@ -461,6 +507,27 @@ def _discover_qc(
                         value=None,
                         kind="metric",
                     )
+                )
+            # R4a capture writes, after all the checks above have populated the
+            # out-params: the three plausibility dicts are merged into the family
+            # dict by sample label (evaluators assign per sample key), empty
+            # sample dicts are filtered (rnaseq_composition precedent), and the
+            # concordance family is only written when the concordance actually
+            # ran (both callers present).
+            if capture_inputs is not None:
+                for captured in (tumor_capture, swap_capture, strelka_capture):
+                    for sample, metrics in captured.items():
+                        if metrics:
+                            somatic_plausibility_capture.setdefault(sample, {}).update(
+                                metrics
+                            )
+            if capture_inputs is not None and somatic_plausibility_capture:
+                capture_inputs["somatic_plausibility"] = {
+                    s: m for s, m in somatic_plausibility_capture.items() if m
+                }
+            if capture_inputs is not None and somatic_concordance_capture:
+                capture_inputs["concordance_somatic_overlap"] = (
+                    somatic_concordance_capture
                 )
     # RNA-seq biological-plausibility checks (capability C3, RNA-seq slice, Phase 3).
     # Gated: only when the assay is rnaseq AND a MultiQC report was found. One extra
