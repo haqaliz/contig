@@ -250,7 +250,10 @@ def annotation_plausibility_metrics(
 
 
 def evaluate_annotation_plausibility(
-    vcf_path: str | os.PathLike, label: str = "sample"
+    vcf_path: str | os.PathLike,
+    label: str = "sample",
+    *,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list[QCResult]:
     """Evaluate the annotation plausibility rules over a VCF, capped at WARN.
 
@@ -261,6 +264,15 @@ def evaluate_annotation_plausibility(
     evaluate() only sees computable metrics, so each rule whose metric is None
     gets an explicit "unverified" QCResult here instead (never a false pass).
     Every result is kind "metric".
+
+    `capture_metrics` is an optional out-param for the pre-band verification
+    inputs capture (PRD R4): when passed, it is populated with
+    `{label: {metric: value}}` for the COMPUTABLE metrics keyed by the rule
+    "metric" slugs (the uncomputable metrics are omitted -- they carry no
+    value to re-derive from). The sample key is `label`, the same convention
+    the check names use ("<check>:<label>"), defaulting to "sample" like the
+    germline capture's default sample name. Additive and back-compat: absent,
+    behavior is exactly as before.
     """
     metrics = annotation_plausibility_metrics(vcf_path)
 
@@ -271,6 +283,8 @@ def evaluate_annotation_plausibility(
     computable = {
         metric: value for metric, value in by_metric.items() if value is not None
     }
+    if capture_metrics is not None:
+        capture_metrics[label] = computable
 
     results = evaluate({label: computable}, ANNOTATION_PLAUSIBILITY_PACK)
 

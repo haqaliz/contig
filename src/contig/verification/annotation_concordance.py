@@ -159,6 +159,7 @@ def evaluate_consequence_concordance(
     layout: str,
     label_a: str = "vep",
     label_b: str = "snpeff",
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list[QCResult]:
     """Emit the one consequence-concordance check between VEP and SnpEff.
 
@@ -166,8 +167,27 @@ def evaluate_consequence_concordance(
     `_MIN_SHARED_VARIANTS` sites (too few to corroborate anything); otherwise
     WARN below `_WARN_BELOW`, PASS at/above it. Never FAIL. Always
     `kind="concordance"`.
+
+    `capture_metrics` is an optional out-param for the pre-band verification
+    inputs capture (PRD R4): when passed, it is populated with
+    `{"vep_vs_snpeff": {"value": <raw agreement>, "n_shared": float(shared)}}`
+    on BOTH the normal and the too-few-shared-variants paths (a low shared
+    count still captures -- the raw values re-derive to unverified downstream;
+    `n_shared` is float because the verification_inputs contract is
+    float-valued). Additive and back-compat: absent, behavior is exactly as
+    before.
     """
     shared = set(vep_map) & set(snpeff_map)
+    matches = sum(vep_map[k] == snpeff_map[k] for k in shared)
+    # An empty shared set has no agreement to compute (never raise); with
+    # n_shared 0.0 the downstream re-derivation is unverified either way.
+    raw = matches / len(shared) if shared else 0.0
+
+    if capture_metrics is not None:
+        capture_metrics["vep_vs_snpeff"] = {
+            "value": raw,
+            "n_shared": float(len(shared)),
+        }
 
     if len(shared) < _MIN_SHARED_VARIANTS:
         return [
@@ -182,8 +202,6 @@ def evaluate_consequence_concordance(
             )
         ]
 
-    matches = sum(vep_map[k] == snpeff_map[k] for k in shared)
-    raw = matches / len(shared)
     status = "warn" if raw < _WARN_BELOW else "pass"
     fraction = round(raw, 4)
     return [
@@ -468,19 +486,22 @@ def _evaluate_both_metrics(
     snpeff_path: str | os.PathLike,
     *,
     layout: str,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list[QCResult]:
     vep_cons = parse_consequences(vep_path, "CSQ")
     snpeff_cons = parse_consequences(snpeff_path, "ANN")
     vep_syms = parse_symbols(vep_path, "CSQ")
     snpeff_syms = parse_symbols(snpeff_path, "ANN")
     return evaluate_consequence_concordance(
-        vep_cons, snpeff_cons, layout=layout
+        vep_cons, snpeff_cons, layout=layout, capture_metrics=capture_metrics
     ) + evaluate_gene_symbol_concordance(vep_syms, snpeff_syms)
 
 
 def evaluate_annotation_concordance_from_run(
     run_dir: str | os.PathLike,
     vcfs: Iterable[str | os.PathLike] | None = None,
+    *,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list[QCResult]:
     """Discover VEP/SnpEff annotation under a run dir and evaluate BOTH
     concordance metrics (consequence + gene-symbol) against each other.
@@ -496,11 +517,20 @@ def evaluate_annotation_concordance_from_run(
     2. two-file: split the remaining candidates by declared key.
        - exactly one on each side -> use them directly.
        - one side EMPTY (only one annotator ran) -> `_one_annotator_only`.
-       - multiple on a side -> path-component tie-break SECONDARY (a `vep` /
-         `snpeff` path component below `run_dir`, mirroring
-         `select_caller_vcfs`'s caller-name match); exactly one each after
-         that -> use them; otherwise `_ambiguous_layout` (never an arbitrary
-         pick).
+        - multiple on a side -> path-component tie-break SECONDARY (a `vep` /
+          `snpeff` path component below `run_dir`, mirroring
+          `select_caller_vcfs`'s caller-name match); exactly one each after
+          that -> use them; otherwise `_ambiguous_layout` (never an arbitrary
+          pick).
+
+    `capture_metrics` is the optional out-param for the pre-band verification
+    inputs capture (PRD R4): when passed, it is forwarded to
+    `evaluate_consequence_concordance`, which populates it on the computable
+    layouts. The `_one_annotator_only` and `_ambiguous_layout` paths write
+    NOTHING (honest absence -- there is no VEP-vs-SnpEff signal to capture).
+    `evaluate_gene_symbol_concordance` is deliberately NOT captured (no scorer
+    family for it). Additive and back-compat: absent, behavior is exactly as
+    before.
     """
     run_dir = Path(run_dir)
     candidate_paths = [
@@ -514,7 +544,9 @@ def evaluate_annotation_concordance_from_run(
 
     both = next((v for v, keys in keyed if keys == {"CSQ", "ANN"}), None)
     if both is not None:
-        return _evaluate_both_metrics(both, both, layout="single-vcf-both")
+        return _evaluate_both_metrics(
+            both, both, layout="single-vcf-both", capture_metrics=capture_metrics
+        )
 
     vep_candidates = [v for v, keys in keyed if "CSQ" in keys]
     snpeff_candidates = [v for v, keys in keyed if "ANN" in keys]
@@ -525,7 +557,10 @@ def evaluate_annotation_concordance_from_run(
 
     if len(vep_candidates) == 1 and len(snpeff_candidates) == 1:
         return _evaluate_both_metrics(
-            vep_candidates[0], snpeff_candidates[0], layout="two-file"
+            vep_candidates[0],
+            snpeff_candidates[0],
+            layout="two-file",
+            capture_metrics=capture_metrics,
         )
 
     def _has_component(p: Path, name: str) -> bool:
@@ -535,7 +570,10 @@ def evaluate_annotation_concordance_from_run(
     snpeff_disambiguated = [v for v in snpeff_candidates if _has_component(v, "snpeff")]
     if len(vep_disambiguated) == 1 and len(snpeff_disambiguated) == 1:
         return _evaluate_both_metrics(
-            vep_disambiguated[0], snpeff_disambiguated[0], layout="two-file"
+            vep_disambiguated[0],
+            snpeff_disambiguated[0],
+            layout="two-file",
+            capture_metrics=capture_metrics,
         )
 
     return _ambiguous_layout(len(vep_candidates), len(snpeff_candidates))
