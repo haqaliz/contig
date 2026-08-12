@@ -330,7 +330,10 @@ def _pon_status(header_lines: list[str]) -> tuple[str, str]:
 
 
 def evaluate_somatic_plausibility(
-    vcf_path: str | os.PathLike, sample: str | None = None
+    vcf_path: str | os.PathLike,
+    sample: str | None = None,
+    *,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list[QCResult]:
     """Evaluate the somatic plausibility rules over a VCF.
 
@@ -362,6 +365,14 @@ def evaluate_somatic_plausibility(
 
     The sample label is the resolved tumor sample name (from the header), or
     "sample" when the tumor cannot be identified.
+
+    `capture_metrics` is an optional out-param for the pre-band verification
+    inputs capture (PRD R4a): when passed, it is populated with
+    `{sample label: {metric: value}}` for the COMPUTABLE metrics (a None
+    median_vaf is omitted -- no value to re-derive from). Keyed by the same
+    label the `<check>:<sample>` naming uses; `pon_applied` is never captured
+    (non-numeric). Additive and back-compat: absent, behavior is exactly as
+    before.
     """
     metrics = somatic_metrics(vcf_path)
     header_lines = _header_lines(vcf_path)
@@ -374,6 +385,8 @@ def evaluate_somatic_plausibility(
     computable = {
         metric: value for metric, value in by_metric.items() if value is not None
     }
+    if capture_metrics is not None:
+        capture_metrics[label] = computable
 
     results = evaluate({label: computable}, SOMATIC_PLAUSIBILITY_PACK)
 
@@ -416,7 +429,10 @@ def evaluate_somatic_plausibility(
 
 
 def evaluate_swap_plausibility(
-    vcf_path: str | os.PathLike, sample: str | None = None
+    vcf_path: str | os.PathLike,
+    sample: str | None = None,
+    *,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list[QCResult]:
     """Evaluate the normal-column swap plausibility rule, capped at WARN.
 
@@ -452,6 +468,12 @@ def evaluate_swap_plausibility(
 
     The sample label is ``sample`` if given, else the resolved
     ``##normal_sample=`` name, else ``"sample"``.
+
+    `capture_metrics` is an optional out-param for the pre-band verification
+    inputs capture (PRD R4a): when passed, it is populated with
+    `{sample label: {"normal_median_vaf": value}}` when the median is
+    computable, keyed by the same label the `<check>:<sample>` naming uses.
+    Additive and back-compat: absent, behavior is exactly as before.
     """
     median, normal_name = normal_median_vaf(vcf_path)
     label = sample or normal_name or "sample"
@@ -460,6 +482,8 @@ def evaluate_swap_plausibility(
     computable = {
         metric: value for metric, value in by_metric.items() if value is not None
     }
+    if capture_metrics is not None:
+        capture_metrics[label] = computable
 
     results = [
         result.model_copy(
