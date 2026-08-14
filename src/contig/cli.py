@@ -81,6 +81,17 @@ from contig.verify_corpus import (
     save_verify_baseline,
     snapshot_from_verify_report,
 )
+from contig.reproduce_guard import (
+    compare_reproduce_to_baseline,
+    default_reproduce_baseline_path,
+    default_reproduce_history_path,
+    default_reproduce_scenarios_path,
+    evaluate_reproduce,
+    load_reproduce_baseline,
+    load_reproduce_scenarios,
+    save_reproduce_baseline,
+    snapshot_from_reproduce_report,
+)
 from contig.bundle import compute_output_checksums, compute_tree_sha256, write_reproduce_bundle
 from contig.cost import cost_report
 from contig.signing import generate_keypair, signing_available, verify_signature
@@ -92,6 +103,7 @@ from contig.models import (
     ExecutionTarget,
     HealSnapshot,
     LaunchManifest,
+    ReproduceSnapshot,
     RunRecord,
     RunSummary,
     VerifySnapshot,
@@ -3065,6 +3077,181 @@ def verify_guard(
         typer.echo(
             f"verify-guard PASS: verdict-match {result.verdict_match_rate:.1%} "
             f"≥ baseline {result.baseline_rate:.1%}."
+        )
+
+
+@app.command(name="reproduce-guard")
+def reproduce_guard(
+    scenarios: str = typer.Option(None, "--scenarios", help="Reproduce scenario JSONL (defaults to the shipped synthetic set)."),
+    baseline: str = typer.Option(None, "--baseline", help="Baseline JSON (defaults to the shipped one)."),
+    tolerance: float = typer.Option(1e-9, "--tolerance", help="Float tolerance; outcome-match rate below (baseline - tolerance) is a regression."),
+    update_baseline: bool = typer.Option(False, "--update-baseline", help="(Re)freeze the baseline to the current outcome-match rate. Deliberate, reviewed act."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the guard snapshot as JSON."),
+    snapshot: bool = typer.Option(False, "--snapshot", help="Append this guard run to the reproduce outcome-match trend (C6 fold-in)."),
+    show_history: bool = typer.Option(False, "--history", help="Print the recorded reproduce outcome-match trend instead of guarding. Ignores --snapshot."),
+    history_file: str = typer.Option(None, "--history-file", help="Reproduce outcome-match history JSONL (defaults to the shipped one)."),
+) -> None:
+    """Guard the reproduce loop's per-scenario outcome-match rate against a frozen synthetic scenario set (C6 fold-in).
+
+    Replays `evaluate_reproduce` -- the REAL run_reproduction loop (real
+    load_claims, real classify, real locators, real freshness guard) with only
+    the executor/installer seams scripted -- over a frozen scenario corpus and
+    compares the outcome-match rate to a committed baseline, exiting non-zero
+    on a real regression so a change to the loop, a locator, or the freshness
+    guard never silently starts diverging from a scenario's declared outcome.
+    `--update-baseline` deliberately (re)freezes the baseline instead of
+    guarding; that always exits 0. With --snapshot the result is also appended
+    to the committed reproduce trend; with --history the recorded trend is
+    printed instead.
+
+    Honest scope: the number is over **14 SYNTHETIC, self-graded scenarios**
+    (we author the fixtures we grade -- same disclosure as every prior eval
+    slice). The corpus only becomes non-tautological as real runs feed it
+    through the pending-capture/promote channel. The seed deliberately carries
+    ONE known-miss scenario (expected DIVERGED on an exact match) that the
+    current loop gets wrong, so the committed baseline is 13/14 -- below 1.0,
+    the guard's liveness demonstration.
+    """
+    scenarios_path = Path(scenarios) if scenarios else default_reproduce_scenarios_path()
+    baseline_path = Path(baseline) if baseline else default_reproduce_baseline_path()
+    history_path = Path(history_file) if history_file else default_reproduce_history_path()
+
+    if show_history:
+        history = load_jsonl(ReproduceSnapshot, history_path)
+        if json_out:
+            typer.echo("[" + ",".join(s.model_dump_json() for s in history) + "]")
+            return
+        if not history:
+            typer.echo(f"No reproduce outcome-match snapshots recorded yet in {history_path}.")
+            return
+        _print_trend(
+            [(s.timestamp, s.outcome_match_rate,
+              f"outcome-match {s.outcome_match_rate:.1%}  ({s.scenario_count} scenarios)  "
+              f"recovery {round(s.recovery_rate * s.scenario_count)}/{s.scenario_count}",
+              s.contig_version or "unknown") for s in history],
+            title="Reproduce outcome-match over time:",
+        )
+        return
+
+    try:
+        scenarios_list = load_reproduce_scenarios(scenarios_path)
+    except FileNotFoundError:
+        typer.echo(f"Reproduce scenarios not found: {scenarios_path}", err=True)
+        raise typer.Exit(code=1)
+
+    report = evaluate_reproduce(scenarios_list)
+    corpus_sha = sha256_file(scenarios_path)
+
+    if update_baseline:
+        snap = snapshot_from_reproduce_report(
+            report,
+            corpus_sha=corpus_sha,
+            contig_version=_pkg_version("contig"),
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+        save_reproduce_baseline(snap, baseline_path)
+        append_jsonl(snap, history_path)
+        typer.echo(
+            f"Baseline updated: outcome-match {report['outcome_match_rate']:.1%} over "
+            f"{report['total_count']} reproduce scenarios; recovery "
+            f"{report['healed_count']}/{report['total_count']}; "
+            f"covered: {', '.join(report['covered_families'])}"
+        )
+        return
+
+    if snapshot:
+        append_jsonl(
+            snapshot_from_reproduce_report(
+                report,
+                corpus_sha=corpus_sha,
+                contig_version=_pkg_version("contig"),
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            ),
+            history_path,
+        )
+
+    baseline_snapshot = load_reproduce_baseline(baseline_path)
+    snapshot_snap = snapshot_from_reproduce_report(
+        report,
+        corpus_sha=corpus_sha,
+        contig_version=_pkg_version("contig"),
+        timestamp=datetime.now(timezone.utc).isoformat(),
+    )
+
+    if json_out:
+        typer.echo(snapshot_snap.model_dump_json())
+
+    if baseline_snapshot is None:
+        typer.echo(
+            f"No reproduce-guard baseline at {baseline_path}; run 'contig reproduce-guard "
+            "--update-baseline' to freeze one.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    status, _ = compare_reproduce_to_baseline(
+        snapshot_snap,
+        baseline=baseline_snapshot,
+        tolerance=tolerance,
+    )
+
+    if snapshot_snap.corpus_sha != baseline_snapshot.corpus_sha:
+        typer.echo(
+            f"Scenario set changed (sha {snapshot_snap.corpus_sha[:12]} != baseline "
+            f"{baseline_snapshot.corpus_sha[:12]}); the delta crosses different sets — "
+            "refreeze with --update-baseline.",
+            err=True,
+        )
+
+    if snapshot_snap.contig_version != baseline_snapshot.contig_version:
+        typer.echo(
+            f"Contig version mismatch ({snapshot_snap.contig_version} != "
+            f"{baseline_snapshot.contig_version})",
+            err=True,
+        )
+
+    if not json_out:
+        delta_pp = (snapshot_snap.outcome_match_rate - baseline_snapshot.outcome_match_rate) * 100
+        typer.echo(
+            f"Reproduce-guard: outcome-match {snapshot_snap.outcome_match_rate:.1%} vs baseline "
+            f"{baseline_snapshot.outcome_match_rate:.1%} (delta {delta_pp:+.1f}pp) over "
+            f"{report['total_count']} scenarios; recovery {report['healed_count']}/{report['total_count']}"
+        )
+        for family in report["covered_families"]:
+            score = report["per_family"][family]
+            typer.echo(f"  {family}: {score.matched}/{score.total} ({score.rate:.1%})")
+        for res in report["scenario_results"]:
+            if res["matched"]:
+                continue
+            for key, (expected, observed) in sorted(res["mismatches"].items()):
+                typer.echo(
+                    f"  MISS {res['scenario_id']}: {key} expected {expected}, observed {observed}"
+                )
+
+    if status == "regressed":
+        mismatch_ids = ", ".join(
+            res["scenario_id"] for res in report["scenario_results"] if not res["matched"]
+        )
+        delta_pp = (snapshot_snap.outcome_match_rate - baseline_snapshot.outcome_match_rate) * 100
+        typer.echo(
+            f"REGRESSION: outcome-match {snapshot_snap.outcome_match_rate:.1%} below baseline "
+            f"{baseline_snapshot.outcome_match_rate:.1%} (delta {delta_pp:+.1f}pp): {mismatch_ids}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if status == "improved":
+        if not json_out:
+            typer.echo(
+                f"Reproduce-guard improved (outcome-match {snapshot_snap.outcome_match_rate:.1%} > baseline "
+                f"{baseline_snapshot.outcome_match_rate:.1%}); consider --update-baseline to lock it in."
+            )
+        return
+
+    if not json_out:
+        typer.echo(
+            f"reproduce-guard PASS: outcome-match {snapshot_snap.outcome_match_rate:.1%} "
+            f"≥ baseline {baseline_snapshot.outcome_match_rate:.1%}."
         )
 
 
