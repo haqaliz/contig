@@ -29,6 +29,10 @@ jobs:
       # verdict-match rate on the frozen synthetic holdout drops below the
       # committed baseline (verify_baseline.json).
       - run: uv run contig verify-guard
+      # C6 fold-in regression guard: fail the build if the reproduce loop's
+      # per-scenario outcome-match rate on the frozen synthetic scenario set
+      # drops below the committed baseline (reproduce_baseline.json).
+      - run: uv run contig reproduce-guard
 
   dashboard:
     name: Dashboard (tsc, lint, e2e)

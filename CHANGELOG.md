@@ -6,6 +6,40 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **The C6 fold-in now covers the reproduce track: `contig reproduce-guard` guards
+  the REAL reproduce loop's per-scenario outcome-match rate as the fourth C6 guard.**
+  A frozen `ReproduceScenario` set (`src/contig/data/reproduce_scenarios.jsonl`, **14
+  scenarios**) is replayed through the **real** `run_reproduction` loop — real
+  `load_claims`, real `classify`, real locators, real freshness guard — with only the
+  executor/installer seams scripted (`src/contig/reproduce_guard.py`). The seed covers
+  every locator family (`flat`/`json`/`table`/`pattern`/`notebook`) plus a
+  stale-artifact case and the env-resurrection heal (`installed_and_retried`, the
+  slice-2 repair) with its install-fail give-up. A scenario matches only when **every**
+  expected claim status, the expected repair outcome, and the expected exit code all
+  equal the replay. The committed baseline is honestly **13/14 (92.9%)**
+  (`src/contig/data/reproduce_baseline.json`) — the single mismatch is the deliberate
+  `known-miss` scenario (metadata only, never special-cased), the guard's liveness
+  demonstration that the number can sit below 1.0; `recovery_rate` (1/14) and per-family
+  rates ride along informational-only, never guarded. Flags mirror verify-guard exactly:
+  `--update-baseline` / `--snapshot` / `--history` / `--json` / `--tolerance`, with
+  `src/contig/data/reproduce_history.jsonl` as the append-only trend (currently empty).
+  Wired into CI immediately after `verify-guard` (`.github/workflows/ci.yml`).
+  - **Honest scope.** **Synthetic and self-graded**: we authored the 14 fixtures we
+    grade, and **no real repo, git, network, or pip appears in CI** — the executor and
+    installer are scripted and the run stamp is injected (one fixed `run_started_at` for
+    every replay, never wall-clock). This is **push, not demand-pull**: organic
+    reproduce-run volume is unmeasured and nothing here claims otherwise. The guarded
+    number is live only via the **anti-tautology mutation-control pin** (flipping an
+    expected or observed status flips the match — pinned by test), not via field data.
+    **It recovers nothing for a user** — it changes what CI guards, not what the engine
+    does. The **capture channel has NOT shipped**: capture of reproduce outcomes
+    (pending `ReproduceCase` + promote, the capture-promote aspect) remains the
+    **pending follow-on slice**, and the corpus only becomes non-tautological as real
+    runs feed it through that channel. And, per every prior C8 slice, a **real-repo
+    smoke test remains a manual post-merge gate**, not a CI step.
+
 ## [0.53.0] - 2026-08-12
 
 ### Added

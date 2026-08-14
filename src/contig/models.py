@@ -828,3 +828,81 @@ class ReproduceRecord(BaseModel):
     source_url: str | None = None
     source_commit: str | None = None
     source_tree_sha256: str | None = None
+
+
+# --- Reproduce-eval guard (C6 fold-in: reproduce-guard) ------------------------
+# A ReproduceScenario is a frozen replay of one `contig reproduce` run: the
+# command to run, the claims to extract, and a scripted executor/installer
+# trace, so the guard can replay it through the REAL `run_reproduction` loop
+# and guard the per-scenario outcome-match rate against a committed baseline,
+# exactly as verify-guard guards the verification rules. All new fields are
+# additive: bundles serialized before this fold-in load unchanged (the sibling
+# ReproduceRecord above is untouched).
+
+# Repair outcome literals mirror the env-resurrection RepairStep.outcome
+# strings; "none" is the no-repair baseline.
+RepairOutcome = Literal[
+    "none", "installed_and_retried", "install_failed", "retry_failed"
+]
+
+
+class ExecStep(BaseModel):
+    """One scripted executor call: rc + captured output + what it writes.
+
+    `write_results` is the content to write as the scenario's results file at
+    this step; `write_artifacts` are repo-relative path -> content. The
+    `artifact_mtimes` dict pins artifact freshness for the REAL freshness
+    guard (mtime >= run_started_at); a path absent from it is written with
+    mtime == run_started_at.
+    """
+
+    exit_code: int = 0
+    output: str = ""
+    write_results: dict | None = None
+    write_artifacts: dict[str, str] | None = None
+    artifact_mtimes: dict[str, float] | None = None
+
+
+class ReproduceScenario(BaseModel):
+    """One frozen replay of a `contig reproduce` run over a published repo.
+
+    `claims` are raw claim dicts, validated through the real `load_claims` at
+    replay time (never constructed by hand). `executor_steps` pop in call
+    order; `installer_steps` pop in the same way when `allow_install` is set.
+    `expected_claim_statuses` maps claim id -> expected ClaimStatus, the
+    guarded number; `known_miss` marks the deliberate seed fixture keeping the
+    committed baseline < 1.0.
+    """
+
+    scenario_id: str
+    description: str
+    source: str = "holdout:synthetic"
+    run_command: str
+    claims: list[dict]
+    results_path: str = "results.json"
+    executor_steps: list[ExecStep]
+    installer_steps: list[int] | None = None
+    allow_install: bool = False
+    expected_claim_statuses: dict[str, str]
+    expected_repair: RepairOutcome = "none"
+    expected_exit_code: int = 0
+    known_miss: bool = False
+
+
+class ReproduceSnapshot(BaseModel):
+    """One reproduce-eval result tied to a corpus version; mirrors HealSnapshot.
+
+    Serialized two ways: as the single committed baseline (one pretty-printed
+    JSON object, NOT JSONL) that the outcome-match rate is compared against on
+    every run, and -- via `contig.snapshot_history`, same as EvalSnapshot --
+    appended one-per-line to a committed JSONL trend.
+    """
+
+    timestamp: str
+    scenario_count: int
+    corpus_sha: str
+    outcome_match_rate: float
+    recovery_rate: float  # healed scenarios / total (informational)
+    per_family: dict[str, FamilyScore] | None = None
+    covered_families: list[str]
+    contig_version: str
