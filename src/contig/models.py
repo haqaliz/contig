@@ -933,8 +933,10 @@ class ReproduceCaseClaim(BaseModel):
 class ReproduceCase(BaseModel):
     """One labeled reproduce case: a published repo to re-run and its claims.
 
-    `exit_code` is the run's observed exit code; `expected_exit_code` pins what
-    the case expects (None until the case is promoted). `known_miss` marks the
+    `repair` is the run's recorded repair outcome (`None` when none was
+    needed); `exit_code` is the run's observed exit code. `expected_repair`
+    and `expected_exit_code` pin what the case expects (None until the case is
+    promoted), mirroring `expected_status` per claim. `known_miss` marks the
     deliberate seed fixture keeping the committed baseline < 1.0.
     """
 
@@ -945,7 +947,8 @@ class ReproduceCase(BaseModel):
     run_command: str
     claims_sha256: str
     claims: list[ReproduceCaseClaim] = []
-    repair: RepairOutcome | None = None  # None until the case is promoted
+    repair: RepairOutcome | None = None  # recorded repair outcome, None when none
+    expected_repair: RepairOutcome | None = None  # None until the case is promoted
     exit_code: int
     expected_exit_code: int | None = None
     known_miss: bool = False
