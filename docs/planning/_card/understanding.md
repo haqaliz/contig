@@ -1,73 +1,91 @@
-# Understanding — eval-concordance-capture (deep dig, 2026-08-12)
+# Understanding — reproduce-case-promote (deep dig, 2026-08-15)
 
 Source: `docs/planning/_card/issue.md` (inline brief from the contig-next recommendation),
-verified against the worktree code at v0.52.0.
+verified against the worktree code at v0.53.0.
 
 ## What the work is really asking
 
-The v0.51.0 C6 fold-in shipped labeled verification capture
-(`RunRecord.verification_inputs`, pending-case append, `contig verify-guard`) for
-every scoreable family **except the C1 concordance family** — its stated deferral
-"PRD R4a: capture deferred, status DERIVATION in scope" is a code comment at
-`src/contig/verify_corpus.py:80-82`. This slice closes that deferral: capture
-pre-band concordance inputs so concordance cases can ride the same
-capture → promote → guarded-re-derive pipeline as the other families.
+The C6 eval fold-in's reproduce track shipped the guard (`contig reproduce-guard`,
+13/14 baseline over 14 frozen synthetic scenarios) but **not the capture half**: the
+CHANGELOG Unreleased entry says "the capture channel has NOT shipped: capture of
+reproduce outcomes (pending `ReproduceCase` + promote, the capture-promote aspect)
+remains the pending follow-on slice, and the corpus only becomes non-tautological as
+real runs feed it through that channel." This slice ships that channel: pending
+`ReproduceCase` capture from real reproduce runs + `contig reproduce-case-promote`,
+mirroring the shipped verification-track machinery, without touching the signed
+record and without moving the 13/14 baseline.
 
 ## What the dig found (file:line)
 
-- **Capture contract:** `verification_inputs: dict[family, dict[sample, dict[metric, float]]]`
-  (`src/contig/models.py:363-370`), populated via an out-param `capture_inputs` threaded
-  through `_discover_qc(run_dir, assay, *, capture_inputs)` (`src/contig/runner.py:285-296`),
-  wired at record creation (`runner.py:1276-1291`). Hardcoded per-family writes; the
-  docstring list at `runner.py:296-300` is the de-facto registry. Capture is **not**
-  verdict-gated; the pending-case append at `self_heal._finalize` (`self_heal.py:1754-1765`)
-  is (WARN/FAIL + succeeded + non-empty inputs, `verify_corpus.py:438-455`).
-- **Guard side is DONE:** `verify_corpus.py:83-88` (`_CONCORDANCE_FAMILY_KINDS`:
-  `concordance_spearman`, `concordance_genotype`, `concordance_somatic_overlap`,
-  `concordance_consequence`), thresholds at `verify_corpus.py:98-103`, status reduction
-  at `verify_corpus.py:159-180` consuming `{"value", "n_shared"}` per sample. Holdout
-  already carries concordance cases (verify_corpus_holdout.jsonl lines 16-21). **No
-  guard-side change needed.**
-- **Concordance emission points:** somatic + annotation are auto-wired inside
-  `_discover_qc` (`runner.py:428`, `runner.py:378`); germline/RNA-seq/single-cell are
-  CLI-verify-only (`cli.py:1641-1911`) — their second call set is user-supplied or
-  autorun-generated **at verify time**, never present in the run dir.
+- **Verify-track machinery to mirror (the pattern):** `VerificationCase` model
+  (`models.py:701-721`) stores **pre-band inputs** (`inputs: {family: {sample:
+  {metric: value}}}`) plus `expected_verdict` assigned at promote — deliberately NOT
+  the computed verdict, so the corpus is band-sensitive (a band change flips stored
+  cases; the mutation-control pin `test_verify_corpus.py:66-94` proves it).
+  Predicate `should_capture_verification` (`verify_corpus.py:445-462`) gates on
+  green tasks + fail/warn verdict + non-empty pre-band inputs ("interesting cases
+  only", always on, no flag). Builder `verification_case_from_run`
+  (`verify_corpus.py:465-489`), append `append_verify_case` (`:340-345`), promote
+  `promote_pending_verify_case` (`:492-531`: source `pending:`→`confirmed:`,
+  dedupe by case_id, append golden + rewrite pending). Capture hook at
+  `self_heal.py:1754-1765` (default `<runs_dir>/pending_verify_corpus.jsonl`).
+  CLI `verify-case-promote` (`cli.py:2446-2504`): positional `case_id`,
+  `--expected-verdict` (validated pass|warn|fail|unverified, exit 1 before any
+  write), `--pending` (default `runs/pending_verify_corpus.jsonl`), `--golden`,
+  `--history-file`; auto-snapshots the grown golden into history.
+- **Reproduce track (greenfield capture):** `ReproduceRecord` (`models.py:811-830`:
+  reproduce_id, repo, run_command, claims_sha256, claim_results, exit_code,
+  created_at, interpreter, tool, repair_history, source_url, source_commit,
+  source_tree_sha256). `run_reproduction` (`verification/reproduce.py:838-851`)
+  is pure — returns the record; the ONLY persistence is the CLI bundle write
+  (`cli.py:1125` `write_reproduce_bundle`), after the remote pins are patched
+  (`cli.py:1112-1123`). **Zero corpus/pending hooks anywhere in the reproduce
+  path** (grep-verified). `ClaimResult` (`models.py:799-808`: id, status
+  `reproduced|within_tolerance|diverged|unverified`, claimed, observed, tolerance,
+  delta, message) carries the per-claim observed value — the pre-classification
+  input (the "pre-band" analog is (claimed, observed, tolerance) + locator family).
+  `repair_history` carries the env-resurrection outcome (`installed_and_retried`
+  etc.). Guard replay/scoring: `reproduce_guard.py` (`run_reproduce_scenario`
+  `:91-172`, `evaluate_reproduce` `:179-273` — strict equality match per claim
+  status + repair + exit code), mutation pins in `test_reproduce_guard_scorer.py:193-224`.
+- **The 13/14 baseline must not move:** `reproduce-guard` defaults to the frozen
+  `reproduce_scenarios.jsonl` and `reproduce-guard` docstring itself names the gap
+  ("the corpus only becomes non-tautological as real runs feed it through the
+  pending-capture/promote channel", `cli.py:3109-3111`). Mirror the verify-track
+  rule (`verify_corpus.py:305-311`): golden corpus is deliberately never the
+  guard's default.
+- **ReproduceCase labeling decision (the brief's open question):** faithful mirror
+  of `VerificationCase` = store **pre-classification inputs** — per-claim
+  (claimed, observed, tolerance, family) — not the derived statuses; `expected`
+  statuses assigned at promote; a scorer re-derives statuses under current
+  classification (like the verify scorer re-derives under current packs), with a
+  mutation-control pin proving a tolerance/threshold change flips a stored case.
+  This keeps the corpus band-sensitive and non-tautological (the verify precedent,
+  `verify_corpus.py:1-9, 66-94`).
 
-## The contradiction (flagging, not papering over)
+## The design fork (for the interview)
 
-The brief says "all four shipped slices — germline, RNA-seq, somatic, single-cell —
-plus the autorun paths". The code says only **two** of those have a run-dir source at
-capture time: `concordance_somatic_overlap` (Mutect2 vs Strelka2 from one sarek run)
-and `concordance_consequence` (VEP vs SnpEff from one run). Germline
-`--concordance-vcf/-auto`, RNA-seq `--concordance-counts[-auto]`, and single-cell
-`--concordance-sc-counts[-auto]` all need a second set that does not exist under the
-run dir, so there is nothing to capture into `verification_inputs` at run time
-without either mutating the signed record post-verify or inventing run-dir sources.
-
-## Also found (same R4a neighbourhood)
-
-`somatic_plausibility` and `annotation_plausibility` are **scoreable families in the
-guard** (`verify_corpus.py:72-73`, holdout lines 12-15) but are **never written** into
-`verification_inputs` by `_discover_qc` — their branches (`runner.py:357-378`,
-`runner.py:386-464`) lack the `capture_inputs` write the germline branch has
-(`runner.py:339-344`, `capture_metrics=` out-param precedent).
-
-## Open questions for the interview
-
-1. Scope of families: run-dir-derived only (somatic + annotation concordance), or also
-   the plausibility capture gaps (somatic_plausibility, annotation_plausibility)?
-2. Germline / RNA-seq / single-cell concordance: defer with a committed revisit
-   trigger (their inputs exist only at verify time — post-record, signature-breaking),
-   or is there appetite for a verify-time capture channel? (Recommend: defer, honestly.)
-3. Per-pair sample key for captured concordance inputs (holdout uses `"S1"`; real runs
-   need a stable label, e.g. `mutect2_vs_strelka2`).
-4. Stats exposure: `evaluate_somatic_concordance` and `evaluate_consequence_concordance`
-   currently throw away `shared`/`union`/`matches` after stringifying them into the
-   message — needs the `capture_metrics=` out-param precedent. Confirm that's in scope.
+1. **What captures:** every reproduce run, or gated on "interesting" outcomes only
+   (any claim diverged/unverified, repair occurred, or non-zero exit)? Verify-track
+   precedent gates (`should_capture_verification`); recommend gating.
+2. **What a case stores:** (a) full pre-classification inputs per claim + repair +
+   exit (band-sensitive mirror, recommended), or (b) observed statuses verbatim
+   (simpler, more tautological).
+3. **Capture point:** CLI after the remote pins are finalized, before/at the bundle
+   write (`cli.py:1112-1125`) — the reproduce path has no `_finalize`; the record is
+   the record.
+4. **Promote surface:** `--expected-claims`-style labels (per-claim expected status
+   + expected repair + expected exit) vs a single run-level label — verify precedent
+   uses one `expected_verdict` per case; reproduce has N claims, so the label set is
+   per-claim. Whether to require full labeling or allow partial.
+5. **Scoring/guard:** a `evaluate_reproduce_cases` used by promote's auto-snapshot
+   only (no new CI guard; the corpus starts empty), or a new guard command wired to
+   CI once cases exist.
 
 ## Guardrails check
 
-Layer 2 (verify/eval-data capture), inside the founder's edge, no new deps, test-first,
-no real nf-core in CI. The fold-in's mutation control (`test_verify_corpus.py:66-94`)
-is the anti-tautology instrument; a concordance capture must not move the guarded
-number by composition (capture changes write cases, not thresholds).
+Layer 2 (eval-data capture / C6 flywheel), inside the founder's edge, no new
+dependencies, test-first, no real repo/network in CI. The capture must not move the
+13/14 baseline (guards default to frozen scenario corpora, never golden). Honest
+scope: corpus starts empty; push, not demand-pull — record in roadmap + CHANGELOG
+per house style.

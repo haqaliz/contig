@@ -1260,7 +1260,11 @@ scenario; flags mirror verify-guard, the trend is the append-only
 `reproduce_history.jsonl`, and CI wiring sits after `verify-guard`. Verify-side capture
 is unaffected; capture of reproduce outcomes (pending `ReproduceCase` + promote, the
 capture-promote aspect) remains pending in the follow-on slice — the guard stays live
-via its anti-tautology mutation-control pin, not field data.)*
+via its anti-tautology mutation-control pin, not field data.)* *(Superseded a sixth
+time by the `reproduce-case-promote` capture channel (Unreleased): the pending
+`ReproduceCase` sidecar capture from real `contig reproduce` runs and
+`reproduce-case-promote` into the golden corpus are now shipped — the full record
+lives in the C8 fold-in paragraph; the reproduce-guard itself did not move.)*
 
 **Both guards moved for the first time (heartbeat stall watchdog slice — Unreleased).**
 The C2 stall-watchdog slice above made `no_progress` emittable by the `rules` detector,
@@ -2080,10 +2084,28 @@ repo, git, network, or pip in CI** (scripted executor/installer, injected run st
 it is **push, not demand-pull** (organic reproduce-run volume unmeasured); it
 **recovers nothing for a user** (it changes what CI guards, not what the engine does);
 and the guard is live only via the anti-tautology **mutation-control pin**, not field
-data. **Still deferred:** the **capture/promote channel** — capture of reproduce
-outcomes (pending `ReproduceCase` corpus + `reproduce-case-promote`) is the **follow-on
-slice** (aspect capture-promote); the corpus only becomes non-tautological as real runs
-feed it through that channel. The other standing C8 deferrals are unchanged: PDF/DOI
+data. **Shipped (capture/promote channel — Unreleased).** The channel now ships: a
+finished `contig reproduce` run earns a pending `ReproduceCase` in the sidecar
+`<runs_dir>/pending_reproduce_corpus.jsonl` whenever it is interesting for a human —
+any `diverged`/`unverified` claim, any repair history, or a non-zero exit — always-on,
+no flag toggles it, and a clean run is never captured (the honest-skip contract); the
+capture writes ONLY the sidecar, leaving the bundle untouched. `contig
+reproduce-case-promote` moves a reviewed case from pending into the golden corpus
+`src/contig/data/reproduce_corpus.jsonl` (created on first promote), with per-claim
+`--expected-claims id:status` partial labeling (optional `--expected-repair` /
+`--expected-exit`), and the informational scorer re-derives each claim under the
+CURRENT `classify` bands via the shipped classify with an injectable classifier seam
+(the mutation-control pin: a mutated looser classifier must flip stored cases),
+counting only labeled claims; every promote auto-snapshots a
+`ReproduceCorpusSnapshot` into the committed `reproduce_corpus_history.jsonl` trend.
+**Honest scope, restated:** the golden corpus starts **empty** (created on first
+promote), remains **push, not demand-pull**, CI still touches **no real repo, git,
+network, or pip** (scripted seams), the guard stays **13/14** with every baseline
+unmoved — the golden corpus is deliberately never the guard's default, so golden cases
+never leak into the regression guard — and no signed field changed (models purely
+additive). **Revisit trigger:** if the next **20 real reproduce runs** file zero
+non-authored pending cases, the channel is restated as taxonomy-only. The other
+standing C8 deferrals are unchanged: PDF/DOI
 resolution, figure/plot & table-cell(-image) claims (hard-blocked — no plot-hash,
 stdlib-only), a dashboard card, checkout pruning, private-repo credentials, submodules,
 local-path & shipped-`source/` tree hashing, and the locator niceties (multi-key row

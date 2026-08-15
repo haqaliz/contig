@@ -92,6 +92,17 @@ from contig.reproduce_guard import (
     save_reproduce_baseline,
     snapshot_from_reproduce_report,
 )
+from contig.reproduce_corpus import (
+    append_reproduce_case,
+    default_reproduce_corpus_history_path,
+    default_reproduce_corpus_path,
+    evaluate_reproduce_cases,
+    load_reproduce_cases,
+    promote_reproduce_case,
+    reproduce_case_from_record,
+    should_capture_reproduce,
+    snapshot_from_reproduce_report as snapshot_from_reproduce_corpus_report,
+)
 from contig.bundle import compute_output_checksums, compute_tree_sha256, write_reproduce_bundle
 from contig.cost import cost_report
 from contig.signing import generate_keypair, signing_available, verify_signature
@@ -1123,6 +1134,16 @@ def reproduce(
         )
 
     write_reproduce_bundle(record, Path(runs_dir) / reproduce_id, requested_rev=rev)
+
+    # Capture: a finished run that is interesting for a human (a diverged or
+    # unverified claim, any repair history, or a non-zero exit) earns a pending
+    # reproduce case in the sidecar corpus, always-on. The capture writes ONLY
+    # the sidecar file -- the bundle dir is left exactly as the writer made it.
+    if should_capture_reproduce(record):
+        append_reproduce_case(
+            reproduce_case_from_record(record, claims=claims_list),
+            Path(runs_dir) / "pending_reproduce_corpus.jsonl",
+        )
 
     typer.echo(render_reproduction(record))
 
@@ -2502,6 +2523,93 @@ def verify_case_promote(
     )
     label = promoted.expected_verdict or "unlabeled"
     typer.echo(f"Promoted {promoted.case_id} ({label}) into the golden corpus.")
+
+
+@app.command(name="reproduce-case-promote")
+def reproduce_case_promote(
+    case_id: str = typer.Argument(..., help="The pending reproduce case id to promote."),
+    expected_claims: list[str] = typer.Option(None, "--expected-claims", help="Repeatable claim labels 'id:status' (reproduced|within_tolerance|diverged|unverified). Partial labeling is allowed."),
+    expected_repair: str = typer.Option(None, "--expected-repair", help="Expected repair outcome (e.g. installed_and_retried). Omit to leave unlabeled."),
+    expected_exit: int = typer.Option(None, "--expected-exit", help="Expected exit code. Omit to leave unlabeled."),
+    pending: str = typer.Option("runs/pending_reproduce_corpus.jsonl", "--pending", help="Pending reproduce corpus JSONL."),
+    golden: str = typer.Option(None, "--golden", help="Golden reproduce corpus JSONL (default: the shipped one)."),
+    history_file: str = typer.Option(None, "--history-file", help="Reproduce corpus history JSONL (defaults to the shipped one)."),
+    json_out: bool = typer.Option(False, "--json", help="Print the grown-corpus eval report as JSON."),
+) -> None:
+    """Promote a reviewed pending reproduce case into the golden corpus (C8 slice 2).
+
+    The reviewer confirms a captured reproduce case and labels some or all of
+    its claims with expected statuses (reproduced|within_tolerance|diverged|
+    unverified); the case then moves from pending into the golden corpus
+    (`source` pending: -> confirmed:) that the informational reproduce-corpus
+    eval scores. After a successful promote, a fresh eval of the grown golden
+    corpus is appended to the reproduce history so the trend reflects the
+    grown corpus (verify-case-promote precedent).
+    """
+    parsed_claims: dict[str, str] = {}
+    for entry in expected_claims or []:
+        claim_id, _, status = entry.partition(":")
+        if status not in ("reproduced", "within_tolerance", "diverged", "unverified"):
+            typer.echo(
+                f"Invalid --expected-claims status {status!r}: must be one of "
+                "reproduced, within_tolerance, diverged, unverified.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        parsed_claims[claim_id] = status
+
+    if expected_repair is not None and expected_repair not in (
+        "none",
+        "installed_and_retried",
+        "install_failed",
+        "retry_failed",
+    ):
+        typer.echo(
+            f"Invalid --expected-repair {expected_repair!r}: must be one of "
+            "none, installed_and_retried, install_failed, retry_failed.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    golden_path = Path(golden) if golden else default_reproduce_corpus_path()
+    try:
+        promoted = promote_reproduce_case(
+            case_id,
+            pending_path=pending,
+            golden_path=golden_path,
+            expected_claims=parsed_claims,
+            expected_repair=expected_repair,
+            expected_exit_code=expected_exit,
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        typer.echo(f"Could not promote {case_id}: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    # Auto-snapshot: eval the now-grown golden corpus and append it to the trend.
+    history_path = Path(history_file) if history_file else default_reproduce_corpus_history_path()
+    golden_cases = load_reproduce_cases(golden_path)
+    promoted = next(c for c in golden_cases if c.case_id == case_id)
+    report = evaluate_reproduce_cases(golden_cases)
+    append_jsonl(
+        snapshot_from_reproduce_corpus_report(
+            report,
+            corpus_sha=sha256_file(golden_path),
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            contig_version=_pkg_version("contig"),
+        ),
+        history_path,
+    )
+    labels = []
+    for claim in promoted.claims:
+        if claim.expected_status is not None:
+            labels.append(f"{claim.claim_id}:{claim.expected_status}")
+    if promoted.expected_repair is not None:
+        labels.append(f"repair:{promoted.expected_repair}")
+    if promoted.expected_exit_code is not None:
+        labels.append(f"exit:{promoted.expected_exit_code}")
+    typer.echo(f"Promoted {promoted.case_id} ({', '.join(labels) or 'unlabeled'}) into the golden corpus.")
+    if json_out:
+        typer.echo(report.model_dump_json())
 
 
 def _print_trend(rows, *, title):

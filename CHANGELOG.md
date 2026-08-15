@@ -8,6 +8,31 @@ All notable changes to Contig are recorded here. The format follows
 
 ### Added
 
+- **The C6 reproduce track's capture/promote channel ships: `contig
+  reproduce-case-promote` + pending `ReproduceCase` capture.** A finished `contig
+  reproduce` run earns a pending case in the sidecar
+  `<runs_dir>/pending_reproduce_corpus.jsonl` when it is interesting for a human —
+  any `diverged`/`unverified` claim, any repair history, or a non-zero exit —
+  always-on, no flag (a clean run is never captured), and the capture writes only the
+  sidecar, leaving the bundle untouched. `contig reproduce-case-promote` moves a
+  reviewed case from pending into the golden corpus
+  `src/contig/data/reproduce_corpus.jsonl` (created on first promote) with per-claim
+  `--expected-claims id:status` partial labeling and optional `--expected-repair` /
+  `--expected-exit`; the informational scorer re-derives each claim under the current
+  `classify` bands via the shipped classify with an injectable classifier seam (the
+  mutation-control pin), counting only labeled claims. Each promote auto-snapshots a
+  `ReproduceCorpusSnapshot` of the grown corpus into
+  `src/contig/data/reproduce_corpus_history.jsonl`.
+  - **Honest scope.** The golden corpus starts **empty** (created on first promote);
+    capture is **push, not demand-pull** (organic reproduce-run volume unmeasured);
+    CI touches **no real repo, git, network, or pip** (scripted seams only); the four
+    guards, all baselines, and `reproduce_scenarios.jsonl` are untouched — the guard
+    stays **13/14** — and the golden corpus is deliberately never a guard default, so
+    golden cases never leak into the regression guard. If the next **20 real
+    reproduce runs** file zero non-authored pending cases, the channel is restated as
+    taxonomy-only. No signature break: the new models are purely additive, no signed
+    field changed.
+
 - **The C6 fold-in now covers the reproduce track: `contig reproduce-guard` guards
   the REAL reproduce loop's per-scenario outcome-match rate as the fourth C6 guard.**
   A frozen `ReproduceScenario` set (`src/contig/data/reproduce_scenarios.jsonl`, **14

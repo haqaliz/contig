@@ -906,3 +906,93 @@ class ReproduceSnapshot(BaseModel):
     per_family: dict[str, FamilyScore] | None = None
     covered_families: list[str]
     contig_version: str
+
+
+# --- Reproduce corpus (C8 slice 2: labeled case data models) ------------------
+# A ReproduceCase is one labeled case in the reproduce corpus: a published
+# repo + run command + claims, re-derived through the REAL reproduce loop to
+# produce a ReproduceCaseResult, aggregated into a ReproduceCorpusReport and
+# committed as a ReproduceCorpusSnapshot -- the corpus-analog of the
+# VerificationCase/VerifyEvalReport/VerifySnapshot family above. All new
+# fields are additive: nothing already serialized changes.
+
+
+class ReproduceCaseClaim(BaseModel):
+    """One quantitative claim in a labeled case: the paper's number vs. what
+    Contig is expected to observe, with the expected re-derived status pinned.
+    """
+
+    claim_id: str
+    claimed: float
+    observed: float | None = None  # None when the metric is uncomputable
+    tolerance: float
+    family: str
+    expected_status: ClaimStatus | None = None  # None until the case is promoted
+
+
+class ReproduceCase(BaseModel):
+    """One labeled reproduce case: a published repo to re-run and its claims.
+
+    `repair` is the run's recorded repair outcome (`None` when none was
+    needed); `exit_code` is the run's observed exit code. `expected_repair`
+    and `expected_exit_code` pin what the case expects (None until the case is
+    promoted), mirroring `expected_status` per claim. `known_miss` marks the
+    deliberate seed fixture keeping the committed baseline < 1.0.
+    """
+
+    case_id: str
+    description: str  # honesty note: what the case pins
+    source: str  # "synthetic" | "pending:<run_id>" | "confirmed:<run_id>"
+    repo: str
+    run_command: str
+    claims_sha256: str
+    claims: list[ReproduceCaseClaim] = []
+    repair: RepairOutcome | None = None  # recorded repair outcome, None when none
+    expected_repair: RepairOutcome | None = None  # None until the case is promoted
+    exit_code: int
+    expected_exit_code: int | None = None
+    known_miss: bool = False
+
+
+class ReproduceCaseResult(BaseModel):
+    """One case's re-derivation outcome; mirrors VerifyCaseResult.
+
+    `predicted_statuses` maps claim_id -> the re-derived ClaimStatus.
+    `divergence` names reasons on a miss; unlabeled claims are never counted
+    as mismatches.
+    """
+
+    case_id: str
+    predicted_statuses: dict[str, str]
+    matched: bool
+    labeled_claims: int  # claims with expected_status set
+    matching_claims: int  # labeled claims whose re-derived status == expected
+    divergence: list[str] = []
+
+
+class ReproduceCorpusReport(BaseModel):
+    """The result of replaying the reproduce loop over a case corpus.
+
+    `total`/`correct`/`claim_match_rate` cover labeled claims only; unlabeled
+    claims are excluded, never counted wrong.
+    """
+
+    total: int  # labeled claims only
+    correct: int
+    claim_match_rate: float
+    cases: int  # labeled cases evaluated
+    per_family: dict[str, FamilyScore] = {}
+    mismatches: list[ReproduceCaseResult] = []
+
+
+class ReproduceCorpusSnapshot(BaseModel):
+    """One reproduce-corpus eval result tied to a corpus version; mirrors
+    VerifySnapshot.
+    """
+
+    timestamp: str
+    case_count: int
+    corpus_sha: str
+    claim_match_rate: float
+    per_family: dict[str, FamilyScore] = {}
+    contig_version: str | None = None
