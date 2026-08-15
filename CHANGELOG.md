@@ -8,6 +8,44 @@ All notable changes to Contig are recorded here. The format follows
 
 ### Added
 
+- **The C7 live-cache gap closes: sarek variant runs now wire their own
+  annotation-cache download (`annotation-cache-wiring`), so the annotation step
+  runs on a real machine instead of failing at cache initialisation.** sarek 3.5.1
+  defaults `--vep_cache`/`--snpeff_cache` to `s3://annotation-cache/…` and its
+  `ANNOTATION_CACHE_INITIALISATION` subworkflow calls `error()` on a missing cache
+  dir — so the roadmap's earlier "absent annotation → UNVERIFIED" framing was
+  optimistic: a cache-less Contig variant run **hard-fails at cache
+  initialisation** (verified against sarek 3.5.1 source). `_dispatch_run` now
+  injects `download_cache=true` + `outdir_cache=<runs_dir>/caches/annotation/
+  <pipeline>@<revision>/` (setdefault, user values win; the dir is created up
+  front and an uncreatable path refuses the launch before anything runs) for both
+  `VARIANT_ASSAYS` (`variant_calling`, `somatic_variant_calling`). With
+  `download_cache=true` sarek takes the `DOWNLOAD_CACHE_SNPEFF_VEP` branch and
+  skips the hard-error validation, downloading the VEP/SnpEff cache at run time on
+  the user's compute into the shared cache dir — paid once, reused on
+  rerun/resume/sibling runs, never inside the run bundle (without `outdir_cache`
+  sarek would publish the cache into `${outdir}/cache/`). Rerun/resume re-inject
+  automatically (both re-enter `_dispatch_run`; params are not persisted in the
+  manifest by design). No verifier change: `_discover_qc`'s CSQ/ANN discovery and
+  `_finalize`'s provenance capture light up unchanged once an annotated VCF
+  exists.
+  - **`--step annotate` is deliberately not used.** sarek's `step` enum
+    (mapping/markduplicates/recalibrate/variant_calling/annotate) is a *restart*
+    mode needing a VCF-dir `--input`; annotation runs automatically after calling
+    when `vep`/`snpeff` are in `--tools`, so the cache is the only missing
+    enabler.
+  - **Read honestly.** Push, not demand-pull (organic frequency unmeasured); **no
+    real nf-core/sarek run in CI** — the wiring is pinned by argv/param tests
+    (`tests/test_annotation_cache_wiring.py`), and a real-run smoke test (cache
+    downloads, annotated VCF appears, C7 verifiers fire) remains a manual
+    post-merge gate. The cache download is keyed to sarek's default `GATK.GRCh38`
+    genome attrs (`conf/igenomes.config`), so an explicit `--fasta/--gtf` run with
+    a **non-GRCh38** reference would fetch the GRCh38 cache (wrong build) —
+    accepted; user-supplied `--vep_cache`/`--snpeff_cache` paths remain a future
+    slice. A run machine without network fails the download honestly (existing
+    self-heal behavior; no new repair). No signature break: no model, manifest, or
+    signed field changed.
+
 - **The C6 reproduce track's capture/promote channel ships: `contig
   reproduce-case-promote` + pending `ReproduceCase` capture.** A finished `contig
   reproduce` run earns a pending case in the sidecar

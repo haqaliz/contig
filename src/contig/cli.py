@@ -127,7 +127,7 @@ from contig.progress import read_progress, render_progress
 from contig.reference import ReferenceError, resolve_reference
 from contig.reference_check import check_reference_consistency, fasta_contigs, gtf_contigs
 from contig.reference_harmonize import harmonize_gtf, plan_harmonization
-from contig.registry import UnknownAssayError, assay_for_pipeline, select_pipeline
+from contig.registry import VARIANT_ASSAYS, UnknownAssayError, assay_for_pipeline, select_pipeline
 from contig.report import (
     render_explain,
     render_reproduction,
@@ -474,6 +474,36 @@ def _inject_default_params(params: dict[str, object], assay: str) -> None:
         params.setdefault(key, value)
 
 
+def _enable_annotation_cache(
+    params: dict[str, object], *,
+    assay: str, pipeline: str, revision: str, runs_dir: str, engine: str,
+) -> None:
+    """Wire sarek's annotation-cache download for variant assays (C7).
+
+    sarek 3.5.1 defaults --vep_cache/--snpeff_cache to s3://annotation-cache/…
+    and hard-fails cache initialisation when they are unreachable; with
+    --download_cache true it downloads the cache at run time into
+    --outdir_cache instead (main.nf takes the DOWNLOAD_CACHE branch and skips
+    the validation error). Only sarek variant assays run annotation tools, so
+    only they get the params; setdefault keeps any user-supplied value.
+    """
+    if engine != "nextflow" or assay not in VARIANT_ASSAYS:
+        return
+    cache_dir = (
+        Path(runs_dir).resolve()
+        / "caches" / "annotation" / f"{pipeline}@{revision}"
+    )
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        typer.echo(
+            f"Annotation cache dir not creatable: {cache_dir} ({exc})", err=True
+        )
+        raise typer.Exit(code=1)
+    params.setdefault("download_cache", "true")
+    params.setdefault("outdir_cache", str(cache_dir))
+
+
 def _dispatch_run(
     *,
     run_id: str,
@@ -713,6 +743,15 @@ def _dispatch_run(
     # `--tools strelka,mutect2`. User-supplied params are never overridden. Reproduce
     # is faithful because the assay persists in launch.json and this re-injects on
     # rerun (rather than storing the derived params). See _inject_default_params (R5).
+    # C7 live-cache enablement: sarek variant assays download their
+    # VEP/SnpEff cache at run time into a shared cache dir, so the shipped
+    # annotation verification actually produces (and verifies) an annotated
+    # VCF instead of hard-failing cache initialisation on a machine without
+    # access to s3://annotation-cache. User-supplied values win (setdefault).
+    _enable_annotation_cache(
+        params, assay=resolved_assay, pipeline=effective_pipeline,
+        revision=revision, runs_dir=runs_dir, engine=engine,
+    )
     _inject_default_params(params, resolved_assay)
 
     # Write the reproduce sidecar BEFORE the run, so it exists during the run and
