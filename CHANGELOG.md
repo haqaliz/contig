@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.54.0] - 2026-08-15
+
 ### Added
 
 - **The C7 live-cache gap closes: sarek variant runs now wire their own
@@ -3501,6 +3503,7 @@ compute. Pre-revenue, validation phase.
 [0.13.0]: https://github.com/haqaliz/contig/releases/tag/v0.13.0
 [0.12.0]: https://github.com/haqaliz/contig/releases/tag/v0.12.0
 [0.53.0]: https://github.com/haqaliz/contig/releases/tag/v0.53.0
+[0.54.0]: https://github.com/haqaliz/contig/releases/tag/v0.54.0
 [0.52.0]: https://github.com/haqaliz/contig/releases/tag/v0.52.0
 [0.10.0]: https://github.com/haqaliz/contig/releases/tag/v0.10.0
 [0.9.0]: https://github.com/haqaliz/contig/releases/tag/v0.9.0
