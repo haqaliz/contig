@@ -11,6 +11,8 @@ that writes a canned results.json and returns a canned (exit_code, output).
 from __future__ import annotations
 
 import json
+import os
+import time
 
 from typer.testing import CliRunner
 
@@ -34,10 +36,24 @@ def _claims_file(tmp_path, claims):
     return path
 
 
+def _stamp_fresh(path):
+    """Future-stamp an artifact the run binds, so the freshness guard
+    (mtime >= run start) cannot flake on a coarse-mtime filesystem: the CLI
+    stamps the run start sub-second (cli.py), and a filesystem that truncates
+    mtime to the second can report the write as marginally before the stamp --
+    the documented false-UNVERIFIED hazard. The guard's own deterministic
+    fixtures use fixed os.utime stamps (reproduce_guard.py)."""
+
+    now = time.time()
+    os.utime(path, (now + 60, now + 60))
+
+
 def _fake_executor(results=None, exit_code=0, output=""):
     def execute(cmd, cwd):
         if results is not None:
-            (cwd / "results.json").write_text(json.dumps(results))
+            path = cwd / "results.json"
+            path.write_text(json.dumps(results))
+            _stamp_fresh(path)
         return exit_code, output
 
     return execute
