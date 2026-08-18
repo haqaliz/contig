@@ -1265,6 +1265,19 @@ time by the `reproduce-case-promote` capture channel (Unreleased): the pending
 `ReproduceCase` sidecar capture from real `contig reproduce` runs and
 `reproduce-case-promote` into the golden corpus are now shipped — the full record
 lives in the C8 fold-in paragraph; the reproduce-guard itself did not move.)*
+*(Superseded a seventh time by the `verify-time-concordance-capture` slice
+(Unreleased): the R4a deferral now **closes for all four concordance families** —
+the S1 revisit trigger shipped, not as run-dir derivation but as a **verify-time
+capture channel that does not break the signed payload**: `contig verify
+--concordance-*` appends one pending `VerificationCase` per concordance
+invocation (case_id `{run_id}-verify-concordance`, source `pending:{run_id}`,
+inputs `{family: {"S1": {"value", "n_shared"}}}` from the evaluators' new
+`capture_metrics=` out-params) into the same pending sidecar, deduped by
+case_id, promoted via the unchanged `verify-case-promote`, and re-derived under
+the current bands — round-trip, status-consistency, mutation-control, and
+family-key-enumeration pins guard it. `concordance_genotype` (germline) and
+`concordance_spearman` (RNA-seq/single-cell) are now captured like the
+run-dir-derived families; the four guards and baselines did not move.)*
 
 **Both guards moved for the first time (heartbeat stall watchdog slice — Unreleased).**
 The C2 stall-watchdog slice above made `no_progress` emittable by the `rules` detector,

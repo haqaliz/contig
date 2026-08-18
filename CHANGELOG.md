@@ -6,6 +6,35 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **The last R4a capture deferral closes: `contig verify --concordance-*` now
+  captures one pending `VerificationCase` per concordance invocation into
+  `<runs_dir>/pending_verify_corpus.jsonl` (`verify-time-concordance-capture`).**
+  The three verify-time concordance evaluators — germline `concordance_genotype`
+  and the RNA-seq/single-cell `concordance_spearman` — gain the v0.53.0 somatic
+  precedent's `capture_metrics=` out-param, surfacing the RAW pre-band
+  `{"value", "n_shared"}` their verdicts are computed from: the last two C6
+  families whose pre-band inputs existed only at verify time (the second call set
+  / count matrix is user-supplied or autorun, never in the run dir). When
+  `contig verify` runs any of the six concordance flags and the evaluator returns
+  results, one pending case is appended (`case_id f"{run_id}-verify-concordance"`,
+  `source "pending:{run_id}"`, `expected_verdict None` until promote), deduped by
+  `case_id` on a repeated verify of the same run; the existing
+  `verify-case-promote` then labels it exactly like any other pending case
+  (source `pending:` → `confirmed:`, deduped against golden, auto-snapshot), and
+  the scorer re-derives the stored values under the current bands.
+  - **Honest scope.** Capture is **push, not demand-pull**: it fires only when a
+    concordance flag ran and produced results — a flag-less verify, a
+    non-matching assay's honest skip (`[]`), and a repeat verify of the same run
+    all write nothing. The golden corpus stays synthetic; it becomes
+    non-tautological only as real runs get labeled through the promote channel
+    (band-sensitive by construction — the mutation-control pin proves a band
+    change flips a stored case). The four guards and all baselines are unmoved
+    (95.5% / 92.9% / 100% / 13/14, no refreeze). No signature break: capture
+    writes only the sidecar, never the signed bundle, and is byte-invisible to
+    every verify output path (text and `--json`).
+
 ## [0.54.0] - 2026-08-15
 
 ### Added

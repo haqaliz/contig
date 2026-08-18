@@ -20,14 +20,22 @@ inputs -- the load-bearing pin of the whole feature.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from typer.testing import CliRunner
 
+import contig.cli
 from contig.bundle import write_bundle
 from contig.cli import app
 from contig.models import ExecutionTarget, RunRecord, TaskEvent, VerificationCase
-from contig.verify_corpus import _worst_status, evaluate_verify_case
+from contig.verify_corpus import (
+    _worst_status,
+    append_verify_case,
+    evaluate_verify,
+    evaluate_verify_case,
+    load_verify_cases,
+)
 from contig.verification.concordance import (
     concordance_results as genotype_results,
     evaluate_concordance,
@@ -496,3 +504,165 @@ def test_verify_capture_writes_nothing_to_run_dir(tmp_path):
         p.relative_to(run_dir).as_posix() for p in run_dir.rglob("*") if p.is_file()
     )
     assert after == before
+
+
+# --- Phase 3: round-trip / mutation-control / dedupe / enumeration pins ---------
+# (spec AC5 + should-have pin): the captured case must promote through the
+# EXISTING verify-case-promote channel and re-derive the confirmed verdict under
+# CURRENT thresholds; a threshold-band override must flip it (mutation control);
+# a duplicated pending line must document the promote boundary honestly; and the
+# verify-time writer's family keys are pinned by a source scan of cli.py.
+
+# A second call set agreeing at 2 of 3 shared sites: rate 2/3 < the 0.90 warn
+# band (n_shared 3 >= the genotype floor 1), so the captured case re-derives
+# "warn" -- the status a "--expected-verdict warn" label confirms.
+_VCF_SITES_WARN = (
+    "chr1\t100\t.\tA\tT\t50\tPASS\t.\tGT\t0|1\n"
+    "chr1\t200\t.\tC\tG\t50\tPASS\t.\tGT\t1/1\n"
+    "chr2\t300\t.\tG\tA\t50\tPASS\t.\tGT\t0/0\n"
+)
+
+
+def test_verify_time_case_promotes_and_re_derives(tmp_path):
+    # The full round trip through the REAL CLI: verify captures the pending
+    # case, verify-case-promote labels it, and evaluate_verify over the grown
+    # golden re-derives the same status under current thresholds (spec AC5).
+    _write_germline_run_with_vcf(tmp_path, "w1", _VCF_SITES_A)
+    second = _write_second_vcf(tmp_path, "second.vcf.gz", _VCF_SITES_WARN)
+    captured = runner.invoke(
+        app,
+        ["verify", "w1", "--runs-dir", str(tmp_path), "--concordance-vcf", str(second)],
+    )
+    assert captured.exit_code == 0
+
+    pending_path = tmp_path / "pending_verify_corpus.jsonl"
+    golden_path = tmp_path / "golden.jsonl"
+    history_path = tmp_path / "verify_history.jsonl"
+    promoted = runner.invoke(
+        app,
+        ["verify-case-promote", "w1-verify-concordance",
+         "--pending", str(pending_path),
+         "--golden", str(golden_path),
+         "--history-file", str(history_path),
+         "--expected-verdict", "warn"],
+    )
+    assert promoted.exit_code == 0
+    assert "w1-verify-concordance" in promoted.output
+
+    golden = load_verify_cases(golden_path)
+    assert len(golden) == 1
+    assert golden[0].case_id == "w1-verify-concordance"
+    assert golden[0].source == "confirmed:w1"
+    assert golden[0].expected_verdict == "warn"
+    assert golden[0].inputs == {
+        "concordance_genotype": {"S1": {"value": 2 / 3, "n_shared": 3.0}}
+    }
+    assert load_verify_cases(pending_path) == []  # removed from pending
+
+    # The grown golden scores the family matched: rate 2/3 re-derives "warn"
+    # under current bands (warn_below 0.90, floor 1), matching the label.
+    report = evaluate_verify(golden)
+    assert report.total == 1
+    assert report.correct == 1
+    assert report.verdict_match_rate == 1.0
+    assert report.per_family["concordance_genotype"].rate == 1.0
+
+
+def test_verify_time_case_mutation_control():
+    # A stored pass case (value 0.95 >= the 0.90 spearman band, n_shared 500 >=
+    # the 10-gene floor) re-derives "pass" under current thresholds. The
+    # family_packs override seam re-points the family at a band-mutated pack
+    # whose only band raises warn_below to 0.97 -- the same stored value must
+    # flip to "warn" (the threshold-sensitivity contract; mirrors
+    # test_verify_corpus.py's mutation control).
+    case = VerificationCase(
+        case_id="stored-pass-verify-concordance",
+        description="mutation-control pin (synthetic)",
+        source="confirmed:r1",
+        assay="rnaseq",
+        inputs={"concordance_spearman": {"S1": {"value": 0.95, "n_shared": 500.0}}},
+        expected_verdict="pass",
+    )
+
+    current = evaluate_verify_case(case)
+    assert current.families["concordance_spearman"] == "pass"
+    assert current.predicted_verdict == "pass"
+    assert current.matched is True
+
+    mutated = [
+        {
+            "check": "spearman_concordance",
+            "metric": "value",
+            "warn_below": 0.97,
+            "message": "mutated band for the mutation control",
+        }
+    ]
+    flipped = evaluate_verify_case(case, family_packs={"concordance_spearman": mutated})
+    assert flipped.families["concordance_spearman"] == "warn"
+    assert flipped.predicted_verdict == "warn"
+    assert flipped.matched is False  # labeled "pass", now predicted "warn"
+
+
+def test_verify_time_case_dedupe_via_promote(tmp_path):
+    # A hand-edited or pre-dedupe sidecar can hold TWO pending lines with the
+    # same case_id. Promote's boundary, pinned honestly: `next()` picks the
+    # FIRST line and that one moves to golden; the pending rewrite drops every
+    # line with the id (`[c for c in pending if c.case_id != case_id]`), so no
+    # twin lingers to be double-promoted and a second promote of the same id
+    # fails cleanly ("no pending verification case") -- exactly one promotion.
+    pending_path = tmp_path / "pending_verify_corpus.jsonl"
+    golden_path = tmp_path / "golden.jsonl"
+    history_path = tmp_path / "verify_history.jsonl"
+    first = VerificationCase(
+        case_id="dup-verify-concordance",
+        description="first duplicate line",
+        source="pending:dup",
+        assay="rnaseq",
+        inputs={"concordance_spearman": {"S1": {"value": 0.95, "n_shared": 500.0}}},
+    )
+    twin = first.model_copy(update={"description": "second duplicate line"})
+    append_verify_case(first, pending_path)
+    append_verify_case(twin, pending_path)
+
+    args = [
+        "verify-case-promote", "dup-verify-concordance",
+        "--pending", str(pending_path),
+        "--golden", str(golden_path),
+        "--history-file", str(history_path),
+        "--expected-verdict", "pass",
+    ]
+    promoted = runner.invoke(app, args)
+    assert promoted.exit_code == 0
+
+    golden = load_verify_cases(golden_path)
+    assert len(golden) == 1  # exactly one case promoted, not two
+    assert golden[0].description == "first duplicate line"  # the FIRST line won
+    assert golden[0].source == "confirmed:dup"
+    assert golden[0].expected_verdict == "pass"
+    assert load_verify_cases(pending_path) == []  # the twin is dropped, not kept
+
+    again = runner.invoke(app, args)
+    assert again.exit_code == 1
+    assert "no pending verification case" in again.output
+    assert len(load_verify_cases(golden_path)) == 1  # no double promotion
+
+
+def test_verify_time_family_key_enumeration_pins_two_families():
+    # The verify-time writer's family keys, pinned by scanning the actual
+    # `_CONCORDANCE_FAMILY_FLAGS` mapping literal in cli.py: adding a third
+    # concordance family key -- or re-pointing any of the six flags at a family
+    # outside the two -- is a deliberate act that must update this test.
+    # Sibling to the runner.py capture-inputs scan in
+    # test_verify_capture_roundtrip.py:438-464.
+    src = Path(contig.cli.__file__).read_text()
+    block = re.search(
+        r"_CONCORDANCE_FAMILY_FLAGS: dict\[str, str\] = \{(.*?)\}", src, re.S
+    )
+    assert block is not None
+    mapping = re.findall(r'"([a-z_]+)": "([a-z_]+)"', block.group(1))
+    assert len(mapping) == 6  # the six concordance flags
+    assert set(family for _, family in mapping) == {
+        "concordance_genotype",
+        "concordance_spearman",
+    }
+    assert all(flag.startswith("concordance_") for flag, _ in mapping)
