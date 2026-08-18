@@ -1,45 +1,42 @@
-# Issue Card: annotation-cache-wiring (C7 enablement on real runs)
+# Brief — verify-time concordance capture
 
-## Brief (inline, from the contig-next recommendation)
+Source: `contig-next` handoff prompt (feat `verify-time-concordance-capture`), run on
+master at v0.54.0. No GitHub issue exists for this work (verified 2026-08-18: `gh issue
+list` shows no matching item); the brief below is the task source.
 
-C7's verification axes (annotation structural, plausibility, VEP-vs-SnpEff
-concordance, provenance) are all shipped but the annotation step may never run on
-a real sarek run because Contig doesn't wire a VEP/SnpEff cache
-(`--vep_cache`/`--download_cache`) or a `--step annotate` entry point — so
-everything degrades to UNVERIFIED and the whole C7 value is hollow on real data.
-Wire the enablement through the shipped `default_params` seam (surviving
-rerun/resume, user's own `--tools` still wins), verify the annotated VCF is
-produced, and keep every failure path an honest UNVERIFIED. Caveat: resolve the
-correct sarek 3.5.1 mechanism (cache flag vs `--step annotate`) before choosing —
-no real sarek run exists in CI, so confirm against sarek's documented behavior and
-fixtures, test-first, no new dependency.
+## Brief
 
-## Why (from the contig-next pick)
+Ship the last C6 R4a capture gap: germline (`--concordance-vcf`/`-auto`) and
+RNA-seq/single-cell (`--concordance-counts`/`-sc-counts`[-`-auto`]) concordance checks
+computed at `contig verify` time are the only run-dir-derived verification families not
+captured into the eval corpus (CHANGELOG v0.53.0, CAPABILITY_ROADMAP.md C6). Add a
+verify-time capture channel — append a pending VerificationCase (pre-band value,
+n_shared, status) to a sidecar on `contig verify`, promote via a
+`verify-case-promote`-style path with expected status and a mutation-control pin —
+without touching the signed record. Mirror the shipped `eval-concordance-capture`
+pattern and its round-trip/per-kind pins; guards must not move. Caveat: push, not
+demand-pull; the capture hook at verify time is net-new, and the channel must not break
+the signed payload.
 
-- Every C7 slice (M1–M5, all marked SHIPPED) inherits this live-cache caveat — the
-  deepest "shipped but not turnkey" gap in the roadmap. The verification axes exist
-  but the annotated VCF may never be produced on a real run.
-- Follow-on slice of a shipped capability (contig-next rule 6): making the shipped
-  verify capability actually fire widens what the verified verdict covers on real
-  data, and real annotation runs feed plausibility/concordance outcomes into the
-  shipped `verify-case-promote` corpus channel (C6) — deepening moat #2.
-- Unblocked: the enablement seam already exists — `default_params` injection that
-  survives rerun/resume (shipped M1/M2), and every failure path degrades to an
-  honest UNVERIFIED, never a false pass.
+## Open questions (from the handoff, to resolve in the dig/interview)
 
-## Sources in the roadmap
+- Capture point: the exact hook in the `contig verify` path where concordance results
+  exist (and whether the pending-verify-corpus sidecar precedent at `self_heal.py`
+  is reusable or a verify-time sidecar is net-new).
+- Channel shape: same `pending_verify_corpus.jsonl` + `verify-case-promote` machinery,
+  or a sibling sidecar? The handoff says "a verify-time capture channel that does not
+  break the signed payload" — the run record must not gain fields that invalidate
+  existing Ed25519 signatures.
+- Scoring: the verify-corpus scorer must be able to re-derive concordance statuses from
+  stored pre-band signals (`value`, `n_shared`) under current thresholds, with a
+  mutation-control pin proving a threshold change flips a stored case.
+- Guards: `verify-guard` (95.5%), `eval-guard` (92.9%), `heal-guard` (100%),
+  `reproduce-guard` (13/14) must not move.
 
-- `docs/technical/CAPABILITY_ROADMAP.md` C7 (M1 slice): "a real run's annotation
-  step may still require a VEP/SnpEff cache (`--vep_cache`/`--download_cache`) or a
-  `--step annotate` entry point that Contig does not yet wire — when that annotation
-  output is absent the verifier reports UNVERIFIED, so a missing cache surfaces
-  honestly rather than as a silent success."
-- Same caveat carried by M3 (annotation plausibility) and M4 (VEP-vs-SnpEff
-  concordance): "Same carried live-cache caveat as M1."
-- C7 M1/M2: the `default_params` seam ("injected non-destructively — a user's own
-  `--tools` wins — and re-injected on rerun/resume") is the mechanism this slice
-  extends.
+## Non-goals (guardrails from CLAUDE.md / the C6 record)
 
-## Task source
-
-Inline brief (no GitHub issue filed for this slug). Owner: aliz.
+- No Layer-1 workflow authoring.
+- No change to concordance's verdict semantics: at most WARN, never changes the verify
+  exit code, `unverified` below 10 shared genes, six flags mutually exclusive.
+- No new runtime dependency (stdlib-only is the standing contract).
+- Capture must never alter any QC result or the signed record.
