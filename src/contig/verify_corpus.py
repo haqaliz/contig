@@ -489,6 +489,37 @@ def verification_case_from_run(record: RunRecord) -> VerificationCase:
     )
 
 
+def verification_case_from_concordance(
+    record: RunRecord, family: str, capture: dict[str, float]
+) -> VerificationCase:
+    """Build a pending VerificationCase from a verify-time concordance capture
+    (PRD R4a, verify-time slice; mirrors `verification_case_from_run`).
+
+    The inputs are the RAW pre-band metrics the evaluator just computed for the
+    run-level sample `"S1"` ({"value", "n_shared"}, never stored statuses), so
+    the scorer re-derives the verdict under the current bands when a reviewer
+    promotes the case. `expected_verdict` stays None until a human labels it.
+    The case_id carries a distinct `-verify-concordance` suffix so it can never
+    collide with the finalize-time `f"{run_id}-verify"` case in the same sidecar
+    (PRD R-risk-1, review-gate decision). The description states the run's
+    stored verdict and the family so the reviewer can judge the case without
+    opening the run.
+    """
+    return VerificationCase(
+        case_id=f"{record.run_id}-verify-concordance",
+        description=(
+            f"captured from run {record.run_id} ({record.pipeline}): stored verdict "
+            f"{record.verdict} over verify-time concordance family {family} "
+            "(sample S1 pre-band metrics)"
+        ),
+        source=f"pending:{record.run_id}",
+        assay=record.assay or "unknown",
+        inputs={family: {"S1": capture}},
+        expected_verdict=None,
+        known_miss=False,
+    )
+
+
 def promote_pending_verify_case(
     case_id: str,
     *,

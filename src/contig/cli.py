@@ -69,6 +69,7 @@ from contig.heal import (
 )
 from contig.snapshot_history import append_jsonl, load_jsonl
 from contig.verify_corpus import (
+    append_verify_case,
     compare_verify_to_baseline,
     default_verify_baseline_path,
     default_verify_golden_path,
@@ -80,6 +81,7 @@ from contig.verify_corpus import (
     promote_pending_verify_case,
     save_verify_baseline,
     snapshot_from_verify_report,
+    verification_case_from_concordance,
 )
 from contig.reproduce_guard import (
     compare_reproduce_to_baseline,
@@ -1626,29 +1628,59 @@ def verify(
 
     # Concordance is independent of output-drift: compute it (if requested) up front
     # so it is surfaced on BOTH the no-checksums and has-checksums paths, and so it
-    # can never influence the `ok`/exit decision below.
+    # can never influence the `ok`/exit decision below. The capture out-param and
+    # the corpus family are threaded through the fired helper so the hook after the
+    # dispatch (PRD R4a, verify-time slice) can append a pending VerificationCase.
+    capture_metrics: dict[str, dict[str, float]] = {}
+    concordance_family: str | None = None
     if concordance_vcf:
-        concordance = _evaluate_run_concordance(record, runs_dir, run_id, concordance_vcf)
+        concordance = _evaluate_run_concordance(
+            record, runs_dir, run_id, concordance_vcf, capture_metrics=capture_metrics
+        )
+        concordance_family = _concordance_family("concordance_vcf")
     elif concordance_auto:
-        concordance = _evaluate_run_concordance_auto(record, runs_dir, run_id, bam, ref)
+        concordance = _evaluate_run_concordance_auto(
+            record, runs_dir, run_id, bam, ref, capture_metrics=capture_metrics
+        )
+        concordance_family = _concordance_family("concordance_auto")
     elif concordance_counts:
         concordance = _evaluate_run_counts_concordance(
-            record, runs_dir, run_id, concordance_counts
+            record, runs_dir, run_id, concordance_counts, capture_metrics=capture_metrics
         )
+        concordance_family = _concordance_family("concordance_counts")
     elif concordance_counts_auto:
         concordance = _evaluate_run_counts_concordance_auto(
-            record, runs_dir, run_id, reads, index
+            record, runs_dir, run_id, reads, index, capture_metrics=capture_metrics
         )
+        concordance_family = _concordance_family("concordance_counts_auto")
     elif concordance_sc_counts:
         concordance = _evaluate_run_sc_counts_concordance(
-            record, runs_dir, run_id, concordance_sc_counts
+            record, runs_dir, run_id, concordance_sc_counts, capture_metrics=capture_metrics
         )
+        concordance_family = _concordance_family("concordance_sc_counts")
     elif concordance_sc_counts_auto:
         concordance = _evaluate_run_sc_counts_concordance_auto(
-            record, runs_dir, run_id, reads, index, whitelist, chemistry
+            record,
+            runs_dir,
+            run_id,
+            reads,
+            index,
+            whitelist,
+            chemistry,
+            capture_metrics=capture_metrics,
         )
+        concordance_family = _concordance_family("concordance_sc_counts_auto")
     else:
         concordance = None
+
+    # Verify-time concordance capture (PRD R4a, verify-time slice): a non-empty
+    # concordance list earns ONE pending VerificationCase in the shared sidecar
+    # (<runs_dir>/pending_verify_corpus.jsonl, the same file verify-case-promote
+    # reads), deduped by case_id so a repeated verify of the same run stays one
+    # line. Purely additive: it never touches the signed bundle and never affects
+    # result, exit_code, or any echoed output.
+    if concordance:
+        _capture_pending_concordance_case(record, runs_dir, concordance_family, capture_metrics)
 
     # A signed run carries a signature.json sidecar; a mismatch is a verification
     # failure (the record was tampered with), so it fails the verify just like drift.
@@ -1710,8 +1742,62 @@ def verify(
     raise typer.Exit(code=1)
 
 
+# The six concordance flags map to two corpus family keys (PRD R4a, verify-time
+# slice): the germline paths capture "concordance_genotype", the count paths
+# (RNA-seq and single-cell) "concordance_spearman".
+_CONCORDANCE_FAMILY_FLAGS: dict[str, str] = {
+    "concordance_vcf": "concordance_genotype",
+    "concordance_auto": "concordance_genotype",
+    "concordance_counts": "concordance_spearman",
+    "concordance_counts_auto": "concordance_spearman",
+    "concordance_sc_counts": "concordance_spearman",
+    "concordance_sc_counts_auto": "concordance_spearman",
+}
+
+
+def _concordance_family(flag_name: str) -> str | None:
+    """The corpus family key a concordance flag captures under (PRD R4a).
+
+    `--concordance-vcf` / `--concordance-auto` capture `concordance_genotype`;
+    the four count flags (`--concordance-counts*`, `--concordance-sc-counts*`)
+    capture `concordance_spearman`. None for an unknown flag name, so one miss
+    degrades to "no capture" rather than a crash.
+    """
+    return _CONCORDANCE_FAMILY_FLAGS.get(flag_name)
+
+
+def _capture_pending_concordance_case(
+    record: RunRecord,
+    runs_dir: str,
+    family: str | None,
+    capture_metrics: dict[str, dict[str, float]],
+) -> None:
+    """Append one pending VerificationCase for a verify-time concordance run (PRD R4a).
+
+    Only fires when the evaluator actually produced results (the caller gates on a
+    non-empty concordance list); an honest skip therefore writes nothing. Dedupes
+    by case_id against the existing pending file, tolerating a missing or
+    malformed file (`load_verify_cases` skips bad lines, verify never crashes on a
+    half-written sidecar). Only this verify-time writer dedupes; the shared
+    `append_verify_case` and the finalize-time path are untouched (PRD R-risk-1).
+    """
+    if family is None or not capture_metrics:
+        return
+    case = verification_case_from_concordance(record, family, capture_metrics["S1"])
+    pending_path = Path(runs_dir) / "pending_verify_corpus.jsonl"
+    if pending_path.exists():
+        existing = load_verify_cases(pending_path)
+        if any(c.case_id == case.case_id for c in existing):
+            return
+    append_verify_case(case, pending_path)
+
+
 def _evaluate_run_concordance(
-    record: RunRecord, runs_dir: str, run_id: str, concordance_vcf: str
+    record: RunRecord,
+    runs_dir: str,
+    run_id: str,
+    concordance_vcf: str,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list:
     """Concordance checks for a germline run vs a second call set, or [] with a note.
 
@@ -1720,11 +1806,17 @@ def _evaluate_run_concordance(
     glob). A non-germline assay or a missing primary VCF prints a clear note and
     yields no checks (never a crash, never a false pass). Returns the QCResult list
     so the caller surfaces it without changing the exit code.
+
+    `capture_metrics`, when passed, is handed to the evaluator's out-param so the
+    caller (the verify-time capture hook) reads the pre-band metrics of a run that
+    produced results; on the honest-skip path it stays empty.
     """
     primary = _resolve_primary_vcf(record, runs_dir, run_id)
     if primary is None:
         return []
-    return evaluate_concordance(primary, concordance_vcf, assay="variant_calling")
+    return evaluate_concordance(
+        primary, concordance_vcf, assay="variant_calling", capture_metrics=capture_metrics
+    )
 
 
 def _evaluate_run_concordance_auto(
@@ -1734,6 +1826,7 @@ def _evaluate_run_concordance_auto(
     bam: str,
     ref: str,
     caller=None,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list:
     """Concordance checks for a germline run vs a freshly produced second call set.
 
@@ -1745,6 +1838,10 @@ def _evaluate_run_concordance_auto(
     SecondCallerError prints a clear skip note and yields no checks (never a crash,
     never a false pass). Returns the QCResult list so the caller surfaces it without
     changing the exit code.
+
+    `capture_metrics`, when passed, is handed to the evaluator's out-param so the
+    caller (the verify-time capture hook) reads the pre-band metrics of a run that
+    produced results; on any honest-skip path it stays empty.
     """
     primary = _resolve_primary_vcf(record, runs_dir, run_id)
     if primary is None:
@@ -1765,7 +1862,9 @@ def _evaluate_run_concordance_auto(
         except SecondCallerError as exc:
             typer.echo(f"Skipping concordance: the second caller could not run ({exc}).")
             return []
-        return evaluate_concordance(primary, second_vcf, assay="variant_calling")
+        return evaluate_concordance(
+            primary, second_vcf, assay="variant_calling", capture_metrics=capture_metrics
+        )
 
 
 def _resolve_primary_vcf(record: RunRecord, runs_dir: str, run_id: str):
@@ -1827,7 +1926,11 @@ def _resolve_primary_counts(record: RunRecord, runs_dir: str, run_id: str):
 
 
 def _evaluate_run_counts_concordance(
-    record: RunRecord, runs_dir: str, run_id: str, counts_matrix: str
+    record: RunRecord,
+    runs_dir: str,
+    run_id: str,
+    counts_matrix: str,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list:
     """Count-concordance checks for an rnaseq run vs a second matrix, or [] with a note.
 
@@ -1835,11 +1938,17 @@ def _evaluate_run_counts_concordance(
     it against the provided second matrix. A non-rnaseq assay or a missing primary
     matrix yields no checks. Returns the QCResult list so the caller surfaces it
     without changing the exit code.
+
+    `capture_metrics`, when passed, is handed to the evaluator's out-param so the
+    caller (the verify-time capture hook) reads the pre-band metrics of a run that
+    produced results; on the honest-skip path it stays empty.
     """
     primary = _resolve_primary_counts(record, runs_dir, run_id)
     if primary is None:
         return []
-    return evaluate_count_concordance(primary, counts_matrix, assay="rnaseq")
+    return evaluate_count_concordance(
+        primary, counts_matrix, assay="rnaseq", capture_metrics=capture_metrics
+    )
 
 
 def _resolve_primary_sc_matrix(record: RunRecord, runs_dir: str, run_id: str):
@@ -1876,7 +1985,11 @@ def _resolve_primary_sc_matrix(record: RunRecord, runs_dir: str, run_id: str):
 
 
 def _evaluate_run_sc_counts_concordance(
-    record: RunRecord, runs_dir: str, run_id: str, second: str
+    record: RunRecord,
+    runs_dir: str,
+    run_id: str,
+    second: str,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list:
     """Single-cell count-concordance for an scrnaseq run vs a second matrix, or [].
 
@@ -1885,11 +1998,17 @@ def _evaluate_run_sc_counts_concordance(
     pseudobulk TSV, sniffed by the loader). A non-scrnaseq assay or a missing primary
     matrix yields no checks. Returns the QCResult list so the caller surfaces it without
     changing the exit code.
+
+    `capture_metrics`, when passed, is handed to the evaluator's out-param so the
+    caller (the verify-time capture hook) reads the pre-band metrics of a run that
+    produced results; on the honest-skip path it stays empty.
     """
     primary = _resolve_primary_sc_matrix(record, runs_dir, run_id)
     if primary is None:
         return []
-    return evaluate_sc_count_concordance(primary, second, assay="scrnaseq")
+    return evaluate_sc_count_concordance(
+        primary, second, assay="scrnaseq", capture_metrics=capture_metrics
+    )
 
 
 def _evaluate_run_counts_concordance_auto(
@@ -1899,6 +2018,7 @@ def _evaluate_run_counts_concordance_auto(
     reads: str,
     index: str,
     quantifier=None,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list:
     """Count-concordance checks for an rnaseq run vs a freshly produced second matrix.
 
@@ -1910,6 +2030,10 @@ def _evaluate_run_counts_concordance_auto(
     SecondQuantifierError prints a clear skip note and yields no checks (never a
     crash, never a false pass). Returns the QCResult list so the caller surfaces it
     without changing the exit code.
+
+    `capture_metrics`, when passed, is handed to the evaluator's out-param so the
+    caller (the verify-time capture hook) reads the pre-band metrics of a run that
+    produced results; on any honest-skip path it stays empty.
     """
     primary = _resolve_primary_counts(record, runs_dir, run_id)
     if primary is None:
@@ -1930,7 +2054,9 @@ def _evaluate_run_counts_concordance_auto(
         except SecondQuantifierError as exc:
             typer.echo(f"Skipping concordance: the second quantifier could not run ({exc}).")
             return []
-        return evaluate_count_concordance(primary, second, assay="rnaseq")
+        return evaluate_count_concordance(
+            primary, second, assay="rnaseq", capture_metrics=capture_metrics
+        )
 
 
 def _evaluate_run_sc_counts_concordance_auto(
@@ -1942,6 +2068,7 @@ def _evaluate_run_sc_counts_concordance_auto(
     whitelist: str,
     chemistry: str,
     quantifier=None,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list:
     """Single-cell concordance for an scrnaseq run vs a freshly produced second matrix.
 
@@ -1954,6 +2081,10 @@ def _evaluate_run_sc_counts_concordance_auto(
     SecondScQuantifierError prints a clear skip note and yields no checks (never a
     crash, never a false pass). Returns the QCResult list so the caller surfaces it
     without changing the exit code.
+
+    `capture_metrics`, when passed, is handed to the evaluator's out-param so the
+    caller (the verify-time capture hook) reads the pre-band metrics of a run that
+    produced results; on any honest-skip path it stays empty.
     """
     primary = _resolve_primary_sc_matrix(record, runs_dir, run_id)
     if primary is None:
@@ -1979,7 +2110,11 @@ def _evaluate_run_sc_counts_concordance_auto(
             )
             return []
         return evaluate_sc_count_concordance(
-            str(primary), second, assay="scrnaseq", second_name="STARsolo"
+            str(primary),
+            second,
+            assay="scrnaseq",
+            second_name="STARsolo",
+            capture_metrics=capture_metrics,
         )
 
 
