@@ -183,7 +183,10 @@ def genotype_concordance(
 
 
 def concordance_results(
-    vcf_a: str | os.PathLike, vcf_b: str | os.PathLike
+    vcf_a: str | os.PathLike,
+    vcf_b: str | os.PathLike,
+    *,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list[QCResult]:
     """Emit the two concordance checks for a pair of call sets.
 
@@ -193,10 +196,25 @@ def concordance_results(
     threshold, WARN below it (0.0 overlap is itself a signal that the two callers
     found disjoint sites). The message names both call sets by basename so the
     comparison is auditable.
+
+    `capture_metrics` is an optional out-param for the pre-band verification
+    inputs capture (PRD R4a): when passed, it is populated with
+    `{"S1": {"value": <raw rate>, "n_shared": float(shared)}}` on the normal
+    path, and `{"value": 0.0, "n_shared": 0.0}` when no shared site has a known
+    genotype (rate is None) -- the low-n case stays self-describing, and 0.0
+    re-derives the same UNVERIFIED the result carried via the genotype floor
+    (min_shared 1 in `_concordance_status`). Additive and back-compat: absent,
+    behavior is exactly as before.
     """
     stats = genotype_concordance(vcf_a, vcf_b)
     name_a = Path(vcf_a).name
     name_b = Path(vcf_b).name
+
+    if capture_metrics is not None:
+        capture_metrics["S1"] = {
+            "value": stats.rate if stats.rate is not None else 0.0,
+            "n_shared": float(stats.shared) if stats.rate is not None else 0.0,
+        }
 
     if stats.rate is None:
         genotype_result = _concordance(
@@ -237,13 +255,18 @@ def evaluate_concordance(
     primary_vcf: str | os.PathLike,
     second_vcf: str | os.PathLike,
     assay: str,
+    *,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list[QCResult]:
     """Assay-gated entry point: concordance checks where the assay defines a comparison.
 
     Returns the two `concordance_results` for an assay in `_CONCORDANCE_ASSAYS`
     (germline variant calling today), else an empty list. Gating here keeps the
     caller (run_qc) from having to know which assays support concordance.
+
+    `capture_metrics` is passed through to `concordance_results`; on the
+    non-matching-assay path nothing is captured (honest absence).
     """
     if assay not in _CONCORDANCE_ASSAYS:
         return []
-    return concordance_results(primary_vcf, second_vcf)
+    return concordance_results(primary_vcf, second_vcf, capture_metrics=capture_metrics)

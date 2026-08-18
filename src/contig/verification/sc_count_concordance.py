@@ -175,6 +175,8 @@ def evaluate_sc_count_concordance(
     second: str | os.PathLike,
     assay: str,
     second_name: str | None = None,
+    *,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list[QCResult]:
     """Assay-gated single-cell concordance: pseudobulk both matrices, reuse the core.
 
@@ -189,6 +191,9 @@ def evaluate_sc_count_concordance(
     path leaves it `None` (labelled by basename, unchanged); the autorun passes the tool
     that produced it (e.g. `"STARsolo"`) so the corroboration line names the second tool
     instead of an opaque `matrix.mtx vs matrix.mtx`.
+
+    `capture_metrics` is passed through to the shared `results_from_counts` core
+    (one change in the count module; RNA-seq and single-cell both inherit it).
     """
     if assay not in _SC_CONCORDANCE_ASSAYS:
         return []
@@ -212,4 +217,4 @@ def evaluate_sc_count_concordance(
             )
         ]
 
-    return results_from_counts(a, b, Path(primary_mtx).name, label_b)
+    return results_from_counts(a, b, Path(primary_mtx).name, label_b, capture_metrics=capture_metrics)
