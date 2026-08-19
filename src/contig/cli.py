@@ -1125,6 +1125,15 @@ def reproduce(
     # directory behind (see fetch_repo).
     source_commit: str | None = None
     source_tree_sha256: str | None = None
+    # Contig's own runs directory must never be folded into the digest it
+    # attests. --runs-dir resolves against CWD (default "runs"), so the
+    # plausible `cd repo && contig reproduce .` run writes the bundle INSIDE
+    # the tree being hashed. One universal rule on both branches: exclude the
+    # resolved runs dir whenever it is a descendant of the tree being hashed.
+    # For remote it never is -- the runs dir is the checkout's PARENT -- so the
+    # exclusion is a provable no-op there, pinned by
+    # test_compute_tree_sha256_exclude_is_a_noop_when_outside_the_tree.
+    resolved_runs_dir = Path(runs_dir).resolve()
     if repo_argument.kind == "remote":
         fetched = fetch_repo(
             repo_argument.url, repo_path, fetcher=default_fetcher, rev=rev
@@ -1136,7 +1145,20 @@ def reproduce(
         # Hashed here too -- right after the fetch, before run_started_at is
         # stamped below -- so an --allow-install retry (or anything the run
         # itself writes into the checkout) can never change the recorded digest.
-        source_tree_sha256 = compute_tree_sha256(repo_path)
+        source_tree_sha256 = compute_tree_sha256(repo_path, exclude=resolved_runs_dir)
+    else:
+        # Local branch: hash the user's directory as given (no copy, no fetch),
+        # at the same pre-stamp moment the remote branch hashes its checkout --
+        # before the executor runs, so anything the run writes into the repo
+        # (the executor's cwd IS the repo) can never change the recorded value.
+        source_tree_sha256 = compute_tree_sha256(
+            repo_path,
+            exclude=(
+                resolved_runs_dir
+                if resolved_runs_dir.is_relative_to(repo_path.resolve())
+                else None
+            ),
+        )
 
     claims_sha256 = hashlib.sha256(Path(claims).read_bytes()).hexdigest()
     created_at = datetime.now(timezone.utc).isoformat()
@@ -1172,6 +1194,13 @@ def reproduce(
                 "source_commit": source_commit,
                 "source_tree_sha256": source_tree_sha256,
             }
+        )
+    elif source_tree_sha256 is not None:
+        # Local: `repo` is already the user's path string and the commit/url
+        # stay None -- only the tree hash is populated. A None digest (honest
+        # degradation) is left as-is and never changes the record shape.
+        record = record.model_copy(
+            update={"source_tree_sha256": source_tree_sha256}
         )
 
     write_reproduce_bundle(record, Path(runs_dir) / reproduce_id, requested_rev=rev)
