@@ -1,171 +1,188 @@
-# Phase 2 — Understanding: `repair-patch-applied`
+# Understanding — reproduce-local-tree-hash (C8 slice 9)
 
-Written after reading the code first-hand in the worktree (`origin/master`, post-`cc91155`).
-Every line reference below was verified in this tree, **not** taken from the filed follow-up.
+Phase-2 dig note. Grounds the PRD interview. All file:line refs verified in this worktree.
 
----
+## What the work is really asking
 
-## 1. What the work is really asking
+Populate `ReproduceRecord.source_tree_sha256` for a **local** `contig reproduce <path>`
+run. Today it is computed only inside `if repo_argument.kind == "remote":`
+(`cli.py:1050-1061`), so a local run's signed record carries `source_url`,
+`source_commit` **and** `source_tree_sha256` all `None` — it attests the verdict while
+binding nothing about the code that produced it.
 
-Add one structured boolean to `RepairStep` that answers: **was this patch actually carried
-out?** — and then drive the surfaces off it instead of off `patch !== null`.
+Slice 8 named this as its own deferral in three places:
+`docs/planning/reproduce-checkout-hash/prd.md:217` ("Local-path checkout hashing
+(deferred)"), `CAPABILITY_ROADMAP.md:1495`, and `CHANGELOG.md:715-716`.
 
-The distinction that makes it non-trivial: **proposed ≠ applied ≠ successful.** Three
-different things, currently collapsed into one.
+This is Layer-2 reproducibility integrity (moat #1), stdlib-only, and — like slice 8 —
+CI-observable with real fixture trees.
 
----
+## The load-bearing contradiction the dig found
 
-## 2. Verified ground truth: the eleven `_record_attempt` sites
+Slice 8 did **not** defer local hashing purely for scope. Its own dig argued *against*
+it, and its PRD argued *for* it, from the same fact:
 
-`_record_attempt` (`self_heal.py:253-267`) is the single funnel — it appends to
-`repair_history` **and** writes a line to `repair_progress.jsonl` (the live self-heal feed).
-So the new field lands on the live surface for free, and must be honest there too.
+- **Against** — `docs/planning/reproduce-checkout-hash/understanding.md:89-99`: a local
+  repo path is "dirty-by-design, unbounded, and often full of unrelated files (`.venv/`,
+  data, outputs) — noisy and expensive to hash, **lower attestation value (no commit
+  anyway)**."
+- **For** — `docs/planning/reproduce-checkout-hash/prd.md:43` and `CHANGELOG.md:715-716`:
+  the tree hash is "**groundwork** for the deferred local-path and shipped-`source/`
+  integrity checks, **where there is no commit at all**."
 
-| Line | `patch=` | outcome | patch actually applied? |
-|---|---|---|---|
-| 1036 | `None` | `qc_verdict_flagged` | **No** |
-| 1112 | `None` | `gave_up` | **No** |
-| 1126 | `gated` | `gave_up` (budget exhausted) | **No** |
-| 1149 | `gated` | from `_apply_patch_and_maybe_build` | **= `cont`** |
-| 1192 | `chosen` | from `_apply_patch_and_maybe_build` | **= `cont`** |
-| 1207 | `gated` | `rejected_by_user` / `invalid_choice_rejected` / `approval_timed_out` | **No** |
-| 1243 | `gated` | from `_apply_patch_and_maybe_build` | **= `cont`** |
-| 1258 | `gated` | `rejected_by_user` / `approval_timed_out` | **No** |
-| 1270 | `safe` | `gave_up` (budget exhausted) | **No** |
-| 1283 | `safe` | `gave_up_at_ceiling` | **No** |
-| 1308 | `safe` | `patched_and_retried` | **Yes** (direct `apply_patch` at `:1293`) |
+Same fact — no commit — read as devaluing in one document and as motivating in the other.
+**The PRD must pick one and say why.** This is Q1 below and it is the first question of
+the interview, ahead of any implementation detail.
 
-**The filed follow-up's design is confirmed correct.** `cont` (the 5th element of
-`_apply_patch_and_maybe_build`'s documented return, `:849`/`:853`) is destructured into scope
-at all three sites (`:1140`, `:1182`, `:1233`) *before* the `_record_attempt` call that
-follows, so the field can be set with no new plumbing at all. The only direct `apply_patch`
-call in the loop is `:1293`, feeding `:1308`.
+## Affected code (map from the dig)
 
-Its warning is also confirmed: `apply_patch` is called on the **first line** of
-`_apply_patch_and_maybe_build` (`:879`), before the build/recompress is even attempted, with
-the code saying so at `:876` ("The build IS the fix (apply_patch is a no-op for
-build_index)"). A naive "set it wherever `apply_patch` returns" rule would stamp
-`index_build_failed`, `index_unresolvable`, `reference_recompress_failed` and
-`reference_recompress_unresolvable` as applied.
+- **CLI** `cli.py:819-1105` — the `reproduce` command. Ordering that matters:
+  - `:921` classify → `:962` **local** `repo_path = Path(repo)` (the user's directory
+    **as given**, no copy) vs `:966-975` **remote** `repo_path = <runs_dir>/<id>/source`
+    (a prospective path).
+  - `:1040-1061` **remote-only** fetch **and** `compute_tree_sha256(repo_path)` at `:1061`.
+  - `:1071` `run_started_at = time.time()` — the freshness stamp.
+  - `:1073-1085` `run_reproduction(...)`; `:1086-1097` **remote-only** `model_copy(update=
+    {repo, source_url, source_commit, source_tree_sha256})`; `:1099` bundle write.
+  - **The local branch has no analog to `:1061` at all.** The natural insertion point is
+    immediately before `:1071`, still pre-executor.
+- **Hash** `bundle.py:334-370` `compute_tree_sha256` — `os.walk(followlinks=False)`,
+  prunes `.git` **by name at any depth** and any **symlinked directory**, skips symlinked
+  and non-regular files, folds sorted `f"{posix_relpath}\0{sha256_file(p)}\n"` → one
+  sha256. Any `OSError` (including via the deliberate `_raise` onerror at `:326-331`)
+  returns **`None` for the whole digest — never partial**. Reusable **as-is**; this slice
+  should not need to modify it unless Q2/Q3 force an exclusion or bound parameter.
+- **Model** `models.py:687-706` — `source_url`/`source_commit`/`source_tree_sha256`, all
+  `str | None = None`.
+- **Signing** `signing.py:55-64` `canonical_record_bytes` — `model_dump(mode="json")` then
+  `json.dumps(sort_keys=True, separators=(",",":"))`, **no field exclusion**.
+- **Engine** `verification/reproduce.py:838-1214` — `run_reproduction`; the executor runs
+  with **`repo_path` as its cwd** (`:1214`, retry `:1251`). `run_started_at` is used only
+  as the freshness gate (`_require_fresh`, `:880-917`). It never touches
+  `source_tree_sha256`.
+- **Tests that pin today's behavior and must be deliberately rewritten:**
+  `tests/test_reproduce_checkout_hash.py:499-520`
+  `test_local_reproduce_records_no_source_tree_sha256`, plus the module docstring at
+  `:17-20` ("Local runs never compute it."). The mirror-template for the new pre-run
+  assertion is `test_source_tree_sha256_is_taken_pre_run_not_post_retry` (`:523-556`).
 
-**Line numbers in the filed follow-up have drifted.** It cites
-`:1102/:1183/:1234/:1246/:1257`; the *set* of sites is right, but the numbers are ~+20 off in
-this tree. `:879` and `:849` still hold. Use the table above, not the PRD's numbers.
+## What makes local genuinely different from remote (not just "the same, elsewhere")
 
----
+These are the findings that make this more than a one-line `if`:
 
-## 3. THREE FINDINGS THAT CORRECT THE BRIEF
+1. **No moment of freshness.** Remote's pre-stamp hash is meaningful because "a clone
+   writes every file at clone time" (`cli.py:1040-1047`). A local directory has no such
+   moment — the pre-run hash is of "whatever is already sitting there," including
+   leftovers from a **previous** local reproduce run against the same repo.
+2. **The run writes into the hashed directory.** For a local run the executor's cwd **is**
+   the user's repo (`reproduce.py:1214`). So the recorded digest describes the tree's
+   **inputs**, and the tree on disk **after** the run will not match it. True for remote
+   too (slice 8's R3), but far more visible when it is the user's own working copy.
+3. **`--runs-dir` defaults to the relative string `"runs"`** (`cli.py:834`), resolved
+   against **CWD**, not against `repo_path`. The plausible invocation
+   `cd my-repo && contig reproduce . --run ...` puts the bundle at `<repo>/runs/<id>`,
+   i.e. **inside the tree we would hash**. This run's own bundle is written after the
+   hash (`:1099` ≫ `:1071`), so it cannot corrupt its own digest — but the **second** run
+   against that repo would hash the first run's bundle. Contig's own output would then
+   contaminate Contig's own measurement.
+4. **`compute_tree_sha256` prunes only `.git` and symlinks.** Pointed at a real working
+   copy it will happily walk `.venv/`, `node_modules/`, `__pycache__/`, `runs/`. The dig
+   confirms **no ignore-list concept exists anywhere in the repo** to reuse.
+5. **No `source_commit` for local either.** No `git rev-parse` is ever run against an
+   arbitrary local path (`fetch.py`'s rev-parse is inside `fetch_repo`, remote-only).
 
-### 3.1 There are 18 live outcome literals, not 15
+## Open questions for the interview
 
-The follow-up's list is `self_heal.py`-only. `verification/reproduce.py:1236-1268` constructs
-three more `RepairStep`s with their own literals, none of which appear anywhere else in `src/`
-or in the dashboard:
+### Q1 — Does a local tree hash actually attest anything? (load-bearing; see above)
 
-- `install_failed` (`:1240`) — pip install failed → **not applied**
-- `retry_failed` (`:1255`) — install **succeeded**, retry still failed → **applied**
-- `installed_and_retried` (`:1265`) → **applied**
+Honest analysis from the dig: **no `source/` copy is made for a local run**
+(`cli.py:966-975` is the `else` branch only), so a third party handed a local bundle has
+neither the tree nor a commit to fetch — they **cannot recompute the digest**. The
+third-party-attestation framing that justified slices 6-8 does **not** transfer.
 
-`retry_failed` is the sharpest available proof that **applied ≠ successful**, and it is a
-strong argument for the field's semantics and its name.
+What it *does* buy, stated narrowly:
+- **(a) Drift evidence over time on the same tree** — re-run later, a changed digest
+  proves the inputs changed. Today nothing detects that.
+- **(b) Tamper-evidence via the signature** — the digest rides the signed record.
+- **(c) Removes an ambiguity**: `null` currently means both "local run" and "could not be
+  computed." Populating it makes `null` mean only the latter.
 
-### 3.2 `ReproduceRecord.repair_history` is the same `RepairStep` type
+Recommendation: **ship it, framed as (a)+(b)+(c), and explicitly disclaim third-party
+attestation** — resolve the contradiction in favor of the PRD's framing, but write the
+understanding note's caveat into the CHANGELOG. If (a)-(c) are not worth a slice, the
+honest alternative is to **close this as won't-do and re-point at the `extract-claims`
+PDF-intake alternate** rather than ship provenance theater.
 
-`models.py:336` (RunRecord) and `models.py:684` (ReproduceRecord) share it. So the field
-lands in the **reproduce** bundle as well, and if this slice only wires `self_heal.py`, the
-three reproduce steps silently take the default — manufacturing a *new* dishonesty in exactly
-the surface (`report.py:95-97` renders `env-repair: {outcome}`) the slice claims to fix.
-**Scope decision required in the PRD:** either wire reproduce too (cheap and mechanical — the
-truth is `install_rc == 0`), or explicitly justify leaving it unknown there.
+### Q2 — What to exclude from a local tree walk
 
-### 3.3 The signature break is materially narrower than slices 6 and 8
+- (a) **Hash as-is** — simplest, zero new policy, but includes `.venv`/`node_modules` and,
+  on a second run, a prior bundle.
+- (b) **As-is, plus exclude the resolved runs dir when it falls inside `repo_path`** —
+  targeted, defensible: that directory is *Contig's own artifact*, not the repo's code.
+  Fixes finding 3 without inventing general ignore policy.
+- (c) **A general ignore list** (`.venv`, `node_modules`, …) — **recommend against**: no
+  precedent, invents policy, and a name-based denylist is a correctness hazard (excluding
+  `node_modules` would hide a genuine dependency change from the digest).
 
-`RepairStep` is **nested inside a list**. A record with an empty `repair_history` serializes
-byte-identically before and after, so its old signature **still verifies**. The blast radius
-is "signed bundles that recorded at least one repair attempt", not "every signed bundle" —
-unlike C8 slice 6, which broke *every* signed reproduce bundle. Worth stating precisely
-rather than inheriting the brief's framing; over-claiming the breakage is its own small
-dishonesty. The break is still real and must be pinned by a test, mirroring
-`tests/test_reproduce_checkout_hash.py:354-381` (build the pre-change canonical bytes by
-stripping the new key, sign those, assert `verify_signature(...) is False`, then assert a
-fresh signature *does* verify).
+Recommend **(b)**.
 
----
+### Q3 — Bounding the walk
 
-## 4. The open questions the PRD must settle
+No precedent exists for bounding a *filesystem walk*. The nearest precedent is
+`_MAX_MATCH_BYTES = 8 MiB` (`reproduce.py:51`), and its lesson is about *failure mode*,
+not size: over-cap input is **UNVERIFIED or a refusal, never silent truncation** —
+"Text over the cap is UNVERIFIED rather than silently truncated, which could report
+'0 matches' for a pattern that does match past the cut" (`reproduce.py:46-50`).
 
-**Q1 — What does the field actually mean?** `apply_patch` is documented (`self_heal.py:549`)
-as changing **nothing** for `code`/`retry` patches: "The re-run itself is the fix." The
-`no_progress` heal is exactly such a patch (`kind="retry"`, `risk="safe"`). So for it, `cont`
-is True and nothing was mutated. Two honest readings:
+Applied here: **if we bound, exceeding the bound must return `None`, never a partial
+digest** — which is already `compute_tree_sha256`'s all-or-`None` contract. Options:
+- (a) **Unbounded** — matches the function's current contract; risk is a long pre-run
+  pause on a huge tree that reads like a hang.
+- (b) **Bounded by cumulative bytes and/or file count → `None` + a stated reason.**
 
-- **(a)** "the patch's operation was carried out and the loop proceeded" → retry patches are
-  `True`. Matches `cont`. Matches `retry_failed` being `True`.
-- **(b)** "the run's configuration was mutated" → retry patches are `False`.
+Recommend **(a) unbounded for this slice**, cost documented, unless the user wants the
+bound; the walk is pre-run and `sha256_file` streams in 1 MiB chunks, so it is I/O-bound
+but memory-safe.
 
-A bare name like `patch_applied` invites (b) while the implementation gives (a). Either
-settle on (a) and document it on the field, or pick a name that says (a) out loud.
+### Q4 — Should local also capture `source_commit` (+ dirty flag)? — recommend OUT of scope
 
-**Q2 — Legacy default: `False` or tri-state `None`?** A plain `bool = False` retro-labels
-every pre-change bundle "no patch applied", which is wrong for the ones that did patch. A
-`bool | None = None` ("unknown, pre-field record") is honest but forces every consumer to
-handle three states, and the dashboard needs an explicit unknown rendering. Note the repo's
-own precedent cuts the other way: `source_url` / `source_commit` / `source_tree_sha256` all
-defaulted to `None` because **`None` was a real value** (a local run), not because it meant
-"unknown".
+For a local directory that *is* a git checkout, `git rev-parse HEAD` plus a dirty
+indicator would be **more** third-party-meaningful than a tree hash (they could fetch that
+commit), and would arguably answer Q1 better than this slice does. But it means shelling
+git at an arbitrary user directory, needs a non-git-directory fallback, and is a different
+feature. **Flag it, defer it, name it in the CHANGELOG as the honest follow-on.**
 
-**Q3 — Does completing `OUTCOME_META` belong in this slice or its own?** They are separable:
-the badge fix needs the new field; the label map is pure presentation. Bundling is defensible
-(same over-claim, filed together) but the blast radii differ — one touches the signed record,
-one touches a `.tsx` map.
+### Q5 — Retiring the pinned test, deliberately
 
-**Q4 — Should `heal_scenarios.jsonl` gain `expected_patch_applied`?** That would guard the
-new field through the **real** loop in CI rather than only via unit tests, with direct
-precedent (the qc-anomaly slice added an optional `HealScenario` field and refroze
-deliberately). Cost: it changes `heal_scenarios.jsonl` bytes → changes `corpus_sha` →
-requires a deliberate `--update-baseline` refreeze.
+`test_local_reproduce_records_no_source_tree_sha256` (`:499-520`) and the module docstring
+(`:17-20`) currently assert the exact behavior this slice inverts. Following the v0.50.0
+precedent, that guard is **retired deliberately and replaced** by one pinning the new
+contract — not deleted to go green.
 
----
+## Signature question — settled, no break
 
-## 5. Explicitly NOT this slice (verified reasons, not guesses)
+`source_tree_sha256` is **already** an always-present key in the canonical payload
+(`signing.py:55-64` dumps every declared field; `None` renders as `null`). Populating it
+for local runs changes a **value**, not the key set. A previously-signed bundle re-derives
+its canonical bytes from its own stored `null` and still verifies. **This slice is not a
+fourth signature break** — and a regression test should pin exactly that, mirroring
+`test_pre_slice_8_signature_over_a_record_without_tree_hash_no_longer_verifies` (`:355-381`).
 
-- **Redefining `heal.py`'s `recovered`.** It is
-  `RunSummary.from_events(record.events).succeeded` (`heal.py:153`) — event-derived, which is
-  why the green-by-construction qc-anomaly scenario computes `recovered=True` though nothing
-  was recovered. `patch_applied` would make it truthful, **but** `recovered` is not merely
-  informational: a mismatch against `expected_recovered` enters `divergence`
-  (`heal.py:168-171`) and therefore `matched`, i.e. the **guarded** `outcome_match_rate`.
-  Changing it would move a guarded number and retroactively change the meaning of every
-  recorded `heal_history` point. The docs already declined this.
-- **Type-constraining `RepairStep.outcome` to a `Literal`** — 18 values across two modules;
-  a wider change with its own back-compat question (an old bundle carrying a retired literal
-  must still load).
-- **Cross-run repair success-rate analytics** (`FEATURES.md:217`) — this slice supplies the
-  field that view needs; it does not build the view.
-- **`FailureCase`/corpus capture of patch info** — `corpus.py` carries no patch/repair fields
-  at all today. Adding them is a separate corpus-schema decision.
+## Guardrails check (CLAUDE.md)
 
----
+Layer-2 reproducibility integrity ✓ · no Layer-1 NL→workflow ✓ · no wet-lab/clinical
+credentials or proprietary data ✓ · stdlib-only, no new dependency (`hashlib`/`os` only;
+declared deps stay `pydantic`/`typer`/`cryptography`) ✓ · honesty posture preserved
+(degrade to `None`, never a partial or fabricated digest) ✓.
 
-## 6. Strategic check (CLAUDE.md)
+## Contradictions / risks surfaced, not papered over
 
-Layer 2, squarely: it hardens the honesty of the self-heal/verify record and adds structured
-evaluation data to the signed bundle. No Layer-1 surface, no new dependency, no wet-lab or
-clinical dependency. It is **push, not demand-pull** — no design partner asked; the driver is
-a self-audit finding. State that as an honest limit rather than dressing it up.
-
----
-
-## 7. Test surfaces to extend, not duplicate
-
-- `tests/test_self_heal.py` (114 KB) — the main loop's unit tests.
-- `tests/test_heal_scenarios.py` / `tests/test_heal_guard.py` — the frozen-scenario harness.
-- `tests/test_models.py`, `tests/test_signing.py` — model + signature contracts.
-- `tests/test_reproduce.py` (97 KB) — the reproduce loop's `repair_history`.
-- `tests/test_report.py` — text/HTML rendering of repair history (`report.py:153-160`,
-  `:334-340`).
-- `dashboard/e2e/repair-truthfulness.spec.ts` — **the** file for this slice. Its header
-  comment already claims *"The badge now means what it says: a patch was applied"*, which is
-  precisely the statement that is **not yet true**; correcting it is part of the work.
-- CI runs `uv run pytest`, `contig eval-guard`, `contig heal-guard`, then `tsc --noEmit`,
-  `npm run lint`, `npx playwright test` (`.github/workflows/ci.yml`).
+1. **The Q1 contradiction** between slice 8's own PRD and its own dig note — must be
+   resolved explicitly in this PRD.
+2. **Third-party recomputation does not transfer to local** (no `source/` copy). The
+   slice's value proposition is genuinely narrower than slices 6-8's and must be written
+   that way.
+3. **Contig's own `runs/` output can land inside the hashed tree** and contaminate the
+   digest on the second run against the same repo.
+4. **This is push, not demand-pull** — no design partner asked for it; organic frequency
+   of local reproduce runs is unmeasured. Same honest posture as the last several slices.
