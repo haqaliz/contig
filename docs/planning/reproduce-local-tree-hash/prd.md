@@ -1,9 +1,10 @@
 # PRD — reproduce-local-tree-hash (C8 slice 9)
 
-**Status:** drafted, pending review-gate approval · **Owner:** aliz · **Branch:**
+**Status:** drafted, approved at review gate 2026-08-19 · **Owner:** aliz · **Branch:**
 `feat/reproduce-local-tree-hash/aliz` · **Source:** `/contig-next` handoff, no GitHub
 issue (`gh issue list` → "No Issues") · **Capability:** C8 (Reproduce & verify existing
-published work) · **Baseline:** 2377 passed, 1 skipped, green.
+published work) · **Baseline:** 2666 passed, 1 skipped, green (re-measured 2026-08-19 on
+the origin/master merge).
 
 ## Problem Statement
 
@@ -11,7 +12,7 @@ published work) · **Baseline:** 2377 passed, 1 skipped, green.
 that attests the per-claim verdict while binding **nothing about the code that produced
 it**. For a local run the record's `source_url`, `source_commit` **and**
 `source_tree_sha256` are all `None` — nothing in the local branch ever sets them
-(`cli.py:1048-1061`, `cli.py:1086-1097`; both populate sites are gated on
+(`cli.py:1140-1152`, `cli.py:1190-1204`; both populate sites are gated on
 `repo_argument.kind == "remote"`).
 
 **Who has the problem.** The local-path mode is `contig reproduce`'s *original* mode — the
@@ -46,7 +47,7 @@ this PRD resolves it explicitly rather than inheriting either framing:
 **Resolution: build it, on the narrow framing, and disclaim the broad one.**
 
 **What it does NOT buy — stated first, so it cannot be over-read.** No `source/` copy is
-made for a local run (`cli.py:966-975` constructs that path in the remote `else` branch
+made for a local run (`cli.py:1053` constructs that path in the remote `else` branch
 only). A third party handed a local bundle therefore has neither the tree nor a commit to
 fetch, and **cannot recompute the digest**. The third-party-verifiability argument that
 justified slices 6–8 **does not transfer to local runs**, and this slice must not be
@@ -74,9 +75,9 @@ Every metric is test-backed, per the repo's test-first discipline.
 - **G2 — The digest is taken pre-run.** A local run's executor cwd **is** the user's repo
   (`reproduce.py:1214`), so anything the run writes — including an `--allow-install` retry
   — must not change the recorded value. *Metric:* mirroring
-  `test_source_tree_sha256_is_taken_pre_run_not_post_retry` (`:523-556`), a scripted
-  executor writes a new file into the repo during the run; the recorded digest must equal
-  the pre-run tree and differ from the post-run tree.
+  `test_source_tree_sha256_is_taken_pre_run_not_post_retry` (`tests/test_reproduce_checkout_hash.py:665`),
+  a scripted executor writes a new file into the repo during the run; the recorded digest
+  must equal the pre-run tree and differ from the post-run tree.
 - **G3 — Contig's own output never contaminates the digest.** When the resolved
   `--runs-dir` falls inside the repo path, it is excluded from the walk. *Metric:* a
   local run whose `--runs-dir` is inside the repo records the **same** digest as an
@@ -87,12 +88,14 @@ Every metric is test-backed, per the repo's test-first discipline.
   test**: run 1's executor writes `results.json` into the repo (the executor's cwd *is*
   the repo, `reproduce.py:1214`), so run 2's pre-run tree legitimately differs by that
   file regardless of any runs-dir exclusion. The test must isolate the runs-dir
-  contribution specifically, not compare two sequential runs.
+  contribution specifically, not compare two sequential runs. (`test_local_runs_dir_inside_repo_is_excluded`
+  enacts this: a pre-existing `<repo>/runs/prior_bundle/` is excluded, and the recorded
+  digest equals a runs-dir-outside run's.)
 - **G4 — No fourth signature break.** *Metric:* a test proves a record signed while
   `source_tree_sha256` was `None` still verifies, and that the canonical **key set** is
   unchanged by this slice.
-- **G5 — No regression.** Full suite green from the 2377-passed/1-skipped baseline; no new
-  dependency; no CLI signature change.
+- **G5 — No regression.** Full suite green from the re-measured 2666-passed/1-skipped
+  baseline; no new dependency; no CLI signature change.
 
 ## User Personas & Scenarios
 
@@ -112,34 +115,35 @@ Every metric is test-backed, per the repo's test-first discipline.
   onto the returned `ReproduceRecord`. The remote branch's **recorded digest** is
   **byte-identical** to today (R3's parameter is a provable no-op on that branch).
 - **R2 — Pre-run placement.** The hash is taken **before** `run_started_at = time.time()`
-  (`cli.py:1071`) and therefore before the executor runs. It must **not** move, re-order,
+  (`cli.py:1171`) and therefore before the executor runs. It must **not** move, re-order,
   or re-stamp the freshness guard — that ordering is load-bearing for the
   false-`REPRODUCED` protection and is verified by mutation in slice 6/7/8's tests.
 - **R3 — Exclude Contig's own runs directory when it is inside the repo, via one
   universal rule on both branches (see R-7).** `--runs-dir` defaults to the relative
-  string `"runs"` resolved against **CWD** (`cli.py:834`), so `cd my-repo && contig
+  string `"runs"` resolved against **CWD** (`cli.py:912`), so `cd my-repo && contig
   reproduce . …` writes the bundle to `<repo>/runs/<id>`. `compute_tree_sha256` gains an
   optional `exclude: Path | None` parameter; the CLI resolves `--runs-dir` and passes it
   on **both** the local and remote call sites whenever it is a descendant of the tree
   being hashed. Remote's runs dir is structurally never a descendant of `repo_path` (it is
-  `repo_path`'s parent), so the parameter is a **provable no-op there** — pinned by a test
-  asserting remote's digest is unchanged with the parameter passed vs. omitted. **No
+  `repo_path`'s parent), so the parameter is a **provable no-op there** — pinned by
+  `test_compute_tree_sha256_exclude_is_a_noop_when_outside_the_tree`. **No
   general ignore list** beyond this one named exclusion — `.venv`, `node_modules`,
   `__pycache__` are hashed like any other content, because a name-based denylist could
   hide a genuine dependency change from the digest.
 - **R4 — Honest degradation, unchanged.** Reuse `compute_tree_sha256`'s existing
   all-or-`None` contract: a missing/non-directory root or any `OSError` yields `None` for
-  the whole digest — **never a partial or fabricated one** (`bundle.py:345-349`, and the
-  deliberate `_raise` onerror at `:326-331`). A `None` digest must **never** fail the run
-  or change the exit code.
+  the whole digest — **never a partial or fabricated one** (`bundle.py:349` docstring
+  contract; `except OSError: return None` at `:380`; the deliberate `_raise` onerror at
+  `:326-331`). A `None` digest must **never** fail the run or change the exit code.
 - **R5 — Manifest echo.** `reproduce.json` continues to emit `source_tree_sha256`
   unconditionally; for a local run it now carries the digest instead of `null`.
 - **R6 — Retire the pinning test deliberately.**
-  `test_local_reproduce_records_no_source_tree_sha256` (`tests/test_reproduce_checkout_hash.py:499-520`)
-  and the module docstring's "Local runs never compute it." (`:17-20`) assert exactly the
-  behavior this slice inverts. They are **replaced by tests pinning the new contract**, in
-  the same commit — following the v0.50.0 precedent for retiring a guard deliberately
-  rather than deleting it to go green.
+  `test_local_reproduce_records_no_source_tree_sha256` and the module docstring's
+  "Local runs never compute it." assert exactly the behavior this slice inverts. They are
+  **replaced by tests pinning the new contract** (`test_local_reproduce_records_source_tree_sha256`,
+  `test_local_source_tree_sha256_is_taken_pre_run_not_post`,
+  `test_local_runs_dir_inside_repo_is_excluded`), in the same commit — following the
+  v0.50.0 precedent for retiring a guard deliberately rather than deleting it to go green.
 - **R7 — Tests-first, real fixture trees.** No mocks of the hash itself; real directories
   under `tmp_path`, matching slice 8's fully-CI-observable posture. The command executor
   stays the existing injected seam.
@@ -161,15 +165,15 @@ Every metric is test-backed, per the repo's test-first discipline.
 
 ## Technical Considerations
 
-- **Chokepoint.** `cli.py`'s `reproduce` body, immediately before `:1071`. The remote path
-  hashes at `:1061` right after `fetch_repo`; local has no fetch, so the pre-stamp point is
-  the equivalent moment. Local `repo_path` is `Path(repo)` — the user's directory as given
-  (`cli.py:962`), not a copy.
+- **Chokepoint.** `cli.py`'s `reproduce` body, immediately before `:1171`. The remote path
+  hashes at `:1148` right after `fetch_repo`; local has no fetch, so the pre-stamp point is
+  the equivalent moment (the slice-9 local hash lands at `:1154-1161`). Local `repo_path`
+  is `Path(repo)` — the user's directory as given (`cli.py:1040`), not a copy.
 - **Carrying the value onto the record.** The remote branch uses
-  `record.model_copy(update={…})` at `:1086-1097`. The local branch needs the same
-  mechanism for `source_tree_sha256` **only** — `repo`, `source_url` and `source_commit`
-  stay as they are for local (`repo` is already the local path string; the other two stay
-  `None`).
+  `record.model_copy(update={…})` at `:1190-1197`. The local branch uses the same
+  mechanism for `source_tree_sha256` **only** (`:1198-1204`) — `repo`, `source_url` and
+  `source_commit` stay as they are for local (`repo` is already the local path string; the
+  other two stay `None`).
 - **Signing — settled, no break.** `canonical_record_bytes` (`signing.py:55-64`) dumps
   every declared field and `json.dumps(sort_keys=True)`; `source_tree_sha256` is therefore
   **already** an always-present key rendering as `null`. Populating it changes a **value**,
@@ -186,7 +190,7 @@ Every metric is test-backed, per the repo's test-first discipline.
 ## Data Model / Artifact Contract
 
 No model change. `ReproduceRecord.source_tree_sha256: str | None = None` already exists
-(`models.py:706`). Only its **population rule** widens: remote-only → remote **and** local.
+(`models.py:830`). Only its **population rule** widens: remote-only → remote **and** local.
 `reproduce.json`'s unsigned echo is unchanged in shape.
 
 ## Risks & Open Questions
@@ -227,18 +231,19 @@ No model change. `ReproduceRecord.source_tree_sha256: str | None = None` already
 
 - **R-7 — R3's exclusion forks the published algorithm — RESOLVED.**
   `compute_tree_sha256`'s algorithm is deliberately **published so a third party can
-  recompute it byte-for-byte** (`bundle.py:335-349`). A local-only exclusion would give
+  recompute it byte-for-byte** (`bundle.py:334-380`). A local-only exclusion would give
   `source_tree_sha256` two silent definitions depending on which branch produced it.
   **Resolved: one universal rule on both paths.** `compute_tree_sha256` gains an optional
   `exclude: Path | None` parameter (an absolute directory to prune, alongside the existing
   `.git`/symlink pruning); the CLI passes the resolved `--runs-dir` **on both the local and
   remote branches** whenever it resolves to a descendant of `repo_path`. For remote, the
   runs dir is never a descendant of the (prospective, then freshly-cloned) `repo_path` —
-  it is `repo_path`'s own **parent** (`<runs_dir>/<id>/source`, `cli.py:966-975`) — so the
-  exclusion provably never fires there; a test pins that remote's digest is byte-identical
-  with and without the parameter passed. The field keeps a single published definition:
-  "the walk, minus `.git`, symlinks, and Contig's own runs directory when nested inside
-  the hashed tree" — true on both branches, not a local-only carve-out.
+  it is `repo_path`'s own **parent** (`<runs_dir>/<id>/source`, `cli.py:1053`) — so the
+  exclusion provably never fires there; `test_compute_tree_sha256_exclude_is_a_noop_when_outside_the_tree`
+  pins that the digest is byte-identical with and without the parameter passed. The field
+  keeps a single published definition: "the walk, minus `.git`, symlinks, and Contig's own
+  runs directory when nested inside the hashed tree" — true on both branches, not a
+  local-only carve-out.
 - **Open:** none blocking — Q1 (ship, narrow framing), Q2 (exclude the runs dir, no general
   ignore list) and Q3 (unbounded) were settled in the interview.
 

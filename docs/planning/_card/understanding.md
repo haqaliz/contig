@@ -36,58 +36,65 @@ the interview, ahead of any implementation detail.
 
 ## Affected code (map from the dig)
 
-- **CLI** `cli.py:819-1105` — the `reproduce` command. Ordering that matters:
-  - `:921` classify → `:962` **local** `repo_path = Path(repo)` (the user's directory
-    **as given**, no copy) vs `:966-975` **remote** `repo_path = <runs_dir>/<id>/source`
+- **CLI** `cli.py:999-1206` — the `reproduce` command. Ordering that matters:
+  - `:999` classify → `:1040` **local** `repo_path = Path(repo)` (the user's directory
+    **as given**, no copy) vs `:1053` **remote** `repo_path = <runs_dir>/<id>/source`
     (a prospective path).
-  - `:1040-1061` **remote-only** fetch **and** `compute_tree_sha256(repo_path)` at `:1061`.
-  - `:1071` `run_started_at = time.time()` — the freshness stamp.
-  - `:1073-1085` `run_reproduction(...)`; `:1086-1097` **remote-only** `model_copy(update=
-    {repo, source_url, source_commit, source_tree_sha256})`; `:1099` bundle write.
-  - **The local branch has no analog to `:1061` at all.** The natural insertion point is
-    immediately before `:1071`, still pre-executor.
-- **Hash** `bundle.py:334-370` `compute_tree_sha256` — `os.walk(followlinks=False)`,
-  prunes `.git` **by name at any depth** and any **symlinked directory**, skips symlinked
-  and non-regular files, folds sorted `f"{posix_relpath}\0{sha256_file(p)}\n"` → one
-  sha256. Any `OSError` (including via the deliberate `_raise` onerror at `:326-331`)
-  returns **`None` for the whole digest — never partial**. Reusable **as-is**; this slice
-  should not need to modify it unless Q2/Q3 force an exclusion or bound parameter.
-- **Model** `models.py:687-706` — `source_url`/`source_commit`/`source_tree_sha256`, all
+  - `:1140-1152` **remote-only** fetch, then `compute_tree_sha256(repo_path,
+    exclude=resolved_runs_dir)` at `:1148`. **Slice 9 adds the local analog** at
+    `:1154-1161`: the user's directory hashed pre-run with the same universal exclusion
+    rule (runs dir excluded when it resolves inside the tree).
+  - `:1171` `run_started_at = time.time()` — the freshness stamp.
+  - `:1173-1185` `run_reproduction(...)`; `:1190-1197` **remote-only** `model_copy(update=
+    {repo, source_url, source_commit, source_tree_sha256})`; slice 9's **local** population
+    at `:1198-1204` (sets `source_tree_sha256` only); `:1206` bundle write.
+- **Hash** `bundle.py:334-376` `compute_tree_sha256(root, exclude=None)` — `os.walk
+  (followlinks=False)`, prunes `.git` **by name at any depth**, any **symlinked directory**,
+  and (slice 9) any directory resolving to `exclude`; skips symlinked and non-regular files,
+  folds sorted `f"{posix_relpath}\0{sha256_file(p)}\n"` → one sha256. Any `OSError`
+  (including via the deliberate `_raise` onerror at `:326-331`) returns **`None` for the
+  whole digest — never partial**. `exclude=None` keeps the slice-8 algorithm byte-identical.
+- **Model** `models.py:826-830` — `source_url`/`source_commit`/`source_tree_sha256`, all
   `str | None = None`.
 - **Signing** `signing.py:55-64` `canonical_record_bytes` — `model_dump(mode="json")` then
   `json.dumps(sort_keys=True, separators=(",",":"))`, **no field exclusion**.
-- **Engine** `verification/reproduce.py:838-1214` — `run_reproduction`; the executor runs
+- **Engine** `verification/reproduce.py:843-1214` — `run_reproduction`; the executor runs
   with **`repo_path` as its cwd** (`:1214`, retry `:1251`). `run_started_at` is used only
   as the freshness gate (`_require_fresh`, `:880-917`). It never touches
   `source_tree_sha256`.
-- **Tests that pin today's behavior and must be deliberately rewritten:**
-  `tests/test_reproduce_checkout_hash.py:499-520`
-  `test_local_reproduce_records_no_source_tree_sha256`, plus the module docstring at
-  `:17-20` ("Local runs never compute it."). The mirror-template for the new pre-run
-  assertion is `test_source_tree_sha256_is_taken_pre_run_not_post_retry` (`:523-556`).
+- **Tests that pinned today's behavior and were deliberately rewritten (slice 9):**
+  `test_local_reproduce_records_no_source_tree_sha256` is **retired**, replaced by
+  `test_local_reproduce_records_source_tree_sha256` (G1), `test_local_source_tree_sha256_
+  is_taken_pre_run_not_post` (G2) and `test_local_runs_dir_inside_repo_is_excluded` (G3);
+  the module docstring's "Local runs never compute it." is updated. The mirror-template for
+  the pre-run assertion is `test_source_tree_sha256_is_taken_pre_run_not_post_retry`
+  (`tests/test_reproduce_checkout_hash.py:665`).
 
 ## What makes local genuinely different from remote (not just "the same, elsewhere")
 
 These are the findings that make this more than a one-line `if`:
 
 1. **No moment of freshness.** Remote's pre-stamp hash is meaningful because "a clone
-   writes every file at clone time" (`cli.py:1040-1047`). A local directory has no such
+   writes every file at clone time" (`cli.py:1140-1147`). A local directory has no such
    moment — the pre-run hash is of "whatever is already sitting there," including
    leftovers from a **previous** local reproduce run against the same repo.
 2. **The run writes into the hashed directory.** For a local run the executor's cwd **is**
    the user's repo (`reproduce.py:1214`). So the recorded digest describes the tree's
    **inputs**, and the tree on disk **after** the run will not match it. True for remote
    too (slice 8's R3), but far more visible when it is the user's own working copy.
-3. **`--runs-dir` defaults to the relative string `"runs"`** (`cli.py:834`), resolved
+3. **`--runs-dir` defaults to the relative string `"runs"`** (`cli.py:912`), resolved
    against **CWD**, not against `repo_path`. The plausible invocation
    `cd my-repo && contig reproduce . --run ...` puts the bundle at `<repo>/runs/<id>`,
    i.e. **inside the tree we would hash**. This run's own bundle is written after the
-   hash (`:1099` ≫ `:1071`), so it cannot corrupt its own digest — but the **second** run
+   hash (`:1206` ≫ `:1171`), so it cannot corrupt its own digest — but the **second** run
    against that repo would hash the first run's bundle. Contig's own output would then
-   contaminate Contig's own measurement.
-4. **`compute_tree_sha256` prunes only `.git` and symlinks.** Pointed at a real working
-   copy it will happily walk `.venv/`, `node_modules/`, `__pycache__/`, `runs/`. The dig
-   confirms **no ignore-list concept exists anywhere in the repo** to reuse.
+   contaminate Contig's own measurement. **Slice 9's resolution:** the resolved runs dir
+   is excluded from the walk whenever it is a descendant of the hashed tree (R-7's one
+   universal rule on both branches).
+4. **`compute_tree_sha256` prunes only `.git`, symlinks, and the excluded dir.** Pointed at
+   a real working copy it will happily walk `.venv/`, `node_modules/`, `__pycache__/`
+   (deliberately — a name-based denylist could hide a genuine dependency change). The dig
+   confirms **no general ignore-list concept exists anywhere in the repo** to reuse.
 5. **No `source_commit` for local either.** No `git rev-parse` is ever run against an
    arbitrary local path (`fetch.py`'s rev-parse is inside `fetch_repo`, remote-only).
 
@@ -96,9 +103,10 @@ These are the findings that make this more than a one-line `if`:
 ### Q1 — Does a local tree hash actually attest anything? (load-bearing; see above)
 
 Honest analysis from the dig: **no `source/` copy is made for a local run**
-(`cli.py:966-975` is the `else` branch only), so a third party handed a local bundle has
-neither the tree nor a commit to fetch — they **cannot recompute the digest**. The
-third-party-attestation framing that justified slices 6-8 does **not** transfer.
+(`cli.py:1053` is the remote-only prospective checkout path), so a third party handed a
+local bundle has neither the tree nor a commit to fetch — they **cannot recompute the
+digest**. The third-party-attestation framing that justified slices 6-8 does **not**
+transfer.
 
 What it *does* buy, stated narrowly:
 - **(a) Drift evidence over time on the same tree** — re-run later, a changed digest
@@ -152,12 +160,14 @@ commit), and would arguably answer Q1 better than this slice does. But it means 
 git at an arbitrary user directory, needs a non-git-directory fallback, and is a different
 feature. **Flag it, defer it, name it in the CHANGELOG as the honest follow-on.**
 
-### Q5 — Retiring the pinned test, deliberately
+### Q5 — Retiring the pinned test, deliberately (RESOLVED — slice 9 enacted it)
 
-`test_local_reproduce_records_no_source_tree_sha256` (`:499-520`) and the module docstring
-(`:17-20`) currently assert the exact behavior this slice inverts. Following the v0.50.0
-precedent, that guard is **retired deliberately and replaced** by one pinning the new
-contract — not deleted to go green.
+`test_local_reproduce_records_no_source_tree_sha256` and the module docstring's "Local
+runs never compute it." asserted exactly the behavior this slice inverts. Following the
+v0.50.0 precedent, that guard is **retired deliberately and replaced** by tests pinning
+the new contract (`test_local_reproduce_records_source_tree_sha256` /
+`test_local_source_tree_sha256_is_taken_pre_run_not_post` /
+`test_local_runs_dir_inside_repo_is_excluded`) — not deleted to go green.
 
 ## Signature question — settled, no break
 
@@ -165,8 +175,9 @@ contract — not deleted to go green.
 (`signing.py:55-64` dumps every declared field; `None` renders as `null`). Populating it
 for local runs changes a **value**, not the key set. A previously-signed bundle re-derives
 its canonical bytes from its own stored `null` and still verifies. **This slice is not a
-fourth signature break** — and a regression test should pin exactly that, mirroring
-`test_pre_slice_8_signature_over_a_record_without_tree_hash_no_longer_verifies` (`:355-381`).
+fourth signature break** — pinned by `test_record_with_none_tree_hash_still_verifies`
+(mirroring `test_pre_slice_8_signature_over_a_record_without_tree_hash_no_longer_verifies`,
+`tests/test_reproduce_checkout_hash.py:367`).
 
 ## Guardrails check (CLAUDE.md)
 

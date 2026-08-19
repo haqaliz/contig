@@ -8,6 +8,42 @@ All notable changes to Contig are recorded here. The format follows
 
 ### Added
 
+- **A local `contig reproduce <path> --run` run now records the digest of the
+  tree it ran over (`reproduce-local-tree-hash`, C8 slice 9).** The signed
+  `ReproduceRecord.source_tree_sha256` — until now populated only on the remote
+  `--allow-fetch` branch — is computed for a local repo-path run too, taken
+  **before** the run-start stamp, so neither the executor (whose cwd IS the
+  repo) nor an `--allow-install` retry can change the recorded value. It rides
+  the already-signed record and is echoed in the unsigned `reproduce.json`.
+  - **What it buys, stated narrowly.** Two local runs of the same repo whose
+    recorded digests differ prove the inputs changed (drift evidence — today
+    nothing detects it); altering the recorded claim about the inputs invalidates
+    the signature (tamper-evidence); and `source_tree_sha256: null` on a local
+    record now means only "could not be computed" instead of the useless
+    "local run, or failure, indistinguishable." **It is NOT third-party
+    recomputable:** no `source/` copy is made for a local run, so a third party
+    handed the bundle has neither the tree nor a commit to re-hash — the
+    attestation framing of slices 6–8 does not transfer here.
+  - **Exclusion rule (one universal rule, both branches).** `compute_tree_sha256`
+    gains an optional `exclude` parameter, and the CLI passes the resolved
+    `--runs-dir` whenever it is a descendant of the tree being hashed — the
+    `cd repo && contig reproduce .` shape that would otherwise fold Contig's own
+    prior bundles into its own measurement. For remote the runs dir is always
+    the checkout's parent, so the exclusion is a provable no-op there. No general
+    ignore list: `.venv`/`node_modules` are hashed like any other content, so a
+    genuine dependency change can never hide from the digest.
+  - **Honest limits.** A `None` digest (missing/non-directory root, unreadable
+    file) degrades honestly and never fails the run or changes the exit code. A
+    local run's executor writes into the hashed directory itself, so the on-disk
+    tree after the run legitimately differs from the recorded digest — the record
+    describes the inputs. Not a signature break: the field's key always existed,
+    only its population widened. Local `source_commit`/dirty-state capture stays
+    deferred (needs git shelled at an arbitrary user directory); it is named as
+    the honest follow-on rather than silently omitted. No new dependency
+    (stdlib `hashlib`/`os`/`pathlib` only), no CLI signature change. Closes the
+    deferral slice 8 named in its own words ("Local-path checkout hashing
+    (deferred)") — full suite green at 2666 passed / 1 skipped.
+
 - **The last R4a capture deferral closes: `contig verify --concordance-*` now
   captures one pending `VerificationCase` per concordance invocation into
   `<runs_dir>/pending_verify_corpus.jsonl` (`verify-time-concordance-capture`).**
