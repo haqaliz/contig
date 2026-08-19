@@ -1630,7 +1630,7 @@ ever. See [`../planning/variant-annotation-assay/prd.md`](../planning/variant-an
 
 ---
 
-## C8. Reproduce & verify *existing published* work  ·  first slice SHIPPED v0.40.0 + output-locator slice 1.5 SHIPPED v0.41.0 + environment-resurrection slice 2 SHIPPED (Unreleased) + TSV/CSV table-locator slice 3 SHIPPED (Unreleased) + stdout/log pattern-locator slice 4 SHIPPED (Unreleased) + notebook (`.ipynb`) locator slice 5 SHIPPED (Unreleased) + freshness guard extended to **all** binding surfaces SHIPPED (Unreleased) + remote `https://` git-URL intake slice 6 SHIPPED (Unreleased) + `--rev` revision pinning slice 7 SHIPPED (Unreleased) + checkout-tree hash slice 8 SHIPPED (Unreleased) + paper-claim extraction (`contig extract-claims`) SHIPPED (Unreleased)  ·  M7+
+## C8. Reproduce & verify *existing published* work  ·  first slice SHIPPED v0.40.0 + output-locator slice 1.5 SHIPPED v0.41.0 + environment-resurrection slice 2 SHIPPED (Unreleased) + TSV/CSV table-locator slice 3 SHIPPED (Unreleased) + stdout/log pattern-locator slice 4 SHIPPED (Unreleased) + notebook (`.ipynb`) locator slice 5 SHIPPED (Unreleased) + freshness guard extended to **all** binding surfaces SHIPPED (Unreleased) + remote `https://` git-URL intake slice 6 SHIPPED (Unreleased) + `--rev` revision pinning slice 7 SHIPPED (Unreleased) + checkout-tree hash slice 8 SHIPPED (Unreleased) + local tree hash slice 9 SHIPPED (Unreleased) + paper-claim extraction (`contig extract-claims`) SHIPPED (Unreleased)  ·  M7+
 
 Point the shipped run → self-heal → verify → reproduce engine at a **third-party,
 already-published** bioinformatics repository (a paper + its code/data) and report which of
@@ -2085,10 +2085,26 @@ bounded to opt-in `CONTIG_SIGNING_KEY` signers, pinned by
 `test_pre_slice_8_signature_over_a_record_without_tree_hash_no_longer_verifies`. Unlike every
 prior C8 slice, the core of this one is **fully CI-observable** — real fixture trees on disk, no
 injected-seam reasoning required — only the CLI-remote wiring rides the `Fetcher` seam. No new
-dependency (stdlib `hashlib`/`os`). **Still deferred:** local-path checkout hashing, hashing the
+dependency (stdlib `hashlib`/`os`). **Still deferred:** hashing the
 bundle's `source/` copy as shipped (post-run), paper-parsing, figure/plot claims, DOI resolution,
 private-repo credentials, submodules, checkout pruning, dashboard card. Plan/PRD under
 `docs/planning/reproduce-checkout-hash/`.
+
+**Shipped (local tree hash — slice 9, Unreleased).** Closes the "local-path checkout
+hashing" deferral slice 8 named above: a **local** `contig reproduce <path> --run` run now
+records `ReproduceRecord.source_tree_sha256` too — the user's directory hashed pre-run,
+before the run-start stamp, via the same `compute_tree_sha256` (which gains an optional
+`exclude` parameter). One universal exclusion rule on both branches: the CLI passes the
+resolved `--runs-dir` whenever it is a descendant of the hashed tree (the
+`cd repo && contig reproduce .` shape), so Contig's own prior bundles never contaminate its
+own measurement; for remote it is a provable no-op (the runs dir is the checkout's parent).
+**Honestly narrowed, not inherited:** local has no `source/` copy and no commit, so the value
+is drift evidence over time + tamper-evidence (the digest rides the signature) +
+disambiguation (`null` now means only "could not be computed") — **not** third-party
+attestation, which is stated plainly rather than over-sold. A `None` digest degrades honestly
+and never fails the run. Not a signature break (key set unchanged). Local
+`source_commit`/dirty-state capture named as the deferred follow-on. No new dependency.
+Plan/PRD under `docs/planning/reproduce-local-tree-hash/`.
 
 **Shipped (C6 eval fold-in — reproduce-guard slice, Unreleased).** The reproduce track
 is now fold-in'd into the C6 flywheel as the **fourth regression guard**: `contig

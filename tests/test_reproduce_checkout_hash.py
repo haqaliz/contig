@@ -17,7 +17,14 @@ and is pinned, not silently absorbed, by
 Phase 3 wires `compute_tree_sha256` into `contig reproduce`'s remote path: the
 digest is taken right after a successful fetch, before `run_started_at` is
 stamped, so an `--allow-install` retry (or anything the run itself writes into
-the checkout) never changes the recorded value. Local runs never compute it.
+the checkout) never changes the recorded value.
+
+Phase 4 (slice 9) wires it into the **local** path too: the user's directory is
+hashed pre-run, before the stamp, so the executor's own writes cannot change the
+recorded value. Contig's own runs directory is excluded from the walk whenever it
+resolves inside the tree being hashed (a `cd repo && contig reproduce .` run puts
+`runs/` inside the repo); for remote that exclusion is a provable no-op. A `None`
+digest degrades honestly and never fails the run.
 """
 
 from __future__ import annotations
@@ -34,7 +41,12 @@ from typer.testing import CliRunner
 from contig.bundle import _maybe_write_signature, compute_tree_sha256, write_reproduce_bundle
 from contig.cli import app
 from contig.models import ClaimResult, ReproduceRecord, sha256_file
-from contig.signing import generate_keypair, signing_available, verify_signature
+from contig.signing import (
+    canonical_record_bytes,
+    generate_keypair,
+    signing_available,
+    verify_signature,
+)
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -496,7 +508,45 @@ def test_remote_reproduce_records_source_tree_sha256(tmp_path, monkeypatch):
     assert manifest["source_tree_sha256"] == expected
 
 
-def test_local_reproduce_records_no_source_tree_sha256(tmp_path, monkeypatch):
+def test_compute_tree_sha256_exclude_is_a_noop_when_outside_the_tree(tmp_path: Path) -> None:
+    """The R3 remote pin: an exclude that is NOT inside the hashed tree changes
+    nothing. The remote branch's runs dir is always the checkout's parent, so
+    this pins that the universal exclusion rule provably never fires there."""
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    _write(tree, "a.txt", b"alpha")
+    _write(tree, "sub/b.txt", b"beta")
+
+    assert compute_tree_sha256(tree, exclude=tree.parent) == compute_tree_sha256(tree)
+
+
+def test_compute_tree_sha256_exclude_prunes_nested_runs_dir(tmp_path: Path) -> None:
+    """The G3 building block: an exclude INSIDE the tree is pruned at any depth,
+    so Contig's own `runs/` output never contaminates the digest."""
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    _write(tree, "code.py", b"print('hi')\n")
+    _write(tree, "runs/prior_bundle/reproduce_record.json", b"{}")
+    _write(tree, "runs/prior_bundle/reproduce.json", b"{}")
+
+    without_runs = tmp_path / "without_runs"
+    without_runs.mkdir()
+    _write(without_runs, "code.py", b"print('hi')\n")
+
+    assert compute_tree_sha256(tree, exclude=tree / "runs") == compute_tree_sha256(without_runs)
+    # And the exclusion does not bleed into a sibling directory of the same name
+    # elsewhere in the tree.
+    _write(tree, "not_runs/a.txt", b"x")
+    _write(without_runs, "not_runs/a.txt", b"x")
+    assert compute_tree_sha256(tree, exclude=tree / "runs") == compute_tree_sha256(without_runs)
+
+
+# --- Phase 4: CLI wiring (local, pre-stamp, runs-dir exclusion) -----------------
+
+
+def test_local_reproduce_records_source_tree_sha256(tmp_path, monkeypatch):
+    """G1: a local run records a real digest equal to the independently-hashed
+    pre-run tree, and echoes it in the unsigned manifest."""
     repo_dir = _materialize(tmp_path / "repo", {"code.py": "print('hi')\n"})
     claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
     runs_dir = tmp_path / "runs"
@@ -512,12 +562,104 @@ def test_local_reproduce_records_no_source_tree_sha256(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
 
+    expected = compute_tree_sha256(_materialize(tmp_path / "expected_repo", {"code.py": "print('hi')\n"}))
+    assert expected is not None
+    assert HEX64.match(expected)
+
     record = _read_record(runs_dir)
-    assert record["source_tree_sha256"] is None
+    assert record["source_tree_sha256"] == expected
 
     (bundle,) = _bundle_dirs(runs_dir)
     manifest = json.loads((bundle / "reproduce.json").read_text())
-    assert manifest["source_tree_sha256"] is None
+    assert manifest["source_tree_sha256"] == expected
+
+
+def test_local_source_tree_sha256_is_taken_pre_run_not_post(tmp_path, monkeypatch):
+    """G2: the local digest is taken BEFORE the executor runs, so a file the run
+    writes into the repo (the executor's cwd IS the repo) never changes it."""
+    repo_dir = _materialize(tmp_path / "repo", {"code.py": "print('hi')\n"})
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    runs_dir = tmp_path / "runs"
+
+    def _executor(cmd: list[str], cwd: Path) -> tuple[int, str]:
+        (Path(cwd) / "results.json").write_text(json.dumps({"auc": 0.9}))
+        (Path(cwd) / "run_output.log").write_text("ran\n")  # not present pre-run
+        return 0, ""
+
+    monkeypatch.setattr("contig.cli.default_command_executor", _executor)
+
+    result = _invoke(tmp_path, claims, runs_dir, repo=str(repo_dir))
+
+    assert result.exit_code == 0, result.output
+
+    pre_run_expected = compute_tree_sha256(
+        _materialize(tmp_path / "expected_repo", {"code.py": "print('hi')\n"})
+    )
+    record = _read_record(runs_dir)
+    assert record["source_tree_sha256"] == pre_run_expected
+
+    post_run_actual = compute_tree_sha256(repo_dir)
+    assert post_run_actual is not None
+    assert record["source_tree_sha256"] != post_run_actual
+
+
+def test_local_runs_dir_inside_repo_is_excluded(tmp_path, monkeypatch):
+    """G3: a prior run's bundle living in `<repo>/runs/` does not contaminate the
+    digest. A run whose --runs-dir is INSIDE the repo records the same digest as
+    an otherwise-identical run whose --runs-dir is OUTSIDE it."""
+    files = {"code.py": "print('hi')\n", "data/values.csv": "a,b\n1,2\n"}
+    repo_in = _materialize(tmp_path / "repo_in", files)
+    repo_out = _materialize(tmp_path / "repo_out", files)
+
+    # A prior run's artifact already sitting inside repo_in.
+    _write(repo_in, "runs/prior_bundle/reproduce.json", b"{}")
+
+    claims = _claims_file(tmp_path, [{"id": "auc", "value": 0.9}])
+    executor = lambda cmd, cwd: (  # noqa: E731
+        (Path(cwd) / "results.json").write_text(json.dumps({"auc": 0.9})),
+        (0, ""),
+    )[1]
+    monkeypatch.setattr("contig.cli.default_command_executor", executor)
+
+    runs_in = repo_in / "runs"
+    result_in = _invoke(tmp_path, claims, runs_in, repo=str(repo_in))
+    assert result_in.exit_code == 0, result_in.output
+
+    runs_out = tmp_path / "runs_out"
+    result_out = _invoke(tmp_path, claims, runs_out, repo=str(repo_out))
+    assert result_out.exit_code == 0, result_out.output
+
+    # runs_in already holds the pre-existing prior_bundle, so pick the new one.
+    (new_bundle,) = [
+        p for p in _bundle_dirs(runs_in) if p.name != "prior_bundle"
+    ]
+    record_in = json.loads((new_bundle / "reproduce_record.json").read_text())
+    record_out = _read_record(runs_out)
+
+    expected = compute_tree_sha256(_materialize(tmp_path / "expected_repo", files))
+    assert record_in["source_tree_sha256"] == expected
+    assert record_out["source_tree_sha256"] == expected
+    assert record_in["source_tree_sha256"] == record_out["source_tree_sha256"]
+
+
+@requires_signing
+def test_record_with_none_tree_hash_still_verifies(tmp_path, monkeypatch):
+    """G4: populating the field for local runs is a VALUE change, not a key-set
+    change -- a record whose digest is None still verifies under the real signing
+    machinery. This slice is NOT a fourth signature break."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    private_key, public_key = generate_keypair()
+    record = _record()  # local run: source_tree_sha256 defaults to None
+    assert record.source_tree_sha256 is None
+
+    signature = (
+        Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key))
+        .sign(canonical_record_bytes(record))
+        .hex()
+    )
+
+    assert verify_signature(record, signature, public_key) is True
 
 
 def test_source_tree_sha256_is_taken_pre_run_not_post_retry(tmp_path, monkeypatch):

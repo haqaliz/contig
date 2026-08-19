@@ -1,114 +1,199 @@
-# Understanding — verify-time concordance capture
+# Understanding — reproduce-local-tree-hash (C8 slice 9)
 
-Deep dig note (2026-08-18). Verified against the worktree code at v0.54.0 (HEAD 669eac5).
+Phase-2 dig note. Grounds the PRD interview. All file:line refs verified in this worktree.
 
 ## What the work is really asking
 
-Close the last C6 R4a capture gap: `concordance_genotype` (germline) and
-`concordance_spearman` (RNA-seq + single-cell) are the only verification families whose
-pre-band inputs are not captured into the eval corpus, because their second call set /
-count matrix exists only at `contig verify` time (user-supplied or autorun), not in the
-run dir. Ship a **verify-time capture channel**: append a pending `VerificationCase`
-to the shared sidecar when `contig verify --concordance-*` actually computes a
-concordance check, promotable via the existing `verify-case-promote`, with round-trip /
-mutation-control pins — without touching the signed record and without moving any guard
-baseline.
+Populate `ReproduceRecord.source_tree_sha256` for a **local** `contig reproduce <path>`
+run. Today it is computed only inside `if repo_argument.kind == "remote":`
+(`cli.py:1050-1061`), so a local run's signed record carries `source_url`,
+`source_commit` **and** `source_tree_sha256` all `None` — it attests the verdict while
+binding nothing about the code that produced it.
 
-## What the dig found (file:line)
+Slice 8 named this as its own deferral in three places:
+`docs/planning/reproduce-checkout-hash/prd.md:217` ("Local-path checkout hashing
+(deferred)"), `CAPABILITY_ROADMAP.md:1495`, and `CHANGELOG.md:715-716`.
 
-### The scorer is DONE — this is purely a producer-side gap
+This is Layer-2 reproducibility integrity (moat #1), stdlib-only, and — like slice 8 —
+CI-observable with real fixture trees.
 
-- `_CONCORDANCE_FAMILY_KINDS` already enumerates all four concordance families
-  including `concordance_spearman` and `concordance_genotype`
-  (`src/contig/verify_corpus.py:90-95`), with the comment at :80-89 explicitly naming
-  capture "still deferred" for the two verify-time families — the exact item this task
-  closes.
-- `_CONCORDANCE_KIND_THRESHOLDS` (`verify_corpus.py:105-110`) already re-derives
-  per-kind `(warn_below, min_shared)` from current module constants: spearman
-  (0.90, 10), genotype (0.90, **1** — floor 1 because genotype rate is None when no
-  shared site has a known GT in both).
-- `_concordance_status` (`verify_corpus.py:166-187`) scores from `{"value", "n_shared"}`
-  per sample; missing keys → unverified; n_shared < floor → unverified; value <
-  warn_below → warn; else pass. Concordance never FAILs (WARN-capped by contract).
-- The holdout already contains 6 concordance cases (`verify_corpus_holdout.jsonl`
-  lines 16-21, incl. `verify-concordance-spearman-pass/warn/unverified` and
-  `verify-concordance-genotype-warn`), all matched 1.0 in the baseline
-  (`verify_baseline.json` per_family).
-- **verify-guard cannot move from capture alone**: it scores only the sha-pinned
-  holdout (`cli.py:3113`); the pending sidecar is never a guard input
-  (`verify_corpus.py:305-311`). Precedent locked in CHANGELOG v0.53.0 ("Guards unmoved,
-  no baseline refreeze").
+## The load-bearing contradiction the dig found
 
-### The producers lack capture out-params
+Slice 8 did **not** defer local hashing purely for scope. Its own dig argued *against*
+it, and its PRD argued *for* it, from the same fact:
 
-- `evaluate_concordance` (`verification/concordance.py:236-249`), `evaluate_count_concordance`
-  (`count_concordance.py:341-354`), `evaluate_sc_count_concordance`
-  (`sc_count_concordance.py:173-215`) return `list[QCResult]` and have **no**
-  `capture_metrics` out-param.
-- The precedent to mirror: `somatic_concordance.py:120-149`
-  (`capture_metrics: dict[str, dict[str, float]] | None = None`, populated with raw
-  `{"value": jaccard, "n_shared": float(union)}` under a descriptive pair key, **on both
-  the normal and the too-few-sites paths** so a low-n case stays self-describing;
-  additive and back-compat) and `annotation_concordance.py:162-187`.
-- Raw stats already exist internally: `ConcordanceStats` (`concordance.py:135-148`:
-  shared, rate, overlap) and `CountConcordanceStats` (`count_concordance.py:177-191`:
-  shared, rho, fraction_agreeing, overlap). QCResult has **no n_shared field** — it
-  lives only in the message text, so the out-param (not message parsing) is the honest
-  channel.
-- Single-cell reuses `results_from_counts` (`sc_count_concordance.py:215`) — the
-  count-cores get the out-param once and both RNA-seq and sc inherit it
-  (byte-identical RNA-seq behavior is a pinned property).
+- **Against** — `docs/planning/reproduce-checkout-hash/understanding.md:89-99`: a local
+  repo path is "dirty-by-design, unbounded, and often full of unrelated files (`.venv/`,
+  data, outputs) — noisy and expensive to hash, **lower attestation value (no commit
+  anyway)**."
+- **For** — `docs/planning/reproduce-checkout-hash/prd.md:43` and `CHANGELOG.md:715-716`:
+  the tree hash is "**groundwork** for the deferred local-path and shipped-`source/`
+  integrity checks, **where there is no commit at all**."
 
-### The capture hook
+Same fact — no commit — read as devaluing in one document and as motivating in the other.
+**The PRD must pick one and say why.** This is Q1 below and it is the first question of
+the interview, ahead of any implementation detail.
 
-- `verify()` command: `cli.py:1461-1710`. Six mutually exclusive concordance flags
-  (:1592-1612); dispatch :1630-1651 produces the `concordance` local
-  (`list[QCResult]`, `[]` on honest skip, `None` when no flag).
-- **Natural capture point: immediately after cli.py:1651** — `record`, `runs_dir`,
-  `run_id`, and the results are all in scope; covers all four terminal paths.
-- Sidecar: reuse `append_verify_case` (`verify_corpus.py:340-345`, pure append, needs
-  only a constructed `VerificationCase` + path) and the **shared** default path
-  `<runs_dir>/pending_verify_corpus.jsonl` (the `self_heal.py:1763` precedent; already
-  the `verify-case-promote --pending` default, cli.py:2510).
-- **The verify path never writes the signed payload**: `load_run` is read-only
-  (workspace.py:26-36), no `write_bundle` anywhere in verify, drift re-hash ignores
-  unrecorded files (cli.py:1442-1443), signature covers the record not sidecars
-  (bundle.py:38-39). An unrecorded sidecar is invisible to everything signed.
+## Affected code (map from the dig)
 
-### Open design decisions (for the interview)
+- **CLI** `cli.py:999-1206` — the `reproduce` command. Ordering that matters:
+  - `:999` classify → `:1040` **local** `repo_path = Path(repo)` (the user's directory
+    **as given**, no copy) vs `:1053` **remote** `repo_path = <runs_dir>/<id>/source`
+    (a prospective path).
+  - `:1140-1152` **remote-only** fetch, then `compute_tree_sha256(repo_path,
+    exclude=resolved_runs_dir)` at `:1148`. **Slice 9 adds the local analog** at
+    `:1154-1161`: the user's directory hashed pre-run with the same universal exclusion
+    rule (runs dir excluded when it resolves inside the tree).
+  - `:1171` `run_started_at = time.time()` — the freshness stamp.
+  - `:1173-1185` `run_reproduction(...)`; `:1190-1197` **remote-only** `model_copy(update=
+    {repo, source_url, source_commit, source_tree_sha256})`; slice 9's **local** population
+    at `:1198-1204` (sets `source_tree_sha256` only); `:1206` bundle write.
+- **Hash** `bundle.py:334-376` `compute_tree_sha256(root, exclude=None)` — `os.walk
+  (followlinks=False)`, prunes `.git` **by name at any depth**, any **symlinked directory**,
+  and (slice 9) any directory resolving to `exclude`; skips symlinked and non-regular files,
+  folds sorted `f"{posix_relpath}\0{sha256_file(p)}\n"` → one sha256. Any `OSError`
+  (including via the deliberate `_raise` onerror at `:326-331`) returns **`None` for the
+  whole digest — never partial**. `exclude=None` keeps the slice-8 algorithm byte-identical.
+- **Model** `models.py:826-830` — `source_url`/`source_commit`/`source_tree_sha256`, all
+  `str | None = None`.
+- **Signing** `signing.py:55-64` `canonical_record_bytes` — `model_dump(mode="json")` then
+  `json.dumps(sort_keys=True, separators=(",",":"))`, **no field exclusion**.
+- **Engine** `verification/reproduce.py:843-1214` — `run_reproduction`; the executor runs
+  with **`repo_path` as its cwd** (`:1214`, retry `:1251`). `run_started_at` is used only
+  as the freshness gate (`_require_fresh`, `:880-917`). It never touches
+  `source_tree_sha256`.
+- **Tests that pinned today's behavior and were deliberately rewritten (slice 9):**
+  `test_local_reproduce_records_no_source_tree_sha256` is **retired**, replaced by
+  `test_local_reproduce_records_source_tree_sha256` (G1), `test_local_source_tree_sha256_
+  is_taken_pre_run_not_post` (G2) and `test_local_runs_dir_inside_repo_is_excluded` (G3);
+  the module docstring's "Local runs never compute it." is updated. The mirror-template for
+  the pre-run assertion is `test_source_tree_sha256_is_taken_pre_run_not_post_retry`
+  (`tests/test_reproduce_checkout_hash.py:665`).
 
-1. **Sample key** for run-level (whole-VCF / whole-matrix) results: holdout uses `"S1"`;
-   somatic precedent uses the pair key `mutect2_vs_strelka2`. Scorer takes the worst
-   across samples, so any stable key works; need a deterministic, self-describing
-   convention (e.g. `"S1"` to match holdout shape, or the second-tool name).
-2. **Capture gating**: finalize capture is gated on run verdict fail/warn
-   (`should_capture_verification`, verify_corpus.py:445-462 — RunRecord-shaped, not
-   reusable here). Verify-time the run verdict may be pass; the honest gate is
-   "concordance actually produced results" (non-empty list), always-on no flag
-   (finalize precedent: always on).
-3. **case_id uniqueness**: `verification_case_from_run` uses `f"{run_id}-verify"`
-   (verify_corpus.py:479) — a verify-time case for the same run must NOT collide
-   (append doesn't dedupe; promote finds by case_id). Use a distinct id, e.g.
-   `f"{run_id}-verify-concordance"` (one family per invocation, flags mutually
-   exclusive).
-4. **source convention**: keep `"pending:{run_id}"` prefix so the existing
-   promote rewrite (`pending:` → `confirmed:`, verify_corpus.py:520-525) works
-   unchanged.
-5. **expected_verdict**: None until promote (same as finalize captures); the brief's
-   "expected status" is assigned at promote time via `--expected-verdict`.
-6. **Mutation-control / anti-tautology pin**: mirror the round-trip pin style
-   (`tests/test_verify_capture_roundtrip.py:233-260`) — capture → promote → re-derive
-   under current thresholds → statuses match; a threshold change flips a stored case.
-   The existing family-key enumeration pin (:438-464) scans **runner.py only** — a
-   cli.py-side writer does not trip it; decide whether to extend it deliberately.
-7. **Autorun caveat**: autorun paths run real tools (bcftools/kallisto/STARsolo) — never
-   in CI (manual gate); capture after the tool result exists, so capture itself is pure
-   I/O and CI-testable with injected seams.
+## What makes local genuinely different from remote (not just "the same, elsewhere")
 
-## Guardrails check
+These are the findings that make this more than a one-line `if`:
 
-Layer 2 (eval-data capture / C6 flywheel), inside the founder's edge, stdlib-only, no
-new dependencies, test-first. Capture must not move verify-guard (95.5%),
-eval-guard (92.9%), heal-guard (100%), reproduce-guard (13/14); must not touch the
-signed record. Honest scope: push, not demand-pull — organic `--concordance-*` usage is
-unmeasured, and the corpus only becomes non-tautological as real runs get labeled.
+1. **No moment of freshness.** Remote's pre-stamp hash is meaningful because "a clone
+   writes every file at clone time" (`cli.py:1140-1147`). A local directory has no such
+   moment — the pre-run hash is of "whatever is already sitting there," including
+   leftovers from a **previous** local reproduce run against the same repo.
+2. **The run writes into the hashed directory.** For a local run the executor's cwd **is**
+   the user's repo (`reproduce.py:1214`). So the recorded digest describes the tree's
+   **inputs**, and the tree on disk **after** the run will not match it. True for remote
+   too (slice 8's R3), but far more visible when it is the user's own working copy.
+3. **`--runs-dir` defaults to the relative string `"runs"`** (`cli.py:912`), resolved
+   against **CWD**, not against `repo_path`. The plausible invocation
+   `cd my-repo && contig reproduce . --run ...` puts the bundle at `<repo>/runs/<id>`,
+   i.e. **inside the tree we would hash**. This run's own bundle is written after the
+   hash (`:1206` ≫ `:1171`), so it cannot corrupt its own digest — but the **second** run
+   against that repo would hash the first run's bundle. Contig's own output would then
+   contaminate Contig's own measurement. **Slice 9's resolution:** the resolved runs dir
+   is excluded from the walk whenever it is a descendant of the hashed tree (R-7's one
+   universal rule on both branches).
+4. **`compute_tree_sha256` prunes only `.git`, symlinks, and the excluded dir.** Pointed at
+   a real working copy it will happily walk `.venv/`, `node_modules/`, `__pycache__/`
+   (deliberately — a name-based denylist could hide a genuine dependency change). The dig
+   confirms **no general ignore-list concept exists anywhere in the repo** to reuse.
+5. **No `source_commit` for local either.** No `git rev-parse` is ever run against an
+   arbitrary local path (`fetch.py`'s rev-parse is inside `fetch_repo`, remote-only).
+
+## Open questions for the interview
+
+### Q1 — Does a local tree hash actually attest anything? (load-bearing; see above)
+
+Honest analysis from the dig: **no `source/` copy is made for a local run**
+(`cli.py:1053` is the remote-only prospective checkout path), so a third party handed a
+local bundle has neither the tree nor a commit to fetch — they **cannot recompute the
+digest**. The third-party-attestation framing that justified slices 6-8 does **not**
+transfer.
+
+What it *does* buy, stated narrowly:
+- **(a) Drift evidence over time on the same tree** — re-run later, a changed digest
+  proves the inputs changed. Today nothing detects that.
+- **(b) Tamper-evidence via the signature** — the digest rides the signed record.
+- **(c) Removes an ambiguity**: `null` currently means both "local run" and "could not be
+  computed." Populating it makes `null` mean only the latter.
+
+Recommendation: **ship it, framed as (a)+(b)+(c), and explicitly disclaim third-party
+attestation** — resolve the contradiction in favor of the PRD's framing, but write the
+understanding note's caveat into the CHANGELOG. If (a)-(c) are not worth a slice, the
+honest alternative is to **close this as won't-do and re-point at the `extract-claims`
+PDF-intake alternate** rather than ship provenance theater.
+
+### Q2 — What to exclude from a local tree walk
+
+- (a) **Hash as-is** — simplest, zero new policy, but includes `.venv`/`node_modules` and,
+  on a second run, a prior bundle.
+- (b) **As-is, plus exclude the resolved runs dir when it falls inside `repo_path`** —
+  targeted, defensible: that directory is *Contig's own artifact*, not the repo's code.
+  Fixes finding 3 without inventing general ignore policy.
+- (c) **A general ignore list** (`.venv`, `node_modules`, …) — **recommend against**: no
+  precedent, invents policy, and a name-based denylist is a correctness hazard (excluding
+  `node_modules` would hide a genuine dependency change from the digest).
+
+Recommend **(b)**.
+
+### Q3 — Bounding the walk
+
+No precedent exists for bounding a *filesystem walk*. The nearest precedent is
+`_MAX_MATCH_BYTES = 8 MiB` (`reproduce.py:51`), and its lesson is about *failure mode*,
+not size: over-cap input is **UNVERIFIED or a refusal, never silent truncation** —
+"Text over the cap is UNVERIFIED rather than silently truncated, which could report
+'0 matches' for a pattern that does match past the cut" (`reproduce.py:46-50`).
+
+Applied here: **if we bound, exceeding the bound must return `None`, never a partial
+digest** — which is already `compute_tree_sha256`'s all-or-`None` contract. Options:
+- (a) **Unbounded** — matches the function's current contract; risk is a long pre-run
+  pause on a huge tree that reads like a hang.
+- (b) **Bounded by cumulative bytes and/or file count → `None` + a stated reason.**
+
+Recommend **(a) unbounded for this slice**, cost documented, unless the user wants the
+bound; the walk is pre-run and `sha256_file` streams in 1 MiB chunks, so it is I/O-bound
+but memory-safe.
+
+### Q4 — Should local also capture `source_commit` (+ dirty flag)? — recommend OUT of scope
+
+For a local directory that *is* a git checkout, `git rev-parse HEAD` plus a dirty
+indicator would be **more** third-party-meaningful than a tree hash (they could fetch that
+commit), and would arguably answer Q1 better than this slice does. But it means shelling
+git at an arbitrary user directory, needs a non-git-directory fallback, and is a different
+feature. **Flag it, defer it, name it in the CHANGELOG as the honest follow-on.**
+
+### Q5 — Retiring the pinned test, deliberately (RESOLVED — slice 9 enacted it)
+
+`test_local_reproduce_records_no_source_tree_sha256` and the module docstring's "Local
+runs never compute it." asserted exactly the behavior this slice inverts. Following the
+v0.50.0 precedent, that guard is **retired deliberately and replaced** by tests pinning
+the new contract (`test_local_reproduce_records_source_tree_sha256` /
+`test_local_source_tree_sha256_is_taken_pre_run_not_post` /
+`test_local_runs_dir_inside_repo_is_excluded`) — not deleted to go green.
+
+## Signature question — settled, no break
+
+`source_tree_sha256` is **already** an always-present key in the canonical payload
+(`signing.py:55-64` dumps every declared field; `None` renders as `null`). Populating it
+for local runs changes a **value**, not the key set. A previously-signed bundle re-derives
+its canonical bytes from its own stored `null` and still verifies. **This slice is not a
+fourth signature break** — pinned by `test_record_with_none_tree_hash_still_verifies`
+(mirroring `test_pre_slice_8_signature_over_a_record_without_tree_hash_no_longer_verifies`,
+`tests/test_reproduce_checkout_hash.py:367`).
+
+## Guardrails check (CLAUDE.md)
+
+Layer-2 reproducibility integrity ✓ · no Layer-1 NL→workflow ✓ · no wet-lab/clinical
+credentials or proprietary data ✓ · stdlib-only, no new dependency (`hashlib`/`os` only;
+declared deps stay `pydantic`/`typer`/`cryptography`) ✓ · honesty posture preserved
+(degrade to `None`, never a partial or fabricated digest) ✓.
+
+## Contradictions / risks surfaced, not papered over
+
+1. **The Q1 contradiction** between slice 8's own PRD and its own dig note — must be
+   resolved explicitly in this PRD.
+2. **Third-party recomputation does not transfer to local** (no `source/` copy). The
+   slice's value proposition is genuinely narrower than slices 6-8's and must be written
+   that way.
+3. **Contig's own `runs/` output can land inside the hashed tree** and contaminate the
+   digest on the second run against the same repo.
+4. **This is push, not demand-pull** — no design partner asked for it; organic frequency
+   of local reproduce runs is unmeasured. Same honest posture as the last several slices.

@@ -331,16 +331,20 @@ def _raise(err: OSError) -> None:
     raise err
 
 
-def compute_tree_sha256(root: str | Path) -> str | None:
+def compute_tree_sha256(root: str | Path, exclude: Path | None = None) -> str | None:
     """Deterministic, stdlib-only digest of a checkout tree (C8 slice 8).
 
     Walks ``root`` with ``os.walk(followlinks=False)``, pruning any directory
-    component named ``.git`` (at any depth) and any symlinked directory, so
-    the digest never crosses a repo boundary or leaves containment. For each
-    regular non-symlink file, folds ``f"{posix_relpath}\\0{sha256_file(path)}\\n"``
+    component named ``.git`` (at any depth), any symlinked directory, and --
+    when ``exclude`` is given -- any directory resolving to it, so the digest
+    never crosses a repo boundary, leaves containment, or folds in Contig's own
+    runs directory when it sits inside the tree being hashed. For each regular
+    non-symlink file, folds ``f"{posix_relpath}\\0{sha256_file(path)}\\n"``
     (NUL delimiter -- illegal in POSIX paths) into a sorted list, then returns
     the hex SHA-256 of the UTF-8 concatenation. This exact algorithm is
     published (CHANGELOG) so a third party can recompute it byte-for-byte.
+    With ``exclude=None`` (the remote branch's effective case) the walk is
+    byte-identical to the slice-8 algorithm.
 
     Honest degradation: a missing or non-directory root, or any ``OSError``
     while listing a directory or reading a file, returns ``None`` -- never a
@@ -351,12 +355,21 @@ def compute_tree_sha256(root: str | Path) -> str | None:
     base = Path(root)
     if not base.is_dir():
         return None
+    exclude_resolved = exclude.resolve() if exclude is not None else None
     lines: list[str] = []
     try:
         for dirpath, dirnames, filenames in os.walk(base, followlinks=False, onerror=_raise):
-            # Prune .git dirs and symlinked dirs in place (os.walk honors edits).
+            # Prune .git dirs, symlinked dirs, and the excluded dir in place
+            # (os.walk honors edits to dirnames).
             dirnames[:] = [
-                d for d in dirnames if d != ".git" and not Path(dirpath, d).is_symlink()
+                d
+                for d in dirnames
+                if d != ".git"
+                and not Path(dirpath, d).is_symlink()
+                and (
+                    exclude_resolved is None
+                    or Path(dirpath, d).resolve() != exclude_resolved
+                )
             ]
             for name in filenames:
                 p = Path(dirpath, name)
