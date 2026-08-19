@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 from contig.cli import app
 from contig.heal import default_heal_baseline_path, default_heal_scenarios_path
 from contig.holdout import default_baseline_path, default_holdout_path
-from contig.models import EvalSnapshot, HealSnapshot
+from contig.models import EvalSnapshot, HealSnapshot, VerifySnapshot
 from contig.snapshot_history import append_jsonl, load_jsonl
 
 runner = CliRunner()
@@ -370,6 +370,101 @@ def test_heal_guard_bare_default_paths_unchanged():
     assert "synthetic" in result.output
 
 
+# --- verify-guard ---------------------------------------------------------------
+
+
+def test_verify_guard_bare_default_paths_unchanged():
+    """Regression guard: a bare `verify-guard` (no new flags, default paths)
+    must print the guard line and exit 0 against the committed baseline --
+    proof --snapshot/--history/--history-file did not change guard behavior."""
+    result = runner.invoke(app, ["verify-guard"])
+    assert result.exit_code == 0
+    assert "verify-guard PASS" in result.output
+    assert "verdict-match 95.5%" in result.output
+
+
+def test_verify_guard_bare_writes_no_history(tmp_path):
+    baseline_path = tmp_path / "baseline.json"
+    history_path = tmp_path / "verify_history.jsonl"
+    setup_history_path = tmp_path / "setup_history.jsonl"
+
+    freeze = runner.invoke(
+        app,
+        ["verify-guard", "--update-baseline", "--baseline", str(baseline_path),
+         "--history-file", str(setup_history_path)],
+    )
+    assert freeze.exit_code == 0
+
+    result = runner.invoke(
+        app,
+        [
+            "verify-guard",
+            "--baseline", str(baseline_path),
+            "--history-file", str(history_path),
+        ],
+    )
+    assert result.exit_code == 0
+    assert not history_path.exists()
+
+
+def test_verify_guard_snapshot_appends_one(tmp_path):
+    baseline_path = tmp_path / "baseline.json"
+    history_path = tmp_path / "verify_history.jsonl"
+    setup_history_path = tmp_path / "setup_history.jsonl"
+
+    freeze = runner.invoke(
+        app,
+        ["verify-guard", "--update-baseline", "--baseline", str(baseline_path),
+         "--history-file", str(setup_history_path)],
+    )
+    assert freeze.exit_code == 0
+
+    bare = runner.invoke(app, ["verify-guard", "--baseline", str(baseline_path)])
+
+    snapshotted = runner.invoke(
+        app,
+        [
+            "verify-guard",
+            "--baseline", str(baseline_path),
+            "--snapshot",
+            "--history-file", str(history_path),
+        ],
+    )
+    assert snapshotted.exit_code == bare.exit_code
+    snaps = load_jsonl(VerifySnapshot, history_path)
+    assert len(snaps) == 1
+
+
+def test_verify_guard_update_baseline_appends_one(tmp_path):
+    baseline_path = tmp_path / "baseline.json"
+    history_path = tmp_path / "verify_history.jsonl"
+
+    first = runner.invoke(
+        app,
+        [
+            "verify-guard",
+            "--update-baseline",
+            "--baseline", str(baseline_path),
+            "--history-file", str(history_path),
+        ],
+    )
+    assert first.exit_code == 0
+    assert baseline_path.exists()
+    assert len(load_jsonl(VerifySnapshot, history_path)) == 1
+
+    second = runner.invoke(
+        app,
+        [
+            "verify-guard",
+            "--update-baseline",
+            "--baseline", str(baseline_path),
+            "--history-file", str(history_path),
+        ],
+    )
+    assert second.exit_code == 0
+    assert len(load_jsonl(VerifySnapshot, history_path)) == 2
+
+
 # --- RELEASING.md accrual hook (R10) -----------------------------------------
 
 
@@ -379,3 +474,4 @@ def test_releasing_doc_has_snapshot_step():
     text = (Path(__file__).parent.parent / "RELEASING.md").read_text()
     assert "contig eval-guard --snapshot" in text
     assert "contig heal-guard --snapshot" in text
+    assert "contig verify-guard --snapshot" in text

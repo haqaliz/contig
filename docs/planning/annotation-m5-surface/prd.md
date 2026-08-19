@@ -30,7 +30,8 @@ structural verify + provenance, v0.25.0), M2 (somatic gate, v0.26.0), M3 (annota
 plausibility, v0.26.0), M4 (VEP-vs-SnpEff concordance, v0.27.0) are shipped. M5 adds the
 **human-legible surface** for M4's concordance and the **DB/cache-version provenance**;
 the third M5 sub-part (folding annotation outcomes into the C6 eval corpus) is **deferred**
-(blocked, see Out of Scope).
+(blocked, see Out of Scope). *(SUPERSEDED — shipped 2026-08 as `eval-corroboration-fold-in`;
+the labeling design, `contig verify-guard`, and the capture/promote channel now exist.)*
 
 ## Problem Statement
 
@@ -241,6 +242,9 @@ pathogenic."
   blocked.** The C1/C3/annotation corroboration signals carry no ground-truth labels, so they
   need a labeling design before joining `eval-guard`/`heal-guard` (deferred across v0.17.0 /
   v0.22.0). Do not build in this slice.
+  *(SUPERSEDED — shipped 2026-08 as `eval-corroboration-fold-in`: verdict-level labels on
+  pre-band metric inputs, `contig verify-guard`, and the real-run capture/promote channel,
+  with concordance-family capture deferred to a follow-on.)*
 - FAIL severity on any annotation concordance band (still uncalibrated).
 - Wiring a SnpEff/VEP cache or `--step annotate` (the live-cache fix); M5 stays honest via
   omission / `None` when annotation didn't run.

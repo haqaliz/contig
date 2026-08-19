@@ -123,16 +123,30 @@ def evaluate_somatic_concordance(
     *,
     label_a: str = "mutect2",
     label_b: str = "strelka",
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list[QCResult]:
     """Emit the one somatic PASS-site-overlap concordance check.
 
     UNVERIFIED (value=None) when the union of PASS sites is below
     `_MIN_SHARED_SITES` (too few to corroborate anything); otherwise WARN below
     `_OVERLAP_WARN_BELOW`, PASS at/above it. Never FAIL. Always `kind="concordance"`.
+
+    `capture_metrics` is an optional out-param for the pre-band verification
+    inputs capture (PRD R4a): when passed, it is populated with the RAW
+    (unrounded) jaccard and the union count under the pair key
+    `mutect2_vs_strelka2` -- on BOTH the normal and the too-few-sites paths, so
+    a low-n case stays self-describing. Additive and back-compat: absent,
+    behavior is exactly as before.
     """
     a = read_caller_sites(mutect2_paths)
     b = read_caller_sites(strelka_paths)
     shared, union, jaccard = _overlap(a, b)
+
+    if capture_metrics is not None:
+        capture_metrics["mutect2_vs_strelka2"] = {
+            "value": jaccard,
+            "n_shared": float(union),
+        }
 
     if union < _MIN_SHARED_SITES:
         return [
@@ -212,7 +226,10 @@ def select_caller_vcfs(
 
 
 def evaluate_somatic_concordance_from_run(
-    run_dir: str | os.PathLike, vcfs: Iterable[str | os.PathLike]
+    run_dir: str | os.PathLike,
+    vcfs: Iterable[str | os.PathLike],
+    *,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list[QCResult]:
     """Auto-select the Mutect2/Strelka VCFs from a somatic run and evaluate their
     PASS-site overlap.
@@ -222,6 +239,9 @@ def evaluate_somatic_concordance_from_run(
     corroboration check needs both callers present. UNVERIFIED, not an arbitrary
     compare, on an ambiguous multi tumor-normal pair layout, or when the callers'
     single pair directories don't match each other.
+
+    `capture_metrics` is passed through to `evaluate_somatic_concordance`; the
+    early paths (ambiguous layout, caller missing) write nothing.
     """
     mutect2, strelka, reason = select_caller_vcfs(run_dir, vcfs)
     if reason is not None:
@@ -236,4 +256,6 @@ def evaluate_somatic_concordance_from_run(
         ]
     if not mutect2 or not strelka:
         return []
-    return evaluate_somatic_concordance(mutect2, strelka)
+    return evaluate_somatic_concordance(
+        mutect2, strelka, capture_metrics=capture_metrics
+    )

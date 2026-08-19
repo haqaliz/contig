@@ -282,10 +282,26 @@ def _locate_mag_qc(run_dir: Path) -> dict[str, dict[str, float]]:
     return located
 
 
-def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
+def _discover_qc(
+    run_dir: Path,
+    assay: str = "rnaseq",
+    *,
+    capture_inputs: dict[str, dict[str, dict[str, float]]] | None = None,
+) -> list[QCResult]:
     """Verify a finished run: MultiQC metric checks (assay-specific rule pack) +
     structural checks on outputs + VCF plausibility checks (germline ts_tv/het_hom;
-    somatic VAF/count/PON), each gated to its own assay."""
+    somatic VAF/count/PON), each gated to its own assay.
+
+    `capture_inputs` is an optional out-param for the pre-band verification
+    inputs capture (C6 fold-in, PRD R4/R4a): when passed, it is populated with
+    the same metric dicts the checks here are derived from, keyed by the
+    verify-corpus scorer's family names (`multiqc`, `rnaseq_plausibility`,
+    `rnaseq_composition`, `scrnaseq`, `methylseq`, `ampliseq`, `mag`,
+    `germline`, and the R4a families `somatic_plausibility`,
+    `concordance_somatic_overlap`, `annotation_plausibility`,
+    `concordance_consequence`). Additive and back-compat: the return shape is
+    unchanged, and absent the parameter nothing is collected.
+    """
     results: list[QCResult] = []
     multiqc = next(run_dir.glob("**/multiqc_data.json"), None)
     if multiqc is not None:
@@ -294,9 +310,17 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
         except ValueError:
             pack = None  # no rule pack for this assay -> skip metric QC (stay honest)
         if pack is not None and assay not in _DEDICATED_METRIC_ASSAYS:
+            multiqc_metrics = parse_multiqc_general_stats_file(multiqc)
             results.extend(
-                evaluate_run_qc(multiqc, rule_pack=pack, cross_sample=(assay == "rnaseq"))
+                evaluate_run_qc(
+                    multiqc,
+                    rule_pack=pack,
+                    cross_sample=(assay == "rnaseq"),
+                    pre_parsed_metrics=multiqc_metrics,
+                )
             )
+            if capture_inputs is not None and multiqc_metrics:
+                capture_inputs["multiqc"] = multiqc_metrics
     # Check that BAM outputs exist and are non-empty. We do NOT blanket-check for
     # indexes here: many BAMs are intermediates that are never indexed, and a
     # spurious index_present:fail would wrongly drag the verdict to "fail".
@@ -314,7 +338,12 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
         pattern = manifest_for("variant_calling").required[0]  # "*.vcf.gz"
         vcfs = sorted(p for p in run_dir.rglob(pattern) if p.is_file())
         if vcfs:
-            results.extend(evaluate_variant_plausibility(vcfs[0]))
+            germline_capture: dict[str, dict[str, float]] = {}
+            results.extend(
+                evaluate_variant_plausibility(vcfs[0], capture_metrics=germline_capture)
+            )
+            if capture_inputs is not None and germline_capture:
+                capture_inputs["germline"] = germline_capture
             results.extend(evaluate_sex_plausibility(vcfs[0]))
     # Annotation structural + plausibility verification (capability C7; germline
     # structural shipped M1, somatic structural enabled M2, plausibility M3 — the
@@ -336,10 +365,16 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
             evaluate_annotation_structural,
         )
 
+        annotation_plausibility_capture: dict[str, dict[str, float]] = {}
+        annotation_concordance_capture: dict[str, dict[str, float]] = {}
         for vcf in sorted(run_dir.rglob("*.vcf.gz")):
             if annotation_metrics(vcf).info_key is not None:
                 results.extend(evaluate_annotation_structural(vcf))
-                results.extend(evaluate_annotation_plausibility(vcf))
+                results.extend(
+                    evaluate_annotation_plausibility(
+                        vcf, capture_metrics=annotation_plausibility_capture
+                    )
+                )
                 break
         # Cross-tool VEP-vs-SnpEff annotation concordance (capability C7 M4):
         # auto-discovers the annotation source(s) under the run (single-vcf-both
@@ -348,7 +383,17 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
         # cross-caller concordance auto-wiring below. Clean `[]` skip when no
         # annotated VCF is found at all; honest UNVERIFIED (never a false pass)
         # when only one annotator ran or the layout is ambiguous.
-        results.extend(evaluate_annotation_concordance_from_run(run_dir))
+        results.extend(
+            evaluate_annotation_concordance_from_run(
+                run_dir, capture_metrics=annotation_concordance_capture
+            )
+        )
+        if capture_inputs is not None and annotation_plausibility_capture:
+            capture_inputs["annotation_plausibility"] = {
+                s: m for s, m in annotation_plausibility_capture.items() if m
+            }
+        if capture_inputs is not None and annotation_concordance_capture:
+            capture_inputs["concordance_consequence"] = annotation_concordance_capture
     # Somatic biological-plausibility checks (capability C4 follow-on): VAF
     # distribution, somatic variant count, and panel-of-normals presence, all
     # computed from the tumor column of the Mutect2 VCF. Gated strictly to the
@@ -360,6 +405,20 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
         pattern = manifest_for("somatic_variant_calling").required[0]  # "*.vcf.gz"
         vcfs = sorted(p for p in run_dir.rglob(pattern) if p.is_file())
         if vcfs:
+            # R4a capture out-params: the pre-band metric dicts these checks are
+            # derived from, written into `capture_inputs` after all the calls
+            # below (guarded exactly like the germline capture precedent). The
+            # three plausibility evaluators each capture under their own sample
+            # label (tumor, normal, strelka-TUMOR) -- but two of them can share
+            # the SAME tumor sample label, so each evaluator fills its own
+            # out-param dict and the family dict is merged below (the evaluators
+            # assign, not merge, per sample key -- sharing one dict would
+            # clobber the tumor metrics).
+            somatic_plausibility_capture: dict[str, dict[str, float]] = {}
+            somatic_concordance_capture: dict[str, dict[str, float]] = {}
+            tumor_capture: dict[str, dict[str, float]] = {}
+            swap_capture: dict[str, dict[str, float]] = {}
+            strelka_capture: dict[str, dict[str, float]] = {}
             # Match "mutect2" as a path COMPONENT below the run dir (sarek writes the
             # VCF under a `mutect2/` directory), not as a substring of the absolute
             # path — otherwise a "mutect2" in an ancestor workspace/run-id name would
@@ -373,7 +432,11 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
                 None,
             )
             if mutect2 is not None:
-                results.extend(evaluate_somatic_plausibility(mutect2))
+                results.extend(
+                    evaluate_somatic_plausibility(
+                        mutect2, capture_metrics=tumor_capture
+                    )
+                )
                 # Tumor/normal swap smell test (swap-verdict, C4 follow-on):
                 # reads the same Mutect2 VCF's NORMAL column (##normal_sample=)
                 # for an implausibly high median VAF -- the somatic signal
@@ -381,7 +444,9 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
                 # heavily contaminated pair. WARN-capped (no fail_*) and
                 # UNVERIFIED-when-unresolvable, so it can never change the
                 # exit code or silently drop.
-                results.extend(evaluate_swap_plausibility(mutect2))
+                results.extend(
+                    evaluate_swap_plausibility(mutect2, capture_metrics=swap_capture)
+                )
             else:
                 results.append(
                     QCResult(
@@ -398,7 +463,11 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
             # appended after, and independent of, VAF plausibility above — it
             # reuses the same globbed VCF list but self-selects both callers'
             # files and skips cleanly (or reports UNVERIFIED) on its own terms.
-            results.extend(evaluate_somatic_concordance_from_run(run_dir, vcfs))
+            results.extend(
+                evaluate_somatic_concordance_from_run(
+                    run_dir, vcfs, capture_metrics=somatic_concordance_capture
+                )
+            )
             # Strelka2 tumor-VAF plausibility (capability C4 follow-on, PRD S1):
             # mirrors the Mutect2 median_vaf gate above, but sourced from
             # Strelka2's own tier-count VAF definition (AU/CU/GU/TU for SNVs,
@@ -418,7 +487,11 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
             if strelka:
                 snv = next((p for p in strelka if "snv" in p.name.lower()), None)
                 indel = next((p for p in strelka if "indel" in p.name.lower()), None)
-                results.extend(evaluate_strelka_vaf_plausibility(snv, indel))
+                results.extend(
+                    evaluate_strelka_vaf_plausibility(
+                        snv, indel, capture_metrics=strelka_capture
+                    )
+                )
             elif strelka_reason is not None and any(
                 "strelka" in {part.lower() for part in p.relative_to(run_dir).parts}
                 for p in vcfs
@@ -435,12 +508,35 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
                         kind="metric",
                     )
                 )
+            # R4a capture writes, after all the checks above have populated the
+            # out-params: the three plausibility dicts are merged into the family
+            # dict by sample label (evaluators assign per sample key), empty
+            # sample dicts are filtered (rnaseq_composition precedent), and the
+            # concordance family is only written when the concordance actually
+            # ran (both callers present).
+            if capture_inputs is not None:
+                for captured in (tumor_capture, swap_capture, strelka_capture):
+                    for sample, metrics in captured.items():
+                        if metrics:
+                            somatic_plausibility_capture.setdefault(sample, {}).update(
+                                metrics
+                            )
+            if capture_inputs is not None and somatic_plausibility_capture:
+                capture_inputs["somatic_plausibility"] = {
+                    s: m for s, m in somatic_plausibility_capture.items() if m
+                }
+            if capture_inputs is not None and somatic_concordance_capture:
+                capture_inputs["concordance_somatic_overlap"] = (
+                    somatic_concordance_capture
+                )
     # RNA-seq biological-plausibility checks (capability C3, RNA-seq slice, Phase 3).
     # Gated: only when the assay is rnaseq AND a MultiQC report was found. One extra
     # parse of the same JSON is intentional — mirrors the germline path independently
     # re-locating the VCF so the two gates stay self-contained.
     if assay == "rnaseq" and multiqc is not None:
         metrics = parse_multiqc_general_stats_file(multiqc)
+        if capture_inputs is not None and metrics:
+            capture_inputs["rnaseq_plausibility"] = metrics
         results.extend(evaluate_rnaseq_plausibility(metrics))
     # RNA-seq read-composition QC (capability C3, rnaseq slice, additive to the
     # MultiQC-driven gate above). RSeQC's exonic/intronic/unassigned fractions do
@@ -458,7 +554,12 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
     # part of the rnaseq structural manifest). Kept as a SEPARATE `if` block from
     # the gate above (not merged) -- mirrors the germline dual-gate precedent.
     if assay == "rnaseq":
-        for sample, sample_metrics in _locate_rnaseq_composition_qc(run_dir).items():
+        located = _locate_rnaseq_composition_qc(run_dir)
+        if capture_inputs is not None:
+            composition = {s: m for s, m in located.items() if m}
+            if composition:
+                capture_inputs["rnaseq_composition"] = composition
+        for sample, sample_metrics in located.items():
             if sample_metrics:
                 results.extend(evaluate({sample: sample_metrics}, RNASEQ_COMPOSITION_PACK))
             else:
@@ -481,7 +582,12 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
     # false pass); no artifact at all skips silently (structural QC owns a missing
     # output, mirroring the germline no-VCF path). Gated strictly to scrnaseq.
     if assay == "scrnaseq":
-        for sample, sample_metrics in _locate_scrnaseq_qc(run_dir).items():
+        located = _locate_scrnaseq_qc(run_dir)
+        if capture_inputs is not None:
+            scrnaseq = {s: m for s, m in located.items() if m}
+            if scrnaseq:
+                capture_inputs["scrnaseq"] = scrnaseq
+        for sample, sample_metrics in located.items():
             if sample_metrics:
                 results.extend(evaluate({sample: sample_metrics}, SCRNASEQ_RULE_PACK))
             else:
@@ -509,7 +615,12 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
     # generic MultiQC pack path above skips methylseq (_DEDICATED_METRIC_ASSAYS)
     # so this gate is the single authoritative source (M6).
     if assay == "methylseq":
-        for sample, sample_metrics in _locate_methylseq_qc(run_dir).items():
+        located = _locate_methylseq_qc(run_dir)
+        if capture_inputs is not None:
+            methylseq = {s: m for s, m in located.items() if m}
+            if methylseq:
+                capture_inputs["methylseq"] = methylseq
+        for sample, sample_metrics in located.items():
             if sample_metrics:
                 results.extend(evaluate({sample: sample_metrics}, METHYLSEQ_RULE_PACK))
             else:
@@ -541,7 +652,12 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
     # MultiQC pack path above skips ampliseq (_DEDICATED_METRIC_ASSAYS) so this
     # gate is the single authoritative source (M6).
     if assay == "ampliseq":
-        for sample, sample_metrics in _locate_ampliseq_qc(run_dir).items():
+        located = _locate_ampliseq_qc(run_dir)
+        if capture_inputs is not None:
+            ampliseq = {s: m for s, m in located.items() if m}
+            if ampliseq:
+                capture_inputs["ampliseq"] = ampliseq
+        for sample, sample_metrics in located.items():
             if sample_metrics:
                 results.extend(evaluate({sample: sample_metrics}, AMPLISEQ_RULE_PACK))
             else:
@@ -573,7 +689,12 @@ def _discover_qc(run_dir: Path, assay: str = "rnaseq") -> list[QCResult]:
     # (_DEDICATED_METRIC_ASSAYS) so this gate is the single authoritative
     # source (M6).
     if assay == "mag":
-        for bin_id, bin_metrics in _locate_mag_qc(run_dir).items():
+        located = _locate_mag_qc(run_dir)
+        if capture_inputs is not None:
+            mag = {b: m for b, m in located.items() if m}
+            if mag:
+                capture_inputs["mag"] = mag
+        for bin_id, bin_metrics in located.items():
             if bin_metrics:
                 results.extend(evaluate({bin_id: bin_metrics}, MAG_RULE_PACK))
             else:
@@ -1219,6 +1340,7 @@ def run_pipeline(
     # nothing to record.
     record: RunRecord | None = None
     if artifact_path.exists():
+        capture_inputs: dict[str, dict[str, dict[str, float]]] = {}
         record = RunRecord(
             run_id=run_id,
             pipeline=pipeline,
@@ -1227,10 +1349,13 @@ def run_pipeline(
             input_checksums=compute_input_checksums(input_paths),
             parameters=params or {},
             events=parse_events(artifact_path),
-            qc_results=_discover_qc(run_dir, assay),
+            qc_results=_discover_qc(run_dir, assay, capture_inputs=capture_inputs),
             assay=assay,
             nextflow_version=nextflow_version,
             contig_version=_contig_version(),
+            # An empty capture normalizes to None (PRD R4: nothing band-relevant
+            # to label), keeping the field absent rather than present-but-empty.
+            verification_inputs=capture_inputs or None,
         )
         write_bundle(record, run_dir)
 

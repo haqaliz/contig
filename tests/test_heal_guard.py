@@ -17,6 +17,7 @@ from contig.heal import (
     default_heal_scenarios_path,
     load_heal_baseline,
     load_heal_scenarios,
+    run_heal_scenario,
     save_heal_baseline,
     snapshot_from_heal_report,
 )
@@ -84,6 +85,27 @@ def test_load_heal_scenarios_skips_blank_lines(tmp_path):
     assert len(scenarios) == 2
     assert scenarios[0].scenario_id == "s1"
     assert scenarios[0].expected_class == "oom"
+
+
+def test_shipped_alignment_format_mismatch_give_up_scenario(tmp_path):
+    # R4 (C2): the shipped scenario clones tool-crash-giveup exactly -- the
+    # CRAM log classifies alignment_format_mismatch, no patch exists by design,
+    # and the REAL loop must end in an honest gave_up, never a false pass or a
+    # fabricated patch.
+    scenarios = load_heal_scenarios(default_heal_scenarios_path())
+    scn = next(
+        s for s in scenarios if s.scenario_id == "alignment-format-mismatch-give-up"
+    )
+    assert scn.expected_class == "alignment_format_mismatch"
+    assert scn.expected_recovered is False
+    assert scn.expected_outcome == "gave_up"
+    assert scn.expected_patch_applied is False
+
+    result = run_heal_scenario(scn, tmp_path)
+    assert result.matched is True, result.divergence
+    assert result.diagnosed_class == "alignment_format_mismatch"
+    assert result.recovered is False
+    assert result.actual_outcome == "gave_up"
 
 
 # --- compare_heal_to_baseline (pure) ------------------------------------------

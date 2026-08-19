@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
 import pytest
 from typer.testing import CliRunner
@@ -30,6 +31,18 @@ def _repo(tmp_path):
     return repo
 
 
+def _stamp_fresh(path):
+    """Future-stamp an artifact the run binds, so the freshness guard
+    (mtime >= run start) cannot flake on a coarse-mtime filesystem: the CLI
+    stamps the run start sub-second (cli.py), and a filesystem that truncates
+    mtime to the second can report the write as marginally before the stamp --
+    the documented false-UNVERIFIED hazard. The guard's own deterministic
+    fixtures use fixed os.utime stamps (reproduce_guard.py)."""
+
+    now = time.time()
+    os.utime(path, (now + 60, now + 60))
+
+
 def _fake_executor(results=None, exit_code=0, output=""):
     """Mirrors _fake_run_executor in test_cli.py: writes a canned results.json
     into cwd (the repo dir, per run_reproduction's executor contract) and
@@ -40,7 +53,9 @@ def _fake_executor(results=None, exit_code=0, output=""):
 
     def execute(cmd, cwd):
         if results is not None:
-            (cwd / "results.json").write_text(json.dumps(results))
+            path = cwd / "results.json"
+            path.write_text(json.dumps(results))
+            _stamp_fresh(path)
         return exit_code, output
 
     return execute
@@ -402,7 +417,9 @@ def test_reproduce_located_claim_end_to_end_reports_verdict(tmp_path, monkeypatc
 
     def execute(cmd, cwd):
         (cwd / "out").mkdir(parents=True, exist_ok=True)
-        (cwd / "out" / "summary.json").write_text(json.dumps({"model": {"auc": 0.9}}))
+        p = cwd / "out" / "summary.json"
+        p.write_text(json.dumps({"model": {"auc": 0.9}}))
+        _stamp_fresh(p)
         return 0, ""
 
     monkeypatch.setattr("contig.cli.default_command_executor", execute)
@@ -492,7 +509,9 @@ def test_reproduce_allow_install_heals_and_bundle_records_repair(tmp_path, monke
         calls["n"] += 1
         if calls["n"] == 1:
             return 1, "ModuleNotFoundError: No module named 'numpy'"
-        (cwd / "results.json").write_text(json.dumps({"auc": 0.9}))
+        p = cwd / "results.json"
+        p.write_text(json.dumps({"auc": 0.9}))
+        _stamp_fresh(p)
         return 0, ""
 
     monkeypatch.setattr("contig.cli.default_command_executor", execute)
@@ -649,7 +668,9 @@ def _write_de_tsv_executor(observed: str):
         out_dir = cwd / "out"
         out_dir.mkdir(parents=True, exist_ok=True)
         rows = [_DE_HEADER, ["ENSG1", observed, "0.001"]]
-        (out_dir / "de.tsv").write_text("\n".join("\t".join(r) for r in rows) + "\n")
+        p = out_dir / "de.tsv"
+        p.write_text("\n".join("\t".join(r) for r in rows) + "\n")
+        _stamp_fresh(p)
         return 0, ""
 
     return execute
@@ -784,7 +805,9 @@ def _write_train_log_executor(line: str):
     def execute(cmd, cwd):
         log_dir = cwd / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
-        (log_dir / "train.log").write_text(f"epoch 1 done\n{line}\n")
+        p = log_dir / "train.log"
+        p.write_text(f"epoch 1 done\n{line}\n")
+        _stamp_fresh(p)
         return 0, ""
 
     return execute
@@ -997,7 +1020,9 @@ def _write_notebook_executor(printed: str, name: str = "out.ipynb"):
     """
 
     def execute(cmd, cwd):
-        (cwd / name).write_text(json.dumps(_notebook_doc(printed)))
+        p = cwd / name
+        p.write_text(json.dumps(_notebook_doc(printed)))
+        _stamp_fresh(p)
         return 0, ""
 
     return execute

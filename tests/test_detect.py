@@ -96,6 +96,67 @@ def test_missing_csi_is_missing_index() -> None:
     assert any(".csi" in e for e in d.evidence)
 
 
+# --- stale single-file index: OLDER than the data it indexes (htslib) ---------
+
+
+def test_stale_bai_index_is_missing_index() -> None:
+    # htslib refuses an index that is OLDER than the data it indexes
+    # (hts_idx_load3). The message carries no absence phrase ("not found"/
+    # "missing"), so the generic branch below misses it and it would fall to
+    # tool_crash; the freshness branch must catch it.
+    events = [TaskEvent(process="SAMTOOLS", status="FAILED", exit=1)]
+    log = "[E::hts_idx_load3] The index file is older than the data file: /ref/aln.bam.bai"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "missing_index"
+    assert any(".bai" in e for e in d.evidence)
+
+
+def test_stale_fai_tbi_csi_indexes_classify() -> None:
+    # One stale line per supported single-file kind must classify the same way.
+    events = [TaskEvent(process="SAMTOOLS", status="FAILED", exit=1)]
+    for line in (
+        "[E::fai_load] The index file is older than the FASTA file: ref.fa.fai",
+        "[E::hts_idx_load3] The index file is older than the data file: calls.vcf.gz.tbi",
+        "[E::hts_idx_load3] The index file is older than the data file: calls.vcf.gz.csi",
+    ):
+        d = diagnose_failure(events, log_text=line)
+        assert d.failure_class == "missing_index", line
+
+
+def test_stale_absent_index_phrasing_still_generic() -> None:
+    # An absence-phrased line (no freshness wording) must STILL classify via the
+    # generic branch, root_cause unchanged -- the stale branch must not steal it.
+    events = [TaskEvent(process="SAMTOOLS", status="FAILED", exit=1)]
+    log = 'samtools index: failed to open "aln.bam.bai": No such file or directory'
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "missing_index"
+    assert d.root_cause == "A required index file is missing."
+
+
+def test_mixed_missing_or_older_classifies_stale() -> None:
+    # A line carrying BOTH absence and freshness wording must classify
+    # STALE-first: the freshness branch is ordered before the generic one, and
+    # the rebuild+replace repair covers both flavors.
+    events = [TaskEvent(process="SAMTOOLS", status="FAILED", exit=1)]
+    log = (
+        "[E::hts_idx_load3] The index file is missing or older than the "
+        "data file: /ref/aln.bam.bai"
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "missing_index"
+    assert d.root_cause == "An index file is older than the data it indexes."
+
+
+def test_benign_older_than_mention_is_not_missing_index() -> None:
+    # The AND-guard must hold: "older than" alone is not enough. A line with no
+    # index token and no "index file" wording must fall through, never
+    # missing_index.
+    events = [TaskEvent(process="PREPARE_GENOME", status="FAILED", exit=1)]
+    log = "the reference was updated, so this sample sheet is older than the expected revision"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class != "missing_index"
+
+
 def test_missing_genome_fasta_is_missing_reference() -> None:
     events = [TaskEvent(process="ALIGN", status="FAILED", exit=1)]
     log = "Error: No such file or directory: /data/genome.fasta"
@@ -320,6 +381,49 @@ def test_vcf_please_use_bgzip_without_faidx_token_is_not_reference_not_bgzf() ->
     log = "[tabix] was bgzip used to compress this file? please use bgzip"
     d = diagnose_failure(events, log_text=log)
     assert d.failure_class != "reference_not_bgzf"
+
+
+# --- CRAM decode failures: alignment format mismatch (C2) ----------------------
+
+
+def test_cram_decode_slice_without_reference_is_alignment_format_mismatch() -> None:
+    # samtools view on a CRAM input fails at decode time when htslib has no
+    # reference FASTA for CRAM->BAM conversion. Distinct and actionable
+    # (supply the reference / point at the right CRAM), not an opaque crash.
+    events = [TaskEvent(process="SAMTOOLS_VIEW", status="FAILED", exit=1)]
+    log = (
+        "[E::cram_decode_slice] No reference file specified for CRAM decoding\n"
+        "samtools view failed on /work/aln.cram"
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "alignment_format_mismatch"
+    assert d.confidence == 0.85
+    assert "CRAM" in d.root_cause.upper()
+    assert any("cram_decode_slice" in e.lower() for e in d.evidence)
+
+
+def test_cram_decode_line_that_also_says_reference_not_found_is_alignment_format_mismatch() -> None:
+    # The absence phrase ("reference not found") shares a line with the decode
+    # error. The CRAM branch's AND-guard must beat the missing_index absence
+    # needles (which require an index token on the line) and must not fall
+    # through to tool_crash.
+    events = [TaskEvent(process="SAMTOOLS_VIEW", status="FAILED", exit=1)]
+    log = (
+        "samtools view: [E::cram_decode_slice] Reference file is required for "
+        "CRAM decoding: reference not found for /data/aln.cram"
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "alignment_format_mismatch"
+
+
+def test_bare_cram_filename_without_decode_phrase_is_tool_crash() -> None:
+    # The branch must not fire on the bare token "cram" inside a filename; only
+    # a CRAM decode-failure phrase triggers it. Without one, this stays an
+    # unrecognized crash.
+    events = [TaskEvent(process="SAMTOOLS_VIEW", status="FAILED", exit=1)]
+    log = "Error processing /data/aln.cram: invalid argument"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "tool_crash"
 
 
 # --- broader failure classes for common nf-core failures (contract D) ----------

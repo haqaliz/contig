@@ -6,6 +6,294 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **The last R4a capture deferral closes: `contig verify --concordance-*` now
+  captures one pending `VerificationCase` per concordance invocation into
+  `<runs_dir>/pending_verify_corpus.jsonl` (`verify-time-concordance-capture`).**
+  The three verify-time concordance evaluators — germline `concordance_genotype`
+  and the RNA-seq/single-cell `concordance_spearman` — gain the v0.53.0 somatic
+  precedent's `capture_metrics=` out-param, surfacing the RAW pre-band
+  `{"value", "n_shared"}` their verdicts are computed from: the last two C6
+  families whose pre-band inputs existed only at verify time (the second call set
+  / count matrix is user-supplied or autorun, never in the run dir). When
+  `contig verify` runs any of the six concordance flags and the evaluator returns
+  results, one pending case is appended (`case_id f"{run_id}-verify-concordance"`,
+  `source "pending:{run_id}"`, `expected_verdict None` until promote), deduped by
+  `case_id` on a repeated verify of the same run; the existing
+  `verify-case-promote` then labels it exactly like any other pending case
+  (source `pending:` → `confirmed:`, deduped against golden, auto-snapshot), and
+  the scorer re-derives the stored values under the current bands.
+  - **Honest scope.** Capture is **push, not demand-pull**: it fires only when a
+    concordance flag ran and produced results — a flag-less verify, a
+    non-matching assay's honest skip (`[]`), and a repeat verify of the same run
+    all write nothing. The golden corpus stays synthetic; it becomes
+    non-tautological only as real runs get labeled through the promote channel
+    (band-sensitive by construction — the mutation-control pin proves a band
+    change flips a stored case). The four guards and all baselines are unmoved
+    (95.5% / 92.9% / 100% / 13/14, no refreeze). No signature break: capture
+    writes only the sidecar, never the signed bundle, and is byte-invisible to
+    every verify output path (text and `--json`).
+
+## [0.54.0] - 2026-08-15
+
+### Added
+
+- **The C7 live-cache gap closes: sarek variant runs now wire their own
+  annotation-cache download (`annotation-cache-wiring`), so the annotation step
+  runs on a real machine instead of failing at cache initialisation.** sarek 3.5.1
+  defaults `--vep_cache`/`--snpeff_cache` to `s3://annotation-cache/…` and its
+  `ANNOTATION_CACHE_INITIALISATION` subworkflow calls `error()` on a missing cache
+  dir — so the roadmap's earlier "absent annotation → UNVERIFIED" framing was
+  optimistic: a cache-less Contig variant run **hard-fails at cache
+  initialisation** (verified against sarek 3.5.1 source). `_dispatch_run` now
+  injects `download_cache=true` + `outdir_cache=<runs_dir>/caches/annotation/
+  <pipeline>@<revision>/` (setdefault, user values win; the dir is created up
+  front and an uncreatable path refuses the launch before anything runs) for both
+  `VARIANT_ASSAYS` (`variant_calling`, `somatic_variant_calling`). With
+  `download_cache=true` sarek takes the `DOWNLOAD_CACHE_SNPEFF_VEP` branch and
+  skips the hard-error validation, downloading the VEP/SnpEff cache at run time on
+  the user's compute into the shared cache dir — paid once, reused on
+  rerun/resume/sibling runs, never inside the run bundle (without `outdir_cache`
+  sarek would publish the cache into `${outdir}/cache/`). Rerun/resume re-inject
+  automatically (both re-enter `_dispatch_run`; params are not persisted in the
+  manifest by design). No verifier change: `_discover_qc`'s CSQ/ANN discovery and
+  `_finalize`'s provenance capture light up unchanged once an annotated VCF
+  exists.
+  - **`--step annotate` is deliberately not used.** sarek's `step` enum
+    (mapping/markduplicates/recalibrate/variant_calling/annotate) is a *restart*
+    mode needing a VCF-dir `--input`; annotation runs automatically after calling
+    when `vep`/`snpeff` are in `--tools`, so the cache is the only missing
+    enabler.
+  - **Read honestly.** Push, not demand-pull (organic frequency unmeasured); **no
+    real nf-core/sarek run in CI** — the wiring is pinned by argv/param tests
+    (`tests/test_annotation_cache_wiring.py`), and a real-run smoke test (cache
+    downloads, annotated VCF appears, C7 verifiers fire) remains a manual
+    post-merge gate. The cache download is keyed to sarek's default `GATK.GRCh38`
+    genome attrs (`conf/igenomes.config`), so an explicit `--fasta/--gtf` run with
+    a **non-GRCh38** reference would fetch the GRCh38 cache (wrong build) —
+    accepted; user-supplied `--vep_cache`/`--snpeff_cache` paths remain a future
+    slice. A run machine without network fails the download honestly (existing
+    self-heal behavior; no new repair). No signature break: no model, manifest, or
+    signed field changed.
+
+- **The C6 reproduce track's capture/promote channel ships: `contig
+  reproduce-case-promote` + pending `ReproduceCase` capture.** A finished `contig
+  reproduce` run earns a pending case in the sidecar
+  `<runs_dir>/pending_reproduce_corpus.jsonl` when it is interesting for a human —
+  any `diverged`/`unverified` claim, any repair history, or a non-zero exit —
+  always-on, no flag (a clean run is never captured), and the capture writes only the
+  sidecar, leaving the bundle untouched. `contig reproduce-case-promote` moves a
+  reviewed case from pending into the golden corpus
+  `src/contig/data/reproduce_corpus.jsonl` (created on first promote) with per-claim
+  `--expected-claims id:status` partial labeling and optional `--expected-repair` /
+  `--expected-exit`; the informational scorer re-derives each claim under the current
+  `classify` bands via the shipped classify with an injectable classifier seam (the
+  mutation-control pin), counting only labeled claims. Each promote auto-snapshots a
+  `ReproduceCorpusSnapshot` of the grown corpus into
+  `src/contig/data/reproduce_corpus_history.jsonl`.
+  - **Honest scope.** The golden corpus starts **empty** (created on first promote);
+    capture is **push, not demand-pull** (organic reproduce-run volume unmeasured);
+    CI touches **no real repo, git, network, or pip** (scripted seams only); the four
+    guards, all baselines, and `reproduce_scenarios.jsonl` are untouched — the guard
+    stays **13/14** — and the golden corpus is deliberately never a guard default, so
+    golden cases never leak into the regression guard. If the next **20 real
+    reproduce runs** file zero non-authored pending cases, the channel is restated as
+    taxonomy-only. No signature break: the new models are purely additive, no signed
+    field changed.
+
+- **The C6 fold-in now covers the reproduce track: `contig reproduce-guard` guards
+  the REAL reproduce loop's per-scenario outcome-match rate as the fourth C6 guard.**
+  A frozen `ReproduceScenario` set (`src/contig/data/reproduce_scenarios.jsonl`, **14
+  scenarios**) is replayed through the **real** `run_reproduction` loop — real
+  `load_claims`, real `classify`, real locators, real freshness guard — with only the
+  executor/installer seams scripted (`src/contig/reproduce_guard.py`). The seed covers
+  every locator family (`flat`/`json`/`table`/`pattern`/`notebook`) plus a
+  stale-artifact case and the env-resurrection heal (`installed_and_retried`, the
+  slice-2 repair) with its install-fail give-up. A scenario matches only when **every**
+  expected claim status, the expected repair outcome, and the expected exit code all
+  equal the replay. The committed baseline is honestly **13/14 (92.9%)**
+  (`src/contig/data/reproduce_baseline.json`) — the single mismatch is the deliberate
+  `known-miss` scenario (metadata only, never special-cased), the guard's liveness
+  demonstration that the number can sit below 1.0; `recovery_rate` (1/14) and per-family
+  rates ride along informational-only, never guarded. Flags mirror verify-guard exactly:
+  `--update-baseline` / `--snapshot` / `--history` / `--json` / `--tolerance`, with
+  `src/contig/data/reproduce_history.jsonl` as the append-only trend (currently empty).
+  Wired into CI immediately after `verify-guard` (`.github/workflows/ci.yml`).
+  - **Honest scope.** **Synthetic and self-graded**: we authored the 14 fixtures we
+    grade, and **no real repo, git, network, or pip appears in CI** — the executor and
+    installer are scripted and the run stamp is injected (one fixed `run_started_at` for
+    every replay, never wall-clock). This is **push, not demand-pull**: organic
+    reproduce-run volume is unmeasured and nothing here claims otherwise. The guarded
+    number is live only via the **anti-tautology mutation-control pin** (flipping an
+    expected or observed status flips the match — pinned by test), not via field data.
+    **It recovers nothing for a user** — it changes what CI guards, not what the engine
+    does. The **capture channel has NOT shipped**: capture of reproduce outcomes
+    (pending `ReproduceCase` + promote, the capture-promote aspect) remains the
+    **pending follow-on slice**, and the corpus only becomes non-tautological as real
+    runs feed it through that channel. And, per every prior C8 slice, a **real-repo
+    smoke test remains a manual post-merge gate**, not a CI step.
+
+## [0.53.0] - 2026-08-12
+
+### Added
+
+- **The C6 fold-in's R4a deferral closes: the four run-dir-derived corroboration
+  families are now captured into `RunRecord.verification_inputs`.** The v0.51.0 fold-in
+  deferred concordance-family capture and left the somatic/annotation plausibility
+  gaps open — this slice captures **all four** from the run dir at `_discover_qc` time
+  (`somatic_plausibility`, `annotation_plausibility`, `concordance_somatic_overlap`,
+  `concordance_consequence`), each via the evaluator's `capture_metrics` out-param
+  mirroring the germline `capture_metrics` precedent: the pre-band metric dicts the
+  checks are derived from, keyed by the verify-corpus scorer's family names, written
+  into `verification_inputs` after all the calls (additive, back-compat, absent the
+  parameter nothing is collected). The somatic evaluators share a single tumor sample
+  label, so each fills its own out-param dict and the family dict is merged below —
+  the evaluators assign, never merge, per sample key. The verify-corpus scorer pins the
+  round-trip: capture → `pending_verify_corpus.jsonl` → promote replays through the
+  scorer's family-key enumeration (`concordance_somatic_overlap` /
+  `concordance_consequence` re-derive from stored `{"value", "n_shared"}` signals under
+  the modules' current thresholds, one family per kind), with round-trip and per-kind
+  status-consistency pins plus a family-key enumeration pin.
+  - **Guards unmoved, no baseline refreeze:** `verify-guard` stays at **95.5%**,
+    `eval-guard` at **92.9%**, `heal-guard` at **100%** — the capture is additive and
+    never moves the guarded number, so no `verify_baseline.json` /
+    `holdout_baseline.json` / `heal_baseline.json` change.
+  - **Read honestly.** Concordance remains **WARN-only** in the verdict, low-`n_shared`
+    still re-derives **unverified** (never a false pass), capture never alters any QC
+    result or the signed record — no signature break, no new dependency. The honest
+    limits persist: germline (`concordance_genotype`) and RNA-seq/single-cell
+    (`concordance_spearman`) concordance capture **remains deferred** — their second
+    call set / count matrix exists only at `contig verify` time (user-supplied or
+    autorun), not in the run dir — with the committed revisit trigger: the day a
+    second set is run-dir-derivable for those assays, or a verify-time capture channel
+    that does not break the signed payload. No real nf-core in CI.
+
+## [0.52.0] - 2026-08-09
+
+### Added
+
+- **A stale single-file index is now detected, rebuilt, and swapped — htslib's "index file
+  is older than the data file" family stops being an opaque `tool_crash`.** htslib refuses
+  an index built from an older version of the data it indexes
+  (`[E::hts_idx_load3] The index file is older than the data file: X`). The message carries
+  no absence phrase, so every shipped `missing_index` branch missed it and the run died
+  undiagnosed — and its inverse, "missing **or** older" phrasing, was swallowed by the
+  generic missing-index branch, aiming a rebuild at an index that already exists. A new
+  detector branch now classifies the stale flavor `missing_index` **first**: AND-guarded on
+  the freshness phrase (`"older than"`) plus an index token (`.fai`/`.bai`/`.tbi`/`.csi` or
+  "index file"), ordered **before** the generic notfound branch so a "missing or older"
+  message classifies stale-first, at confidence 0.85. The repair is dispatched by
+  **evidence, not a model change**: `_is_stale_evidence` scans the diagnosis's evidence
+  lines for the freshness phrase, so `Diagnosis` and the signed record are untouched — no
+  signature break. The rebuild runs into run-scoped scratch (`<run_id>/healed_index/<kind>`):
+  the resolved source is **symlinked into scratch** and the unchanged `_INDEX_BUILD` argv
+  (`.fai`→`samtools faidx`, `.bai`→`samtools index`, `.tbi`→`tabix -p vcf`, `.csi`→`bcftools
+  index`) runs against the symlink, so the rebuilt sidecar lands in scratch; only on rc 0
+  **and** a produced artifact does `os.replace` atomically swap the user's stale file
+  (same-dir dot-temp copy + rename fallback on a cross-device `OSError`). A failed build
+  leaves the user's file byte-identical — never half-written; give-ups are honest
+  (`index_unresolvable` on an unparseable path or unresolvable source,
+  `index_build_failed` on a failed build or an "exited 0 but produced no index" empty
+  build); build-once-per-path bounds the loop; success reuses the `built_index_and_retried`
+  outcome literal with old/new mtimes and the applied argv in `RepairStep.detail`.
+  - Guards: **`eval-guard` unmoved at 92.3% (12/13)** — the new branch's corpus case
+    landed in the training set, the holdout is untouched; **`heal-guard` at 1.0 over 21
+    scenarios** with `covered_classes` 15 unchanged (`missing_index` was already covered —
+    this adds a scenario, not a class). The `stale-index-heal` scenario replays the REAL
+    repair end to end: attempt 1 fails with the htslib line → scratch build → atomic
+    replace → retry succeeds → `built_index_and_retried`, `expected_patch_applied` true;
+    `heal_baseline.json` refrozen as a deliberate act (`--update-baseline`, never a
+    hand-edit; `corpus_sha 4afc3513…`). The scenario caught a real integration bug the
+    unit tests could not: the dangling scratch **symlink** to the data file would trip the
+    retry's QC `**/*.bam` glob on an otherwise green run — the scratch kind-dir is now
+    removed on success (the `healed_index` root is kept when non-empty, so a STAR scratch
+    sitting alongside survives).
+  - **Read honestly.** Push, not demand-pull: organic frequency is unmeasured and no real
+    Contig-launched run has ever produced this failure — the field corpus has only ever
+    diagnosed `oom`, `tool_crash`, `missing_index`, `unknown`. The needle is **reasoned,
+    not observed**: no real nf-core in CI, and a non-matching stale message still degrades
+  to `tool_crash`. And `samtools faidx` silently rebuilds a stale `.fai`, so the hard-fail
+  surface this actually helps is the htslib `hts_idx_load3` family
+  (`.bai`/`.csi`/`.tbi`), with `.fai` covered defensively. The wrong-reference index
+  masquerade stays out of scope — mtime cannot distinguish it.
+- **An alignment-file format error now has a name — the input-format-conversion class's
+  second half ships as the `alignment_format_mismatch` detector.** A tool killed because it
+  cannot decode a CRAM alignment (the htslib `[E::cram_decode_slice]` reference-required
+  family / GATK "Reference is required for CRAM") previously died as an opaque `tool_crash`
+  at confidence 0.4. A new `FailureClass` literal and a narrow detector branch — AND-guarded
+  on a CRAM-specific decode phrase (`cram_decode_slice` / `for cram decoding` / `required
+  for cram`) plus a `.cram` token, so the bare word never fires — now classify it
+  `alignment_format_mismatch` at confidence 0.85 with a root cause naming the format
+  problem. Placement (after the `reference_not_bgzf` branch, before the `tool_crash`
+  fallthrough) plus the AND-guard is pinned by two control tests: a stale-index log still
+  classifies `missing_index`, and a CRAM error line that also contains an absence phrase
+  still classifies `alignment_format_mismatch`. The class is **detector-only**: there is no
+  repair, by design — see "Read honestly".
+  - **Corpus + guards.** One golden training case (`cram-reference-required`, htslib
+    framing) and one **independently authored holdout twin**
+    (`holdout-cram-reference-required`, GATK framing — written before the needles, so it
+    tests the branch against wording it was not fitted to). `eval-guard` refrozen as a
+    deliberate act (`--update-baseline` after a loud `sha_mismatch`): **92.9% (13/14)** —
+    the twin classified, so the move from 92.3% is a **corpus-composition change, not an
+    accuracy improvement**; the only miss remains the pre-existing
+    `holdout-qc-anomaly-1`. One heal-guard scenario (`alignment-format-mismatch-give-up`)
+    drives the **real** loop: diagnosed, no patch proposed by design, honest `gave_up`,
+    `patch_applied` false; `covered_classes` 15 → **16** over 22 scenarios with
+    `outcome_match_rate` still **1.0**; `heal_baseline.json` refrozen deliberately. Both
+    history files are append-only (`holdout_history.jsonl` line 11, `heal_history.jsonl`
+    line 14). Dashboard: `FAILURE_CLASSES` (the pending-review relabel source, server-
+    validated in the promote route) gains the 19th literal in Python order, pinned by the
+    `failure-classes.spec.ts` order test and a relabel round-trip.
+  - **Read honestly.** Push, not demand-pull: organic frequency is unmeasured and no real
+    Contig-launched run has ever produced this failure — the field corpus has only ever
+    diagnosed `oom`, `tool_crash`, `missing_index`, `unknown`. The needle is **reasoned,
+    not observed**: no real nf-core in CI, no real CRAM error in the repo, and a
+    non-matching CRAM error still degrades to `tool_crash`. The accuracy gain is
+    **self-graded** (we authored the fixtures we grade; the holdout twin's independent
+    framing is the mitigation, not the cure). **It recovers nothing for a user** — it
+    changes what the record *says* (a named class and root cause instead of a 0.4
+    `tool_crash`), not what the engine *does*. The **CRAM→BAM conversion repair
+    (detect → `samtools view -b` → scratch redirect → retry) is deferred, not dropped**,
+    with a committed revisit trigger: the first real CRAM-format failure observed in a
+    Contig-launched run, or the day an alignment-input seam lands (the bwa-mem2
+    build/redirect deferral precedent). BAM→CRAM is out of scope (no plausible consumer).
+    No verdict / exit-code / manifest / signature change; no new dependency.
+
+## [0.51.0] - 2026-08-09
+
+### Added
+
+- **The C6 fold-in ships: verification accuracy is now measured and regression-guarded
+  (the five "blocked on labeling design" deferrals are settled).** The roadmap's last
+  pending C6 capability — folding the C1 concordance / C3 plausibility / annotation
+  corroboration signals into the eval flywheel — is built as the labeling design plus a
+  new sibling guard. A `VerificationCase` (pre-band metric inputs → human-confirmed
+  expected verdict) is the label artifact, and the guard is **band-sensitive by
+  construction**: it re-derives verdicts under the *current* rule packs and thresholds,
+  never from stored statuses, so a band change measurably moves the number (pinned by a
+  mutation control test — the anti-tautology guarantee). `contig verify-guard` scores a
+  frozen synthetic holdout (`verify_corpus_holdout.jsonl`, 22 cases, ids `verify-*`) and
+  guards `verdict_match_rate` against a committed baseline — deliberately **0.9545, not
+  1.0**, because the seed carries one known-miss case (a `ts_tv = 0.5` germline fixture
+  labeled `warn` that today's band FAILs) as the instrument's first demonstration —
+  with the full `--update-baseline` / `--snapshot` / `--history` / `--json` surface,
+  sha pinning, and CI wiring after `heal-guard`. The real-run channel makes the corpus
+  non-tautological over time: `RunRecord` gains an additive `verification_inputs`
+  capture (pre-band metric dicts for the multiqc, plausibility, composition, scrnaseq,
+  methylseq/ampliseq/mag, and germline families — concordance-family capture deferred),
+  QC-driven WARN/FAIL runs append pending cases to `pending_verify_corpus.jsonl` (the
+  `qc_anomaly` events-guard precedent, always on), and `contig verify-case-promote`
+  confirms or corrects the verdict and moves cases into the golden corpus with an
+  auto-snapshot. **Read honestly:** the guarded number starts **synthetic and
+  self-graded** (we authored the fixtures we grade — the standing disclosure), push not
+  demand-pull, and it only compounds as real runs get labeled; the dashboard trend card
+  is deferred. **Incidental fix in the same slice:** the dashboard `FAILURE_CLASSES`
+  taxonomy was missing 5 of the 18 `FailureClass` literals (`reference_not_bgzf`,
+  `missing_dependency`, `disk_full`, `download_failed`, `permission_denied`), so the
+  relabel UI could not correct those pending cases — it now covers all 18 (Python
+  order), pinned by tests with a relabel round-trip.
+
 ## [0.50.0] - 2026-08-03
 
 ### Added
@@ -3206,6 +3494,7 @@ compute. Pre-revenue, validation phase.
 - Installable as a Python package, a standalone binary per OS, a container image, and
   (where set up) via Homebrew. See the README for install options.
 
+[0.51.0]: https://github.com/haqaliz/contig/releases/tag/v0.51.0
 [0.50.0]: https://github.com/haqaliz/contig/releases/tag/v0.50.0
 [0.49.0]: https://github.com/haqaliz/contig/releases/tag/v0.49.0
 [0.48.0]: https://github.com/haqaliz/contig/releases/tag/v0.48.0
@@ -3242,6 +3531,9 @@ compute. Pre-revenue, validation phase.
 [0.14.0]: https://github.com/haqaliz/contig/releases/tag/v0.14.0
 [0.13.0]: https://github.com/haqaliz/contig/releases/tag/v0.13.0
 [0.12.0]: https://github.com/haqaliz/contig/releases/tag/v0.12.0
+[0.53.0]: https://github.com/haqaliz/contig/releases/tag/v0.53.0
+[0.54.0]: https://github.com/haqaliz/contig/releases/tag/v0.54.0
+[0.52.0]: https://github.com/haqaliz/contig/releases/tag/v0.52.0
 [0.10.0]: https://github.com/haqaliz/contig/releases/tag/v0.10.0
 [0.9.0]: https://github.com/haqaliz/contig/releases/tag/v0.9.0
 [0.7.0]: https://github.com/haqaliz/contig/releases/tag/v0.7.0

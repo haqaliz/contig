@@ -275,6 +275,40 @@ def test_heal_scenario_fasta_artifact_defaults_to_none():
     assert scn.fasta_artifact is None
 
 
+def test_heal_scenario_stale_index_artifact_defaults_to_none():
+    """PRD M6: `stale_index_artifact` is additive and default-inert. A scenario
+    built without it parses with the field at None, so every existing shipped
+    line keeps its behaviour (no stale sidecar pre-created into the run dir)."""
+    scn = HealScenario(
+        scenario_id="no-stale-artifact",
+        description="unchanged",
+        source="synthetic",
+        expected_class="oom",
+        attempts=[AttemptSpec(status="FAILED", exit=137)],
+        expected_recovered=False,
+        expected_outcome="gave_up",
+    )
+    assert scn.stale_index_artifact is None
+
+
+def test_heal_scenario_stale_index_artifact_round_trips():
+    """PRD M6: the field is fixture schema only (not part of the signed record),
+    additive, and survives a JSON round-trip with its value intact."""
+    scn = HealScenario(
+        scenario_id="stale-roundtrip",
+        description="stale sidecar named",
+        source="synthetic",
+        expected_class="missing_index",
+        attempts=[AttemptSpec(status="FAILED", exit=1)],
+        expected_recovered=True,
+        expected_outcome="built_index_and_retried",
+        stale_index_artifact="fixtures/aln.bam.bai",
+    )
+    round_tripped = HealScenario.model_validate_json(scn.model_dump_json())
+    assert round_tripped == scn
+    assert round_tripped.stale_index_artifact == "fixtures/aln.bam.bai"
+
+
 def test_run_heal_scenario_reference_not_bgzf_recompresses_and_retries(tmp_path):
     """PRD R4: `fasta_artifact="plain_gzip"` makes the driver write a REAL
     non-BGZF gzip FASTA and point `params["fasta"]` at it, so the loop reaches
@@ -705,20 +739,20 @@ def test_shipped_heal_scenarios_all_reproduce_their_declared_outcomes():
     scenarios = load_heal_scenarios(default_heal_scenarios_path())
     report = evaluate_heal(scenarios)
 
-    assert report.total == 20
+    assert report.total == 22
     assert report.outcome_match_rate == 1.0, [
         (m.scenario_id, m.divergence) for m in report.mismatches
     ]
-    # 10 of 20, up from 9 of 16. This is a CORPUS-COMPOSITION change, not a
-    # behaviour change: Task 6 added three advisory-approved scenarios (which
-    # never count as recovered -- an advisory enacts no patch, R8) and one
-    # genuinely-enacted container_unavailable scenario, and the ratio simply
-    # follows what was added. No pre-existing scenario changed its outcome.
-    # `recovery_rate` is informational-only and is never guarded
-    # (heal.py:413-414 compares only outcome_match_rate) -- the guarded number
-    # is `outcome_match_rate`, which stayed at 1.0 across the move.
-    assert report.healed == 10
-    assert report.recovery_rate == pytest.approx(10 / 20)
+    # 11 of 22, up from 11 of 21. This is a CORPUS-COMPOSITION change, not a
+    # behaviour change: the C2 slice added one by-design give-up scenario
+    # (alignment-format-mismatch-give-up, which recovers nothing -- the class
+    # has no repair), and the ratio simply follows what was added. No
+    # pre-existing scenario changed its outcome. `recovery_rate` is
+    # informational-only and is never guarded (heal.py:413-414 compares only
+    # outcome_match_rate) -- the guarded number is `outcome_match_rate`, which
+    # stayed at 1.0 across the move.
+    assert report.healed == 11
+    assert report.recovery_rate == pytest.approx(11 / 22)
 
     covered = {s.expected_class for s in scenarios}
     assert covered >= {
@@ -735,6 +769,7 @@ def test_shipped_heal_scenarios_all_reproduce_their_declared_outcomes():
         "permission_denied",
         "conda_solve_failed",
         "container_unavailable",
+        "alignment_format_mismatch",
     }
 
 
@@ -745,13 +780,13 @@ def test_shipped_heal_baseline_matches_shipped_scenarios():
     baseline = load_heal_baseline(default_heal_baseline_path())
 
     assert baseline is not None
-    assert baseline.scenario_count == 20
+    assert baseline.scenario_count == 22
     assert baseline.outcome_match_rate == 1.0
-    # 10/20 since the Task 6 refreeze; 9/16 before it. Again a
-    # CORPUS-COMPOSITION move -- three advisory-approved scenarios (never
-    # recovered, R8) and one genuinely-enacted container_unavailable scenario
-    # were added -- not a behaviour change, and never a guarded number.
-    assert baseline.recovery_rate == pytest.approx(10 / 20)
+    # 11/22 since the C2 alignment-format give-up refreeze; 11/21 before it.
+    # Again a CORPUS-COMPOSITION move -- one by-design give-up scenario
+    # (alignment-format-mismatch-give-up, which recovers nothing) was added --
+    # not a behaviour change, and never a guarded number.
+    assert baseline.recovery_rate == pytest.approx(11 / 22)
     assert baseline.corpus_sha == sha256_file(scenarios_path)
     assert set(baseline.covered_classes) >= {
         "oom",
@@ -767,17 +802,19 @@ def test_shipped_heal_baseline_matches_shipped_scenarios():
         "permission_denied",
         "conda_solve_failed",
         "container_unavailable",
+        "alignment_format_mismatch",
     }
-    # Fifteen covered classes exactly -- the eleven the catalog-coverage slice
-    # left plus Task 6's four newly-honest classes (disk_full,
-    # permission_denied, conda_solve_failed, container_unavailable).
-    # platform_unsupported stays uncovered: detect.py:355 requires a failed
+    # Sixteen covered classes exactly -- the eleven the catalog-coverage slice
+    # left, Task 6's four newly-honest classes (disk_full,
+    # permission_denied, conda_solve_failed, container_unavailable), and the
+    # C2 alignment-format-mismatch give-up. platform_unsupported stays
+    # uncovered: detect.py:355 requires a failed
     # event with exit is None, but AttemptSpec.exit is a required int
     # (models.py:543) used both as the trace column (heal.py:82) and the
     # executor return code (:100) -- reaching it needs an additive
     # model/driver change, which is out of scope here. A silent drop here
     # would mean a class lost its scenario.
-    assert len(baseline.covered_classes) == 15
+    assert len(baseline.covered_classes) == 16
 
 
 def test_shipped_heal_report_does_not_regress_against_baseline():
@@ -812,6 +849,35 @@ def test_evaluate_heal_is_deterministic_over_the_shipped_scenarios():
     assert first.recovery_rate == second.recovery_rate
     assert first.matched == second.matched
     assert first.total == second.total
+
+
+def test_run_heal_scenario_stale_index_rebuilds_and_retries(tmp_path):
+    """PRD M6 end-to-end: the shipped `stale-index-heal` scenario replays the
+    REAL loop. htslib's freshness line classifies `missing_index`; the stale
+    rebuild runs the scripted builder against the scratch symlink, whose
+    simulated output (the touched `.bai`) is atomically swapped over the
+    pre-created stale sidecar; the retry succeeds with the declared
+    `built_index_and_retried` outcome.
+
+    The artifact pre-create is load-bearing: the repair replaces the sidecar
+    with the freshly built one, so the file that exists after the run is the
+    builder's output, not the stale fixture the driver wrote.
+    """
+    from pathlib import Path
+
+    scenarios = load_heal_scenarios(default_heal_scenarios_path())
+    scn = next(s for s in scenarios if s.scenario_id == "stale-index-heal")
+
+    result = run_heal_scenario(scn, tmp_path)
+
+    assert result.matched is True, result.divergence
+    assert result.diagnosed_class == "missing_index"
+    assert result.actual_outcome == "built_index_and_retried"
+    assert result.recovered is True
+    sidecar = (
+        Path(tmp_path) / "runs" / "heal-stale-index-heal" / "fixtures" / "aln.bam.bai"
+    )
+    assert sidecar.read_bytes() != b"stale-index-artifact"
 
 
 # --- run_heal_scenario's defensive PipelineExecutionError branch -----------

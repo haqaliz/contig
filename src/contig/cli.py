@@ -68,6 +68,43 @@ from contig.heal import (
     snapshot_from_heal_report,
 )
 from contig.snapshot_history import append_jsonl, load_jsonl
+from contig.verify_corpus import (
+    append_verify_case,
+    compare_verify_to_baseline,
+    default_verify_baseline_path,
+    default_verify_golden_path,
+    default_verify_history_path,
+    default_verify_holdout_path,
+    evaluate_verify,
+    load_verify_baseline,
+    load_verify_cases,
+    promote_pending_verify_case,
+    save_verify_baseline,
+    snapshot_from_verify_report,
+    verification_case_from_concordance,
+)
+from contig.reproduce_guard import (
+    compare_reproduce_to_baseline,
+    default_reproduce_baseline_path,
+    default_reproduce_history_path,
+    default_reproduce_scenarios_path,
+    evaluate_reproduce,
+    load_reproduce_baseline,
+    load_reproduce_scenarios,
+    save_reproduce_baseline,
+    snapshot_from_reproduce_report,
+)
+from contig.reproduce_corpus import (
+    append_reproduce_case,
+    default_reproduce_corpus_history_path,
+    default_reproduce_corpus_path,
+    evaluate_reproduce_cases,
+    load_reproduce_cases,
+    promote_reproduce_case,
+    reproduce_case_from_record,
+    should_capture_reproduce,
+    snapshot_from_reproduce_report as snapshot_from_reproduce_corpus_report,
+)
 from contig.bundle import compute_output_checksums, compute_tree_sha256, write_reproduce_bundle
 from contig.cost import cost_report
 from contig.signing import generate_keypair, signing_available, verify_signature
@@ -79,8 +116,10 @@ from contig.models import (
     ExecutionTarget,
     HealSnapshot,
     LaunchManifest,
+    ReproduceSnapshot,
     RunRecord,
     RunSummary,
+    VerifySnapshot,
     sha256_file,
 )
 from contig.nfconfig import ConfigGenerationError, preflight_aws_batch, preflight_slurm
@@ -90,7 +129,7 @@ from contig.progress import read_progress, render_progress
 from contig.reference import ReferenceError, resolve_reference
 from contig.reference_check import check_reference_consistency, fasta_contigs, gtf_contigs
 from contig.reference_harmonize import harmonize_gtf, plan_harmonization
-from contig.registry import UnknownAssayError, assay_for_pipeline, select_pipeline
+from contig.registry import VARIANT_ASSAYS, UnknownAssayError, assay_for_pipeline, select_pipeline
 from contig.report import (
     render_explain,
     render_reproduction,
@@ -437,6 +476,36 @@ def _inject_default_params(params: dict[str, object], assay: str) -> None:
         params.setdefault(key, value)
 
 
+def _enable_annotation_cache(
+    params: dict[str, object], *,
+    assay: str, pipeline: str, revision: str, runs_dir: str, engine: str,
+) -> None:
+    """Wire sarek's annotation-cache download for variant assays (C7).
+
+    sarek 3.5.1 defaults --vep_cache/--snpeff_cache to s3://annotation-cache/…
+    and hard-fails cache initialisation when they are unreachable; with
+    --download_cache true it downloads the cache at run time into
+    --outdir_cache instead (main.nf takes the DOWNLOAD_CACHE branch and skips
+    the validation error). Only sarek variant assays run annotation tools, so
+    only they get the params; setdefault keeps any user-supplied value.
+    """
+    if engine != "nextflow" or assay not in VARIANT_ASSAYS:
+        return
+    cache_dir = (
+        Path(runs_dir).resolve()
+        / "caches" / "annotation" / f"{pipeline}@{revision}"
+    )
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        typer.echo(
+            f"Annotation cache dir not creatable: {cache_dir} ({exc})", err=True
+        )
+        raise typer.Exit(code=1)
+    params.setdefault("download_cache", "true")
+    params.setdefault("outdir_cache", str(cache_dir))
+
+
 def _dispatch_run(
     *,
     run_id: str,
@@ -676,6 +745,15 @@ def _dispatch_run(
     # `--tools strelka,mutect2`. User-supplied params are never overridden. Reproduce
     # is faithful because the assay persists in launch.json and this re-injects on
     # rerun (rather than storing the derived params). See _inject_default_params (R5).
+    # C7 live-cache enablement: sarek variant assays download their
+    # VEP/SnpEff cache at run time into a shared cache dir, so the shipped
+    # annotation verification actually produces (and verifies) an annotated
+    # VCF instead of hard-failing cache initialisation on a machine without
+    # access to s3://annotation-cache. User-supplied values win (setdefault).
+    _enable_annotation_cache(
+        params, assay=resolved_assay, pipeline=effective_pipeline,
+        revision=revision, runs_dir=runs_dir, engine=engine,
+    )
     _inject_default_params(params, resolved_assay)
 
     # Write the reproduce sidecar BEFORE the run, so it exists during the run and
@@ -1097,6 +1175,16 @@ def reproduce(
         )
 
     write_reproduce_bundle(record, Path(runs_dir) / reproduce_id, requested_rev=rev)
+
+    # Capture: a finished run that is interesting for a human (a diverged or
+    # unverified claim, any repair history, or a non-zero exit) earns a pending
+    # reproduce case in the sidecar corpus, always-on. The capture writes ONLY
+    # the sidecar file -- the bundle dir is left exactly as the writer made it.
+    if should_capture_reproduce(record):
+        append_reproduce_case(
+            reproduce_case_from_record(record, claims=claims_list),
+            Path(runs_dir) / "pending_reproduce_corpus.jsonl",
+        )
 
     typer.echo(render_reproduction(record))
 
@@ -1540,29 +1628,59 @@ def verify(
 
     # Concordance is independent of output-drift: compute it (if requested) up front
     # so it is surfaced on BOTH the no-checksums and has-checksums paths, and so it
-    # can never influence the `ok`/exit decision below.
+    # can never influence the `ok`/exit decision below. The capture out-param and
+    # the corpus family are threaded through the fired helper so the hook after the
+    # dispatch (PRD R4a, verify-time slice) can append a pending VerificationCase.
+    capture_metrics: dict[str, dict[str, float]] = {}
+    concordance_family: str | None = None
     if concordance_vcf:
-        concordance = _evaluate_run_concordance(record, runs_dir, run_id, concordance_vcf)
+        concordance = _evaluate_run_concordance(
+            record, runs_dir, run_id, concordance_vcf, capture_metrics=capture_metrics
+        )
+        concordance_family = _concordance_family("concordance_vcf")
     elif concordance_auto:
-        concordance = _evaluate_run_concordance_auto(record, runs_dir, run_id, bam, ref)
+        concordance = _evaluate_run_concordance_auto(
+            record, runs_dir, run_id, bam, ref, capture_metrics=capture_metrics
+        )
+        concordance_family = _concordance_family("concordance_auto")
     elif concordance_counts:
         concordance = _evaluate_run_counts_concordance(
-            record, runs_dir, run_id, concordance_counts
+            record, runs_dir, run_id, concordance_counts, capture_metrics=capture_metrics
         )
+        concordance_family = _concordance_family("concordance_counts")
     elif concordance_counts_auto:
         concordance = _evaluate_run_counts_concordance_auto(
-            record, runs_dir, run_id, reads, index
+            record, runs_dir, run_id, reads, index, capture_metrics=capture_metrics
         )
+        concordance_family = _concordance_family("concordance_counts_auto")
     elif concordance_sc_counts:
         concordance = _evaluate_run_sc_counts_concordance(
-            record, runs_dir, run_id, concordance_sc_counts
+            record, runs_dir, run_id, concordance_sc_counts, capture_metrics=capture_metrics
         )
+        concordance_family = _concordance_family("concordance_sc_counts")
     elif concordance_sc_counts_auto:
         concordance = _evaluate_run_sc_counts_concordance_auto(
-            record, runs_dir, run_id, reads, index, whitelist, chemistry
+            record,
+            runs_dir,
+            run_id,
+            reads,
+            index,
+            whitelist,
+            chemistry,
+            capture_metrics=capture_metrics,
         )
+        concordance_family = _concordance_family("concordance_sc_counts_auto")
     else:
         concordance = None
+
+    # Verify-time concordance capture (PRD R4a, verify-time slice): a non-empty
+    # concordance list earns ONE pending VerificationCase in the shared sidecar
+    # (<runs_dir>/pending_verify_corpus.jsonl, the same file verify-case-promote
+    # reads), deduped by case_id so a repeated verify of the same run stays one
+    # line. Purely additive: it never touches the signed bundle and never affects
+    # result, exit_code, or any echoed output.
+    if concordance:
+        _capture_pending_concordance_case(record, runs_dir, concordance_family, capture_metrics)
 
     # A signed run carries a signature.json sidecar; a mismatch is a verification
     # failure (the record was tampered with), so it fails the verify just like drift.
@@ -1624,8 +1742,62 @@ def verify(
     raise typer.Exit(code=1)
 
 
+# The six concordance flags map to two corpus family keys (PRD R4a, verify-time
+# slice): the germline paths capture "concordance_genotype", the count paths
+# (RNA-seq and single-cell) "concordance_spearman".
+_CONCORDANCE_FAMILY_FLAGS: dict[str, str] = {
+    "concordance_vcf": "concordance_genotype",
+    "concordance_auto": "concordance_genotype",
+    "concordance_counts": "concordance_spearman",
+    "concordance_counts_auto": "concordance_spearman",
+    "concordance_sc_counts": "concordance_spearman",
+    "concordance_sc_counts_auto": "concordance_spearman",
+}
+
+
+def _concordance_family(flag_name: str) -> str | None:
+    """The corpus family key a concordance flag captures under (PRD R4a).
+
+    `--concordance-vcf` / `--concordance-auto` capture `concordance_genotype`;
+    the four count flags (`--concordance-counts*`, `--concordance-sc-counts*`)
+    capture `concordance_spearman`. None for an unknown flag name, so one miss
+    degrades to "no capture" rather than a crash.
+    """
+    return _CONCORDANCE_FAMILY_FLAGS.get(flag_name)
+
+
+def _capture_pending_concordance_case(
+    record: RunRecord,
+    runs_dir: str,
+    family: str | None,
+    capture_metrics: dict[str, dict[str, float]],
+) -> None:
+    """Append one pending VerificationCase for a verify-time concordance run (PRD R4a).
+
+    Only fires when the evaluator actually produced results (the caller gates on a
+    non-empty concordance list); an honest skip therefore writes nothing. Dedupes
+    by case_id against the existing pending file, tolerating a missing or
+    malformed file (`load_verify_cases` skips bad lines, verify never crashes on a
+    half-written sidecar). Only this verify-time writer dedupes; the shared
+    `append_verify_case` and the finalize-time path are untouched (PRD R-risk-1).
+    """
+    if family is None or not capture_metrics:
+        return
+    case = verification_case_from_concordance(record, family, capture_metrics["S1"])
+    pending_path = Path(runs_dir) / "pending_verify_corpus.jsonl"
+    if pending_path.exists():
+        existing = load_verify_cases(pending_path)
+        if any(c.case_id == case.case_id for c in existing):
+            return
+    append_verify_case(case, pending_path)
+
+
 def _evaluate_run_concordance(
-    record: RunRecord, runs_dir: str, run_id: str, concordance_vcf: str
+    record: RunRecord,
+    runs_dir: str,
+    run_id: str,
+    concordance_vcf: str,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list:
     """Concordance checks for a germline run vs a second call set, or [] with a note.
 
@@ -1634,11 +1806,17 @@ def _evaluate_run_concordance(
     glob). A non-germline assay or a missing primary VCF prints a clear note and
     yields no checks (never a crash, never a false pass). Returns the QCResult list
     so the caller surfaces it without changing the exit code.
+
+    `capture_metrics`, when passed, is handed to the evaluator's out-param so the
+    caller (the verify-time capture hook) reads the pre-band metrics of a run that
+    produced results; on the honest-skip path it stays empty.
     """
     primary = _resolve_primary_vcf(record, runs_dir, run_id)
     if primary is None:
         return []
-    return evaluate_concordance(primary, concordance_vcf, assay="variant_calling")
+    return evaluate_concordance(
+        primary, concordance_vcf, assay="variant_calling", capture_metrics=capture_metrics
+    )
 
 
 def _evaluate_run_concordance_auto(
@@ -1648,6 +1826,7 @@ def _evaluate_run_concordance_auto(
     bam: str,
     ref: str,
     caller=None,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list:
     """Concordance checks for a germline run vs a freshly produced second call set.
 
@@ -1659,6 +1838,10 @@ def _evaluate_run_concordance_auto(
     SecondCallerError prints a clear skip note and yields no checks (never a crash,
     never a false pass). Returns the QCResult list so the caller surfaces it without
     changing the exit code.
+
+    `capture_metrics`, when passed, is handed to the evaluator's out-param so the
+    caller (the verify-time capture hook) reads the pre-band metrics of a run that
+    produced results; on any honest-skip path it stays empty.
     """
     primary = _resolve_primary_vcf(record, runs_dir, run_id)
     if primary is None:
@@ -1679,7 +1862,9 @@ def _evaluate_run_concordance_auto(
         except SecondCallerError as exc:
             typer.echo(f"Skipping concordance: the second caller could not run ({exc}).")
             return []
-        return evaluate_concordance(primary, second_vcf, assay="variant_calling")
+        return evaluate_concordance(
+            primary, second_vcf, assay="variant_calling", capture_metrics=capture_metrics
+        )
 
 
 def _resolve_primary_vcf(record: RunRecord, runs_dir: str, run_id: str):
@@ -1741,7 +1926,11 @@ def _resolve_primary_counts(record: RunRecord, runs_dir: str, run_id: str):
 
 
 def _evaluate_run_counts_concordance(
-    record: RunRecord, runs_dir: str, run_id: str, counts_matrix: str
+    record: RunRecord,
+    runs_dir: str,
+    run_id: str,
+    counts_matrix: str,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list:
     """Count-concordance checks for an rnaseq run vs a second matrix, or [] with a note.
 
@@ -1749,11 +1938,17 @@ def _evaluate_run_counts_concordance(
     it against the provided second matrix. A non-rnaseq assay or a missing primary
     matrix yields no checks. Returns the QCResult list so the caller surfaces it
     without changing the exit code.
+
+    `capture_metrics`, when passed, is handed to the evaluator's out-param so the
+    caller (the verify-time capture hook) reads the pre-band metrics of a run that
+    produced results; on the honest-skip path it stays empty.
     """
     primary = _resolve_primary_counts(record, runs_dir, run_id)
     if primary is None:
         return []
-    return evaluate_count_concordance(primary, counts_matrix, assay="rnaseq")
+    return evaluate_count_concordance(
+        primary, counts_matrix, assay="rnaseq", capture_metrics=capture_metrics
+    )
 
 
 def _resolve_primary_sc_matrix(record: RunRecord, runs_dir: str, run_id: str):
@@ -1790,7 +1985,11 @@ def _resolve_primary_sc_matrix(record: RunRecord, runs_dir: str, run_id: str):
 
 
 def _evaluate_run_sc_counts_concordance(
-    record: RunRecord, runs_dir: str, run_id: str, second: str
+    record: RunRecord,
+    runs_dir: str,
+    run_id: str,
+    second: str,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list:
     """Single-cell count-concordance for an scrnaseq run vs a second matrix, or [].
 
@@ -1799,11 +1998,17 @@ def _evaluate_run_sc_counts_concordance(
     pseudobulk TSV, sniffed by the loader). A non-scrnaseq assay or a missing primary
     matrix yields no checks. Returns the QCResult list so the caller surfaces it without
     changing the exit code.
+
+    `capture_metrics`, when passed, is handed to the evaluator's out-param so the
+    caller (the verify-time capture hook) reads the pre-band metrics of a run that
+    produced results; on the honest-skip path it stays empty.
     """
     primary = _resolve_primary_sc_matrix(record, runs_dir, run_id)
     if primary is None:
         return []
-    return evaluate_sc_count_concordance(primary, second, assay="scrnaseq")
+    return evaluate_sc_count_concordance(
+        primary, second, assay="scrnaseq", capture_metrics=capture_metrics
+    )
 
 
 def _evaluate_run_counts_concordance_auto(
@@ -1813,6 +2018,7 @@ def _evaluate_run_counts_concordance_auto(
     reads: str,
     index: str,
     quantifier=None,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list:
     """Count-concordance checks for an rnaseq run vs a freshly produced second matrix.
 
@@ -1824,6 +2030,10 @@ def _evaluate_run_counts_concordance_auto(
     SecondQuantifierError prints a clear skip note and yields no checks (never a
     crash, never a false pass). Returns the QCResult list so the caller surfaces it
     without changing the exit code.
+
+    `capture_metrics`, when passed, is handed to the evaluator's out-param so the
+    caller (the verify-time capture hook) reads the pre-band metrics of a run that
+    produced results; on any honest-skip path it stays empty.
     """
     primary = _resolve_primary_counts(record, runs_dir, run_id)
     if primary is None:
@@ -1844,7 +2054,9 @@ def _evaluate_run_counts_concordance_auto(
         except SecondQuantifierError as exc:
             typer.echo(f"Skipping concordance: the second quantifier could not run ({exc}).")
             return []
-        return evaluate_count_concordance(primary, second, assay="rnaseq")
+        return evaluate_count_concordance(
+            primary, second, assay="rnaseq", capture_metrics=capture_metrics
+        )
 
 
 def _evaluate_run_sc_counts_concordance_auto(
@@ -1856,6 +2068,7 @@ def _evaluate_run_sc_counts_concordance_auto(
     whitelist: str,
     chemistry: str,
     quantifier=None,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list:
     """Single-cell concordance for an scrnaseq run vs a freshly produced second matrix.
 
@@ -1868,6 +2081,10 @@ def _evaluate_run_sc_counts_concordance_auto(
     SecondScQuantifierError prints a clear skip note and yields no checks (never a
     crash, never a false pass). Returns the QCResult list so the caller surfaces it
     without changing the exit code.
+
+    `capture_metrics`, when passed, is handed to the evaluator's out-param so the
+    caller (the verify-time capture hook) reads the pre-band metrics of a run that
+    produced results; on any honest-skip path it stays empty.
     """
     primary = _resolve_primary_sc_matrix(record, runs_dir, run_id)
     if primary is None:
@@ -1893,7 +2110,11 @@ def _evaluate_run_sc_counts_concordance_auto(
             )
             return []
         return evaluate_sc_count_concordance(
-            str(primary), second, assay="scrnaseq", second_name="STARsolo"
+            str(primary),
+            second,
+            assay="scrnaseq",
+            second_name="STARsolo",
+            capture_metrics=capture_metrics,
         )
 
 
@@ -2417,6 +2638,154 @@ def corpus_promote(
     typer.echo(f"Promoted {promoted.case_id} ({promoted.expected_class}) into the golden corpus.")
 
 
+@app.command(name="verify-case-promote")
+def verify_case_promote(
+    case_id: str = typer.Argument(..., help="The pending verification case id to promote."),
+    expected_verdict: str = typer.Option(None, "--expected-verdict", help="Confirm or correct the expected verdict (pass|warn|fail|unverified). Omit to confirm without assigning a label."),
+    pending: str = typer.Option("runs/pending_verify_corpus.jsonl", "--pending", help="Pending verification corpus JSONL."),
+    golden: str = typer.Option(None, "--golden", help="Golden verification corpus JSONL (default: the shipped one)."),
+    history_file: str = typer.Option(None, "--history-file", help="Verification history JSONL (defaults to the shipped one)."),
+) -> None:
+    """Promote a reviewed pending verification case into the golden corpus (C6 fold-in, PRD R5).
+
+    The reviewer confirms the pending case or corrects its expected verdict
+    with --expected-verdict (pass|warn|fail|unverified); omitting it confirms
+    the case without assigning a label. The case then moves from pending into
+    the golden corpus (`source` pending: -> confirmed:) that the informational
+    verify-eval scores. After a successful promote, a fresh verify-eval of the
+    golden corpus is appended to the verify history so the trend reflects the
+    grown corpus (corpus-promote precedent). This channel -- a real run's
+    WARN/FAIL verdict confirmed or corrected by a human -- is the only path
+    that makes the verification corpus non-tautological.
+    """
+    if expected_verdict is not None and expected_verdict not in (
+        "pass",
+        "warn",
+        "fail",
+        "unverified",
+    ):
+        typer.echo(
+            f"Invalid --expected-verdict {expected_verdict!r}: must be one of "
+            "pass, warn, fail, unverified.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        promoted = promote_pending_verify_case(
+            case_id,
+            pending_path=pending,
+            golden_path=golden,
+            expected_verdict=expected_verdict,  # type: ignore[arg-type]
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        typer.echo(f"Could not promote {case_id}: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    # Auto-snapshot: eval the now-grown golden corpus and append it to the trend.
+    golden_path = Path(golden) if golden else default_verify_golden_path()
+    history_path = Path(history_file) if history_file else default_verify_history_path()
+    cases = load_verify_cases(golden_path)
+    append_jsonl(
+        snapshot_from_verify_report(
+            evaluate_verify(cases),
+            corpus_sha=sha256_file(golden_path),
+            contig_version=_pkg_version("contig"),
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        ),
+        history_path,
+    )
+    label = promoted.expected_verdict or "unlabeled"
+    typer.echo(f"Promoted {promoted.case_id} ({label}) into the golden corpus.")
+
+
+@app.command(name="reproduce-case-promote")
+def reproduce_case_promote(
+    case_id: str = typer.Argument(..., help="The pending reproduce case id to promote."),
+    expected_claims: list[str] = typer.Option(None, "--expected-claims", help="Repeatable claim labels 'id:status' (reproduced|within_tolerance|diverged|unverified). Partial labeling is allowed."),
+    expected_repair: str = typer.Option(None, "--expected-repair", help="Expected repair outcome (e.g. installed_and_retried). Omit to leave unlabeled."),
+    expected_exit: int = typer.Option(None, "--expected-exit", help="Expected exit code. Omit to leave unlabeled."),
+    pending: str = typer.Option("runs/pending_reproduce_corpus.jsonl", "--pending", help="Pending reproduce corpus JSONL."),
+    golden: str = typer.Option(None, "--golden", help="Golden reproduce corpus JSONL (default: the shipped one)."),
+    history_file: str = typer.Option(None, "--history-file", help="Reproduce corpus history JSONL (defaults to the shipped one)."),
+    json_out: bool = typer.Option(False, "--json", help="Print the grown-corpus eval report as JSON."),
+) -> None:
+    """Promote a reviewed pending reproduce case into the golden corpus (C8 slice 2).
+
+    The reviewer confirms a captured reproduce case and labels some or all of
+    its claims with expected statuses (reproduced|within_tolerance|diverged|
+    unverified); the case then moves from pending into the golden corpus
+    (`source` pending: -> confirmed:) that the informational reproduce-corpus
+    eval scores. After a successful promote, a fresh eval of the grown golden
+    corpus is appended to the reproduce history so the trend reflects the
+    grown corpus (verify-case-promote precedent).
+    """
+    parsed_claims: dict[str, str] = {}
+    for entry in expected_claims or []:
+        claim_id, _, status = entry.partition(":")
+        if status not in ("reproduced", "within_tolerance", "diverged", "unverified"):
+            typer.echo(
+                f"Invalid --expected-claims status {status!r}: must be one of "
+                "reproduced, within_tolerance, diverged, unverified.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        parsed_claims[claim_id] = status
+
+    if expected_repair is not None and expected_repair not in (
+        "none",
+        "installed_and_retried",
+        "install_failed",
+        "retry_failed",
+    ):
+        typer.echo(
+            f"Invalid --expected-repair {expected_repair!r}: must be one of "
+            "none, installed_and_retried, install_failed, retry_failed.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    golden_path = Path(golden) if golden else default_reproduce_corpus_path()
+    try:
+        promoted = promote_reproduce_case(
+            case_id,
+            pending_path=pending,
+            golden_path=golden_path,
+            expected_claims=parsed_claims,
+            expected_repair=expected_repair,
+            expected_exit_code=expected_exit,
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        typer.echo(f"Could not promote {case_id}: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    # Auto-snapshot: eval the now-grown golden corpus and append it to the trend.
+    history_path = Path(history_file) if history_file else default_reproduce_corpus_history_path()
+    golden_cases = load_reproduce_cases(golden_path)
+    promoted = next(c for c in golden_cases if c.case_id == case_id)
+    report = evaluate_reproduce_cases(golden_cases)
+    append_jsonl(
+        snapshot_from_reproduce_corpus_report(
+            report,
+            corpus_sha=sha256_file(golden_path),
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            contig_version=_pkg_version("contig"),
+        ),
+        history_path,
+    )
+    labels = []
+    for claim in promoted.claims:
+        if claim.expected_status is not None:
+            labels.append(f"{claim.claim_id}:{claim.expected_status}")
+    if promoted.expected_repair is not None:
+        labels.append(f"repair:{promoted.expected_repair}")
+    if promoted.expected_exit_code is not None:
+        labels.append(f"exit:{promoted.expected_exit_code}")
+    typer.echo(f"Promoted {promoted.case_id} ({', '.join(labels) or 'unlabeled'}) into the golden corpus.")
+    if json_out:
+        typer.echo(report.model_dump_json())
+
+
 def _print_trend(rows, *, title):
     """Render a metric trend oldest->newest with a per-version delta column.
 
@@ -2678,7 +3047,7 @@ def heal_guard(
     exits 0. With --snapshot the result is also appended to the committed
     self-heal trend; with --history the recorded trend is printed instead.
 
-    Honest scope: the number is over **20 SYNTHETIC scenarios**, not a field
+    Honest scope: the number is over **21 SYNTHETIC scenarios**, not a field
     recovery rate. **15 covered failure classes**: bad_param, conda_solve_failed,
     container_pull_failed, container_unavailable, disk_full, download_failed,
     missing_index, missing_reference, no_progress, oom, permission_denied,
@@ -2713,7 +3082,7 @@ def heal_guard(
     we made reachable -- evidence that a taxonomy gap closed, not that a user
     was helped. Its recovery accounting is also an artifact: the scenario is
     green by construction (every task exits 0, only the QC verdict FAILs), so
-    it counts toward the corpus-wide informational-only recovery count (10/20)
+    it counts toward the corpus-wide informational-only recovery count (11/21)
     even though nothing was recovered in that one scenario specifically.
     platform_unsupported is reachable in production the same way (a real killed
     task can carry `exit is None`) -- it is only this scenario CORPUS it cannot
@@ -2839,6 +3208,332 @@ def heal_guard(
         typer.echo(
             f"Heal-guard PASS: outcome-match {result.outcome_match_rate:.0%} "
             f"≥ baseline {result.baseline_match_rate:.0%}."
+        )
+
+
+@app.command(name="verify-guard")
+def verify_guard(
+    corpus: str = typer.Option(None, "--corpus", help="Verification holdout JSONL (defaults to the shipped synthetic seed)."),
+    baseline: str = typer.Option(None, "--baseline", help="Baseline JSON (defaults to the shipped one)."),
+    tolerance: float = typer.Option(1e-9, "--tolerance", help="Float tolerance; verdict-match rate below (baseline - tolerance) is a regression."),
+    update_baseline: bool = typer.Option(False, "--update-baseline", help="(Re)freeze the baseline to the current verdict-match rate. Deliberate, reviewed act."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the guard result as JSON."),
+    snapshot: bool = typer.Option(False, "--snapshot", help="Append this guard run to the verdict-match trend (C6 fold-in)."),
+    show_history: bool = typer.Option(False, "--history", help="Print the recorded verdict-match trend instead of guarding. Ignores --snapshot."),
+    history_file: str = typer.Option(None, "--history-file", help="Verdict-match history JSONL (defaults to the shipped one)."),
+) -> None:
+    """Guard the verification rules' verdict-match rate against a frozen synthetic holdout (C6 fold-in).
+
+    Re-derives each held-out case's verdict from its PRE-BAND stored signal
+    values under the CURRENT rule packs and concordance thresholds (never from
+    stored statuses) and compares the verdict-match rate to a committed
+    baseline, exiting non-zero on a real regression so a band change that
+    starts diverging from the labeled corpus is caught instead of being a
+    silent judgement call. `--update-baseline` deliberately (re)freezes the
+    baseline instead of guarding; that always exits 0. With --snapshot the
+    result is also appended to the committed verdict-match trend; with
+    --history the recorded trend is printed instead.
+
+    Honest scope: the number is over **22 SYNTHETIC, self-graded cases** (we
+    author the fixtures we grade -- same disclosure as every prior eval
+    slice). The corpus only becomes non-tautological as real runs feed it
+    through the pending-capture/promote channel. The seed deliberately
+    carries ONE known-miss fixture (PRD R2a) that the current bands get
+    wrong, so the committed baseline is < 1.0 and the guard's first
+    demonstration of liveness is flagging that case as a MISS. The guard is
+    band-sensitive: a changed band flips a stored value's status (pinned by
+    the scorer's mutation-control test), which is what separates it from a
+    tautology.
+    """
+    corpus_path = Path(corpus) if corpus else default_verify_holdout_path()
+    baseline_path = Path(baseline) if baseline else default_verify_baseline_path()
+    history_path = Path(history_file) if history_file else default_verify_history_path()
+
+    if show_history:
+        history = load_jsonl(VerifySnapshot, history_path)
+        if json_out:
+            typer.echo("[" + ",".join(s.model_dump_json() for s in history) + "]")
+            return
+        if not history:
+            typer.echo(f"No verification verdict-match snapshots recorded yet in {history_path}.")
+            return
+        _print_trend(
+            [(s.timestamp, s.verdict_match_rate,
+              f"verdict-match {s.verdict_match_rate:.1%}  (corpus {s.case_count})",
+              s.contig_version or "unknown") for s in history],
+            title="Verification verdict-match over time:",
+        )
+        return
+
+    try:
+        cases = load_verify_cases(corpus_path)
+    except FileNotFoundError:
+        typer.echo(f"Verification holdout not found: {corpus_path}", err=True)
+        raise typer.Exit(code=1)
+
+    report = evaluate_verify(cases)
+    corpus_sha = sha256_file(corpus_path)
+
+    if update_baseline:
+        snap = snapshot_from_verify_report(
+            report,
+            corpus_sha=corpus_sha,
+            contig_version=_pkg_version("contig"),
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+        save_verify_baseline(snap, baseline_path)
+        append_jsonl(snap, history_path)
+        typer.echo(
+            f"Baseline updated: verdict-match {report.verdict_match_rate:.1%} over "
+            f"{report.total} verification cases (sha {corpus_sha[:12]}...)"
+        )
+        return
+
+    if snapshot:
+        append_jsonl(
+            snapshot_from_verify_report(
+                report,
+                corpus_sha=corpus_sha,
+                contig_version=_pkg_version("contig"),
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            ),
+            history_path,
+        )
+
+    baseline_snapshot = load_verify_baseline(baseline_path)
+    result = compare_verify_to_baseline(
+        report,
+        baseline=baseline_snapshot,
+        corpus_sha=corpus_sha,
+        tolerance=tolerance,
+    )
+
+    if json_out:
+        typer.echo(result.model_dump_json())
+
+    if not result.has_baseline:
+        typer.echo(
+            f"No verify-guard baseline at {baseline_path}; run 'contig verify-guard "
+            "--update-baseline' to freeze one.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if result.sha_mismatch:
+        typer.echo(
+            f"Verification holdout changed (sha {corpus_sha[:12]} != baseline "
+            f"{(result.baseline_sha or '')[:12]}); the delta crosses different sets — "
+            "refreeze with --update-baseline.",
+            err=True,
+        )
+
+    if not json_out:
+        delta_pp = (result.delta or 0.0) * 100
+        typer.echo(
+            f"Verify-guard: verdict-match {result.verdict_match_rate:.1%} vs baseline "
+            f"{result.baseline_rate:.1%} (delta {delta_pp:+.1f}pp) over "
+            f"{result.case_count} verification cases"
+        )
+        for m in result.mismatches:
+            typer.echo(f"  MISS {m.case_id}: expected {m.expected_verdict}, predicted {m.predicted_verdict}")
+
+    if result.regressed:
+        delta_pp = (result.delta or 0.0) * 100
+        mismatch_ids = ", ".join(m.case_id for m in result.mismatches)
+        typer.echo(
+            f"REGRESSION: verdict-match {result.verdict_match_rate:.1%} below baseline "
+            f"{result.baseline_rate:.1%} (delta {delta_pp:+.1f}pp): {mismatch_ids}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if result.improved:
+        if not json_out:
+            typer.echo(
+                f"Verify-guard improved (verdict-match {result.verdict_match_rate:.1%} > baseline "
+                f"{result.baseline_rate:.1%}); consider --update-baseline to lock it in."
+            )
+        return
+
+    if not json_out:
+        typer.echo(
+            f"verify-guard PASS: verdict-match {result.verdict_match_rate:.1%} "
+            f"≥ baseline {result.baseline_rate:.1%}."
+        )
+
+
+@app.command(name="reproduce-guard")
+def reproduce_guard(
+    scenarios: str = typer.Option(None, "--scenarios", help="Reproduce scenario JSONL (defaults to the shipped synthetic set)."),
+    baseline: str = typer.Option(None, "--baseline", help="Baseline JSON (defaults to the shipped one)."),
+    tolerance: float = typer.Option(1e-9, "--tolerance", help="Float tolerance; outcome-match rate below (baseline - tolerance) is a regression."),
+    update_baseline: bool = typer.Option(False, "--update-baseline", help="(Re)freeze the baseline to the current outcome-match rate. Deliberate, reviewed act."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the guard snapshot as JSON."),
+    snapshot: bool = typer.Option(False, "--snapshot", help="Append this guard run to the reproduce outcome-match trend (C6 fold-in)."),
+    show_history: bool = typer.Option(False, "--history", help="Print the recorded reproduce outcome-match trend instead of guarding. Ignores --snapshot."),
+    history_file: str = typer.Option(None, "--history-file", help="Reproduce outcome-match history JSONL (defaults to the shipped one)."),
+) -> None:
+    """Guard the reproduce loop's per-scenario outcome-match rate against a frozen synthetic scenario set (C6 fold-in).
+
+    Replays `evaluate_reproduce` -- the REAL run_reproduction loop (real
+    load_claims, real classify, real locators, real freshness guard) with only
+    the executor/installer seams scripted -- over a frozen scenario corpus and
+    compares the outcome-match rate to a committed baseline, exiting non-zero
+    on a real regression so a change to the loop, a locator, or the freshness
+    guard never silently starts diverging from a scenario's declared outcome.
+    `--update-baseline` deliberately (re)freezes the baseline instead of
+    guarding; that always exits 0. With --snapshot the result is also appended
+    to the committed reproduce trend; with --history the recorded trend is
+    printed instead.
+
+    Honest scope: the number is over **14 SYNTHETIC, self-graded scenarios**
+    (we author the fixtures we grade -- same disclosure as every prior eval
+    slice). The corpus only becomes non-tautological as real runs feed it
+    through the pending-capture/promote channel. The seed deliberately carries
+    ONE known-miss scenario (expected DIVERGED on an exact match) that the
+    current loop gets wrong, so the committed baseline is 13/14 -- below 1.0,
+    the guard's liveness demonstration.
+    """
+    scenarios_path = Path(scenarios) if scenarios else default_reproduce_scenarios_path()
+    baseline_path = Path(baseline) if baseline else default_reproduce_baseline_path()
+    history_path = Path(history_file) if history_file else default_reproduce_history_path()
+
+    if show_history:
+        history = load_jsonl(ReproduceSnapshot, history_path)
+        if json_out:
+            typer.echo("[" + ",".join(s.model_dump_json() for s in history) + "]")
+            return
+        if not history:
+            typer.echo(f"No reproduce outcome-match snapshots recorded yet in {history_path}.")
+            return
+        _print_trend(
+            [(s.timestamp, s.outcome_match_rate,
+              f"outcome-match {s.outcome_match_rate:.1%}  ({s.scenario_count} scenarios)  "
+              f"recovery {round(s.recovery_rate * s.scenario_count)}/{s.scenario_count}",
+              s.contig_version or "unknown") for s in history],
+            title="Reproduce outcome-match over time:",
+        )
+        return
+
+    try:
+        scenarios_list = load_reproduce_scenarios(scenarios_path)
+    except FileNotFoundError:
+        typer.echo(f"Reproduce scenarios not found: {scenarios_path}", err=True)
+        raise typer.Exit(code=1)
+
+    report = evaluate_reproduce(scenarios_list)
+    corpus_sha = sha256_file(scenarios_path)
+
+    if update_baseline:
+        snap = snapshot_from_reproduce_report(
+            report,
+            corpus_sha=corpus_sha,
+            contig_version=_pkg_version("contig"),
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+        save_reproduce_baseline(snap, baseline_path)
+        append_jsonl(snap, history_path)
+        typer.echo(
+            f"Baseline updated: outcome-match {report['outcome_match_rate']:.1%} over "
+            f"{report['total_count']} reproduce scenarios; recovery "
+            f"{report['healed_count']}/{report['total_count']}; "
+            f"covered: {', '.join(report['covered_families'])}"
+        )
+        return
+
+    if snapshot:
+        append_jsonl(
+            snapshot_from_reproduce_report(
+                report,
+                corpus_sha=corpus_sha,
+                contig_version=_pkg_version("contig"),
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            ),
+            history_path,
+        )
+
+    baseline_snapshot = load_reproduce_baseline(baseline_path)
+    snapshot_snap = snapshot_from_reproduce_report(
+        report,
+        corpus_sha=corpus_sha,
+        contig_version=_pkg_version("contig"),
+        timestamp=datetime.now(timezone.utc).isoformat(),
+    )
+
+    if json_out:
+        typer.echo(snapshot_snap.model_dump_json())
+
+    if baseline_snapshot is None:
+        typer.echo(
+            f"No reproduce-guard baseline at {baseline_path}; run 'contig reproduce-guard "
+            "--update-baseline' to freeze one.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    status, _ = compare_reproduce_to_baseline(
+        snapshot_snap,
+        baseline=baseline_snapshot,
+        tolerance=tolerance,
+    )
+
+    if snapshot_snap.corpus_sha != baseline_snapshot.corpus_sha:
+        typer.echo(
+            f"Scenario set changed (sha {snapshot_snap.corpus_sha[:12]} != baseline "
+            f"{baseline_snapshot.corpus_sha[:12]}); the delta crosses different sets — "
+            "refreeze with --update-baseline.",
+            err=True,
+        )
+
+    if snapshot_snap.contig_version != baseline_snapshot.contig_version:
+        typer.echo(
+            f"Contig version mismatch ({snapshot_snap.contig_version} != "
+            f"{baseline_snapshot.contig_version})",
+            err=True,
+        )
+
+    if not json_out:
+        delta_pp = (snapshot_snap.outcome_match_rate - baseline_snapshot.outcome_match_rate) * 100
+        typer.echo(
+            f"Reproduce-guard: outcome-match {snapshot_snap.outcome_match_rate:.1%} vs baseline "
+            f"{baseline_snapshot.outcome_match_rate:.1%} (delta {delta_pp:+.1f}pp) over "
+            f"{report['total_count']} scenarios; recovery {report['healed_count']}/{report['total_count']}"
+        )
+        for family in report["covered_families"]:
+            score = report["per_family"][family]
+            typer.echo(f"  {family}: {score.matched}/{score.total} ({score.rate:.1%})")
+        for res in report["scenario_results"]:
+            if res["matched"]:
+                continue
+            for key, (expected, observed) in sorted(res["mismatches"].items()):
+                typer.echo(
+                    f"  MISS {res['scenario_id']}: {key} expected {expected}, observed {observed}"
+                )
+
+    if status == "regressed":
+        mismatch_ids = ", ".join(
+            res["scenario_id"] for res in report["scenario_results"] if not res["matched"]
+        )
+        delta_pp = (snapshot_snap.outcome_match_rate - baseline_snapshot.outcome_match_rate) * 100
+        typer.echo(
+            f"REGRESSION: outcome-match {snapshot_snap.outcome_match_rate:.1%} below baseline "
+            f"{baseline_snapshot.outcome_match_rate:.1%} (delta {delta_pp:+.1f}pp): {mismatch_ids}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    if status == "improved":
+        if not json_out:
+            typer.echo(
+                f"Reproduce-guard improved (outcome-match {snapshot_snap.outcome_match_rate:.1%} > baseline "
+                f"{baseline_snapshot.outcome_match_rate:.1%}); consider --update-baseline to lock it in."
+            )
+        return
+
+    if not json_out:
+        typer.echo(
+            f"reproduce-guard PASS: outcome-match {snapshot_snap.outcome_match_rate:.1%} "
+            f"≥ baseline {baseline_snapshot.outcome_match_rate:.1%}."
         )
 
 

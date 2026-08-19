@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-08-03T14:32:28.059071+00:00",
-  "scenario_count": 20,
-  "corpus_sha": "b16454fec7759e61c1c912b443ece7937b8ae3bb87845cd68a1dc6218abcdcfe",
+  "timestamp": "2026-08-09T16:43:47.708648+00:00",
+  "scenario_count": 22,
+  "corpus_sha": "c39917544c59273d7834c519e7def7031c8128bd3dda5bdb56f163565469818b",
   "outcome_match_rate": 1.0,
   "recovery_rate": 0.5,
   "per_class": {
@@ -16,8 +16,8 @@
       "rate": 1.0
     },
     "missing_index": {
-      "matched": 3,
-      "total": 3,
+      "matched": 4,
+      "total": 4,
       "rate": 1.0
     },
     "tool_crash": {
@@ -79,9 +79,15 @@
       "matched": 1,
       "total": 1,
       "rate": 1.0
+    },
+    "alignment_format_mismatch": {
+      "matched": 1,
+      "total": 1,
+      "rate": 1.0
     }
   },
   "covered_classes": [
+    "alignment_format_mismatch",
     "bad_param",
     "conda_solve_failed",
     "container_pull_failed",
@@ -98,5 +104,5 @@
     "time_limit",
     "tool_crash"
   ],
-  "contig_version": "0.49.0"
+  "contig_version": "0.51.0"
 }

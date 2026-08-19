@@ -202,6 +202,27 @@ def diagnose_failure(events: list[TaskEvent], log_text: str) -> Diagnosis:
             confidence=0.9,
         )
 
+    # htslib refuses an index that is OLDER than the data it indexes
+    # ("The index file is older than the data file: X"). The message carries no
+    # absence phrase, so the generic notfound branch below misses it entirely and
+    # it would fall to tool_crash. Narrow on purpose: a line must carry BOTH a
+    # freshness phrase AND an index token / "index file", so unrelated "older
+    # than" chatter does not over-trigger. Ordered BEFORE the generic branch so
+    # an "is missing or older" message classifies stale-first (the rebuild+
+    # replace repair covers both flavors).
+    stale_index_lines = [
+        line
+        for line in _matching_lines(log_text, ("older than",))
+        if ("index file" in line.lower() or _has_any(line, (".fai", ".bai", ".tbi", ".csi")))
+    ]
+    if stale_index_lines:
+        return Diagnosis(
+            failure_class="missing_index",
+            root_cause="An index file is older than the data it indexes.",
+            evidence=stale_index_lines,
+            confidence=0.85,
+        )
+
     notfound_lines = _matching_lines(
         log_text, ("not found", "missing", "no such file")
     )
@@ -379,6 +400,34 @@ def diagnose_failure(events: list[TaskEvent], log_text: str) -> Diagnosis:
                 "cannot index it."
             ),
             evidence=bgzf_lines + fai_lines,
+            confidence=0.85,
+        )
+
+    # CRAM-as-input decode failures: htslib/samtools cannot decode the CRAM
+    # without the reference FASTA it was aligned against (CRAM->BAM flavor).
+    # The signatures below are REASONED from real htslib error strings, not
+    # observed in a corpus fixture. Scope is CRAM-as-input only; BAM->CRAM
+    # (writing CRAM output) is out of scope -- those failures surface as
+    # index/reference problems with a different fix. Narrow on purpose: a
+    # matched line must carry a decode-anchor phrase AND the log must name a
+    # .cram file, so the bare token "cram" in a filename never fires.
+    cram_decode_lines = _matching_lines(
+        log_text,
+        (
+            "cram_decode_slice",
+            "for cram decoding",
+            "required for cram",
+        ),
+    )
+    if cram_decode_lines and _has_any(log_text, (".cram",)):
+        return Diagnosis(
+            failure_class="alignment_format_mismatch",
+            root_cause=(
+                "A CRAM input could not be decoded: htslib lacks the reference "
+                "FASTA needed for CRAM-to-BAM conversion, or the CRAM itself "
+                "is malformed."
+            ),
+            evidence=cram_decode_lines,
             confidence=0.85,
         )
 

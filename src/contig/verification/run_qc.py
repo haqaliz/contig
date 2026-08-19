@@ -22,6 +22,7 @@ def evaluate_run_qc(
     multiqc_json_path: str | PathLike[str],
     rule_pack: list[dict] = RNASEQ_RULE_PACK,
     cross_sample: bool = True,
+    pre_parsed_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list[QCResult]:
     """Evaluate a run's MultiQC metrics: per-sample rule pack + cross-sample checks.
 
@@ -29,8 +30,16 @@ def evaluate_run_qc(
     assumptions (a single-sample germline variant run, say, is valid and must not
     be failed for "needing replicates"). Callers disable it for assays where it
     doesn't apply.
+
+    `pre_parsed_metrics` lets a caller that already parsed the file (for the
+    verification-inputs capture, PRD R4) hand the parsed table in instead of
+    forcing a second JSON read; absent, the file is parsed here exactly as
+    before -- the parameter is additive and back-compat.
     """
-    metrics = parse_multiqc_general_stats_file(multiqc_json_path)
+    if pre_parsed_metrics is not None:
+        metrics = pre_parsed_metrics
+    else:
+        metrics = parse_multiqc_general_stats_file(multiqc_json_path)
     if not metrics:
         return []  # no samples to verify -> caller reports "unverified", not "fail"
     results = evaluate(metrics, rule_pack)

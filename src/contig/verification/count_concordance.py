@@ -236,7 +236,10 @@ def count_concordance(
 
 
 def concordance_results(
-    matrix_a: str | os.PathLike, matrix_b: str | os.PathLike
+    matrix_a: str | os.PathLike,
+    matrix_b: str | os.PathLike,
+    *,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list[QCResult]:
     """Emit the three count-concordance checks for a pair of matrices.
 
@@ -251,12 +254,16 @@ def concordance_results(
     (nor count as evidence for a "pass" verdict); the real signal lives in the
     other two. All results carry kind "concordance". Messages name both matrices
     by basename so the comparison is auditable.
+
+    `capture_metrics` is passed through to `results_from_counts` (see its
+    docstring for the out-param contract).
     """
     return results_from_counts(
         parse_count_matrix(matrix_a),
         parse_count_matrix(matrix_b),
         Path(matrix_a).name,
         Path(matrix_b).name,
+        capture_metrics=capture_metrics,
     )
 
 
@@ -265,14 +272,38 @@ def results_from_counts(
     b: dict[str, float],
     name_a: str,
     name_b: str,
+    *,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list[QCResult]:
     """Emit the three count-concordance checks for two already-parsed count dicts.
 
     The pure-dict seam under `concordance_results`: same WARN-cap / UNVERIFIED-on-
     too-few-genes / informational-overlap contract, but keyed off pre-parsed maps and
     caller-supplied display names so a non-TSV source can reuse the identical checks.
+
+    `capture_metrics` is an optional out-param for the pre-band verification
+    inputs capture (PRD R4a): when passed, it is populated with
+    `{"S1": {"value": <raw rho>, "n_shared": float(shared)}}` on the normal
+    path, and with `{"S1": {"n_shared": float(shared)}}` (value OMITTED, the
+    v0.53.0 somatic precedent) when rho is not computable -- a 0.0 placeholder
+    with shared >= the spearman floor would re-derive "warn" in
+    `_concordance_status`, but the module's spearman check is UNVERIFIED
+    there; the guard's missing-value path re-derives the same UNVERIFIED. The
+    too-few-shared-genes path stays self-describing (n_shared < the floor
+    re-derives UNVERIFIED regardless of the value). Additive and back-compat:
+    absent, behavior is exactly as before.
     """
     stats = stats_from_counts(a, b)
+
+    if capture_metrics is not None:
+        # rho uncomputable (constant count vectors / < 2 genes): OMIT "value"
+        # entirely so `_concordance_status` (verify_corpus.py:178) re-derives
+        # the same UNVERIFIED the module emitted -- a 0.0 placeholder would
+        # re-derive "warn" whenever shared >= the spearman floor (0.0 < 0.90).
+        metrics: dict[str, float] = {"n_shared": float(stats.shared)}
+        if stats.rho is not None:
+            metrics["value"] = stats.rho
+        capture_metrics["S1"] = metrics
 
     too_few = stats.shared < _MIN_SHARED_GENES
 
@@ -342,13 +373,18 @@ def evaluate_count_concordance(
     primary: str | os.PathLike,
     second: str | os.PathLike,
     assay: str,
+    *,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list[QCResult]:
     """Assay-gated entry point: count concordance where the assay quantifies genes.
 
     Returns the three `concordance_results` for an assay in
     `_COUNT_CONCORDANCE_ASSAYS` (RNA-seq today), else an empty list. Gating here keeps
     the caller (run_qc) from having to know which assays support count concordance.
+
+    `capture_metrics` is passed through to `concordance_results`; on the
+    non-matching-assay path nothing is captured (honest absence).
     """
     if assay not in _COUNT_CONCORDANCE_ASSAYS:
         return []
-    return concordance_results(primary, second)
+    return concordance_results(primary, second, capture_metrics=capture_metrics)

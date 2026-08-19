@@ -265,6 +265,7 @@ FailureClass = Literal[
     "missing_reference",
     "missing_index",
     "reference_not_bgzf",
+    "alignment_format_mismatch",
     "bad_param",
     "container_pull_failed",
     "container_unavailable",
@@ -359,6 +360,14 @@ class RunRecord(BaseModel):
     # bundles simply lack the key and load with None -- no validator needed,
     # mirroring ReferenceIdentity's back-compat idiom.
     sex_inference: SexInference | None = None
+    # Pre-band verification inputs captured at QC time (C6 fold-in, PRD R4):
+    # family -> sample -> metric -> value, keyed by the verify-corpus scorer's
+    # family names exactly. This is what a pending VerificationCase is built
+    # from -- the stored signal VALUES the verdict was derived from, never the
+    # stored statuses (the threshold-sensitivity contract). None/absent for
+    # legacy bundles (back-compat) and for runs with nothing capturable; an
+    # empty dict is normalized to None at the capture site.
+    verification_inputs: dict[str, dict[str, dict[str, float]]] | None = None
 
     @field_validator("annotation_identity", mode="before")
     @classmethod
@@ -576,6 +585,16 @@ class HealScenario(BaseModel):
     # thing under test. None (the default) leaves a scenario's behaviour exactly
     # as it was: the driver then passes no params at all.
     fasta_artifact: Literal["plain_gzip"] | None = None
+    # Opt-in: drop a stale single-file index sidecar into the run dir so the
+    # REAL `_rebuild_stale_index` (self_heal.py:877) has a stale file to
+    # atomically replace. The value is the sidecar path the scenario's
+    # log_text names, relative to run_dir -- the diagnosis's parsed index path
+    # resolves against run_dir, so the file must already exist there for the
+    # replace to succeed. Deliberately a named fixture directive rather than an
+    # injectable build result -- the loop only needs a file on disk, and
+    # synthesizing the repair would stop measuring the thing under test. None
+    # (the default) leaves a scenario's behaviour exactly as it was.
+    stale_index_artifact: str | None = None
     expected_recovered: bool
     expected_outcome: str
     # Opt-in assertion on whether the loop actually enacted a patch (R7), checked
@@ -663,6 +682,111 @@ class HealGuardResult(BaseModel):
     mismatches: list[HealScenarioResult] = []
 
 
+# --- Verification-signal eval + guard (C6 fold-in: verify-guard) ---------------
+# The labeling design for the verification side of the moat (PRD R1): a
+# VerificationCase is a pre-band signal value set plus a human-confirmed
+# verdict label, so the guard can re-derive each case's verdict under the
+# CURRENT rule packs and measure whether the bands are right -- the analogue
+# of FailureCase/EvalSnapshot/HoldoutGuardResult and HealScenario/
+# HealSnapshot/HealGuardResult, but for the QC/concordance verification
+# signals rather than the detector or the self-heal loop.
+# Honest scope (stated per R1): the first corpus is synthetic and self-graded
+# (we author the fixtures we grade -- same disclosure as every prior eval
+# slice); the corpus only becomes non-tautological as real runs feed it via
+# the capture/promote channel (aspects 2-3).
+# All new fields are additive with defaults: bundles serialized before the
+# fold-in load unchanged.
+
+
+class VerificationCase(BaseModel):
+    """One labeled verification datapoint: pre-band inputs + expected verdict.
+
+    `inputs` is the family -> sample -> metric -> value dict the verdict was
+    DERIVED FROM (the pre-band signal values, never stored statuses) -- the
+    threshold-sensitivity contract (PRD R1): the guard re-derives statuses
+    from these values under the current bands, so a case whose stored value
+    crosses a changed band must flip status. `expected_verdict` is the
+    human-confirmed correct verdict; None until a pending case is promoted.
+    `known_miss` marks the deliberate seed fixture (PRD R2a) whose expected
+    verdict the CURRENT rules get wrong, keeping the committed baseline < 1.0
+    so the guard demonstrably flags a real defect from day one.
+    """
+
+    case_id: str
+    description: str  # honesty note: what the case pins
+    source: str  # "synthetic" | "pending:<run_id>" | "confirmed:<run_id>"
+    assay: str
+    inputs: dict[str, dict[str, dict[str, float]]]
+    expected_verdict: QCStatus | None = None  # None until promoted
+    known_miss: bool = False
+
+
+class FamilyScore(BaseModel):
+    """Per-family verdict-match rate over the labeled corpus (informational)."""
+
+    matched: int
+    total: int
+    rate: float
+
+
+class VerifyCaseResult(BaseModel):
+    """One case's re-derivation outcome; mirrors DetectorMismatch/HealScenarioResult."""
+
+    case_id: str
+    predicted_verdict: QCStatus
+    expected_verdict: QCStatus | None
+    matched: bool
+    families: dict[str, str]  # family -> reduced status
+    divergence: list[str] = []  # unverified families and/or expected-vs-predicted on a miss
+
+
+class VerifyEvalReport(BaseModel):
+    """The result of replaying the verification rules over a case corpus."""
+
+    total: int  # labeled cases only; unlabeled are excluded, never counted wrong
+    correct: int
+    verdict_match_rate: float
+    per_family: dict[str, FamilyScore] = {}
+    mismatches: list[VerifyCaseResult] = []
+
+
+class VerifySnapshot(BaseModel):
+    """One verify-eval result tied to a corpus version; mirrors EvalSnapshot.
+
+    Serialized two ways: as the single committed baseline (one pretty-printed
+    JSON object, NOT JSONL) that the verdict-match rate is compared against on
+    every run, and -- via `contig.snapshot_history`, same as EvalSnapshot --
+    appended one-per-line to a committed JSONL trend.
+    """
+
+    timestamp: str
+    case_count: int
+    corpus_sha: str
+    verdict_match_rate: float
+    per_family: dict[str, FamilyScore] = {}
+    contig_version: str | None = None
+
+
+class VerifyGuardResult(BaseModel):
+    """The result of scoring the verification rules against a frozen held-out
+    case set and comparing it to a committed baseline; mirrors
+    HoldoutGuardResult/HealGuardResult (C6 fold-in: the verify regression guard).
+    """
+
+    case_count: int
+    verdict_match_rate: float
+    baseline_rate: float | None = None
+    delta: float | None = None  # verdict_match_rate - baseline_rate
+    tolerance: float
+    regressed: bool = False
+    improved: bool = False
+    corpus_sha: str
+    baseline_sha: str | None = None
+    sha_mismatch: bool = False
+    has_baseline: bool = True
+    mismatches: list[VerifyCaseResult] = []
+
+
 # --- Reproduce published work (C8 slice 1: pure data models) --------------------
 # A "claim" is one quantitative assertion pulled from a published paper/repo (e.g.
 # "F1 = 0.91"). Reproducing a paper means re-running its pipeline and checking each
@@ -704,3 +828,171 @@ class ReproduceRecord(BaseModel):
     source_url: str | None = None
     source_commit: str | None = None
     source_tree_sha256: str | None = None
+
+
+# --- Reproduce-eval guard (C6 fold-in: reproduce-guard) ------------------------
+# A ReproduceScenario is a frozen replay of one `contig reproduce` run: the
+# command to run, the claims to extract, and a scripted executor/installer
+# trace, so the guard can replay it through the REAL `run_reproduction` loop
+# and guard the per-scenario outcome-match rate against a committed baseline,
+# exactly as verify-guard guards the verification rules. All new fields are
+# additive: bundles serialized before this fold-in load unchanged (the sibling
+# ReproduceRecord above is untouched).
+
+# Repair outcome literals mirror the env-resurrection RepairStep.outcome
+# strings; "none" is the no-repair baseline.
+RepairOutcome = Literal[
+    "none", "installed_and_retried", "install_failed", "retry_failed"
+]
+
+
+class ExecStep(BaseModel):
+    """One scripted executor call: rc + captured output + what it writes.
+
+    `write_results` is the content to write as the scenario's results file at
+    this step; `write_artifacts` are repo-relative path -> content. The
+    `artifact_mtimes` dict pins artifact freshness for the REAL freshness
+    guard (mtime >= run_started_at); a path absent from it is written with
+    mtime == run_started_at.
+    """
+
+    exit_code: int = 0
+    output: str = ""
+    write_results: dict | None = None
+    write_artifacts: dict[str, str] | None = None
+    artifact_mtimes: dict[str, float] | None = None
+
+
+class ReproduceScenario(BaseModel):
+    """One frozen replay of a `contig reproduce` run over a published repo.
+
+    `claims` are raw claim dicts, validated through the real `load_claims` at
+    replay time (never constructed by hand). `executor_steps` pop in call
+    order; `installer_steps` pop in the same way when `allow_install` is set.
+    `expected_claim_statuses` maps claim id -> expected ClaimStatus, the
+    guarded number; `known_miss` marks the deliberate seed fixture keeping the
+    committed baseline < 1.0.
+    """
+
+    scenario_id: str
+    description: str
+    source: str = "holdout:synthetic"
+    run_command: str
+    claims: list[dict]
+    results_path: str = "results.json"
+    executor_steps: list[ExecStep]
+    installer_steps: list[int] | None = None
+    allow_install: bool = False
+    expected_claim_statuses: dict[str, str]
+    expected_repair: RepairOutcome = "none"
+    expected_exit_code: int = 0
+    known_miss: bool = False
+
+
+class ReproduceSnapshot(BaseModel):
+    """One reproduce-eval result tied to a corpus version; mirrors HealSnapshot.
+
+    Serialized two ways: as the single committed baseline (one pretty-printed
+    JSON object, NOT JSONL) that the outcome-match rate is compared against on
+    every run, and -- via `contig.snapshot_history`, same as EvalSnapshot --
+    appended one-per-line to a committed JSONL trend.
+    """
+
+    timestamp: str
+    scenario_count: int
+    corpus_sha: str
+    outcome_match_rate: float
+    recovery_rate: float  # healed scenarios / total (informational)
+    per_family: dict[str, FamilyScore] | None = None
+    covered_families: list[str]
+    contig_version: str
+
+
+# --- Reproduce corpus (C8 slice 2: labeled case data models) ------------------
+# A ReproduceCase is one labeled case in the reproduce corpus: a published
+# repo + run command + claims, re-derived through the REAL reproduce loop to
+# produce a ReproduceCaseResult, aggregated into a ReproduceCorpusReport and
+# committed as a ReproduceCorpusSnapshot -- the corpus-analog of the
+# VerificationCase/VerifyEvalReport/VerifySnapshot family above. All new
+# fields are additive: nothing already serialized changes.
+
+
+class ReproduceCaseClaim(BaseModel):
+    """One quantitative claim in a labeled case: the paper's number vs. what
+    Contig is expected to observe, with the expected re-derived status pinned.
+    """
+
+    claim_id: str
+    claimed: float
+    observed: float | None = None  # None when the metric is uncomputable
+    tolerance: float
+    family: str
+    expected_status: ClaimStatus | None = None  # None until the case is promoted
+
+
+class ReproduceCase(BaseModel):
+    """One labeled reproduce case: a published repo to re-run and its claims.
+
+    `repair` is the run's recorded repair outcome (`None` when none was
+    needed); `exit_code` is the run's observed exit code. `expected_repair`
+    and `expected_exit_code` pin what the case expects (None until the case is
+    promoted), mirroring `expected_status` per claim. `known_miss` marks the
+    deliberate seed fixture keeping the committed baseline < 1.0.
+    """
+
+    case_id: str
+    description: str  # honesty note: what the case pins
+    source: str  # "synthetic" | "pending:<run_id>" | "confirmed:<run_id>"
+    repo: str
+    run_command: str
+    claims_sha256: str
+    claims: list[ReproduceCaseClaim] = []
+    repair: RepairOutcome | None = None  # recorded repair outcome, None when none
+    expected_repair: RepairOutcome | None = None  # None until the case is promoted
+    exit_code: int
+    expected_exit_code: int | None = None
+    known_miss: bool = False
+
+
+class ReproduceCaseResult(BaseModel):
+    """One case's re-derivation outcome; mirrors VerifyCaseResult.
+
+    `predicted_statuses` maps claim_id -> the re-derived ClaimStatus.
+    `divergence` names reasons on a miss; unlabeled claims are never counted
+    as mismatches.
+    """
+
+    case_id: str
+    predicted_statuses: dict[str, str]
+    matched: bool
+    labeled_claims: int  # claims with expected_status set
+    matching_claims: int  # labeled claims whose re-derived status == expected
+    divergence: list[str] = []
+
+
+class ReproduceCorpusReport(BaseModel):
+    """The result of replaying the reproduce loop over a case corpus.
+
+    `total`/`correct`/`claim_match_rate` cover labeled claims only; unlabeled
+    claims are excluded, never counted wrong.
+    """
+
+    total: int  # labeled claims only
+    correct: int
+    claim_match_rate: float
+    cases: int  # labeled cases evaluated
+    per_family: dict[str, FamilyScore] = {}
+    mismatches: list[ReproduceCaseResult] = []
+
+
+class ReproduceCorpusSnapshot(BaseModel):
+    """One reproduce-corpus eval result tied to a corpus version; mirrors
+    VerifySnapshot.
+    """
+
+    timestamp: str
+    case_count: int
+    corpus_sha: str
+    claim_match_rate: float
+    per_family: dict[str, FamilyScore] = {}
+    contig_version: str | None = None
