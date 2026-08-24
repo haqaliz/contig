@@ -281,6 +281,10 @@ def test_contig_mismatch_is_not_missing_index_dict() -> None:
     )
     d = diagnose_failure(events, log_text=log)
     assert d.failure_class != "missing_index"
+    # GATK's "incompatible contigs" wording is the DELIBERATELY EXCLUDED control
+    # for the reference_mismatch branch: it lacks the contig-absence phrase, so
+    # the tight family leaves it as an unrecognized crash.
+    assert d.failure_class == "tool_crash"
 
 
 def test_benign_fai_mention_is_not_missing_index() -> None:
@@ -328,13 +332,62 @@ def test_bwa_missing_index_is_missing_index() -> None:
     assert any("bwa_idx_load_from_disk" in e for e in d.evidence)
 
 
-def test_wrong_reference_contig_mismatch_is_not_missing_index() -> None:
-    # A wrong-reference / contig-mismatch line must NOT be swallowed by the new
-    # STAR/BWA missing-index branches (it is a different, deferred class).
+def test_contig_not_found_in_reference_dictionary_is_reference_mismatch() -> None:
+    # A contig absent from the reference (wrong-genome/build signature) is its
+    # own class now; it must still never be swallowed by the missing-index
+    # family (the dictionary line names a reference file, not an absent index).
     events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=1)]
     log = "ERROR: Contig 'chr1' not found in the reference dictionary /work/ref/genome.fasta"
     d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "reference_mismatch"
+    assert d.confidence == 0.85
+    assert log in d.evidence
     assert d.failure_class != "missing_index"
+
+
+def test_star_sequence_not_found_in_reference_genome_is_reference_mismatch() -> None:
+    # STAR's hard-fail wording for reads carrying a contig absent from the
+    # reference FASTA -- the canonical wrong-genome/build signature.
+    events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=1)]
+    log = (
+        "EXITING because of FATAL ERROR: sequence 'chr1' not found in the "
+        "reference genome /work/ref/genome.fasta"
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "reference_mismatch"
+    assert d.confidence == 0.85
+    assert d.evidence
+
+
+def test_reference_phrase_without_contig_token_is_not_reference_mismatch() -> None:
+    # The AND-guard is load-bearing: "not found in the reference" WITHOUT a
+    # contig/sequence token is a different problem and must stay an unrecognized
+    # crash, never be stolen by the reference_mismatch family.
+    events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=1)]
+    log = "WARNING: reads not found in the reference; skipping"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "tool_crash"
+
+
+def test_missing_reference_log_is_not_stolen_by_reference_mismatch() -> None:
+    # A genuinely absent reference file ("no such file or directory" + .fasta
+    # token) keeps its own class; the contig-absence phrase is absent.
+    events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=1)]
+    log = (
+        "samtools faidx: failed to open /work/ref/genome.fasta: No such file "
+        "or directory"
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "missing_reference"
+
+
+def test_missing_index_log_is_not_stolen_by_reference_mismatch() -> None:
+    # An absent index keeps the missing_index family; the contig-absence phrase
+    # is absent, so the reference_mismatch branch must not fire.
+    events = [TaskEvent(process="BWA_MEM", status="FAILED", exit=1)]
+    log = "[E::bwa_idx_load_from_disk] fail to locate the index files"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "missing_index"
 
 
 def test_bwamem2_unreadable_index_is_missing_index() -> None:

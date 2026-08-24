@@ -431,6 +431,26 @@ def diagnose_failure(events: list[TaskEvent], log_text: str) -> Diagnosis:
             confidence=0.85,
         )
 
+    # Reads whose contigs are absent from the reference FASTA -- a hard-fail
+    # signature of the wrong-genome class (reference/build mismatch at
+    # runtime). Narrow on purpose: a matched line must carry a
+    # contig-absence phrase AND a contig/sequence token, so the branch never
+    # steals from the missing_index family (index-token anchored) or
+    # missing_reference ("no such file or directory" anchored). GATK's
+    # "incompatible contigs" wording is deliberately NOT here (decision:
+    # control negative, stays tool_crash).
+    mismatch_lines = _matching_lines(log_text, ("not found in the reference",))
+    if mismatch_lines and _has_any(log_text, ("contig", "sequence", "'chr")):
+        return Diagnosis(
+            failure_class="reference_mismatch",
+            root_cause=(
+                "Reads or annotations reference contigs absent from the "
+                "reference FASTA - the wrong genome build was likely used."
+            ),
+            evidence=mismatch_lines,
+            confidence=0.85,
+        )
+
     # No specific signal matched. If a task did fail, the tool itself crashed
     # for a reason we could not classify; otherwise we have nothing to go on.
     if any(e.is_failure for e in events):
