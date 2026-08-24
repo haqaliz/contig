@@ -1,7 +1,7 @@
-# Spec — detector (aspect of runtime-reference-mismatch-detector)
+# Spec -- detector (aspect of runtime-reference-mismatch-detector)
 
 > One-aspect slice (the `alignment_format_mismatch` template: one literal, one
-> branch, one corpus family, one guard scenario, one taxonomy sync — one
+> branch, one corpus family, one guard scenario, one taxonomy sync -- one
 > cohesive, test-first unit). Source: `docs/planning/runtime-reference-mismatch-detector/prd.md`.
 
 ## Problem slice
@@ -12,7 +12,7 @@ reference (e.g. STAR `sequence 'chr1' not found in the reference genome`, GATK
 `tool_crash` at 0.4 (`src/contig/detect.py:434-445`). This aspect gives the
 family its own class, seeds the corpus (golden + independently authored holdout
 twin), guards the loop (heal-guard give-up), and mirrors the taxonomy to the
-dashboard. No repair exists or is proposed — honest give-up, exactly like
+dashboard. No repair exists or is proposed -- honest give-up, exactly like
 `alignment_format_mismatch`.
 
 ## In-scope
@@ -45,7 +45,7 @@ dashboard. No repair exists or is proposed — honest give-up, exactly like
 ## Out-of-scope
 
 Any repair/patch; the assembly-signature pre-flight form (blocked); GATK
-`incompatible contigs` branch wording (excluded by decision — control negative);
+`incompatible contigs` branch wording (excluded by decision -- control negative);
 C5 known-sites/GTF-version/RO-Crate; pin-conflict; verdict/exit-code changes;
 real nf-core run in CI.
 
@@ -69,7 +69,7 @@ real nf-core run in CI.
 
 - Phase 1 (literal + branch + detect tests) precedes everything.
 - Phases 2 (corpus + holdout) and 3 (heal scenario) are independent of each
-  other after Phase 1 (distinct data files, distinct baseline files — safe to
+  other after Phase 1 (distinct data files, distinct baseline files -- safe to
   parallelize across agents).
 - Phase 4 (non-overlap + safety net) after Phase 1.
 - Phase 5 (dashboard) after Phase 1; Phase 6 (CHANGELOG + full suite) last.
