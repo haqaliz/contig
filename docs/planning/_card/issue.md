@@ -1,70 +1,40 @@
-# Card: feat / reproduce-local-tree-hash
+# Unit of Work — runtime-reference-mismatch-detector
 
-- **Type:** feat
-- **Id/slug:** `reproduce-local-tree-hash`
-- **Owner:** aliz
-- **Branch:** `feat/reproduce-local-tree-hash/aliz`
-- **Source:** inline brief (no GitHub issue — `gh issue list` returns "No Issues", consistent
-  with the three prior cards) — carried from the `/contig-next` recommendation (2026-08-06),
-  the next slice after `inert-repair-honesty` merged and shipped as v0.50.0.
+> Inline brief (source: contig-next handoff, 2026-08-24). No GitHub issue exists for
+> this slug; the branch `feat/runtime-reference-mismatch-detector/aliz` and the PR
+> carry the id.
 
 ## Brief
 
-C8 slice 9: populate `ReproduceRecord.source_tree_sha256` for a **local**
-`contig reproduce <path>` run, closing the gap slice 8 deferred in its own words.
+Seed the runtime half of the reference-integrity family, which every shipped
+harmonization slice explicitly left open ("no new `reference_mismatch`
+`FailureClass` or detector-corpus case" — provenance-only capture was the
+deliberate choice then; the C2 deferral list still names "a runtime
+`reference_mismatch` detector-corpus case"). Ship a new `FailureClass` literal
+plus a narrow AND-guarded detector branch on the hard-fail log signatures of a
+wrong reference (aligner fatal errors on reads whose contigs are absent from the
+reference), one golden corpus case plus an independently authored holdout twin,
+and a heal-guard give-up scenario, syncing the dashboard `FAILURE_CLASSES`
+taxonomy; refreeze baselines via `--update-baseline` as deliberate acts.
 
-Today `cli.py:1059-1061` hashes the checkout only under
-`if repo_argument.kind == "remote"`, so a signed **local** bundle records
-`source_url` / `source_commit` / `source_tree_sha256` all `null` and binds **nothing**
-about the code that produced the verdict — on what was the only reproduce mode until
-slice 6, and still the default.
+Caveat to honor: the needle is reasoned-not-observed (no real mismatched-reference
+run in CI) and must not double-classify the `qc_anomaly` verdict-trigger family,
+which already surfaces wrong-reference runs that complete with a QC FAIL; the
+assembly-signature pre-flight form stays blocked and is out of scope. Test-first,
+stdlib-only, no real nf-core run in CI.
 
-Reuse the shipped pure `bundle.compute_tree_sha256` as-is; hash **pre-run**, before the
-`run_started_at` stamp at `cli.py:1070`, so the run's own writes and any `--allow-install`
-retry cannot change it.
+## Cited context (docs/technical/CAPABILITY_ROADMAP.md)
 
-Because the field has been in `canonical_record_bytes` since slice 8, this changes a
-**value** and not the canonical schema — confirm with a test that pre-existing signed
-bundles still verify, i.e. **no fourth signature break**.
-
-**Known caveat to settle in the dig:** unlike a `--depth 1` clone, a local repo tree is
-unbounded — decide explicitly whether to hash unconditionally, bound the walk and return
-an honest `None` past a limit, or scope it; and state plainly in the write-up that a dirty
-local tree's hash is evidence about *those bytes*, not a third-party-replayable pin.
-
-Treat post-run hashing of the bundle's `source/` copy as a separate deferred item, **not**
-this slice.
-
-## Provenance of the pick (from `/contig-next`, 2026-08-06)
-
-**Why it ranked first:**
-
-- Closes a stated gap in the signed attestation, on the mode that is actually used
-  (`cli.py:1059-1061`; local runs were the only mode until slice 6).
-- Deferred as *scope*, not blocked — `CAPABILITY_ROADMAP.md:1495` and the slice-8
-  write-up both name "local-path and shipped-`source/` tree hashing" as the intended
-  follow-on, and slice 8 calls the local case "groundwork" it deliberately left.
-- The pure function already exists and is tested (`bundle.py:334 compute_tree_sha256`) —
-  this is placement + honesty rules, not new machinery.
-- No fourth signature break: `source_tree_sha256` has been in `canonical_record_bytes`
-  since slice 8 (`bundle.py:112`).
-- Moat-aligned per `CLAUDE.md`: reproducibility/verification hardening, fully
-  CI-observable with real fixture trees, stdlib-only, no new dependency.
-
-**Alternates considered and not picked:**
-
-- **PDF intake for `contig extract-claims`** (`CAPABILITY_ROADMAP.md:1907`, "Deferred:
-  PDF/DOI/paper-fetching"). Higher user-facing value, but two unresolved feasibility
-  questions: a dependency decision against the stdlib-only contract, and two-column PDF
-  extraction quality degrading the deterministic vocabulary matcher.
-- **`read_task_errors` work-dir blindness** (filed as C2 deferral **(a)**,
-  `CAPABILITY_ROADMAP.md:451`; verified `runner.py:1077` hardcodes `run_dir/"work"` while
-  `nfconfig.py:100` writes `workDir = target.work_dir`). Real bug, but small reachable
-  population — the default work dir already resolves to `run_dir/work` (`cli.py:521`) and
-  the flag's documented purpose is the `s3://` AWS Batch case the fix cannot help.
-
-**Excluded for named blockers:** C6/C7 eval fold-in (labeling design); assembly-signature
-mismatch (no sample-side contig signal); bwa-mem2/classic-BWA build+redirect (no live
-trigger); stall-window calibration (never observed on a real run); C2 deferral **(b)**
-`risk="destructive"` (verified unreachable — all 14 `risk=` sites in `repair.py` are
-`safe`/`needs_confirmation`, so it is the inert shape v0.50.0 just cleaned up).
+- C2 deferred-to-later list: "…the wider failure catalog — the assembly-signature
+  form of reference/build mismatch (no sample-side contig signal in raw FASTQ or
+  finished bundle)… a runtime `reference_mismatch` detector-corpus case… and pin
+  conflict."
+- chr-prefix GTF harmonization slice: "Provenance-only eval capture, matching
+  v0.9.0 — no new `reference_mismatch` `FailureClass` or detector-corpus case."
+- per-contig alias slice: same provenance-only choice; the runtime half was the
+  "moat-vs-architecture question" resolved toward provenance capture then
+  (docs/planning/self-heal-reference-mismatch/understanding.md, update note).
+- C5: "Kills the wrong-genome silent-failure class; deepens reproduce."
+- `qc_anomaly` verdict-trigger slice (shipped, Unreleased): a run that completes
+  green and whose QC reduces to FAIL is diagnosed `qc_anomaly` — the family this
+  slice must not double-classify.
