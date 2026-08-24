@@ -728,3 +728,57 @@ def test_every_shipped_no_progress_fixture_still_classifies() -> None:
     assert len(texts) >= 3, f"expected the three shipped no_progress texts, found {list(texts)}"
     for case_id, log in texts.items():
         assert diagnose_failure([], log_text=log).failure_class == "no_progress", case_id
+
+
+def test_every_shipped_reference_mismatch_fixture_still_classifies() -> None:
+    # The safety net for narrowing the needle: every reference_mismatch text
+    # this repo ships -- the golden corpus case, the frozen holdout twin, and
+    # the heal-guard give-up scenario -- has to keep classifying through the
+    # full diagnose_failure path with the events the guards grade. eval-guard
+    # and heal-guard would both catch a regression here, but only at guard
+    # time; this fails in the unit suite, next to the needle being edited.
+    import json
+    from pathlib import Path
+
+    data_dir = Path(__file__).resolve().parents[1] / "src" / "contig" / "data"
+    cases: dict[str, tuple[list[TaskEvent], str]] = {}
+    for name in ("detector_corpus.jsonl", "detector_corpus_holdout.jsonl"):
+        for line in (data_dir / name).read_text().splitlines():
+            case = json.loads(line)
+            if case.get("expected_class") != "reference_mismatch":
+                continue
+            events = [
+                TaskEvent(
+                    process=e.get("process"),
+                    status=e.get("status"),
+                    exit=e.get("exit"),
+                    task_id=e.get("task_id"),
+                    name=e.get("name"),
+                )
+                for e in case["events"]
+            ]
+            cases[case["case_id"]] = (events, case["log_text"])
+    for line in (data_dir / "heal_scenarios.jsonl").read_text().splitlines():
+        scenario = json.loads(line)
+        if scenario.get("expected_class") != "reference_mismatch":
+            continue
+        attempt = scenario["attempts"][0]
+        events = [
+            TaskEvent(
+                process="",
+                status=attempt["status"],
+                exit=attempt.get("exit"),
+                task_id=None,
+                name=None,
+            )
+        ]
+        cases[scenario["scenario_id"]] = (events, attempt["log_text"])
+
+    assert len(cases) >= 3, (
+        f"expected the three shipped reference_mismatch fixtures "
+        f"(reference-mismatch-star-contig, holdout-reference-mismatch-contig, "
+        f"reference-mismatch-give-up), found {sorted(cases)}"
+    )
+    for case_id, (events, log) in cases.items():
+        d = diagnose_failure(events, log_text=log)
+        assert d.failure_class == "reference_mismatch", case_id
