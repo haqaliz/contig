@@ -21,3 +21,14 @@ test("promote route accepts a previously-missing failure class label", async ({
   const body = (await res.json()) as { error?: string };
   expect(body.error).toMatch(/Could not promote the case/);
 });
+
+test("promote route accepts the reference_mismatch failure class label", async ({
+  request,
+}) => {
+  const res = await request.post("/api/corpus/promote", {
+    data: { case_id: "no-such-case-zzz-2026", label: "reference_mismatch" },
+  });
+  expect(res.status()).toBe(500);
+  const body = (await res.json()) as { error?: string };
+  expect(body.error).toMatch(/Could not promote the case/);
+});
