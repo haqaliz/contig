@@ -281,6 +281,10 @@ def test_contig_mismatch_is_not_missing_index_dict() -> None:
     )
     d = diagnose_failure(events, log_text=log)
     assert d.failure_class != "missing_index"
+    # GATK's "incompatible contigs" wording is the DELIBERATELY EXCLUDED control
+    # for the reference_mismatch branch: it lacks the contig-absence phrase, so
+    # the tight family leaves it as an unrecognized crash.
+    assert d.failure_class == "tool_crash"
 
 
 def test_benign_fai_mention_is_not_missing_index() -> None:
@@ -328,13 +332,62 @@ def test_bwa_missing_index_is_missing_index() -> None:
     assert any("bwa_idx_load_from_disk" in e for e in d.evidence)
 
 
-def test_wrong_reference_contig_mismatch_is_not_missing_index() -> None:
-    # A wrong-reference / contig-mismatch line must NOT be swallowed by the new
-    # STAR/BWA missing-index branches (it is a different, deferred class).
+def test_contig_not_found_in_reference_dictionary_is_reference_mismatch() -> None:
+    # A contig absent from the reference (wrong-genome/build signature) is its
+    # own class now; it must still never be swallowed by the missing-index
+    # family (the dictionary line names a reference file, not an absent index).
     events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=1)]
     log = "ERROR: Contig 'chr1' not found in the reference dictionary /work/ref/genome.fasta"
     d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "reference_mismatch"
+    assert d.confidence == 0.85
+    assert log in d.evidence
     assert d.failure_class != "missing_index"
+
+
+def test_star_sequence_not_found_in_reference_genome_is_reference_mismatch() -> None:
+    # STAR's hard-fail wording for reads carrying a contig absent from the
+    # reference FASTA -- the canonical wrong-genome/build signature.
+    events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=1)]
+    log = (
+        "EXITING because of FATAL ERROR: sequence 'chr1' not found in the "
+        "reference genome /work/ref/genome.fasta"
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "reference_mismatch"
+    assert d.confidence == 0.85
+    assert d.evidence
+
+
+def test_reference_phrase_without_contig_token_is_not_reference_mismatch() -> None:
+    # The AND-guard is load-bearing: "not found in the reference" WITHOUT a
+    # contig/sequence token is a different problem and must stay an unrecognized
+    # crash, never be stolen by the reference_mismatch family.
+    events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=1)]
+    log = "WARNING: reads not found in the reference; skipping"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "tool_crash"
+
+
+def test_missing_reference_log_is_not_stolen_by_reference_mismatch() -> None:
+    # A genuinely absent reference file ("no such file or directory" + .fasta
+    # token) keeps its own class; the contig-absence phrase is absent.
+    events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=1)]
+    log = (
+        "samtools faidx: failed to open /work/ref/genome.fasta: No such file "
+        "or directory"
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "missing_reference"
+
+
+def test_missing_index_log_is_not_stolen_by_reference_mismatch() -> None:
+    # An absent index keeps the missing_index family; the contig-absence phrase
+    # is absent, so the reference_mismatch branch must not fire.
+    events = [TaskEvent(process="BWA_MEM", status="FAILED", exit=1)]
+    log = "[E::bwa_idx_load_from_disk] fail to locate the index files"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "missing_index"
 
 
 def test_bwamem2_unreadable_index_is_missing_index() -> None:
@@ -675,3 +728,57 @@ def test_every_shipped_no_progress_fixture_still_classifies() -> None:
     assert len(texts) >= 3, f"expected the three shipped no_progress texts, found {list(texts)}"
     for case_id, log in texts.items():
         assert diagnose_failure([], log_text=log).failure_class == "no_progress", case_id
+
+
+def test_every_shipped_reference_mismatch_fixture_still_classifies() -> None:
+    # The safety net for narrowing the needle: every reference_mismatch text
+    # this repo ships -- the golden corpus case, the frozen holdout twin, and
+    # the heal-guard give-up scenario -- has to keep classifying through the
+    # full diagnose_failure path with the events the guards grade. eval-guard
+    # and heal-guard would both catch a regression here, but only at guard
+    # time; this fails in the unit suite, next to the needle being edited.
+    import json
+    from pathlib import Path
+
+    data_dir = Path(__file__).resolve().parents[1] / "src" / "contig" / "data"
+    cases: dict[str, tuple[list[TaskEvent], str]] = {}
+    for name in ("detector_corpus.jsonl", "detector_corpus_holdout.jsonl"):
+        for line in (data_dir / name).read_text().splitlines():
+            case = json.loads(line)
+            if case.get("expected_class") != "reference_mismatch":
+                continue
+            events = [
+                TaskEvent(
+                    process=e.get("process"),
+                    status=e.get("status"),
+                    exit=e.get("exit"),
+                    task_id=e.get("task_id"),
+                    name=e.get("name"),
+                )
+                for e in case["events"]
+            ]
+            cases[case["case_id"]] = (events, case["log_text"])
+    for line in (data_dir / "heal_scenarios.jsonl").read_text().splitlines():
+        scenario = json.loads(line)
+        if scenario.get("expected_class") != "reference_mismatch":
+            continue
+        attempt = scenario["attempts"][0]
+        events = [
+            TaskEvent(
+                process="",
+                status=attempt["status"],
+                exit=attempt.get("exit"),
+                task_id=None,
+                name=None,
+            )
+        ]
+        cases[scenario["scenario_id"]] = (events, attempt["log_text"])
+
+    assert len(cases) >= 3, (
+        f"expected the three shipped reference_mismatch fixtures "
+        f"(reference-mismatch-star-contig, holdout-reference-mismatch-contig, "
+        f"reference-mismatch-give-up), found {sorted(cases)}"
+    )
+    for case_id, (events, log) in cases.items():
+        d = diagnose_failure(events, log_text=log)
+        assert d.failure_class == "reference_mismatch", case_id

@@ -3076,15 +3076,16 @@ def heal_guard(
     exits 0. With --snapshot the result is also appended to the committed
     self-heal trend; with --history the recorded trend is printed instead.
 
-    Honest scope: the number is over **21 SYNTHETIC scenarios**, not a field
-    recovery rate. **15 covered failure classes**: bad_param, conda_solve_failed,
-    container_pull_failed, container_unavailable, disk_full, download_failed,
-    missing_index, missing_reference, no_progress, oom, permission_denied,
-    qc_anomaly, reference_not_bgzf, time_limit, tool_crash. `covered` means the
+    Honest scope: the number is over **23 SYNTHETIC scenarios**, not a field
+    recovery rate. **17 covered failure classes**: alignment_format_mismatch,
+    bad_param, conda_solve_failed, container_pull_failed, container_unavailable,
+    disk_full, download_failed, missing_index, missing_reference, no_progress,
+    oom, permission_denied, qc_anomaly, reference_mismatch, reference_not_bgzf,
+    time_limit, tool_crash. `covered` means the
     class has a frozen synthetic scenario whose declared outcome the loop still
     reproduces -- NOT that the engine handles that failure well in the field.
 
-    The remaining 3 of the 18 FailureClass literals are uncovered, and each is
+    The remaining 3 of the 20 FailureClass literals are uncovered, and each is
     uncovered for a DIFFERENT reason -- they are not one backlog:
 
     - **Advisory, and reachable, but no scenario authored yet (1):**
@@ -3111,7 +3112,7 @@ def heal_guard(
     we made reachable -- evidence that a taxonomy gap closed, not that a user
     was helped. Its recovery accounting is also an artifact: the scenario is
     green by construction (every task exits 0, only the QC verdict FAILs), so
-    it counts toward the corpus-wide informational-only recovery count (11/21)
+    it counts toward the corpus-wide informational-only recovery count (11/23)
     even though nothing was recovered in that one scenario specifically.
     platform_unsupported is reachable in production the same way (a real killed
     task can carry `exit is None`) -- it is only this scenario CORPUS it cannot

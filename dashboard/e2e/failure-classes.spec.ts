@@ -3,7 +3,7 @@ import { test, expect } from "@playwright/test";
 import { FAILURE_CLASSES } from "../lib/derive";
 
 // The dashboard's failure-class taxonomy must mirror FailureClass in
-// src/contig/models.py (19 literals, same order): the pending-review relabel UI
+// src/contig/models.py (20 literals, same order): the pending-review relabel UI
 // offers corrections from this list and the promote route validates against it,
 // so a class that ships in the CLI but is missing here can neither be picked in
 // the UI nor accepted by the API ("Unknown failure class." 400). This test runs
@@ -30,6 +30,7 @@ const PYTHON_ORDER = [
   "missing_index",
   "reference_not_bgzf",
   "alignment_format_mismatch",
+  "reference_mismatch",
   "bad_param",
   "container_pull_failed",
   "container_unavailable",
@@ -45,8 +46,8 @@ const PYTHON_ORDER = [
   "unknown",
 ];
 
-test("FAILURE_CLASSES lists all 19 FailureClass literals", () => {
-  expect(FAILURE_CLASSES).toHaveLength(19);
+test("FAILURE_CLASSES lists all 20 FailureClass literals", () => {
+  expect(FAILURE_CLASSES).toHaveLength(20);
 });
 
 test("FAILURE_CLASSES includes the six previously-missing literals", () => {

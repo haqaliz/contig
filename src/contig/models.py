@@ -266,6 +266,7 @@ FailureClass = Literal[
     "missing_index",
     "reference_not_bgzf",
     "alignment_format_mismatch",
+    "reference_mismatch",
     "bad_param",
     "container_pull_failed",
     "container_unavailable",

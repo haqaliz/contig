@@ -8,6 +8,73 @@ All notable changes to Contig are recorded here. The format follows
 
 ### Added
 
+- **The runtime half of the reference-integrity family ships: a new
+  `reference_mismatch` `FailureClass` (19 → 20 literals) and a narrow
+  AND-guarded detector branch on the hard-fail contig-absence signatures of a
+  wrong reference (`runtime-reference-mismatch-detector`).** A failed task whose
+  log says the reads' contigs are absent from the reference FASTA — STAR
+  `sequence 'chr1' not found in the reference genome`, GATK
+  `Contig 'chr1' not found in the reference dictionary` — previously fell
+  through to `tool_crash` at 0.4; it is now `reference_mismatch` at 0.85 with
+  the matched line in evidence. The branch is AND-guarded on a contig-absence
+  phrase (`not found in the reference`) plus a contig/sequence token, placed
+  after the `alignment_format_mismatch` branch and before the `tool_crash`
+  fallthrough, so it never steals from the `missing_index` family
+  (index-token anchored) or `missing_reference` ("no such file or directory"
+  anchored) — the two shipped negative tests for exactly these logs flip to
+  positive coverage, and GATK's `incompatible contigs` wording is deliberately
+  **excluded** (pinned control: stays `tool_crash`; revisit trigger is the
+  first real report). This closes the deferral every shipped harmonization
+  slice recorded in its own words ("no new `reference_mismatch` `FailureClass`
+  or detector-corpus case"): the pre-flight side of the family was already
+  shipped (v0.7.0 contig-naming refusal + chr-prefix + per-contig alias
+  harmonization), the runtime detector half was the open item
+  (CAPABILITY_ROADMAP C2 deferred catalog).
+  - **Corpus, both sides, one-per-family tradition.** One golden training case
+    (`reference-mismatch-star-contig`, STAR wording; training corpus 27 → 28,
+    held at 100%) plus one **independently authored** holdout twin
+    (`holdout-reference-mismatch-contig`, GATK wording — deliberately not the
+    STAR phrasing of the training case, the htslib-vs-GATK precedent).
+    `eval-guard` refrozen as a deliberate act: **92.9% → 93.3% (14/15)**,
+    `corpus_sha ac475206…`, the known miss (`holdout-qc-anomaly-1`) unchanged
+    and still the only miss. The accuracy move is **partly self-graded**: the
+    new holdout case is a fixture we authored for a class we made reachable —
+    legitimate evidence that a documented taxonomy gap closed, not evidence
+    the engine handles real mismatched references well.
+  - **Loop honesty guarded.** One `heal-guard` give-up scenario
+    (`reference-mismatch-give-up`): the class has no repair by design (the
+    runtime class is detector-only; the pre-flight harmonization covers the
+    naming case), so the loop records `gave_up` / `patch_applied false` —
+    never a false pass, never a fabricated patch. covered_classes **16 → 17**,
+    guarded outcome-match **held at 1.0** over 23 scenarios, baseline refrozen;
+    `recovery_rate` 11/23 stays informational-only, never guarded. The stale
+    `heal-guard` docstring (claimed "15 covered classes, 3 of the 18
+    literals") is corrected to the true 17 of 20.
+  - **Taxonomy mirrored everywhere.** Dashboard `FAILURE_CLASSES` (19 → 20,
+    Python order), the e2e length/order pins, and the promote round-trip spec
+    updated; the promote route's server validation accepts the new label.
+  - **`qc_anomaly` non-overlap pinned, not assumed.** The two families are
+    structurally disjoint — `qc_anomaly` is synthesized on the **success**
+    path (green tasks + QC FAIL, `self_heal.py:1233-1302`) and never consults
+    the log-text detector, which only sees failed-task events — and a
+    regression test now pins it both ways (a green-run QC-FAIL whose QC text
+    contains the branch's own phrase is diagnosed `qc_anomaly`, and the
+    success path hard-fails if it ever calls `diagnose_failure`). A safety-net
+    test walks all shipped fixtures for the class (liveness-checked by a
+    deliberate needle break).
+  - **Honest limits, stated not softened:** push, not demand-pull; organic
+    frequency unmeasured (no real Contig-launched run has ever produced this
+    failure — the field corpus has only ever diagnosed
+    `oom`/`tool_crash`/`missing_index`/`unknown`); the needle is
+    **reasoned-not-observed** (no real nf-core run in CI; a non-matching
+    wrong-reference wording still degrades honestly to `tool_crash`); it
+    **recovers nothing** — detector-and-corpus-only, by the same verdict the
+    CRAM↔BAM class reached (no live repair trigger); no signature break (a
+    Literal adds no field), no new dependency, stdlib-only; the
+    assembly-signature pre-flight form of reference/build mismatch remains
+    blocked (no sample-side contig signal in raw FASTQ or finished bundle) and
+    out of scope.
+
 - **A local `contig reproduce <path> --run` run now records the digest of the
   tree it ran over (`reproduce-local-tree-hash`, C8 slice 9).** The signed
   `ReproduceRecord.source_tree_sha256` — until now populated only on the remote

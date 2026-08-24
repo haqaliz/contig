@@ -355,3 +355,48 @@ def test_real_variant_bad_bundle_shape_trips_the_trigger(monkeypatch, tmp_path):
     assert step.diagnosis.evidence == ["ts_tv_ratio:S1: fail (S1: ts_tv=3.5 (fail))"]
     # D6: a deterministic read of our own verdict object, not a graded guess.
     assert step.diagnosis.confidence == 1.0
+
+
+def test_qc_message_carrying_detector_phrase_is_still_qc_anomaly(monkeypatch, tmp_path):
+    # Phase-4 pin (reference_mismatch slice): a QC check whose message literally
+    # contains the detector branch's own phrase -- "not found in the reference"
+    # plus a contig token -- must still be filed as a qc_anomaly. The trigger is
+    # a structural read of the run record (green events + FAIL verdict), while
+    # the log-text detector only ever runs on the exception path (self_heal.py:
+    # 1311), which a run whose tasks all succeeded never reaches. If the trigger
+    # ever started delegating to diagnose_failure, this exact QC text would be
+    # misattributed as a reference_mismatch -- the bomb below turns that
+    # structural regression into a hard failure.
+    def bomb(*args, **kwargs):
+        raise AssertionError(
+            "diagnose_failure must never be consulted on the qc_anomaly verdict path"
+        )
+
+    monkeypatch.setattr("contig.self_heal.diagnose_failure", bomb)
+
+    record = _heal_over_record(
+        monkeypatch,
+        tmp_path,
+        events=[GREEN_EVENT],
+        qc_results=[
+            QCResult(
+                check="variant_count:S1",
+                status="fail",
+                message="S1: 0 sites; Contig 'chr1' not found in the reference dictionary",
+            )
+        ],
+    )
+
+    assert RunSummary.from_events(record.events).succeeded is True
+    assert record.verdict == "fail"
+    assert len(record.repair_history) == 1
+    step = record.repair_history[0]
+    # The verdict trigger's synthesized class, never the detector's guess.
+    assert step.diagnosis.failure_class == "qc_anomaly"
+    assert step.diagnosis.confidence == 1.0
+    # The detector-tripping phrase flows through as evidence, proving the text
+    # reached the trigger yet was not routed to the log-text detector.
+    assert "not found in the reference" in " ".join(step.diagnosis.evidence)
+    assert all(
+        s.diagnosis.failure_class != "reference_mismatch" for s in record.repair_history
+    )
