@@ -739,20 +739,20 @@ def test_shipped_heal_scenarios_all_reproduce_their_declared_outcomes():
     scenarios = load_heal_scenarios(default_heal_scenarios_path())
     report = evaluate_heal(scenarios)
 
-    assert report.total == 22
+    assert report.total == 23
     assert report.outcome_match_rate == 1.0, [
         (m.scenario_id, m.divergence) for m in report.mismatches
     ]
-    # 11 of 22, up from 11 of 21. This is a CORPUS-COMPOSITION change, not a
-    # behaviour change: the C2 slice added one by-design give-up scenario
-    # (alignment-format-mismatch-give-up, which recovers nothing -- the class
-    # has no repair), and the ratio simply follows what was added. No
-    # pre-existing scenario changed its outcome. `recovery_rate` is
-    # informational-only and is never guarded (heal.py:413-414 compares only
-    # outcome_match_rate) -- the guarded number is `outcome_match_rate`, which
-    # stayed at 1.0 across the move.
+    # 11 of 23, up from 11 of 22. This is a CORPUS-COMPOSITION change, not a
+    # behaviour change: the reference-mismatch give-up scenario added one more
+    # by-design give-up (reference_mismatch -- the class has no repair), and
+    # the ratio simply follows what was added. No pre-existing scenario
+    # changed its outcome. `recovery_rate` is informational-only and is never
+    # guarded (heal.py:413-414 compares only outcome_match_rate) -- the
+    # guarded number is `outcome_match_rate`, which stayed at 1.0 across the
+    # move.
     assert report.healed == 11
-    assert report.recovery_rate == pytest.approx(11 / 22)
+    assert report.recovery_rate == pytest.approx(11 / 23)
 
     covered = {s.expected_class for s in scenarios}
     assert covered >= {
@@ -770,6 +770,7 @@ def test_shipped_heal_scenarios_all_reproduce_their_declared_outcomes():
         "conda_solve_failed",
         "container_unavailable",
         "alignment_format_mismatch",
+        "reference_mismatch",
     }
 
 
@@ -780,13 +781,13 @@ def test_shipped_heal_baseline_matches_shipped_scenarios():
     baseline = load_heal_baseline(default_heal_baseline_path())
 
     assert baseline is not None
-    assert baseline.scenario_count == 22
+    assert baseline.scenario_count == 23
     assert baseline.outcome_match_rate == 1.0
-    # 11/22 since the C2 alignment-format give-up refreeze; 11/21 before it.
-    # Again a CORPUS-COMPOSITION move -- one by-design give-up scenario
-    # (alignment-format-mismatch-give-up, which recovers nothing) was added --
+    # 11/23 since the reference-mismatch give-up refreeze; 11/22 before it.
+    # Again a CORPUS-COMPOSITION move -- one more by-design give-up scenario
+    # (reference-mismatch-give-up, which recovers nothing) was added --
     # not a behaviour change, and never a guarded number.
-    assert baseline.recovery_rate == pytest.approx(11 / 22)
+    assert baseline.recovery_rate == pytest.approx(11 / 23)
     assert baseline.corpus_sha == sha256_file(scenarios_path)
     assert set(baseline.covered_classes) >= {
         "oom",
@@ -803,18 +804,18 @@ def test_shipped_heal_baseline_matches_shipped_scenarios():
         "conda_solve_failed",
         "container_unavailable",
         "alignment_format_mismatch",
+        "reference_mismatch",
     }
-    # Sixteen covered classes exactly -- the eleven the catalog-coverage slice
-    # left, Task 6's four newly-honest classes (disk_full,
-    # permission_denied, conda_solve_failed, container_unavailable), and the
-    # C2 alignment-format-mismatch give-up. platform_unsupported stays
+    # Seventeen covered classes exactly -- the sixteen the catalog-coverage
+    # slice and C2 left, plus the reference-mismatch give-up (Phase 3 of the
+    # runtime-reference-mismatch-detector plan). platform_unsupported stays
     # uncovered: detect.py:355 requires a failed
     # event with exit is None, but AttemptSpec.exit is a required int
     # (models.py:543) used both as the trace column (heal.py:82) and the
     # executor return code (:100) -- reaching it needs an additive
     # model/driver change, which is out of scope here. A silent drop here
     # would mean a class lost its scenario.
-    assert len(baseline.covered_classes) == 16
+    assert len(baseline.covered_classes) == 17
 
 
 def test_shipped_heal_report_does_not_regress_against_baseline():

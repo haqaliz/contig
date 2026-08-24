@@ -108,6 +108,28 @@ def test_shipped_alignment_format_mismatch_give_up_scenario(tmp_path):
     assert result.actual_outcome == "gave_up"
 
 
+def test_shipped_reference_mismatch_give_up_scenario(tmp_path):
+    # Phase 3: the shipped scenario clones alignment-format-mismatch-give-up
+    # exactly -- the wrong-genome log classifies reference_mismatch, no patch
+    # exists by design (detector-only class: propose_patches has no branch for
+    # it), and the REAL loop must end in an honest gave_up, never a false
+    # pass or a fabricated patch.
+    scenarios = load_heal_scenarios(default_heal_scenarios_path())
+    scn = next(
+        s for s in scenarios if s.scenario_id == "reference-mismatch-give-up"
+    )
+    assert scn.expected_class == "reference_mismatch"
+    assert scn.expected_recovered is False
+    assert scn.expected_outcome == "gave_up"
+    assert scn.expected_patch_applied is False
+
+    result = run_heal_scenario(scn, tmp_path)
+    assert result.matched is True, result.divergence
+    assert result.diagnosed_class == "reference_mismatch"
+    assert result.recovered is False
+    assert result.actual_outcome == "gave_up"
+
+
 # --- compare_heal_to_baseline (pure) ------------------------------------------
 
 

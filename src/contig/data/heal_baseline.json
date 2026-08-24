@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-08-09T16:43:47.708648+00:00",
-  "scenario_count": 22,
-  "corpus_sha": "c39917544c59273d7834c519e7def7031c8128bd3dda5bdb56f163565469818b",
+  "timestamp": "2026-08-24T22:54:29.065681+00:00",
+  "scenario_count": 23,
+  "corpus_sha": "81b31037b319f9082751b44192a43fa158a7a514a355a9343ed97fab75ecd2aa",
   "outcome_match_rate": 1.0,
-  "recovery_rate": 0.5,
+  "recovery_rate": 0.4782608695652174,
   "per_class": {
     "oom": {
       "matched": 1,
@@ -84,6 +84,11 @@
       "matched": 1,
       "total": 1,
       "rate": 1.0
+    },
+    "reference_mismatch": {
+      "matched": 1,
+      "total": 1,
+      "rate": 1.0
     }
   },
   "covered_classes": [
@@ -100,9 +105,10 @@
     "oom",
     "permission_denied",
     "qc_anomaly",
+    "reference_mismatch",
     "reference_not_bgzf",
     "time_limit",
     "tool_crash"
   ],
-  "contig_version": "0.51.0"
+  "contig_version": "0.54.0"
 }
