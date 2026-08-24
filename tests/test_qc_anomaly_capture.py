@@ -167,13 +167,14 @@ def test_committed_holdout_baseline_still_reads_0_929():
     # reachable at runtime deliberately does NOT touch the detector corpora --
     # a zero-exit structural failure cannot be represented as (events, log_text),
     # so a case added while `detect.py` is untouched would misclassify and
-    # LOWER this number. The one deliberate move here is the C2 holdout-twin
-    # append (holdout-cram-reference-required, refrozen 2026-08-09): 13 -> 14
-    # cases and 0.923 -> 0.929 is a disclosed corpus-composition change (the
-    # twin classifies), not a detector improvement -- the qc_anomaly miss is
-    # still the only one.
+    # LOWER this number. The deliberate moves here are the C2 holdout-twin
+    # appends (holdout-cram-reference-required, refrozen 2026-08-09: 13 -> 14
+    # cases, 0.923 -> 0.929; and holdout-reference-mismatch-contig, refrozen
+    # 2026-08-24: 14 -> 15 cases, 0.929 -> 0.933, corpus_sha ac475206...), both
+    # disclosed corpus-composition changes (each twin classifies), not detector
+    # improvements -- the qc_anomaly miss is still the only one.
     baseline = load_baseline(default_baseline_path())
 
     assert baseline is not None
-    assert round(baseline.accuracy, 3) == 0.929
+    assert round(baseline.accuracy, 3) == 0.933
     assert baseline.detector == "rules"
