@@ -572,3 +572,13 @@ export interface ReproduceManifest {
   source_tree_sha256: string | null;
   requested_rev?: string;
 }
+
+// The detached signature sidecar (signature.json, mirror of bundle.py:59-62).
+// The dashboard renders presence only -- algo and the public-key fingerprint --
+// never a verification claim (PRD N1 defers recomputation).
+export interface ReproduceSignature {
+  algo: string;
+  public_key: string;
+  signature: string;
+  signed_sha256: string;
+}

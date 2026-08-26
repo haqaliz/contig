@@ -14,7 +14,11 @@ import { existsSync } from "fs";
 import path from "path";
 
 import { runsDir } from "./runs";
-import type { ReproduceManifest, ReproduceRecord } from "./types";
+import type {
+  ReproduceManifest,
+  ReproduceRecord,
+  ReproduceSignature,
+} from "./types";
 
 /**
  * One reproduce bundle record by id (runs/<id>/reproduce_record.json), or null
@@ -71,6 +75,22 @@ export async function listReproduceRuns(): Promise<ReproduceRecord[]> {
 /** Absolute path to a reproduce bundle's directory. */
 export function reproduceBundlePath(id: string): string {
   return path.join(runsDir(), id);
+}
+
+/**
+ * A reproduce bundle's detached signature sidecar (signature.json), or null
+ * when absent or malformed. Rendered as presence plus algo and the public-key
+ * fingerprint; the dashboard never verifies the signature (PRD N1 defers it).
+ */
+export async function readReproduceSignature(
+  id: string,
+): Promise<ReproduceSignature | null> {
+  const p = path.join(runsDir(), id, "signature.json");
+  try {
+    return JSON.parse(await fs.readFile(p, "utf8")) as ReproduceSignature;
+  } catch {
+    return null;
+  }
 }
 
 /** Whether the bundle carries a detached signature sidecar (signature.json). */

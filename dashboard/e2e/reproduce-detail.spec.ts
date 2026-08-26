@@ -68,7 +68,8 @@ test("the header shows the id, derived overall, repo, command, date, and exit co
   await expect(s.getByText("Diverged", { exact: true })).toBeVisible();
   await expect(s.getByText("https://github.com/example/paper-repo", { exact: true })).toBeVisible();
   await expect(s.getByText("bash run.sh", { exact: true })).toBeVisible();
-  await expect(s).toContainText("Aug 20, 2026");
+  // toLocaleDateString() server-side: the same short date the listing renders.
+  await expect(s).toContainText("8/20/2026");
   // exit_code 0 renders as a neutral number next to its label.
   await expect(s.getByText("Exit code", { exact: true })).toBeVisible();
   await expect(s.locator("dl").getByText("0", { exact: true })).toBeVisible();
