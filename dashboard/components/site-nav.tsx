@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 
 const LINKS: { href: string; label: string }[] = [
   { href: "/runs", label: "Runs" },
+  { href: "/reproduce", label: "Reproduce" },
   { href: "/eval", label: "Detector" },
   { href: "/pending", label: "Pending" },
 ];
