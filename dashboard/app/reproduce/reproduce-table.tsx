@@ -31,7 +31,6 @@ import {
 import { ReproduceStatusBadge } from "@/components/reproduce-status-badge";
 import {
   claimCountsLine,
-  claimStatusLabel,
   deriveReproduceOverall,
   REPRODUCE_STATUS_ORDER,
   type ReproduceOverall,
