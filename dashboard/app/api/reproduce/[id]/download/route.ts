@@ -55,7 +55,7 @@ export async function GET(
       // without signature.json must 404 honestly).
       return Response.json({ error: "File not found." }, { status: 404 });
     }
-    return new Response(bytes, {
+    return new Response(new Uint8Array(bytes), {
       status: 200,
       headers: {
         "Content-Type": "application/json; charset=utf-8",
