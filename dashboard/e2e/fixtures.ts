@@ -123,6 +123,19 @@ export const FIXTURE_RUN_IDS = [
   // gate's copy does not claim anything is applied, and that the failure-class
   // label renders as prose, not the raw literal.
   "advisory-awaiting-fixture",
+  // Third-party `contig reproduce` bundles (C8) for the /reproduce listing.
+  // These carry reproduce_record.json (NOT run_record.json), so they are
+  // invisible to the first-party runs list and only /reproduce renders them.
+  // reproduce-mixed: every claim status literal (reproduced, within_tolerance,
+  // diverged, unverified) plus one unknown literal ("suspicious", the
+  // forward-compat probe), a repair_history entry, and a signature sidecar.
+  // reproduce-unverified: a non-zero exit (2), so the whole run reads
+  // "did not complete", never a claim-status badge; source fields null.
+  // reproduce-empty: zero claims, so the derived overall is an honest
+  // "unverified" non-result.
+  "reproduce-mixed",
+  "reproduce-unverified",
+  "reproduce-empty",
 ];
 
 // Mirror lib/runs.ts runsDir(): CONTIG_RUNS_DIR, else ../runs from the dashboard

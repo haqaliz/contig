@@ -477,3 +477,108 @@ export interface RunOwner {
   // workspace at dispatch). When set, any viewer in this workspace may see it.
   workspace?: string;
 }
+
+// --- Third-party reproduce bundles (C8) -----------------------------------------
+// TypeScript mirror of the engine's serialized `contig reproduce` bundle
+// (src/contig/models.py: ReproduceRecord, ClaimResult, Diagnosis, Patch,
+// RepairStep; src/contig/bundle.py: the reproduce.json manifest + signature
+// sidecar). The dashboard reads these straight from disk, so the shapes must
+// track the Python models. Status literals are lowercase; an unknown literal is
+// tolerated everywhere (forward-compat: a bundle written by a newer contig than
+// this dashboard must render a neutral badge, never crash).
+
+// The four shipped claim-status literals, plus `(string & {})` so an unknown
+// literal stays type-safe (a future status compiles without a type error).
+export type ReproduceStatus =
+  | "reproduced"
+  | "within_tolerance"
+  | "diverged"
+  | "unverified"
+  | (string & {});
+
+// One claim's outcome: the paper's number vs. what Contig observed (mirror of
+// ClaimResult in src/contig/models.py). observed/delta are null when the metric
+// is uncomputable.
+export interface ReproduceClaim {
+  id: string;
+  status: string;
+  claimed: number;
+  observed: number | null;
+  tolerance: number;
+  delta: number | null;
+  message: string;
+}
+
+// The structured root-cause hypothesis of one repair step (mirror of Diagnosis).
+export interface ReproduceDiagnosis {
+  failure_class: string;
+  root_cause: string;
+  evidence: string[];
+  confidence: number;
+}
+
+// The typed candidate fix of one repair step (mirror of Patch). operation is a
+// structured change; `kind` and `risk` are open strings so a newer engine's
+// literals never fail to parse.
+export interface ReproducePatch {
+  kind: string;
+  operation: Record<string, unknown>;
+  rationale: string;
+  risk: string;
+  expected_signal: string;
+}
+
+// One detect -> diagnose -> patch -> outcome transition (mirror of RepairStep).
+export interface ReproduceRepairStep {
+  attempt: number;
+  diagnosis: ReproduceDiagnosis;
+  patch: ReproducePatch | null;
+  outcome: string;
+  detail: string | null;
+  // True iff the patch was ENACTED and the loop proceeded to retry.
+  patch_applied: boolean;
+}
+
+// The complete record of one `contig reproduce` run over a published repo
+// (mirror of ReproduceRecord in src/contig/models.py:812-831).
+export interface ReproduceRecord {
+  reproduce_id: string;
+  repo: string;
+  run_command: string;
+  claims_sha256: string;
+  claim_results: ReproduceClaim[];
+  exit_code: number;
+  created_at: string;
+  interpreter: string | null;
+  tool: string;
+  repair_history: ReproduceRepairStep[];
+  source_url: string | null;
+  source_commit: string | null;
+  source_tree_sha256: string | null;
+}
+
+// The small re-runnable manifest (reproduce.json, mirror of bundle.py:104-115).
+// Unsigned invocation metadata; `requested_rev` is the `--rev` the caller asked
+// for (a tag or branch is not recoverable from the resolved SHA), so it lives
+// here and not on the signed record.
+export interface ReproduceManifest {
+  reproduce_id: string;
+  repo: string;
+  run_command: string;
+  claims_sha256: string;
+  created_at: string;
+  source_url: string | null;
+  source_commit: string | null;
+  source_tree_sha256: string | null;
+  requested_rev?: string;
+}
+
+// The detached signature sidecar (signature.json, mirror of bundle.py:59-62).
+// The dashboard renders presence only -- algo and the public-key fingerprint --
+// never a verification claim (PRD N1 defers recomputation).
+export interface ReproduceSignature {
+  algo: string;
+  public_key: string;
+  signature: string;
+  signed_sha256: string;
+}

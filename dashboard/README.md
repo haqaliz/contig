@@ -51,6 +51,11 @@ compare runs, curate the failure corpus, and track the detector over time.
   reproduced summary.
 - **Pending** (`/pending`): review auto-captured failure cases and confirm or
   correct their label, promoting them into the golden corpus (moat #2).
+- **Reproductions** (`/reproduce`): every third-party `contig reproduce` bundle
+  on this machine with its derived overall status (worst-of over the claim
+  statuses; a non-zero exit reads "Did not complete", never a pass), per-status
+  claim counts, and a pointer to the CLI for running your own. Read-only: no
+  launch form (the CLI is the launch surface).
 - **Detector** (`/eval`): the failure detector scored against the labeled corpus
   (accuracy, per-class precision/recall, current misses), a **detector selector**
   (rules, rules-strict, and the optional **llm** detector) that scores any
