@@ -1,7 +1,4 @@
-import { promises as fs } from "fs";
-import path from "path";
-
-import { reproduceBundlePath } from "@/lib/reproduce";
+import { readReproduceBundleFile } from "@/lib/reproduce";
 
 // GET /api/reproduce/[id]/download: single-file bundle downloads for a
 // third-party `contig reproduce` bundle (C8), the audit-surface counterpart of
@@ -51,9 +48,13 @@ export async function GET(
   }
 
   const name = FILES[file];
-  const p = path.join(reproduceBundlePath(id), name);
   try {
-    const bytes = await fs.readFile(p);
+    const bytes = await readReproduceBundleFile(id, name);
+    if (!bytes) {
+      // Missing dir or file (a bundle may predate the manifest; a bundle
+      // without signature.json must 404 honestly).
+      return Response.json({ error: "File not found." }, { status: 404 });
+    }
     return new Response(bytes, {
       status: 200,
       headers: {
@@ -61,12 +62,7 @@ export async function GET(
         "Content-Disposition": `attachment; filename="${id}.${name}"`,
       },
     });
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      // Missing dir or file (a bundle may predate the manifest; a bundle
-      // without signature.json must 404 honestly).
-      return Response.json({ error: "File not found." }, { status: 404 });
-    }
+  } catch {
     return Response.json(
       { error: "Could not read the file." },
       { status: 500 },

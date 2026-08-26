@@ -78,6 +78,26 @@ export function reproduceBundlePath(id: string): string {
 }
 
 /**
+ * One raw bundle file's bytes (reproduce_record.json / reproduce.json /
+ * signature.json) for the download route, or null when absent. Callers pick
+ * the name from an allowlist; the path is runtime-scoped (env or cwd), never
+ * part of the bundle.
+ */
+export async function readReproduceBundleFile(
+  id: string,
+  name: string,
+): Promise<Buffer | null> {
+  try {
+    return await fs.readFile(path.join(reproduceBundlePath(id), name));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  }
+}
+
+/**
  * A reproduce bundle's detached signature sidecar (signature.json), or null
  * when absent or malformed. Rendered as presence plus algo and the public-key
  * fingerprint; the dashboard never verifies the signature (PRD N1 defers it).
