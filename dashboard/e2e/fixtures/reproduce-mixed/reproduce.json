@@ -1,0 +1,11 @@
+{
+  "reproduce_id": "reproduce-mixed",
+  "repo": "https://github.com/example/paper-repo",
+  "run_command": "bash run.sh",
+  "claims_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "created_at": "2026-08-20T10:00:00Z",
+  "source_url": "https://github.com/example/paper-repo",
+  "source_commit": "0123456789abcdef0123456789abcdef01234567",
+  "source_tree_sha256": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+  "requested_rev": "v1.0"
+}
