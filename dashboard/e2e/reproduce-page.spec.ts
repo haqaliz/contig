@@ -88,7 +88,8 @@ test("the page carries the honest CLI-guidance note", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "How to reproduce a published paper" }),
   ).toBeVisible();
-  await expect(page.getByText(/contig reproduce/)).toBeVisible();
+  // The canonical command renders in mono inside the guidance card.
+  await expect(page.getByText(/contig reproduce <repo>/)).toBeVisible();
 });
 
 test("/runs never lists the reproduce bundles", async ({ page }) => {
