@@ -8,6 +8,31 @@ All notable changes to Contig are recorded here. The format follows
 
 ### Added
 
+- **The long-deferred C8 dashboard card ships: the third-party `contig
+  reproduce` track gets a dashboard surface (`reproduce-dashboard-card`).**
+  A new `/reproduce` page lists every reproduce bundle under the runs dir
+  (read directly from `reproduce_record.json` — reproduce runs were previously
+  invisible to the dashboard, whose list scans only `run_record.json` dirs)
+  with a derived worst-of overall status (diverged > within-tolerance >
+  unverified > reproduced, mirroring the runs-table verdict order; a non-zero
+  exit renders as its own honest "did not complete (exit N)" presentation) and
+  per-status claim counts; `/reproduce/[id]` shows the per-claim verdicts
+  (REPRODUCED / WITHIN-TOLERANCE / DIVERGED / UNVERIFIED with stated vs
+  observed values, deltas, and verbatim engine messages), repair history
+  (truthful `patch_applied` rendering), provenance (source URL, commit, tree
+  hash, claims hash, and the unsigned `requested_rev` labelled as invocation
+  metadata), signature presence, and read-only GET downloads of the bundle's
+  JSON files. A new claim-status badge set maps 1:1 onto the existing
+  palette (reproduced=emerald, within_tolerance=amber, diverged=red,
+  unverified=slate) with a neutral "Unknown" fallback so a record written by a
+  newer contig never breaks the page. **Read-only by design and honest-scoped:**
+  no engine or CLI change (the dashboard reads bundles from disk, its standing
+  convention), no launch form (`contig reproduce --run` executes arbitrary
+  shell — deferred), no DOI/PDF intake, no figure/plot claims (hard-blocked),
+  and freshness-guarded `unverified` claims render verbatim — a committed-output
+  repo reads UNVERIFIED, never as reproduced. Test-first via Playwright
+  (fixtures under `e2e/fixtures/reproduce-*`; 133 dashboard tests green),
+  deterministic, no Python change, no new dependency.
 - **The runtime half of the reference-integrity family ships: a new
   `reference_mismatch` `FailureClass` (19 → 20 literals) and a narrow
   AND-guarded detector branch on the hard-fail contig-absence signatures of a
