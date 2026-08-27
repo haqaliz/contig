@@ -6,6 +6,61 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+- **`contig extract-claims` now accepts a paper DOI or a local PDF (`reproduce-doi-pdf-intake`,
+  the C8 paper-fetch slice).** The standing C8 deferral — PDF parsing, DOI resolution, and
+  paper fetching, recorded in every prior slice's deferral list
+  (`CAPABILITY_ROADMAP.md:2050-2051`; extract-claims PRD R5) — closes. The `paper` argument
+  is now classified by a pure `classify_paper_argument` (`verification/paper_intake.py`,
+  mirroring `classify_repo_argument`): a DOI (`doi:10.x/y`, bare `10.x/y`,
+  `https://doi.org/…`) is fetched over the network **behind the opt-in `--allow-fetch`
+  flag** (a DOI without it is refused naming the flag, before anything is written), a local
+  `.pdf` is read directly, and the existing local `.txt`/`.md` path is byte-identical.
+  Input generation only: the shipped extractor, the `load_claims` round-trip invariant, and
+  the whole reproduce/verdict/bundle/signing surface are untouched.
+  - **DOI→PDF via a stdlib-only fetcher.** `default_paper_fetcher` resolves
+    `https://doi.org/<doi>` (urllib, 30 s timeout), takes a response that is itself a PDF
+    (`Content-Type` or `%PDF` magic) directly, and otherwise locates the PDF through the
+    landing page's `<meta name="citation_pdf_url">` (a pure `resolve_pdf_url` via
+    `html.parser`); a landing page with **no** `citation_pdf_url` refuses with paywall-aware
+    wording ("the paper may be paywalled; download the PDF and pass its path instead") and
+    **duplicate** metas are refused naming the count — never guessed. Every give-up (DNS/HTTP
+    error, non-HTML non-PDF response, oversized landing page, failed download) exits non-zero
+    with the reason and **nothing written**; the temp PDF is cleaned on every path. The
+    landing page is bounded at 2 MiB and PDF bodies at 64 MiB (`MAX_PDF_BYTES`, 8× the text
+    cap — a reasoned, uncalibrated bound for figure-bearing papers).
+  - **PDF→text via an injectable `pdftotext` seam.** `default_pdf_text_extractor` shells a
+    fixed argv `pdftotext -layout <pdf> -` (poppler) through an injectable
+    `PdfTextExtractor` seam in the Fetcher/Installer mould; a missing executable returns
+    `(127, …)` naming the install (`brew install poppler` / `apt install poppler-utils`),
+    never a traceback. **No new Python dependency** (urllib/html.parser/stdlib only;
+    `uv.lock` unchanged). Extracted text over the existing 8 MiB `_MAX_MATCH_BYTES` input
+    contract is refused naming the size.
+  - **Boundaries, pinned.** Leading-`-` refused first unconditionally (the RCE posture);
+    any URL scheme other than `doi.org` is refused naming the supported forms **before** the
+    `.pdf` extension is considered (a remote `x.pdf` is never read as a local path); a DOI
+    containing `?`/`#` is refused (a different document); the `--out`/`--force`/`--out-dir`
+    guards fire **before** any network fetch; the review sidecar gains a `Source:` line for
+    DOI/PDF sources (text path byte-identical). Empty extraction stays exit 0.
+  - **Honest scope.** **Manual post-merge gate (PRD R2) — RUN, 2026-08-27, and it passed
+    condition (a) and recorded condition (b):** (a) a real public DOI
+    (`10.1038/s41598-025-25919-z`, Scientific Reports) was fetched through the **real**
+    urllib path — doi.org redirect → landing page → `citation_pdf_url` → PDF → real
+    `pdftotext` — and yielded a draft with one claim (`accuracy 50.0`) plus the sidecar;
+    (b) failure modes observed and recorded: the GigaScience landing page
+    (academic.oup.com) refused the request with HTTP 403 (publisher bot protection on this
+    network; the fetcher surfaced it honestly, exit 1, nothing written), a nonexistent DOI
+    was refused with doi.org's 404, and a paywalled Nature paper
+    (`10.1038/s41586-020-2649-2`) served its full-text PDF anyway — extraction found no
+    named-metric claims and produced an honest empty draft (exit 0), so the paywall refusal
+    did **not** fire on that publisher and remains pinned by unit tests only. A local `.pdf`
+    smoke through real `pdftotext` extracted two claims (`accuracy 0.93`,
+    `sensitivity 0.87`) into a `load_claims`-valid draft. Two-column degradation and
+    publisher-dependent success are the accepted, disclosed limits; the draft-only invariant
+    (wrong claims degrade to UNVERIFIED at reproduce time, never REPRODUCED) is the safety
+    net. Test-first, 2754 passed / 1 skipped; the existing `test_cli_extract_claims.py`
+    suite passes unmodified; no real network/PDF/`pdftotext` in CI (injected seams, fixture
+    bytes only).
+
 ## [0.55.0] - 2026-08-26
 
 ### Added
