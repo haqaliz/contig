@@ -486,3 +486,81 @@ def test_default_paper_fetcher_urlopen_called_with_timeout(monkeypatch, tmp_path
     code, message = default_paper_fetcher("10.1/x", tmp_path / "paper.pdf")
     assert code == 0
     assert calls[0]["timeout"] == 30
+
+
+# ---------------------------------------------------------------------------
+# pdf-text-seam: pdftotext PDF->text seam (injectable; never runs in CI)
+# ---------------------------------------------------------------------------
+
+from contig.verification.paper_intake import (
+    MAX_PDF_BYTES,
+    PdfTextExtractor,
+    _pdftotext_argv,
+    default_pdf_text_extractor,
+)
+
+
+class _FakeRunResult:
+    """Stand-in for a `subprocess.CompletedProcess` with the three fields used."""
+
+    def __init__(self, returncode, stdout=b"", stderr=b""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+class _FakeSubprocess:
+    """Stand-in for the `subprocess` module, patched in at module scope."""
+
+    def __init__(self, result=None, exc=None):
+        self.result = result
+        self.exc = exc
+        self.calls = []
+
+    def run(self, argv, **kwargs):
+        self.calls.append((argv, kwargs))
+        if self.exc is not None:
+            raise self.exc
+        return self.result
+
+
+def test_pdftotext_argv_fixed(tmp_path):
+    pdf = tmp_path / "paper.pdf"
+    assert _pdftotext_argv(pdf) == ["pdftotext", "-layout", str(pdf), "-"]
+
+
+def test_max_pdf_bytes_constant():
+    assert MAX_PDF_BYTES == 64 * 1024 * 1024
+
+
+def test_default_pdf_text_extractor_success(monkeypatch, tmp_path):
+    fake = _FakeSubprocess(result=_FakeRunResult(0, stdout=b"extracted text"))
+    monkeypatch.setattr(paper_intake, "subprocess", fake)
+    code, text = default_pdf_text_extractor(tmp_path / "paper.pdf")
+    assert (code, text) == (0, "extracted text")
+
+
+def test_default_pdf_text_extractor_missing_tool(monkeypatch, tmp_path):
+    fake = _FakeSubprocess(exc=FileNotFoundError())
+    monkeypatch.setattr(paper_intake, "subprocess", fake)
+    code, message = default_pdf_text_extractor(tmp_path / "paper.pdf")
+    assert code == 127
+    for token in ("pdftotext", "poppler", "install"):
+        assert token in message
+
+
+def test_default_pdf_text_extractor_nonzero(monkeypatch, tmp_path):
+    fake = _FakeSubprocess(result=_FakeRunResult(1, stderr=b"boom"))
+    monkeypatch.setattr(paper_intake, "subprocess", fake)
+    code, message = default_pdf_text_extractor(tmp_path / "paper.pdf")
+    assert (code, message) == (1, "boom")
+
+
+def test_seam_shape():
+    # The seam is a 1-arg callable satisfying the PdfTextExtractor alias
+    # contract `(Path) -> (code, text)`; patching the module-level
+    # `subprocess` name in the behavioral tests above proves the call site
+    # is injectable, so no real pdftotext runs in CI.
+    assert callable(default_pdf_text_extractor)
+    assert len(inspect.signature(default_pdf_text_extractor).parameters) == 1
+    assert PdfTextExtractor is not None

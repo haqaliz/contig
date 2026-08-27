@@ -294,3 +294,48 @@ def default_paper_fetcher(doi: str, dest: Path) -> tuple[int, str]:
     except Exception as exc:
         dest.unlink(missing_ok=True)
         return (1, f"failed to fetch the PDF for {doi!r} from {url}: {exc}")
+
+# ---------------------------------------------------------------------------
+# pdf-text-seam: pdftotext PDF -> text extraction (stdlib subprocess)
+# ---------------------------------------------------------------------------
+
+import subprocess  # module-level name so tests can patch paper_intake.subprocess
+
+# PDF size cap: reasoned bound, 8x the 8 MiB text cap for figure-bearing
+# papers, uncalibrated per PRD R4.
+MAX_PDF_BYTES = 64 * 1024 * 1024
+
+# A PDF-text extractor turns a local PDF path into (exit code, text). The
+# default shells out to poppler's pdftotext; tests inject a fake via the
+# module-level `subprocess` name so no real pdftotext runs in CI (mirrors
+# Fetcher in runner.py).
+PdfTextExtractor = Callable[[Path], tuple[int, str]]
+
+
+def _pdftotext_argv(pdf: Path) -> list[str]:
+    """Build the fixed pdftotext argv: -layout, the PDF path, stdout to "-"."""
+    return ["pdftotext", "-layout", str(pdf), "-"]
+
+
+def default_pdf_text_extractor(pdf: Path) -> tuple[int, str]:
+    """Extract text from a PDF via pdftotext, or give up with a named refusal.
+
+    `(0, text)` on success; `(127, …)` when poppler is missing, naming the
+    install so the user can act on it; `(rc, stderr-or-message)` on any
+    non-zero exit with the refusal text surfaced. No path raises: arbitrary
+    bytes are decoded with `errors="replace"`.
+    """
+    try:
+        result = subprocess.run(_pdftotext_argv(pdf), capture_output=True)
+    except FileNotFoundError:
+        return (
+            127,
+            "pdftotext executable not found; install poppler "
+            "(brew install poppler / apt install poppler-utils)",
+        )
+    if result.returncode != 0:
+        message = result.stderr.decode(errors="replace") or (
+            f"pdftotext exited {result.returncode}"
+        )
+        return (result.returncode, message)
+    return (0, result.stdout.decode(errors="replace"))
