@@ -11,8 +11,11 @@ deterministic, refuse-by-name shape, applied to the paper side of intake.
 from __future__ import annotations
 
 import re
+import urllib.request
 from dataclasses import dataclass
-from typing import Literal
+from html.parser import HTMLParser
+from pathlib import Path
+from typing import Callable, Literal
 
 from contig.fetch import _is_doi  # single source of truth for the DOI shape
 
@@ -153,3 +156,141 @@ def classify_paper_argument(arg: str) -> PaperArgument:
         return PaperArgument(kind="pdf", refusal=None, doi=None)
 
     return PaperArgument(kind="text", refusal=None, doi=None)
+
+# ---------------------------------------------------------------------------
+# doi-fetch: DOI -> PDF fetch (stdlib urllib + html.parser), behind a seam
+# ---------------------------------------------------------------------------
+
+
+class PaperIntakeError(ValueError):
+    """A DOI landing page that cannot be turned into one PDF URL."""
+
+
+def _doi_url(doi: str) -> str:
+    """Build the doi.org URL for a DOI, verbatim (no normalization)."""
+    return _DOI_URL_PREFIX + doi
+
+
+class _PdfUrlParser(HTMLParser):
+    """Collect non-empty `citation_pdf_url` meta contents from a landing page.
+
+    Attribute order is irrelevant (`name` before `content` or vice versa) and
+    the attribute names are matched case-insensitively, since publishers do
+    not reliably agree on either. Metas with an empty `content` are skipped:
+    they carry no URL to guess from.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.urls: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "meta":
+            return
+        names = [value for key, value in attrs if key.lower() == "name"]
+        contents = [value for key, value in attrs if key.lower() == "content"]
+        if any(name is not None and name.lower() == "citation_pdf_url" for name in names):
+            for content in contents:
+                if content:
+                    self.urls.append(content)
+
+
+def resolve_pdf_url(html: str) -> str:
+    """Return the single `citation_pdf_url` from a landing page, or refuse.
+
+    Zero matches (including a lone empty-content meta) raise
+    `PaperIntakeError` with the paywall-aware product copy; two or more
+    matches raise naming the count -- a PDF URL is never guessed.
+    """
+    parser = _PdfUrlParser()
+    parser.feed(html)
+    parser.close()
+    if not parser.urls:
+        raise PaperIntakeError(
+            "no citation_pdf_url found on the landing page (the paper may be "
+            "paywalled); download the PDF and pass its path instead"
+        )
+    if len(parser.urls) > 1:
+        raise PaperIntakeError(
+            f"found {len(parser.urls)} citation_pdf_url metas on the landing "
+            "page; refusing to guess which is the paper"
+        )
+    return parser.urls[0]
+
+
+def _looks_like_pdf(data: bytes) -> bool:
+    """True when `data` starts with the `%PDF` magic prefix."""
+    return data.startswith(b"%PDF")
+
+
+def _looks_like_pdf(data: bytes) -> bool:
+    """True when `data` starts with the `%PDF` magic prefix."""
+    return data.startswith(b"%PDF")
+
+
+# A fetcher turns a DOI string into a local PDF at `dest`. The default hits
+# the network via urllib; tests patch the module-level `_urlopen` seam so no
+# real network is touched in CI (mirrors Fetcher in runner.py).
+PaperFetcher = Callable[[str, Path], tuple[int, str]]
+
+_FETCH_TIMEOUT = 30
+
+# The landing page is read bounded so a pathological page cannot hang the
+# fetch; a bigger-than-bound page is an honest give-up naming the bound.
+_LANDING_READ_BOUND = 2 * 1024 * 1024  # 2 MiB
+
+# The PDF download is bounded too, but generously: real paper PDFs (figures,
+# supplements) are routinely tens of MiB, and cli-wiring enforces the
+# 64 MiB product cap (`MAX_PDF_BYTES`) after the fetch. This bound only
+# keeps a single read() call honest.
+_PDF_READ_BOUND = 64 * 1024 * 1024  # 64 MiB
+
+
+def _urlopen(url: str, timeout: int):
+    """The only network entry point of this module; patched in tests."""
+    return urllib.request.urlopen(url, timeout=timeout)
+
+
+def default_paper_fetcher(doi: str, dest: Path) -> tuple[int, str]:
+    """Fetch the PDF for a DOI to `dest`, or give up with a named refusal.
+
+    `(0, message)` on success with the PDF written to `dest`; `(nonzero,
+    message)` on every give-up with `dest` removed. Flow: doi.org URL via
+    `_doi_url`, then a PDF-first sniff (Content-Type `application/pdf` or
+    `%PDF` magic -- many DOIs redirect straight to the PDF), else a bounded
+    landing-page read resolved through `resolve_pdf_url`, then a bounded
+    download of the meta URL. Every failure names its cause and leaves
+    nothing behind.
+    """
+    url = _doi_url(doi)
+    try:
+        with _urlopen(url, timeout=_FETCH_TIMEOUT) as response:
+            content_type = response.headers.get("Content-Type", "")
+            first = response.read(5)
+            if "application/pdf" in content_type.lower() or _looks_like_pdf(first):
+                dest.write_bytes(first + response.read())
+                return (0, f"downloaded the PDF for {doi!r} to {dest}")
+            landing = first + response.read(_LANDING_READ_BOUND + 1)
+            if len(landing) > _LANDING_READ_BOUND:
+                raise PaperIntakeError(
+                    f"the landing page for {doi!r} exceeds the "
+                    f"{_LANDING_READ_BOUND}-byte read bound; download the "
+                    "PDF and pass its path instead"
+                )
+            html = landing.decode("utf-8", errors="replace")
+            pdf_url = resolve_pdf_url(html)
+        with _urlopen(pdf_url, timeout=_FETCH_TIMEOUT) as pdf_response:
+            data = pdf_response.read(_PDF_READ_BOUND + 1)
+            if len(data) > _PDF_READ_BOUND:
+                raise PaperIntakeError(
+                    f"the PDF at {pdf_url} exceeds the {_PDF_READ_BOUND}-byte "
+                    "read bound; download the PDF and pass its path instead"
+                )
+            dest.write_bytes(data)
+        return (0, f"downloaded the PDF for {doi!r} to {dest}")
+    except PaperIntakeError as exc:
+        dest.unlink(missing_ok=True)
+        return (1, str(exc))
+    except Exception as exc:
+        dest.unlink(missing_ok=True)
+        return (1, f"failed to fetch the PDF for {doi!r} from {url}: {exc}")
