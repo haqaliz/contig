@@ -1,113 +1,84 @@
-# Understanding — reproduce-dashboard-card
-
-Phase-2 dig note (two parallel explore agents, graphify-first). Grounds the PRD
-interview. All file:line refs verified in the worktree.
+# Understanding: reproduce-doi-pdf-intake (Phase-2 dig)
 
 ## What the work is really asking
 
-Surface the shipped third-party `contig reproduce` track (C8) in the dashboard:
-list third-party reproduce runs, show per-claim verdicts, repair history, and
-the signed bundle — plus a reproduce entry point. The C8 roadmap deferred "a
-dashboard card" in every slice (CAPABILITY_ROADMAP.md C8); this closes it.
-**Read-only over shipped machinery: no engine contract change, no `models.py`
-change, no new CLI command** (dashboard reads bundles from disk directly, its
-standing convention).
+`contig extract-claims` today takes a local `.txt`/`.md` paper and produces a
+draft claims file (`cli.py:1275-1416`). The C8 standing deferral — recorded in
+every slice (`CAPABILITY_ROADMAP.md:2050-2051`, extract-claims PRD R5,
+`CHANGELOG.md:1097-1098`) — is PDF parsing, DOI resolution, and paper
+fetching. This slice widens the **input surface only**: a paper DOI
+(`doi:10.xxx/y` / bare `10.xxx/y` / `https://doi.org/…`) or a local
+`paper.pdf` becomes an accepted input; the PDF is turned into text and fed
+into the **shipped extractor unchanged**. The `load_claims` round-trip
+invariant (never emit a draft the reproduce path rejects, `cli.py:1360-1389`)
+and the zero-blast-radius rule (no change to `run_reproduction`/`classify`/
+`ClaimResult`/bundle/signing) are load-bearing constraints, not suggestions.
 
-## What exists today (verified)
+## Affected areas (from the code map)
 
-### Engine side (Python)
-- Bundle layout: `<runs-dir>/<reproduce_id>/` with `reproduce_record.json`
-  (full `ReproduceRecord`), `reproduce.json` (re-runnable manifest:
-  `reproduce_id`, `repo`, `run_command`, `claims_sha256`, `created_at`,
-  `source_url`, `source_commit`, `source_tree_sha256`, `requested_rev`),
-  optional `signature.json` (Ed25519, opt-in via `CONTIG_SIGNING_KEY`), and
-  `source/` (fetched remote checkouts) — `bundle.py:73-129`.
-- `ReproduceRecord` (`models.py:812-831`): `reproduce_id`, `repo`,
-  `run_command`, `claims_sha256`, `claim_results: list[ClaimResult]`,
-  `exit_code`, `created_at`, `interpreter`, `tool`, `repair_history:
-  list[RepairStep]`, `source_url`, `source_commit`, `source_tree_sha256`.
-- `ClaimResult` (`models.py:800-809`): `id`, `status`, `claimed`, `observed`,
-  `tolerance`, `delta`, `message`. **Status literals are lowercase**:
-  `"reproduced" | "within_tolerance" | "diverged" | "unverified"`
-  (`models.py:797`). **No locator field is persisted** — locators exist only on
-  the input `Claim` dataclass.
-- **No overall reproduce verdict exists** — only per-claim statuses plus
-  `reduce_reproduction` counts/summary (`verification/reproduce.py:1447-1467`).
-  A non-zero `exit_code` short-circuits every claim to `unverified`
-  ("run did not complete (exit N)").
-- **No enumeration of reproduce runs exists anywhere** — `contig list`
-  (`workspace.py:39-51`) scans only `run_record.json` dirs; `contig show
-  <reproduce_id>` fails (`load_run` requires `run_record.json`). The dashboard
-  must scan `<runs-dir>/*/reproduce_record.json` itself (mirroring
-  `list_run_ids`).
-- Capture channel exists: `<runs-dir>/pending_reproduce_corpus.jsonl` +
-  `reproduce-case-promote` (curation — a write surface, out of scope here).
+- `src/contig/cli.py:1275-1416` — `extract_claims` command: argument is a
+  local path with stat-before-read, 8 MiB `_MAX_MATCH_BYTES` cap (imported
+  from `contig.verification.reproduce:51`), UTF-8 check, `--out` guards,
+  `default_extractor` seam (`cli.py:265-280`), temp→`load_claims`→`os.replace`.
+- `src/contig/verification/claim_extraction.py` — pure stdlib core, never
+  raises; `extract_claims(text: str)`; untouched by this slice.
+- Seam pattern to mirror: `Fetcher = Callable[[list[str], Path], tuple[int, str]]`
+  (`runner.py:736`), `default_fetcher` (`runner.py:1165`, FileNotFoundError →
+  `(127, "git executable not found")`), CLI passes the default explicitly and
+  tests monkeypatch `contig.cli.default_fetcher` (`test_reproduce_remote_intake.py:521`).
+- `--allow-fetch` posture: flag off by default (`cli.py:940-949`); pure
+  `classify_repo_argument` refuses leading `-` first, then accepts https,
+  refuses DOI by name (`fetch.py:110-155`); CLI refuses URL-without-flag
+  naming the flag (`cli.py:999-1010`). **`_is_doi` already exists**
+  (`fetch.py:75-76,96-97`) — reusable for the extract-claims classifier; the
+  reproduce command's DOI *refusal* must stay.
+- Tests: `tests/test_cli_extract_claims.py` (295 lines, Click-param
+  introspection for flags, sparse-file size-cap test), `tests/test_reproduce_remote_intake.py`
+  (709 lines, `_ScriptedCheckoutFetcher` fake pattern), no conftest anywhere.
 
-### Dashboard side (Next.js)
-- **Zero awareness of the third-party feature** — no route, component, or type
-  references `claim_results`/`reproduce_id`/`source_url`; the only
-  "reproduce" hits are the FIRST-PARTY per-run "Reproduce exactly" action
-  (`app/api/runs/[id]/reproduce/route.ts` + `components/run/reproduce-actions.tsx`,
-  dispatches a re-run from `launch.json` — unrelated to `contig reproduce`).
-- Data flow: server components read engine artifacts from disk via `lib/runs.ts`
-  (`runsDir()` = `CONTIG_RUNS_DIR` or `../runs`); CLI shell-outs for actions.
-  Read-only data = direct fs read; no HTTP backend (`dashboard/README.md:5-9`).
-- Conventions (from the dig): `force-dynamic` server page → `PageHeader` +
-  client table; `StatusBadge` maps pass/warn/fail/unverified only — a new
-  reproduced/diverged/within_tolerance/unverified set needs a new badge variant
-  (color is never the sole signal); nav entries in `components/site-nav.tsx`
-  LINKS; write routes need `requireWriter()` + `proxy.ts` regex update;
-  Playwright-only tests with fixtures in `e2e/fixtures/` registered in
-  `e2e/fixtures.ts`, installed by `e2e/global-setup.ts`; graceful-degradation
-  pattern on `/eval` ("Live eval not available" card when CLI missing).
-- Export precedent: `app/api/runs/[id]/export/route.ts` (first-party bundle
-  export) — mirror for reproduce bundle download.
-- Launch precedent: `app/runs/new/page.tsx` + `launch-form.tsx` + dispatch
-  route (spawns `uv run contig` detached) — the model for any reproduce entry
-  point, with one caveat: `contig reproduce --run "<cmd>"` executes an
-  arbitrary shell command on the user's compute, a larger trust surface than a
-  pipeline dispatch.
+## Design shape implied by the constraints
 
-## Scope boundaries (honest, from the brief + docs)
+1. **Argument classification** — a pure `classify_paper_argument` mirroring
+   `classify_repo_argument`: leading `-` refused first; DOI forms → kind
+   `doi`; local `.pdf` → kind `pdf`; other URL schemes refused naming what's
+   supported; everything else stays the existing local text path.
+2. **Network** — DOI → PDF requires a fetch: `https://doi.org/<doi>` follows
+   redirects to the publisher **landing page**, then `<meta
+   name="citation_pdf_url">` (de-facto standard across publishers) names the
+   PDF. Two hops, both stdlib (`urllib` + `html.parser`). Opt-in flag in the
+   `--allow-fetch` posture: a DOI without the flag is refused naming the flag.
+3. **PDF→text** — an injectable seam in the Fetcher/Installer mould, default
+   shelling to an external tool (`pdftotext -layout <pdf> -`, poppler),
+   missing tool → honest `(127, …)`-style refusal naming the install. Never
+   executed in CI (injected fakes). This keeps the stdlib-only dependency
+   contract (external binaries like git/pip/samtools are the established
+   pattern — `runner.py:714-743`).
+4. **Honest boundaries** — PDF size cap (stat before fetch/read), extracted
+   text still bounded (extractor input contract), nothing written on any
+   failure, empty extraction stays exit 0, draft-only invariant intact,
+   reasoned-not-observed framing with the manual real-paper gate named.
 
-- **Not in scope:** figure/plot claims (hard-blocked, stdlib-only),
-  PDF/DOI intake, extract-claims integration into the UI, corpus
-  promote/curation UI, first-party reproduce changes, engine/CLI changes.
-- **In scope by brief:** listing + per-claim verdicts + repair history +
-  signed-bundle access + "a reproduce entry point".
-- The card must render `unverified` honestly (freshness-guarded committed-output
-  repos, non-zero exits) — never as a pass.
+## Ambiguities / open questions
 
-## Open questions for the interview
+- **Flag name**: reuse `--allow-fetch` on `extract-claims` (consistent with
+  `reproduce`) vs a new name. Lean: `--allow-fetch`.
+- **URL scope**: DOI + local PDF only (tight, per the brief), or also accept
+  direct `https://…pdf` URLs. Lean: refuse other schemes.
+- **PDF→text tool**: `pdftotext` (poppler) is the cross-platform standard;
+  macOS has `textutil` built-in. One tool, fixed argv, seam-injected. Tool
+  choice is a product decision worth confirming.
+- **Size caps**: PDF cap (papers with figures run 2–20 MB; 8 MiB would refuse
+  legitimate arXiv PDFs) vs extracted-text cap (8 MiB existing). Lean: PDF
+  cap larger (e.g. 64 MiB), extracted text still capped at `_MAX_MATCH_BYTES`.
+- **DOI→PDF is not deterministic** (the slice-6 PRD's own objection at
+  `remote-intake/prd.md:244-246` applies): `citation_pdf_url` is a
+  convention, not a guarantee. Missing meta tag → honest failure, never a
+  guess. This is the nearest feasibility risk, stated honestly.
 
-1. **Surface shape**: a dedicated `/reproduce` page (nav entry) vs a card on
-   `/runs` vs a tab/section. The C8 wording is "a dashboard card"; a separate
-   page matches the "community-facing" framing and avoids crowding the runs
-   list. (Recommend: dedicated page, card-styled sections per run.)
-2. **Entry point depth**: (a) read-only list + view (entry point = link to CLI
-   docs), (b) minimal "New reproduce" form (repo, run command, claims JSON
-   paste, `--allow-fetch`/`--allow-install`/`--rev` toggles) dispatching via
-   CLI spawn, or (c) full form with claims-file upload. Scope/trust question —
-   `--run` executes arbitrary shell; recommend (b) minimal with explicit
-   warnings, or defer the form entirely to a follow-on slice.
-3. **Status vocabulary**: new badge set for the four claim statuses — mapping
-   proposal: reproduced=emerald, within_tolerance=blue/info, diverged=red,
-   unverified=slate (the existing StatusBadge map has no blue — check).
-4. **Bundle download**: zip the whole run dir (record+manifest+signature+source)
-   vs a single-file JSON export of the record. Mirror first-party export?
-5. **Overall run status**: no reduced verdict exists in the record — derive one
-   client-side from claim statuses + exit_code (worst-of), or add nothing and
-   show per-claim only? (Recommend worst-of badge derived client-side; no model
-   change.)
-6. **Auth/owner**: reproduce records have no `owner.json` — do we show all
-   reproduce runs to any viewer, or skip ownership filtering (note first-party
-   list filters by owner)?
+## Guardrail check
 
-## Guardrails check (CLAUDE.md)
-
-Layer-2 surface only ✓ (reproduce/verify verdicts — never Layer 1) · no clinical
-or scientific-judgement claims (per-claim verdicts are computation-vs-numbers,
-never paper conclusions) ✓ · no raw-read egress (cards render hashes/metadata
-only; `source/` checkout stays local) ✓ · honesty: UNVERIFIED never rendered as
-REPRODUCED ✓ · test-first (Playwright fixtures for the dashboard, per its
-conventions; no Python change expected) ✓.
+Layer 2 (input generation for reproduce verification; no NL→workflow
+authoring), founder's edge (public papers, no wet-lab/clinical), not
+deferred-for-a-blocker (PDF/DOI was deferred for *scope* — R5 mitigation —
+with no recorded blocker; the "no plot-hash" hard block does not apply to
+text extraction). Pass.
