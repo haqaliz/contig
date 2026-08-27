@@ -91,9 +91,10 @@ def classify_paper_argument(arg: str) -> PaperArgument:
     2. A DOI (doi: prefix, bare 10.<digits>/..., or an https://doi.org/ URL,
        all case-insensitive) is accepted with the whitespace-stripped DOI in
        the `doi` field; a ?/# or an empty remainder is refused.
-    3. A local .pdf path (case-insensitive extension) is accepted.
-    4. Any other URL scheme or scp-like user@host:path is refused, naming the
-       supported forms.
+    3. Any other URL scheme or scp-like user@host:path is refused, naming the
+       supported forms -- before the local .pdf check, so a remote URL ending
+       in .pdf is refused by scheme, never read as a local path.
+    4. A local .pdf path (case-insensitive extension) is accepted.
     5. Everything else is a local .txt/.md path (text).
     """
     if arg.startswith("-"):
@@ -130,9 +131,6 @@ def classify_paper_argument(arg: str) -> PaperArgument:
             return PaperArgument(kind=None, refusal=refusal, doi=None)
         return PaperArgument(kind="doi", refusal=None, doi=candidate)
 
-    if stripped.lower().endswith(".pdf"):
-        return PaperArgument(kind="pdf", refusal=None, doi=None)
-
     scheme = _SCHEME_RE.match(stripped)
     if scheme is not None:
         return PaperArgument(
@@ -150,5 +148,8 @@ def classify_paper_argument(arg: str) -> PaperArgument:
             ),
             doi=None,
         )
+
+    if stripped.lower().endswith(".pdf"):
+        return PaperArgument(kind="pdf", refusal=None, doi=None)
 
     return PaperArgument(kind="text", refusal=None, doi=None)

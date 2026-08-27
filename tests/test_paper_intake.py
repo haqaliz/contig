@@ -163,6 +163,17 @@ def test_other_schemes_and_scp_like_are_refused_naming_supported_forms(arg):
         assert token in result.refusal
 
 
+@pytest.mark.parametrize("arg", ["https://example.com/paper.pdf", "http://x/y.pdf"])
+def test_url_ending_in_pdf_is_refused_as_a_scheme_not_read_as_local_pdf(arg):
+    # A URL is refused by scheme even when its path ends in .pdf: a remote
+    # paper is never silently downgraded to a local-path stat failure.
+    result = classify_paper_argument(arg)
+    assert result.kind is None
+    assert result.doi is None
+    assert result.refusal is not None
+    assert "scheme" in result.refusal
+
+
 # ---------------------------------------------------------------------------
 # accepted: everything else is a local text path
 # ---------------------------------------------------------------------------
