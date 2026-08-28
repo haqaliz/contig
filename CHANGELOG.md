@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.55.1] - 2026-08-28
+
 - **The failure detector now reads the work dir the run actually used
   (`self-heal-custom-work-dir`, C2 deferral item (a)).** `read_task_errors` globbed
   `<run_dir>/work` while Nextflow is given `ExecutionTarget.work_dir`
@@ -3802,6 +3804,7 @@ compute. Pre-revenue, validation phase.
 [0.13.0]: https://github.com/haqaliz/contig/releases/tag/v0.13.0
 [0.12.0]: https://github.com/haqaliz/contig/releases/tag/v0.12.0
 [0.53.0]: https://github.com/haqaliz/contig/releases/tag/v0.53.0
+[0.55.1]: https://github.com/haqaliz/contig/releases/tag/v0.55.1
 [0.55.0]: https://github.com/haqaliz/contig/releases/tag/v0.55.0
 [0.54.0]: https://github.com/haqaliz/contig/releases/tag/v0.54.0
 [0.52.0]: https://github.com/haqaliz/contig/releases/tag/v0.52.0
