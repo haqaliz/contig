@@ -515,9 +515,18 @@ FASTQ or finished bundle), exhaustive per-assembly alias-table completeness beyo
 GRCh38 seed, known-sites/GTF-version consistency, a runtime `reference_mismatch`
 detector-corpus case, CRAM↔BAM conversion (the input-format-conversion class's second
 half), and pin conflict. Also deferred, filed by the inert-repair-honesty slice (C2), none
-fixed here: **(a)** `read_task_errors` hardcodes `Path(run_dir)/"work"` (`runner.py:1077`)
+fixed here: ~~**(a)** `read_task_errors` hardcodes `Path(run_dir)/"work"` (`runner.py:1077`)
 while Nextflow is actually given `target.work_dir` (`nfconfig.py:100`) — the detector goes
-blind on a custom `--work-dir`; **(b)** `risk="destructive"` is a no-op to the engine — no
+blind on a custom `--work-dir`;~~ **CLOSED (Unreleased, `self-heal-custom-work-dir` — see
+the CHANGELOG).** `read_task_errors` now takes the work dir as a **required** argument and
+`run_dir` is removed (a retained fallback would have been production-dead code keeping the
+wrong-place lookup reachable); a remote work dir yields a self-labelled,
+salient-token-bearing note instead of `""`; and both halves of the `self_heal.py:1310` log
+expression were made raise-safe. The citation above was stale — the real site was
+`runner.py:1198`. Honest limits: **push, not demand-pull**; **reasoned, not observed** (no
+real Nextflow/Batch in CI, the real-run smoke is a manual gate); and **AWS Batch remains
+structurally undiagnosable** (an `s3://` work dir cannot be read locally at all) — the
+slice makes that limit visible, it does not fix it; **(b)** `risk="destructive"` is a no-op to the engine — no
 code branches on it and `--auto-approve` has no carve-out, so only the dashboard honors it;
 **(c)** `_write_pending_choice` (the ambiguous-choice gate) has no advisory branch and still
 writes `operation` unconditionally — unreachable today, since all four advisory classes are
@@ -532,7 +541,9 @@ cannot promote it labelled `disk_full` or `permission_denied`, two of the four c
 slice just made advisory-honest, so the relabel channel that would let a human correct a
 misdiagnosed case before it is counted has no route to either label, leaving the §"Revisit
 trigger" (a) grouping of `runs/pending_corpus.jsonl` by `failure_class` dependent solely on
-the detector's raw (possibly wrong) diagnosis for these two classes; **(e)** the enacted
+the detector's raw (possibly wrong) diagnosis for these two classes;
+**((d) is now CLOSED — verified Unreleased: `dashboard/lib/derive.ts:278-299` mirrors all 20 `FailureClass` literals, including `disk_full`, `permission_denied`, `download_failed`, `reference_not_bgzf` and `missing_dependency`. The prose above is stale; do not re-pick it.))**
+**(e)** the enacted
 `container_unavailable` wait leaves no trace in the record — `self_heal.py:1452-1458` sleeps
 `wait_seconds` but `RepairStep.detail` stays `None`, so no surface says "waited 15s". This is
 an *under*-claim (the record says less than what happened), and fixing it is a behaviour

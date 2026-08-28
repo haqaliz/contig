@@ -6,6 +6,91 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+- **The failure detector now reads the work dir the run actually used
+  (`self-heal-custom-work-dir`, C2 deferral item (a)).** `read_task_errors` globbed
+  `<run_dir>/work` while Nextflow is given `ExecutionTarget.work_dir`
+  (`nfconfig.py:100`), which `--work-dir` (`cli.py:400`) can point anywhere —
+  `<run_dir>/work` is merely the **default** (`cli.py:596`). The two agree in the
+  default case, which is why this survived since the detector was written. It is the
+  item the inert-repair-honesty slice filed against C2 and left unfixed
+  (`CAPABILITY_ROADMAP.md`; its `runner.py:1077` citation was stale, the real site was
+  `runner.py:1198`).
+  - **The loss was near-total, not partial.** `diagnose_failure` is a substring
+    waterfall over `log_text`, and its **only** non-log signals are the exit-137 OOM
+    check (`detect.py:88`) and one co-requirement (`detect.py:376`). So an empty log
+    left **exit-137 OOM as the single classifiable failure** — `disk_full`,
+    `container_pull_failed`, `container_unavailable` (0.9), `permission_denied`,
+    `reference_mismatch` (0.85) and `platform_unsupported` (0.7) all unreachable. The
+    run fell to `tool_crash` @ 0.4; `propose_patches` has no `tool_crash` branch so it
+    returned `[]`, meaning **a recoverable run was not recovered**; and the failure was
+    filed to the pending corpus (`self_heal.py:1319`) both evidence-less **and**
+    mislabelled. Worse, `cluster_failures` keys on `normalize_signature(log_text)`
+    (`corpus.py:257`), so **every** evidence-less case hashed to the same constant
+    signature and merged into one fake "recurring systemic mode" — the exact artifact
+    the clustering exists to surface — while `corpus.py:72` replays the detector against
+    the *stored* log, silently grading events-only rules.
+  - **`work_dir` is required; `run_dir` is gone.** The brief asked for a
+    `run_dir`-only fallback so the four existing tests stayed untouched. Rejected during
+    self-critique: the sole production call site always passes a work dir, so the
+    fallback would have been production-dead code keeping the wrong-place lookup
+    reachable — the same defect one level down. `run_dir` was referenced on exactly one
+    line, so it is removed outright rather than left as a dead parameter. All four
+    pre-existing assertions are **byte-identical**; only their call argument changed,
+    from `read_task_errors(tmp_path)` to `read_task_errors(tmp_path / "work")`, which is
+    what each was always actually testing.
+  - **A remote work dir gets an honest note, not silence.** `s3://` is mandatory on AWS
+    Batch (`nfconfig.py:119-122`), so `.command.err` can *never* be read from local
+    disk there. `_is_remote_work_dir` keys on `"://"` and never a bare `":"` (a Windows
+    drive letter stays local); `file://` is deliberately local. The note is
+    self-labelled `[contig]` and **not log-shaped** — the caller files it into the
+    corpus as evidence, and log-shaped prose would put words in Nextflow's mouth (the
+    rule already stated at `self_heal.py:1279-1289`). It deliberately carries the
+    salient token "cannot" so `normalize_signature` keeps the line and these cases
+    cluster on their own instead of rejoining the constant empty-log signature; the test
+    asserts against the **real** `corpus._SALIENT_TOKENS`, not a copy. A **local** work
+    dir that is merely absent still returns `""` — the ordinary "no task ran" outcome of
+    a run that failed before submission, a different thing that must not look alike.
+  - **The note lands last in `log_text`, deliberately.** `detect.py:457-459` takes the
+    last non-blank line as `tool_crash` evidence, so for a remote work dir the note
+    *becomes* that evidence line — which is the most accurate statement available for
+    such a run. Reordering the concatenation was considered and **rejected**: it would
+    have changed the evidence line for every other run from the task error (specific) to
+    `run.log`'s tail (generic), a regression far wider than this fix.
+  - **Neither log reader may raise.** Both halves of `self_heal.py:1310` run *inside*
+    diagnosis, where an exception destroys the very failure record being captured. Two
+    pre-existing hazards guarded: an unreadable `.command.err` is now skipped rather
+    than propagating `OSError` (readable siblings still land), with the `.exitcode` read
+    extracted to `_exited_cleanly`, which returns `False` when the file is absent **or**
+    unreadable so a genuinely failing task is never discarded as "exited 0"; and
+    `read_run_log` gained the `errors="replace"` its sibling has had all along, so a
+    non-UTF-8 `run.log` no longer raises `UnicodeDecodeError` out of the same
+    expression. *(This corrects an earlier claim in the PRD that `read_run_log` needed
+    no change: it has no work-dir bug, but it was not safe.)*
+  - **The test whose absence hid the bug.** Every test in `test_self_heal.py` already
+    ran the mismatched shape — `_target` puts `work_dir` at `tmp_path/"w"` while
+    `run_dir` is `tmp_path/"runs"/"r"` — but **none had ever written a `.command.err`**,
+    so there was nothing to lose; and the four unit tests passed because they built
+    `<tmp>/work`, reproducing the function's own faulty assumption. Both directions were
+    green for the wrong reason. The new end-to-end test was **observed RED** before the
+    fix (`assert 'tool_crash' == 'disk_full'`) and **re-verified by mutation** after:
+    restoring `Path(run_dir)/"work"` flips it straight back. It uses the real
+    `disk_full` needle (`detect.py:114`), not invented wording. The pending-corpus
+    assertion was also strengthened from bare truthiness to real content, since the new
+    note would have satisfied `assert pending[0].log_text` while carrying no log.
+  - **Honest scope.** **Push, not demand-pull** — nobody reported this and we have **no
+    measurement** of how many runs use a custom `--work-dir`; the case rests on the
+    defect being filed, verified, silent, and corpus-poisoning. **Reasoned, not
+    observed**: there is no real Nextflow and no real Batch run in CI, so a real
+    `--work-dir` smoke test remains a manual post-merge gate, as in every prior C2/C8
+    slice. **Self-graded** — we authored the fixture for the class we made reachable.
+    And **AWS Batch stays structurally undiagnosable**: this makes that limit *visible*,
+    it does not fix it, and no remote-fetching of task logs is planned (it would need a
+    cloud SDK and break the stdlib-only posture). Read-path only: no `models.py` change,
+    no manifest/verdict/exit-code/bundle change, **not a signature break**; `eval-guard`
+    (93.3%) and `heal-guard` (100%) both **unmoved**, as they must be — neither a
+    detector rule nor a corpus was touched. Test-first, 2774 passed / 1 skipped (+20).
+    Plan/PRD under `docs/planning/self-heal-custom-work-dir/`.
+
 - **`contig extract-claims` now accepts a paper DOI or a local PDF (`reproduce-doi-pdf-intake`,
   the C8 paper-fetch slice).** The standing C8 deferral — PDF parsing, DOI resolution, and
   paper fetching, recorded in every prior slice's deferral list
