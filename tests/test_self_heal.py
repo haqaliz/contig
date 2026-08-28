@@ -298,7 +298,10 @@ def test_self_heal_stashes_failure_as_pending_corpus_case(tmp_path):
     assert len(pending) == 1
     assert pending[0].expected_class == "tool_crash"  # provisional = detector guess
     assert pending[0].source.startswith("pending:")
-    assert pending[0].log_text  # the captured log travels with the case
+    # Assert on real captured content, not bare truthiness: read_task_errors can
+    # now return an explanatory note for an unreadable work dir, which would
+    # satisfy a truthiness check while carrying no actual log at all.
+    assert "Segmentation fault in some_tool" in pending[0].log_text
 
 
 def test_self_heal_does_not_stash_on_success(tmp_path):
@@ -3644,3 +3647,30 @@ def test_repair_progress_jsonl_carries_patch_applied(tmp_path):
     lines = (tmp_path / "runs" / "r" / "repair_progress.jsonl").read_text().splitlines()
     assert json.loads(lines[0])["patch_applied"] is True
     assert RepairStep.model_validate_json(lines[0]).patch_applied is True
+
+
+def test_detector_reads_command_err_from_the_configured_work_dir(tmp_path):
+    # The regression this whole slice exists for. _target puts work_dir at
+    # tmp_path/"w" while run_dir is tmp_path/"runs"/"r" -- the mismatched shape
+    # every test in this file has always had, but none ever populated. Reading
+    # <run_dir>/work found nothing here, so the run fell through to tool_crash
+    # @ 0.4 no matter what the task's stderr actually said.
+    #
+    # "no space left on device" is the real disk_full needle (detect.py:114),
+    # checked early at 0.9 so it beats the generic crash rule.
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_TOOL, "Process NFCORE_RNASEQ:STAR_ALIGN terminated")
+        task = tmp_path / "w" / "ab" / "cdef01"
+        task.mkdir(parents=True, exist_ok=True)
+        (task / ".command.err").write_text("samtools sort: no space left on device")
+        return 1
+
+    # approval_timeout=0 because disk_full proposes a needs_confirmation advisory
+    # (repair.py:143-156) and the default 1800s approval poll would block. This
+    # test is about what the detector SEES, not about the repair gate; the corpus
+    # case is captured before that gate is reached.
+    _heal(tmp_path, executor, approval_timeout=0)
+    pending = load_corpus(tmp_path / "runs" / "pending_corpus.jsonl")
+    assert len(pending) == 1
+    assert pending[0].expected_class == "disk_full"  # not the tool_crash fallback
+    assert "no space left on device" in pending[0].log_text
