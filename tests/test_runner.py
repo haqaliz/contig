@@ -576,3 +576,57 @@ def test_default_index_builder_returns_nonzero_for_failure(tmp_path):
         [sys.executable, "-c", "import sys; sys.exit(3)"], tmp_path
     )
     assert rc == 3
+
+
+# --- work-dir threading: the remote rule and the honest note --------------------
+# The detector reads .command.err from the work dir Nextflow was CONFIGURED with
+# (ExecutionTarget.work_dir), not from <run_dir>/work. A work dir that is a remote
+# URI can never be read off local disk, so it earns an explicit note rather than a
+# silent "" (C2 deferral item (a)).
+
+
+@pytest.mark.parametrize(
+    "work_dir",
+    ["s3://bucket/work", "gs://bucket/work", "az://container/work", "s3://bucket/work/"],
+)
+def test_is_remote_work_dir_true_for_remote_uris(work_dir):
+    from contig.runner import _is_remote_work_dir
+
+    assert _is_remote_work_dir(work_dir) is True
+
+
+@pytest.mark.parametrize(
+    "work_dir",
+    [
+        "/local/work",
+        "relative/work",
+        "",
+        "file:///abs/work",  # names a LOCAL path, just with a scheme
+        "C:\\work",  # a Windows drive letter is not a URI scheme
+    ],
+)
+def test_is_remote_work_dir_false_for_local_paths(work_dir):
+    from contig.runner import _is_remote_work_dir
+
+    assert _is_remote_work_dir(work_dir) is False
+
+
+def test_remote_work_dir_note_is_a_single_self_labelled_line():
+    from contig.runner import _remote_work_dir_note
+
+    note = _remote_work_dir_note("s3://bucket/work")
+    assert "\n" not in note  # one line: normalize_signature works line-wise
+    assert note.startswith("[contig]")  # ours, never dressed as tool output
+    assert "s3://bucket/work" in note  # names the dir the user actually passed
+
+
+def test_remote_work_dir_note_carries_a_salient_token():
+    # corpus.normalize_signature keeps only lines holding a salient token; a note
+    # without one is filtered out and the case rejoins the constant empty-log
+    # signature, which is exactly the collapse this note exists to avoid.
+    # Assert against the REAL vocabulary so this breaks if that list changes.
+    from contig.corpus import _SALIENT_TOKENS
+    from contig.runner import _remote_work_dir_note
+
+    note = _remote_work_dir_note("s3://bucket/work").lower()
+    assert any(token in note for token in _SALIENT_TOKENS)

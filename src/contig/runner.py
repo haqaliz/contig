@@ -21,6 +21,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import BinaryIO, Callable
+from urllib.parse import urlparse
 
 
 logger = logging.getLogger(__name__)
@@ -1180,6 +1181,45 @@ def default_fetcher(cmd: list[str], cwd: Path) -> tuple[int, str]:
         # raising, and the caller in a later task depends on that.
         return 127, f"git executable not found: {exc}"
     return proc.returncode, proc.stdout or ""
+
+
+def _is_remote_work_dir(work_dir: str | Path) -> bool:
+    """True when work_dir names a non-local URI (s3://, gs://, az://, ...).
+
+    Keys on "://" and never on a bare ":" so a Windows drive letter (C:\\work)
+    stays local. file:// is deliberately local: it names a local path that merely
+    carries a scheme.
+    """
+    text = str(work_dir)
+    if "://" not in text:
+        return False
+    return not text.startswith("file://")
+
+
+def _local_work_path(work_dir: str | Path) -> Path:
+    """Resolve a local work dir, accepting a file:// URI as the path it names."""
+    text = str(work_dir)
+    if text.startswith("file://"):
+        return Path(urlparse(text).path)
+    return Path(text)
+
+
+def _remote_work_dir_note(work_dir: str | Path) -> str:
+    """One self-labelled line explaining why task errors could not be read.
+
+    Deliberately NOT log-shaped: the caller files this text into the failure
+    corpus as a case's evidence, and log-shaped prose would put words in
+    Nextflow's mouth (the rule stated at self_heal.py:1279-1289).
+
+    Deliberately carries the salient token "cannot" so normalize_signature
+    (corpus.py:225-244) keeps the line: a note without one is filtered out and
+    the case rejoins the single constant signature that every evidence-less case
+    hashes to, which is the collapse this note exists to prevent.
+    """
+    return (
+        f"[contig] cannot read task errors: work dir {str(work_dir)!r} is remote; "
+        "Contig reads .command.err from the local filesystem only."
+    )
 
 
 def read_run_log(run_dir: str | Path) -> str:
