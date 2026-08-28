@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -683,3 +684,68 @@ def test_read_task_errors_empty_work_dir_string_is_local_and_absent():
     from contig.runner import read_task_errors
 
     assert read_task_errors("") == ""
+
+
+# --- raise-safety: a crash DURING diagnosis destroys the failure record ---------
+# self_heal.py:1310 is read_run_log(...) + "\n" + read_task_errors(...); an
+# exception from either half aborts diagnosis and loses the very case we are
+# trying to capture.
+
+
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root ignores the mode bit, which would make this vacuous",
+)
+def test_read_task_errors_skips_an_unreadable_command_err(tmp_path):
+    from contig.runner import read_task_errors
+
+    work = tmp_path / "w"
+    bad = work / "aa" / "1"
+    bad.mkdir(parents=True)
+    unreadable = bad / ".command.err"
+    unreadable.write_text("secret stderr")
+    unreadable.chmod(0o000)
+    good = work / "bb" / "2"
+    good.mkdir(parents=True)
+    (good / ".command.err").write_text("out of memory")
+
+    try:
+        text = read_task_errors(work)
+    finally:
+        unreadable.chmod(0o644)
+
+    assert "out of memory" in text  # the readable sibling still lands
+
+
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root ignores the mode bit, which would make this vacuous",
+)
+def test_read_task_errors_still_considers_a_task_with_an_unreadable_exitcode(tmp_path):
+    # An unreadable .exitcode must not be treated as "exited 0" -- that would
+    # silently drop a genuinely failing task's stderr.
+    from contig.runner import read_task_errors
+
+    task = tmp_path / "w" / "aa" / "1"
+    task.mkdir(parents=True)
+    (task / ".command.err").write_text("killed by signal")
+    exitcode = task / ".exitcode"
+    exitcode.write_text("1")
+    exitcode.chmod(0o000)
+
+    try:
+        text = read_task_errors(tmp_path / "w")
+    finally:
+        exitcode.chmod(0o644)
+
+    assert "killed by signal" in text
+
+
+def test_read_run_log_decodes_a_non_utf8_log_instead_of_raising(tmp_path):
+    # read_task_errors has used errors="replace" all along; its sibling did not,
+    # so a non-UTF-8 run.log raised UnicodeDecodeError out of the SAME expression.
+    from contig.runner import read_run_log
+
+    (tmp_path / "run.log").write_bytes(b"\xff\xfe process failed\n")
+
+    assert "failed" in read_run_log(tmp_path)

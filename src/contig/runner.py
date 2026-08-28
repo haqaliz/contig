@@ -1225,7 +1225,24 @@ def _remote_work_dir_note(work_dir: str | Path) -> str:
 def read_run_log(run_dir: str | Path) -> str:
     """Return the captured run.log text for a run, or '' if none was written."""
     log_path = Path(run_dir) / "run.log"
-    return log_path.read_text() if log_path.exists() else ""
+    # errors="replace" matches read_task_errors below. Both halves of the
+    # log_text expression at self_heal.py:1310 feed failure diagnosis, so
+    # neither may raise: a non-UTF-8 run.log used to abort the diagnosis and
+    # lose the case entirely.
+    return log_path.read_text(errors="replace") if log_path.exists() else ""
+
+
+def _exited_cleanly(exitcode: Path) -> bool:
+    """True only when the task's .exitcode file definitively reads "0".
+
+    An absent OR unreadable .exitcode returns False, so the task's stderr is
+    still collected. Treating unreadable as "0" would silently discard a
+    genuinely failing task -- the expensive direction of the error.
+    """
+    try:
+        return exitcode.exists() and exitcode.read_text().strip() == "0"
+    except OSError:
+        return False
 
 
 def read_task_errors(work_dir: str | Path, max_tasks: int = 10, tail_lines: int = 40) -> str:
@@ -1261,10 +1278,15 @@ def read_task_errors(work_dir: str | Path, max_tasks: int = 10, tail_lines: int 
         # Only failed/killed tasks: a successful task's stderr is noise that can
         # trigger the wrong diagnosis. exitcode "0" -> skip; non-zero or absent
         # (killed before writing one) -> include.
-        exitcode = err.parent / ".exitcode"
-        if exitcode.exists() and exitcode.read_text().strip() == "0":
+        if _exited_cleanly(err.parent / ".exitcode"):
             continue
-        text = err.read_text(errors="replace").strip()
+        try:
+            text = err.read_text(errors="replace").strip()
+        except OSError:
+            # Unreadable (permissions, a vanished file mid-walk). Skip this task
+            # rather than raise: this runs INSIDE failure diagnosis, so an
+            # exception here destroys the very failure record we are capturing.
+            continue
         if text:
             tail = "\n".join(text.splitlines()[-tail_lines:])
             chunks.append(f"# {err.parent.name}\n{tail}")
