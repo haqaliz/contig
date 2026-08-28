@@ -21,6 +21,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import BinaryIO, Callable
+from urllib.parse import urlparse
 
 
 logger = logging.getLogger(__name__)
@@ -1182,20 +1183,94 @@ def default_fetcher(cmd: list[str], cwd: Path) -> tuple[int, str]:
     return proc.returncode, proc.stdout or ""
 
 
+def _is_remote_work_dir(work_dir: str | Path) -> bool:
+    """True when work_dir names a non-local URI (s3://, gs://, az://, ...).
+
+    Keys on "://" and never on a bare ":" so a Windows drive letter (C:\\work)
+    stays local. file:// is deliberately local: it names a local path that merely
+    carries a scheme.
+    """
+    text = str(work_dir)
+    if "://" not in text:
+        return False
+    return not text.startswith("file://")
+
+
+def _local_work_path(work_dir: str | Path) -> Path:
+    """Resolve a local work dir, accepting a file:// URI as the path it names."""
+    text = str(work_dir)
+    if text.startswith("file://"):
+        return Path(urlparse(text).path)
+    return Path(text)
+
+
+def _remote_work_dir_note(work_dir: str | Path) -> str:
+    """One self-labelled line explaining why task errors could not be read.
+
+    Deliberately NOT log-shaped: the caller files this text into the failure
+    corpus as a case's evidence, and log-shaped prose would put words in
+    Nextflow's mouth (the rule stated at self_heal.py:1279-1289).
+
+    Deliberately carries the salient token "cannot" so normalize_signature
+    (corpus.py:225-244) keeps the line: a note without one is filtered out and
+    the case rejoins the single constant signature that every evidence-less case
+    hashes to, which is the collapse this note exists to prevent.
+    """
+    return (
+        f"[contig] cannot read task errors: work dir {str(work_dir)!r} is remote; "
+        "Contig reads .command.err from the local filesystem only."
+    )
+
+
 def read_run_log(run_dir: str | Path) -> str:
     """Return the captured run.log text for a run, or '' if none was written."""
     log_path = Path(run_dir) / "run.log"
-    return log_path.read_text() if log_path.exists() else ""
+    # errors="replace" matches read_task_errors below. Both halves of the
+    # log_text expression at self_heal.py:1310 feed failure diagnosis, so
+    # neither may raise: a non-UTF-8 run.log used to abort the diagnosis and
+    # lose the case entirely.
+    return log_path.read_text(errors="replace") if log_path.exists() else ""
 
 
-def read_task_errors(run_dir: str | Path, max_tasks: int = 10, tail_lines: int = 40) -> str:
+def _exited_cleanly(exitcode: Path) -> bool:
+    """True only when the task's .exitcode file definitively reads "0".
+
+    An absent OR unreadable .exitcode returns False, so the task's stderr is
+    still collected. Treating unreadable as "0" would silently discard a
+    genuinely failing task -- the expensive direction of the error.
+    """
+    try:
+        return exitcode.exists() and exitcode.read_text().strip() == "0"
+    except OSError:
+        return False
+
+
+def read_task_errors(work_dir: str | Path, max_tasks: int = 10, tail_lines: int = 40) -> str:
     """Collect the per-task `.command.err` output from the Nextflow work dirs.
 
     The main run.log only says which process failed; the real error (a tool's
     stderr, a container/platform warning) lives in the failing task's
     `.command.err`. The detector needs it (ARCHITECTURE §5.2).
+
+    `work_dir` is the dir Nextflow was CONFIGURED with -- `ExecutionTarget.work_dir`,
+    written into the config at nfconfig.py:100 and settable with `--work-dir`. It is
+    a required argument on purpose: this function used to derive `<run_dir>/work`
+    itself, which is merely the DEFAULT (cli.py:596). Any other `--work-dir` left it
+    globbing a directory that did not exist, so it returned "" and the detector fell
+    all the way through to `tool_crash` at 0.4 -- with only exit-137 OOM still
+    classifiable, self-heal proposing nothing, and the failure filed to the corpus
+    both evidence-less and mislabelled. Taking the dir from the caller removes the
+    guess; there is deliberately no fallback to reintroduce it.
+
+    A remote work dir (`s3://...`, mandatory on AWS Batch per nfconfig.py:119-122)
+    can never be read from local disk, so it yields an honest one-line note rather
+    than a silent "" -- the two cases are different and must not look alike. A local
+    dir that is simply absent still returns "": that is the ordinary "no task ever
+    ran" outcome of a run that failed before submission.
     """
-    work = Path(run_dir) / "work"
+    if _is_remote_work_dir(work_dir):
+        return _remote_work_dir_note(work_dir)
+    work = _local_work_path(work_dir)
     if not work.is_dir():
         return ""
     chunks: list[str] = []
@@ -1203,10 +1278,15 @@ def read_task_errors(run_dir: str | Path, max_tasks: int = 10, tail_lines: int =
         # Only failed/killed tasks: a successful task's stderr is noise that can
         # trigger the wrong diagnosis. exitcode "0" -> skip; non-zero or absent
         # (killed before writing one) -> include.
-        exitcode = err.parent / ".exitcode"
-        if exitcode.exists() and exitcode.read_text().strip() == "0":
+        if _exited_cleanly(err.parent / ".exitcode"):
             continue
-        text = err.read_text(errors="replace").strip()
+        try:
+            text = err.read_text(errors="replace").strip()
+        except OSError:
+            # Unreadable (permissions, a vanished file mid-walk). Skip this task
+            # rather than raise: this runs INSIDE failure diagnosis, so an
+            # exception here destroys the very failure record we are capturing.
+            continue
         if text:
             tail = "\n".join(text.splitlines()[-tail_lines:])
             chunks.append(f"# {err.parent.name}\n{tail}")

@@ -1,21 +1,49 @@
-# Card: reproduce-doi-pdf-intake
+# Card — feat/self-heal-custom-work-dir
 
-Source: contig-next handoff (2026-08-27). No GitHub issue exists — this is the
-inline brief, treated as the task source. Owner: aliz.
+**Source:** inline brief (no GitHub issue; `gh issue list` shows only closed #13).
+**Branch:** `feat/self-heal-custom-work-dir/aliz`
+**Origin:** picked by `/contig-next` from the C2 deferral list.
 
 ## Brief
 
-`contig extract-claims` accepts plain text/markdown only; the standing C8
-deferral is PDF parsing, DOI resolution, and paper fetching (extract-claims
-PRD R5; CHANGELOG v0.52.0 honest-scope note). Build the intake slice: DOI or
-paper-PDF input to extract-claims — DOI→PDF fetch behind an opt-in network
-flag in the slice-6 `--allow-fetch` posture (refused-with-message otherwise),
-and a PDF→text seam mirroring the Fetcher/Installer injectable-seam pattern
-with no new Python dependency, never executed in CI — feeding the shipped
-extractor unchanged, with the draft-only `load_claims` round-trip invariant
-intact (never emit a draft the reproduce path rejects). Caveat to design
-around: two-column scientific PDFs degrade text extraction and the whole
-PDF/DOI path is reasoned-not-observed (the standing C8 manual real-repo gate
-has not run); the draft-only invariant (wrong claims degrade to UNVERIFIED,
-never REPRODUCED) is the safety net. Keep it input-generation only: zero
-changes to `run_reproduction`/`classify`/`ClaimResult`/bundle/signing.
+Close C2 deferral item (a) (`docs/technical/CAPABILITY_ROADMAP.md:518-520`):
+`read_task_errors` hardcodes `Path(run_dir)/"work"` (`src/contig/runner.py:1198`)
+while Nextflow is given `target.work_dir` (`src/contig/nfconfig.py:100`, settable via
+`--work-dir` at `src/contig/cli.py:400`), so on any custom work dir it returns `""`
+and the sole call site (`src/contig/self_heal.py:1310`) diagnoses on `run.log` alone —
+losing the `.command.err` text the detector is documented to need, and thinning every
+captured pending-corpus case.
+
+Thread the real work dir through (keep the `run_dir`-only default so
+`tests/test_runner.py:60-90` passes untouched) and make an unreadable work dir an
+explicit honest note rather than a silent empty string.
+
+**Caveat to design for, not paper over:** an `s3://` work dir (mandatory on AWS Batch
+per `src/contig/nfconfig.py:119-121`) can never be read from local disk, so this fixes
+local/HPC custom dirs only and must not claim to restore Batch self-heal.
+
+**Constraints:** read-path change only — `LaunchManifest` deliberately stores no
+`work_dir` (`src/contig/models.py:408-415`), so no manifest, verdict, exit-code, or
+signature change. Test-first, synthetic fixtures, no real Nextflow in CI.
+
+## Roadmap citation (verbatim)
+
+> Also deferred, filed by the inert-repair-honesty slice (C2), none fixed here:
+> **(a)** `read_task_errors` hardcodes `Path(run_dir)/"work"` (`runner.py:1077`)
+> while Nextflow is actually given `target.work_dir` (`nfconfig.py:100`) — the
+> detector goes blind on a custom `--work-dir`;
+
+*(The roadmap's `runner.py:1077` line number is stale; the current location is
+`runner.py:1191-1214`.)*
+
+## Related roadmap risk
+
+`docs/ROADMAP.md:219` R8 — "Running on customer compute is too brittle/varied
+(HPC vs cloud vs local)". AWS Batch is the sharp case: `nfconfig.py:119-121`
+*requires* an `s3://` work dir there.
+
+## Sibling item already fixed (do not re-pick)
+
+Item **(d)** of the same deferral list (dashboard `FAILURE_CLASSES` omitting five
+classes) is already closed — `dashboard/lib/derive.ts:278-299` mirrors all 20
+literals. The roadmap prose is stale there.

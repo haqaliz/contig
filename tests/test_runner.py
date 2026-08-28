@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -66,14 +67,14 @@ def test_read_task_errors_collects_command_err_from_work_dirs(tmp_path):
         "WARNING: The requested image's platform (linux/amd64) does not match the "
         "detected host platform (linux/arm64/v8)"
     )
-    text = read_task_errors(tmp_path)
+    text = read_task_errors(tmp_path / "work")
     assert "does not match the detected host platform" in text
 
 
 def test_read_task_errors_empty_when_no_work_dirs(tmp_path):
     from contig.runner import read_task_errors
 
-    assert read_task_errors(tmp_path) == ""
+    assert read_task_errors(tmp_path / "work") == ""
 
 
 def test_read_task_errors_skips_successful_tasks(tmp_path):
@@ -87,7 +88,7 @@ def test_read_task_errors_skips_successful_tasks(tmp_path):
     bad.mkdir(parents=True)
     (bad / ".command.err").write_text("platform does not match the detected host")
     (bad / ".exitcode").write_text("1")
-    text = read_task_errors(tmp_path)
+    text = read_task_errors(tmp_path / "work")
     assert "platform does not match" in text
     assert "index built fine" not in text  # a successful task's stderr is noise, so exclude it
 
@@ -98,7 +99,7 @@ def test_read_task_errors_includes_killed_task_without_exitcode(tmp_path):
     bad = tmp_path / "work" / "cc" / "3"
     bad.mkdir(parents=True)
     (bad / ".command.err").write_text("killed under emulation")  # no .exitcode (killed)
-    assert "killed under emulation" in read_task_errors(tmp_path)
+    assert "killed under emulation" in read_task_errors(tmp_path / "work")
 
 TRACE_2_OK = (
     "task_id\thash\tnative_id\tname\tstatus\texit\tsubmit\tduration\trealtime\n"
@@ -576,3 +577,175 @@ def test_default_index_builder_returns_nonzero_for_failure(tmp_path):
         [sys.executable, "-c", "import sys; sys.exit(3)"], tmp_path
     )
     assert rc == 3
+
+
+# --- work-dir threading: the remote rule and the honest note --------------------
+# The detector reads .command.err from the work dir Nextflow was CONFIGURED with
+# (ExecutionTarget.work_dir), not from <run_dir>/work. A work dir that is a remote
+# URI can never be read off local disk, so it earns an explicit note rather than a
+# silent "" (C2 deferral item (a)).
+
+
+@pytest.mark.parametrize(
+    "work_dir",
+    ["s3://bucket/work", "gs://bucket/work", "az://container/work", "s3://bucket/work/"],
+)
+def test_is_remote_work_dir_true_for_remote_uris(work_dir):
+    from contig.runner import _is_remote_work_dir
+
+    assert _is_remote_work_dir(work_dir) is True
+
+
+@pytest.mark.parametrize(
+    "work_dir",
+    [
+        "/local/work",
+        "relative/work",
+        "",
+        "file:///abs/work",  # names a LOCAL path, just with a scheme
+        "C:\\work",  # a Windows drive letter is not a URI scheme
+    ],
+)
+def test_is_remote_work_dir_false_for_local_paths(work_dir):
+    from contig.runner import _is_remote_work_dir
+
+    assert _is_remote_work_dir(work_dir) is False
+
+
+def test_remote_work_dir_note_is_a_single_self_labelled_line():
+    from contig.runner import _remote_work_dir_note
+
+    note = _remote_work_dir_note("s3://bucket/work")
+    assert "\n" not in note  # one line: normalize_signature works line-wise
+    assert note.startswith("[contig]")  # ours, never dressed as tool output
+    assert "s3://bucket/work" in note  # names the dir the user actually passed
+
+
+def test_remote_work_dir_note_carries_a_salient_token():
+    # corpus.normalize_signature keeps only lines holding a salient token; a note
+    # without one is filtered out and the case rejoins the constant empty-log
+    # signature, which is exactly the collapse this note exists to avoid.
+    # Assert against the REAL vocabulary so this breaks if that list changes.
+    from contig.corpus import _SALIENT_TOKENS
+    from contig.runner import _remote_work_dir_note
+
+    note = _remote_work_dir_note("s3://bucket/work").lower()
+    assert any(token in note for token in _SALIENT_TOKENS)
+
+
+def test_read_task_errors_reads_a_custom_work_dir_outside_the_run_dir(tmp_path):
+    # THE defect: Nextflow is given ExecutionTarget.work_dir (nfconfig.py:100),
+    # which --work-dir can point anywhere. Reading <run_dir>/work found nothing.
+    from contig.runner import read_task_errors
+
+    run_dir = tmp_path / "runs" / "r"
+    run_dir.mkdir(parents=True)
+    work = tmp_path / "scratch" / "nf-work"  # not named "work", not under run_dir
+    task = work / "ab" / "cd"
+    task.mkdir(parents=True)
+    (task / ".command.err").write_text("disk quota exceeded")
+
+    assert "disk quota exceeded" in read_task_errors(work)
+
+
+def test_read_task_errors_notes_a_remote_work_dir_instead_of_returning_empty(tmp_path):
+    from contig.runner import _remote_work_dir_note, read_task_errors
+
+    assert read_task_errors("s3://bucket/work") == _remote_work_dir_note("s3://bucket/work")
+
+
+def test_read_task_errors_touches_no_filesystem_for_a_remote_work_dir(monkeypatch):
+    # An s3:// work dir cannot be read locally, so the decision must be made from
+    # the string alone -- never by stat'ing a path built out of a URI.
+    from contig.runner import read_task_errors
+
+    def explode(*args, **kwargs):
+        raise AssertionError("filesystem touched for a remote work dir")
+
+    monkeypatch.setattr(Path, "is_dir", explode)
+    monkeypatch.setattr(Path, "glob", explode)
+
+    assert "s3://bucket/work" in read_task_errors("s3://bucket/work")
+
+
+def test_read_task_errors_reads_the_path_a_file_uri_names(tmp_path):
+    from contig.runner import read_task_errors
+
+    task = tmp_path / "w" / "aa" / "1"
+    task.mkdir(parents=True)
+    (task / ".command.err").write_text("segmentation fault")
+
+    assert "segmentation fault" in read_task_errors(f"file://{tmp_path / 'w'}")
+
+
+def test_read_task_errors_empty_work_dir_string_is_local_and_absent():
+    # "" is not a URI; it is a local path that does not exist -> the legitimate
+    # "no tasks ran" case, which must stay exactly "" and never become a note.
+    from contig.runner import read_task_errors
+
+    assert read_task_errors("") == ""
+
+
+# --- raise-safety: a crash DURING diagnosis destroys the failure record ---------
+# self_heal.py:1310 is read_run_log(...) + "\n" + read_task_errors(...); an
+# exception from either half aborts diagnosis and loses the very case we are
+# trying to capture.
+
+
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root ignores the mode bit, which would make this vacuous",
+)
+def test_read_task_errors_skips_an_unreadable_command_err(tmp_path):
+    from contig.runner import read_task_errors
+
+    work = tmp_path / "w"
+    bad = work / "aa" / "1"
+    bad.mkdir(parents=True)
+    unreadable = bad / ".command.err"
+    unreadable.write_text("secret stderr")
+    unreadable.chmod(0o000)
+    good = work / "bb" / "2"
+    good.mkdir(parents=True)
+    (good / ".command.err").write_text("out of memory")
+
+    try:
+        text = read_task_errors(work)
+    finally:
+        unreadable.chmod(0o644)
+
+    assert "out of memory" in text  # the readable sibling still lands
+
+
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root ignores the mode bit, which would make this vacuous",
+)
+def test_read_task_errors_still_considers_a_task_with_an_unreadable_exitcode(tmp_path):
+    # An unreadable .exitcode must not be treated as "exited 0" -- that would
+    # silently drop a genuinely failing task's stderr.
+    from contig.runner import read_task_errors
+
+    task = tmp_path / "w" / "aa" / "1"
+    task.mkdir(parents=True)
+    (task / ".command.err").write_text("killed by signal")
+    exitcode = task / ".exitcode"
+    exitcode.write_text("1")
+    exitcode.chmod(0o000)
+
+    try:
+        text = read_task_errors(tmp_path / "w")
+    finally:
+        exitcode.chmod(0o644)
+
+    assert "killed by signal" in text
+
+
+def test_read_run_log_decodes_a_non_utf8_log_instead_of_raising(tmp_path):
+    # read_task_errors has used errors="replace" all along; its sibling did not,
+    # so a non-UTF-8 run.log raised UnicodeDecodeError out of the SAME expression.
+    from contig.runner import read_run_log
+
+    (tmp_path / "run.log").write_bytes(b"\xff\xfe process failed\n")
+
+    assert "failed" in read_run_log(tmp_path)

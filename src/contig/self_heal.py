@@ -1307,7 +1307,14 @@ def self_heal_run(
             )
         except PipelineExecutionError as exc:
             events = exc.record.events if exc.record else []
-            log_text = read_run_log(run_dir) + "\n" + read_task_errors(run_dir)
+            # The work dir Nextflow was CONFIGURED with, not <run_dir>/work: the
+            # latter is only the default (cli.py:596), so any --work-dir left the
+            # detector blind to every task's .command.err. current_target is the
+            # live target, and apply_patch never copies work_dir, so this is
+            # stable across attempts.
+            log_text = read_run_log(run_dir) + "\n" + read_task_errors(
+                current_target.work_dir
+            )
             diagnosis = diagnose_failure(events, log_text)
             # Stash this failure for the corpus with the detector's diagnosis as a
             # provisional label (pending human confirmation). Capture needs a
