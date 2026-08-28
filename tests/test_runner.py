@@ -66,14 +66,14 @@ def test_read_task_errors_collects_command_err_from_work_dirs(tmp_path):
         "WARNING: The requested image's platform (linux/amd64) does not match the "
         "detected host platform (linux/arm64/v8)"
     )
-    text = read_task_errors(tmp_path)
+    text = read_task_errors(tmp_path / "work")
     assert "does not match the detected host platform" in text
 
 
 def test_read_task_errors_empty_when_no_work_dirs(tmp_path):
     from contig.runner import read_task_errors
 
-    assert read_task_errors(tmp_path) == ""
+    assert read_task_errors(tmp_path / "work") == ""
 
 
 def test_read_task_errors_skips_successful_tasks(tmp_path):
@@ -87,7 +87,7 @@ def test_read_task_errors_skips_successful_tasks(tmp_path):
     bad.mkdir(parents=True)
     (bad / ".command.err").write_text("platform does not match the detected host")
     (bad / ".exitcode").write_text("1")
-    text = read_task_errors(tmp_path)
+    text = read_task_errors(tmp_path / "work")
     assert "platform does not match" in text
     assert "index built fine" not in text  # a successful task's stderr is noise, so exclude it
 
@@ -98,7 +98,7 @@ def test_read_task_errors_includes_killed_task_without_exitcode(tmp_path):
     bad = tmp_path / "work" / "cc" / "3"
     bad.mkdir(parents=True)
     (bad / ".command.err").write_text("killed under emulation")  # no .exitcode (killed)
-    assert "killed under emulation" in read_task_errors(tmp_path)
+    assert "killed under emulation" in read_task_errors(tmp_path / "work")
 
 TRACE_2_OK = (
     "task_id\thash\tnative_id\tname\tstatus\texit\tsubmit\tduration\trealtime\n"
@@ -630,3 +630,56 @@ def test_remote_work_dir_note_carries_a_salient_token():
 
     note = _remote_work_dir_note("s3://bucket/work").lower()
     assert any(token in note for token in _SALIENT_TOKENS)
+
+
+def test_read_task_errors_reads_a_custom_work_dir_outside_the_run_dir(tmp_path):
+    # THE defect: Nextflow is given ExecutionTarget.work_dir (nfconfig.py:100),
+    # which --work-dir can point anywhere. Reading <run_dir>/work found nothing.
+    from contig.runner import read_task_errors
+
+    run_dir = tmp_path / "runs" / "r"
+    run_dir.mkdir(parents=True)
+    work = tmp_path / "scratch" / "nf-work"  # not named "work", not under run_dir
+    task = work / "ab" / "cd"
+    task.mkdir(parents=True)
+    (task / ".command.err").write_text("disk quota exceeded")
+
+    assert "disk quota exceeded" in read_task_errors(work)
+
+
+def test_read_task_errors_notes_a_remote_work_dir_instead_of_returning_empty(tmp_path):
+    from contig.runner import _remote_work_dir_note, read_task_errors
+
+    assert read_task_errors("s3://bucket/work") == _remote_work_dir_note("s3://bucket/work")
+
+
+def test_read_task_errors_touches_no_filesystem_for_a_remote_work_dir(monkeypatch):
+    # An s3:// work dir cannot be read locally, so the decision must be made from
+    # the string alone -- never by stat'ing a path built out of a URI.
+    from contig.runner import read_task_errors
+
+    def explode(*args, **kwargs):
+        raise AssertionError("filesystem touched for a remote work dir")
+
+    monkeypatch.setattr(Path, "is_dir", explode)
+    monkeypatch.setattr(Path, "glob", explode)
+
+    assert "s3://bucket/work" in read_task_errors("s3://bucket/work")
+
+
+def test_read_task_errors_reads_the_path_a_file_uri_names(tmp_path):
+    from contig.runner import read_task_errors
+
+    task = tmp_path / "w" / "aa" / "1"
+    task.mkdir(parents=True)
+    (task / ".command.err").write_text("segmentation fault")
+
+    assert "segmentation fault" in read_task_errors(f"file://{tmp_path / 'w'}")
+
+
+def test_read_task_errors_empty_work_dir_string_is_local_and_absent():
+    # "" is not a URI; it is a local path that does not exist -> the legitimate
+    # "no tasks ran" case, which must stay exactly "" and never become a note.
+    from contig.runner import read_task_errors
+
+    assert read_task_errors("") == ""

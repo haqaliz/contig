@@ -1228,14 +1228,32 @@ def read_run_log(run_dir: str | Path) -> str:
     return log_path.read_text() if log_path.exists() else ""
 
 
-def read_task_errors(run_dir: str | Path, max_tasks: int = 10, tail_lines: int = 40) -> str:
+def read_task_errors(work_dir: str | Path, max_tasks: int = 10, tail_lines: int = 40) -> str:
     """Collect the per-task `.command.err` output from the Nextflow work dirs.
 
     The main run.log only says which process failed; the real error (a tool's
     stderr, a container/platform warning) lives in the failing task's
     `.command.err`. The detector needs it (ARCHITECTURE §5.2).
+
+    `work_dir` is the dir Nextflow was CONFIGURED with -- `ExecutionTarget.work_dir`,
+    written into the config at nfconfig.py:100 and settable with `--work-dir`. It is
+    a required argument on purpose: this function used to derive `<run_dir>/work`
+    itself, which is merely the DEFAULT (cli.py:596). Any other `--work-dir` left it
+    globbing a directory that did not exist, so it returned "" and the detector fell
+    all the way through to `tool_crash` at 0.4 -- with only exit-137 OOM still
+    classifiable, self-heal proposing nothing, and the failure filed to the corpus
+    both evidence-less and mislabelled. Taking the dir from the caller removes the
+    guess; there is deliberately no fallback to reintroduce it.
+
+    A remote work dir (`s3://...`, mandatory on AWS Batch per nfconfig.py:119-122)
+    can never be read from local disk, so it yields an honest one-line note rather
+    than a silent "" -- the two cases are different and must not look alike. A local
+    dir that is simply absent still returns "": that is the ordinary "no task ever
+    ran" outcome of a run that failed before submission.
     """
-    work = Path(run_dir) / "work"
+    if _is_remote_work_dir(work_dir):
+        return _remote_work_dir_note(work_dir)
+    work = _local_work_path(work_dir)
     if not work.is_dir():
         return ""
     chunks: list[str] = []
