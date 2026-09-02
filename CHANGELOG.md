@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.56.0] - 2026-09-02
+
 - **`contig reproduce --allow-install` now resolves import names to their PyPI
   package names and chases up to two missing modules (`reproduce-env-alias-map`,
   the C8 env-resurrection follow-on slice).** Slice 2 (environment resurrection,
@@ -3865,6 +3867,7 @@ compute. Pre-revenue, validation phase.
 [0.12.0]: https://github.com/haqaliz/contig/releases/tag/v0.12.0
 [0.53.0]: https://github.com/haqaliz/contig/releases/tag/v0.53.0
 [0.55.1]: https://github.com/haqaliz/contig/releases/tag/v0.55.1
+[0.56.0]: https://github.com/haqaliz/contig/releases/tag/v0.56.0
 [0.55.0]: https://github.com/haqaliz/contig/releases/tag/v0.55.0
 [0.54.0]: https://github.com/haqaliz/contig/releases/tag/v0.54.0
 [0.52.0]: https://github.com/haqaliz/contig/releases/tag/v0.52.0
