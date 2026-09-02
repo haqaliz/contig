@@ -1,49 +1,46 @@
-# Card — feat/self-heal-custom-work-dir
+# Brief — reproduce-env-alias-map
 
-**Source:** inline brief (no GitHub issue; `gh issue list` shows only closed #13).
-**Branch:** `feat/self-heal-custom-work-dir/aliz`
-**Origin:** picked by `/contig-next` from the C2 deferral list.
+**Source:** contig-next handoff (2026-09-02). No GitHub issue exists; the work was
+never filed. The id lives in the branch/PR (`feat/reproduce-env-alias-map/aliz`).
 
-## Brief
+## One-paragraph brief
 
-Close C2 deferral item (a) (`docs/technical/CAPABILITY_ROADMAP.md:518-520`):
-`read_task_errors` hardcodes `Path(run_dir)/"work"` (`src/contig/runner.py:1198`)
-while Nextflow is given `target.work_dir` (`src/contig/nfconfig.py:100`, settable via
-`--work-dir` at `src/contig/cli.py:400`), so on any custom work dir it returns `""`
-and the sole call site (`src/contig/self_heal.py:1310`) diagnoses on `run.log` alone —
-losing the `.command.err` text the detector is documented to need, and thinning every
-captured pending-corpus case.
+Env-resurrection hardening for `contig reproduce`: the slice-2 PRD's deferred
+"curated import→package alias map" (`cv2`→`opencv-python`, `sklearn`→`scikit-learn`,
+`PIL`→`pillow`, `yaml`→`pyyaml`, etc.) plus a bounded iterative resolution (install →
+retry → next missing import, capped with provable termination), so a repo one
+PyPI-name-mismatched dep from running actually resurrects instead of degrading to
+UNVERIFIED. Keep the existing honest contract (unknown names stay verbatim, install
+failure stays UNVERIFIED, never a false reproduce), reuse the `contig_aliases.tsv`
+data-file-plus-loud-loader pattern, land the repair chain in the already-shipped
+`ReproduceRecord.repair_history`, and keep CI synthetic (scripted installer, no real
+pip/network) per every prior C8 slice.
 
-Thread the real work dir through (keep the `run_dir`-only default so
-`tests/test_runner.py:60-90` passes untouched) and make an unreadable work dir an
-explicit honest note rather than a silent empty string.
+**Caveat:** the slice-2 real-repo smoke gate was never run, so field value is reasoned
+not observed; test-first, stdlib-only, no signature break.
 
-**Caveat to design for, not paper over:** an `s3://` work dir (mandatory on AWS Batch
-per `src/contig/nfconfig.py:119-121`) can never be read from local disk, so this fixes
-local/HPC custom dirs only and must not claim to restore Batch self-heal.
+## Anchors (where this is named in the docs)
 
-**Constraints:** read-path change only — `LaunchManifest` deliberately stores no
-`work_dir` (`src/contig/models.py:408-415`), so no manifest, verdict, exit-code, or
-signature change. Test-first, synthetic fixtures, no real Nextflow in CI.
+- `docs/planning/reproduce-env-resurrection/prd.md:110-113` — M5: "verbatim install
+  target (no alias map this slice)… The curated alias map is an explicit later slice
+  (Nice-to-have)."
+- `docs/planning/reproduce-env-resurrection/prd.md:143-145` — deferral list:
+  "Curated import→package alias map (`cv2`→`opencv-python`, …) — resolves common M5
+  mismatches. Iterative multi-module resolution (install one, hit the next missing
+  import, repeat, still bounded) — this slice does single install + single retry only."
+- `docs/planning/reproduce-env-resurrection/prd.md:215` (R3) — the post-merge smoke on
+  a real repo is the go/no-go for slice 3 (alias map / iterative).
+- `docs/technical/CAPABILITY_ROADMAP.md` C8 slice 2 (env resurrection) deferral list —
+  "import→package alias map, iterative multi-module resolution, version pinning from a
+  traced execution, venv isolation."
+- CHANGELOG v0.55.x honesty notes — the slice-2 real-repo smoke "has not been run
+  yet"; the manual gate carries a never-run checklist.
 
-## Roadmap citation (verbatim)
+## Scope edges (from the handoff)
 
-> Also deferred, filed by the inert-repair-honesty slice (C2), none fixed here:
-> **(a)** `read_task_errors` hardcodes `Path(run_dir)/"work"` (`runner.py:1077`)
-> while Nextflow is actually given `target.work_dir` (`nfconfig.py:100`) — the
-> detector goes blind on a custom `--work-dir`;
-
-*(The roadmap's `runner.py:1077` line number is stale; the current location is
-`runner.py:1191-1214`.)*
-
-## Related roadmap risk
-
-`docs/ROADMAP.md:219` R8 — "Running on customer compute is too brittle/varied
-(HPC vs cloud vs local)". AWS Batch is the sharp case: `nfconfig.py:119-121`
-*requires* an `s3://` work dir there.
-
-## Sibling item already fixed (do not re-pick)
-
-Item **(d)** of the same deferral list (dashboard `FAILURE_CLASSES` omitting five
-classes) is already closed — `dashboard/lib/derive.ts:278-299` mirrors all 20
-literals. The roadmap prose is stale there.
+- In scope: curated alias data file + loud loader, alias-aware install target,
+  bounded iterative multi-module resolution with provable termination.
+- Out of scope: version pinning from a traced execution, venv isolation, non-Python
+  environments (R/conda/apt), figure claims, PDF-table extraction.
+- Honest contract preserved: unknown import names install verbatim; a failed install /
+  exhausted budget stays UNVERIFIED (never a false reproduce).
