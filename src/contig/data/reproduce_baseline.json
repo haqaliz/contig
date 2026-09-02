@@ -1,14 +1,14 @@
 {
-  "timestamp": "2026-08-14T09:23:58.038578+00:00",
-  "scenario_count": 14,
-  "corpus_sha": "193d25c80c280b0f78919e403494757592b1690121b07f3eaefea9e8246e96b2",
-  "outcome_match_rate": 0.9285714285714286,
-  "recovery_rate": 0.07142857142857142,
+  "timestamp": "2026-09-02T13:03:36.701162+00:00",
+  "scenario_count": 17,
+  "corpus_sha": "404ed743a3120227fd96183d644ed7a9d9c0e1547cc16e6b141fb5e6e5838e28",
+  "outcome_match_rate": 0.9411764705882353,
+  "recovery_rate": 0.17647058823529413,
   "per_family": {
     "flat": {
-      "matched": 8,
-      "total": 9,
-      "rate": 0.8888888888888888
+      "matched": 11,
+      "total": 12,
+      "rate": 0.9166666666666666
     },
     "json": {
       "matched": 1,
@@ -38,5 +38,5 @@
     "pattern",
     "table"
   ],
-  "contig_version": "0.53.0"
+  "contig_version": "0.55.1"
 }

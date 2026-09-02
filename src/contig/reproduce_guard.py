@@ -108,8 +108,12 @@ def run_reproduce_scenario(
     A scripted installer pops `scenario.installer_steps` (rc per step); when
     the scenario gives no steps the closure returns rc 1 -- an install that
     fails is the honest fallback, so a scenario that does not script an
-    install outcome can never silently heal. An unexpected extra executor call
-    raises `AssertionError` (loud scenario bug). `installer` is accepted for
+    install outcome can never silently heal. When `installer_expected_argv` is
+    present, each install call also pops one expected argv and asserts
+    `cmd == expected` (the resolved pip target must reach the seam verbatim);
+    a mismatch or an over-draw is a loud `AssertionError` scenario bug, never
+    a silent fallback. An unexpected extra executor call raises
+    `AssertionError` (loud scenario bug). `installer` is accepted for
     signature parity with `run_reproduction`'s seam; the driver always scripts
     the scenario's own steps and never runs a real pip.
     """
@@ -150,8 +154,30 @@ def run_reproduce_scenario(
         return step.exit_code, step.output
 
     install_rcs = list(scenario.installer_steps) if scenario.installer_steps else []
+    expected_argv = (
+        list(scenario.installer_expected_argv)
+        if scenario.installer_expected_argv
+        else None
+    )
 
     def scripted_installer(cmd: list[str], cwd: Path) -> int:
+        if expected_argv is not None:
+            # A scenario that declares expected install argv asserts it: the
+            # resolved pip target must arrive at the installer seam verbatim.
+            # A mismatch or an over-draw is a scenario bug -- loud, never a
+            # silent fallback (mirrors the executor's extra-call posture).
+            if not expected_argv:
+                raise AssertionError(
+                    f"installer called more times than the scenario's "
+                    f"{len(scenario.installer_expected_argv)} installer_expected_argv "
+                    f"entries (scenario {scenario.scenario_id})"
+                )
+            expected = expected_argv.pop(0)
+            if cmd != expected:
+                raise AssertionError(
+                    f"installer argv mismatch in scenario {scenario.scenario_id}: "
+                    f"expected {expected!r}, got {cmd!r}"
+                )
         if not install_rcs:
             return 1
         return install_rcs.pop(0)
