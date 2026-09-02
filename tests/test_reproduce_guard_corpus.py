@@ -137,17 +137,9 @@ def test_each_scenarios_observed_claim_status_matches_the_frozen_pin():
 
 
 def test_baseline_corpus_sha_equals_scenarios_file_sha():
-    # The shipped scenario file is byte-pinned by a committed sha -- now
-    # machine-portable since the installer argv sentinel swap, so the pin
-    # holds on any checkout. The frozen baseline's corpus_sha pins the file
-    # bytes it was refrozen against; the baseline stays semantically current
-    # when its scenario count / outcome-match / recovery still describe the
-    # shipped set (the guard compares the rate; sha is informational).
     baseline = load_reproduce_baseline(BASELINE_PATH)
     assert baseline is not None
-    assert sha256_file(SCENARIOS_PATH) == (
-        "d6a216b657afa556806e70d912ea605f69da1576c2b73da4df3581f15c80d260"
-    )
+    assert baseline.corpus_sha == sha256_file(SCENARIOS_PATH)
     assert baseline.scenario_count == 17
     assert baseline.outcome_match_rate == pytest.approx(16 / 17)
     assert baseline.recovery_rate == pytest.approx(3 / 17)
