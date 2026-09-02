@@ -8,7 +8,7 @@ decides, for one claim, whether a freshly observed value reproduces it within
 tolerance; `detect_missing_module` pulls a missing Python package name out of a
 failed run's captured output (slice 2 environment resurrection); and
 `run_reproduction` drives an injected executor over the repo, reads its results
-file, optionally installs a missing dependency and retries once, and classifies
+file, optionally installs a missing dependency and retries, and classifies
 every claim into a `ReproduceRecord`.
 """
 
@@ -35,6 +35,7 @@ from contig.models import (
     ReproduceRecord,
 )
 from contig.runner import Installer, _pip_install_argv, default_installer
+from contig.verification.import_aliases import package_for_import
 
 _STATUSES: tuple[ClaimStatus, ...] = ("reproduced", "within_tolerance", "diverged", "unverified")
 
@@ -49,6 +50,12 @@ _SAFE_PACKAGE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 # rather than silently truncated, which could report "0 matches" for a
 # pattern that does match past the cut.
 _MAX_MATCH_BYTES = 8 * 1024 * 1024
+
+# At most this many env-resurrection installs per run. Paired with the
+# per-run seen-set, the retry loop provably terminates: a module already
+# installed this run is never installed again, and the cap bounds distinct
+# modules even in the worst case.
+_MAX_INSTALLS = 2
 
 
 def detect_missing_module(output: str) -> str | None:
@@ -861,14 +868,17 @@ def run_reproduction(
     generated here, so the record stays deterministic.
 
     When the first run fails (nonzero exit) and `allow_install` is True, this
-    makes one bounded env-resurrection attempt: detect a missing Python
-    module in the run's output (`detect_missing_module`), install it via
-    `installer`, and retry the run exactly once. There is no loop -- at most
-    one install and one retry, ever, even if the retried run names a
-    different missing module. `repair_history` records what happened (empty
-    when `allow_install` is False, or when no installable module was
-    detected). The final `exit_code` on the record is always the LAST run's
-    exit code (the retried one, if a retry happened).
+    makes bounded env-resurrection attempts: detect a missing Python module
+    in the run's output (`detect_missing_module`), resolve its PyPI package
+    name (`package_for_import`), install it via `installer`, and retry the
+    run. A retry that fails with a NEW missing module starts another cycle,
+    at most `_MAX_INSTALLS` installs per run. A module already installed
+    this run is never installed again (per-run seen-set), so the loop
+    provably terminates even when the same failure keeps recurring.
+    `repair_history` records one step per install attempt (empty when
+    `allow_install` is False, or when no installable module was detected).
+    The final `exit_code` on the record is always the LAST run's exit code
+    (the retried one, if a retry happened).
     """
     repo_path = Path(repo)
     repo_root = repo_path.resolve()
@@ -1215,8 +1225,15 @@ def run_reproduction(
     repair_history: list[RepairStep] = []
 
     if exit_code != 0 and allow_install:
-        module = detect_missing_module(run_output)
-        if module is not None:
+        seen: set[str] = set()
+        installs = 0
+        while exit_code != 0 and installs < _MAX_INSTALLS:
+            module = detect_missing_module(run_output)
+            if module is None or module in seen:
+                break
+            seen.add(module)
+            installs += 1
+            target = package_for_import(module)
             diagnosis = Diagnosis(
                 failure_class="missing_dependency",
                 root_cause=f"missing Python module {module!r}",
@@ -1225,58 +1242,62 @@ def run_reproduction(
             )
             patch = Patch(
                 kind="env",
-                operation={"install": module},
-                rationale=f"install {module} and retry",
+                operation={"install": target},
+                rationale=f"install {target} (import {module}) and retry",
                 risk="needs_confirmation",
                 expected_signal="run exits 0 after install",
             )
-            install_rc = installer(_pip_install_argv(module), repo_path)
+            install_rc = installer(_pip_install_argv(target), repo_path)
             if install_rc != 0:
                 repair_history.append(
                     RepairStep(
-                        attempt=1,
+                        attempt=installs,
                         diagnosis=diagnosis,
                         patch=patch,
                         outcome="install_failed",
-                        detail=f"pip install {module} exited {install_rc}",
+                        detail=f"pip install {target} exited {install_rc}",
                         # pip exited non-zero: the patch was proposed but its
                         # operation never ran.
                         patch_applied=False,
                     )
                 )
+                break
+            exit_code, run_output = executor(shlex.split(run_command), repo_path)
+            if exit_code != 0:
+                detail = f"installed {target} (import {module}); retry exited {exit_code}"
+                # Name a same-module re-detection in the step that precedes it:
+                # the install did not take (different-interpreter symptom), so
+                # the seen-set would stop the loop next iteration -- the step
+                # says why instead of leaving it implicit.
+                if detect_missing_module(run_output) == module:
+                    detail += "; same module re-detected -- not re-installing"
+                repair_history.append(
+                    RepairStep(
+                        attempt=installs,
+                        diagnosis=diagnosis,
+                        patch=patch,
+                        outcome="retry_failed",
+                        detail=detail,
+                        # The install SUCCEEDED (install_rc == 0) -- the
+                        # patch was enacted and the loop proceeded to retry.
+                        # The retry then failed on its own, which is a
+                        # separate fact: applied != successful.
+                        patch_applied=True,
+                    )
+                )
             else:
-                # Bounded: exactly one retry, no re-detection afterwards -- even
-                # if the retried output names a different missing module, we do
-                # not install again.
-                exit_code, run_output = executor(shlex.split(run_command), repo_path)
-                if exit_code != 0:
-                    repair_history.append(
-                        RepairStep(
-                            attempt=1,
-                            diagnosis=diagnosis,
-                            patch=patch,
-                            outcome="retry_failed",
-                            detail=f"installed {module}; retry exited {exit_code}",
-                            # The install SUCCEEDED (install_rc == 0) -- the
-                            # patch was enacted and the loop proceeded to retry.
-                            # The retry then failed on its own, which is a
-                            # separate fact: applied != successful.
-                            patch_applied=True,
-                        )
+                repair_history.append(
+                    RepairStep(
+                        attempt=installs,
+                        diagnosis=diagnosis,
+                        patch=patch,
+                        outcome="installed_and_retried",
+                        detail=f"installed {target} (import {module}); retry exited 0",
+                        patch_applied=True,
                     )
-                else:
-                    repair_history.append(
-                        RepairStep(
-                            attempt=1,
-                            diagnosis=diagnosis,
-                            patch=patch,
-                            outcome="installed_and_retried",
-                            detail=f"installed {module}; retry exited 0",
-                            patch_applied=True,
-                        )
-                    )
-        # module is None: no installable module detected -- nothing to record,
-        # honest UNVERIFIED via the short-circuit below.
+                )
+        # module is None (or already installed this run): nothing new to
+        # record -- honest UNVERIFIED via the short-circuit below.
 
     if exit_code != 0:
         claim_results = [

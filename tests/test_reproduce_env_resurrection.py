@@ -99,15 +99,21 @@ class _ScriptedExecutor:
 
 
 class _ScriptedInstaller:
-    """Records every `(argv, cwd)` it was called with and always returns the
-    same scripted exit code."""
+    """Records every `(argv, cwd)` it was called with and returns scripted
+    exit codes: a single int for every call, or one int per call popped in
+    order. An over-drawn rc script raises, so a loop bug that installs more
+    times than scripted fails loudly instead of repeating the last rc."""
 
-    def __init__(self, return_code: int):
+    def __init__(self, return_code: int | list[int]):
         self.return_code = return_code
         self.calls: list[tuple[list[str], Path]] = []
 
     def __call__(self, cmd: list[str], cwd: Path) -> int:
         self.calls.append((list(cmd), cwd))
+        if isinstance(self.return_code, list):
+            if not self.return_code:
+                raise AssertionError("installer called more times than scripted")
+            return self.return_code.pop(0)
         return self.return_code
 
 
@@ -218,22 +224,152 @@ def test_run_reproduction_retry_still_fails_records_retry_failed(tmp_path):
     assert len(installer.calls) == 1
 
 
-def test_run_reproduction_does_not_chase_a_second_missing_module(tmp_path):
+def test_run_reproduction_chases_a_second_missing_module_up_to_two_installs(tmp_path):
     claims = _claims(("auc", 0.9, 0.05))
     executor = _ScriptedExecutor(
         script=[
-            (1, "No module named 'numpy'"),
-            (1, "No module named 'scipy'"),
+            (1, "No module named 'cv2'"),
+            (1, "No module named 'sklearn'"),
+            (0, ""),
+        ],
+        results_by_call={3: {"auc": 0.9}},
+    )
+    installer = _ScriptedInstaller(return_code=[0, 0])
+
+    record = _run(tmp_path, claims, executor, allow_install=True, installer=installer)
+
+    assert record.claim_results[0].status == "reproduced"
+    assert record.exit_code == 0
+    assert len(installer.calls) == 2
+    assert installer.calls[0][0][-1] == "opencv-python"
+    assert installer.calls[1][0][-1] == "scikit-learn"
+    assert len(record.repair_history) == 2
+    assert [s.attempt for s in record.repair_history] == [1, 2]
+    assert record.repair_history[-1].outcome == "installed_and_retried"
+    assert executor.calls == 3
+
+
+def test_run_reproduction_never_installs_a_third_module(tmp_path):
+    claims = _claims(("auc", 0.9, 0.05))
+    executor = _ScriptedExecutor(
+        script=[
+            (1, "No module named 'cv2'"),
+            (1, "No module named 'sklearn'"),
+            (1, "No module named 'pandas'"),
         ]
     )
-    installer = _ScriptedInstaller(return_code=0)
+    installer = _ScriptedInstaller(return_code=[0, 0])
+
+    record = _run(tmp_path, claims, executor, allow_install=True, installer=installer)
+
+    assert len(installer.calls) == 2
+    assert [c[0][-1] for c in installer.calls] == ["opencv-python", "scikit-learn"]
+    assert len(record.repair_history) == 2
+    assert record.repair_history[-1].outcome == "retry_failed"
+    assert all(r.status == "unverified" for r in record.claim_results)
+    assert executor.calls == 3
+
+
+def test_run_reproduction_does_not_reinstall_a_seen_module(tmp_path):
+    claims = _claims(("auc", 0.9, 0.05))
+    executor = _ScriptedExecutor(
+        script=[
+            (1, "No module named 'cv2'"),
+            (1, "No module named 'cv2'"),
+        ]
+    )
+    installer = _ScriptedInstaller(return_code=[0])
 
     record = _run(tmp_path, claims, executor, allow_install=True, installer=installer)
 
     assert len(installer.calls) == 1
-    assert installer.calls[0][0][-1] == "numpy"
+    assert installer.calls[0][0][-1] == "opencv-python"
+    assert len(record.repair_history) == 1
+    step = record.repair_history[0]
+    assert step.outcome == "retry_failed"
+    assert "same module re-detected" in (step.detail or "")
     assert all(r.status == "unverified" for r in record.claim_results)
     assert executor.calls == 2
+
+
+def test_run_reproduction_installs_the_alias_resolved_package(tmp_path):
+    claims = _claims(("auc", 0.9, 0.05))
+    executor = _ScriptedExecutor(
+        script=[
+            (1, "No module named 'cv2'"),
+            (0, ""),
+        ],
+        results_by_call={2: {"auc": 0.9}},
+    )
+    installer = _ScriptedInstaller(return_code=[0])
+
+    record = _run(tmp_path, claims, executor, allow_install=True, installer=installer)
+
+    assert installer.calls[0][0][-1] == "opencv-python"
+    step = record.repair_history[0]
+    assert step.patch is not None
+    assert step.patch.operation == {"install": "opencv-python"}
+    assert step.outcome == "installed_and_retried"
+    assert "opencv-python" in (step.detail or "")
+    assert "cv2" in (step.detail or "")
+    assert record.claim_results[0].status == "reproduced"
+
+
+def test_run_reproduction_unknown_module_installs_verbatim(tmp_path):
+    claims = _claims(("auc", 0.9, 0.05))
+    executor = _ScriptedExecutor(
+        script=[
+            (1, "No module named 'numpy'"),
+            (0, ""),
+        ],
+        results_by_call={2: {"auc": 0.9}},
+    )
+    installer = _ScriptedInstaller(return_code=[0])
+
+    record = _run(tmp_path, claims, executor, allow_install=True, installer=installer)
+
+    assert installer.calls[0][0][-1] == "numpy"
+    step = record.repair_history[0]
+    assert step.patch is not None
+    assert step.patch.operation == {"install": "numpy"}
+    assert record.claim_results[0].status == "reproduced"
+
+
+def test_run_reproduction_second_install_failure_records_install_failed(tmp_path):
+    claims = _claims(("auc", 0.9, 0.05))
+    executor = _ScriptedExecutor(
+        script=[
+            (1, "No module named 'cv2'"),
+            (1, "No module named 'sklearn'"),
+        ]
+    )
+    installer = _ScriptedInstaller(return_code=[0, 1])
+
+    record = _run(tmp_path, claims, executor, allow_install=True, installer=installer)
+
+    assert len(record.repair_history) == 2
+    assert [s.outcome for s in record.repair_history] == ["retry_failed", "install_failed"]
+    assert record.repair_history[-1].patch_applied is False
+    assert all(r.status == "unverified" for r in record.claim_results)
+    assert executor.calls == 2
+    assert len(installer.calls) == 2
+
+
+def test_run_reproduction_repair_steps_carry_incrementing_attempt(tmp_path):
+    claims = _claims(("auc", 0.9, 0.05))
+    executor = _ScriptedExecutor(
+        script=[
+            (1, "No module named 'cv2'"),
+            (1, "No module named 'sklearn'"),
+            (0, ""),
+        ],
+        results_by_call={3: {"auc": 0.9}},
+    )
+    installer = _ScriptedInstaller(return_code=[0, 0])
+
+    record = _run(tmp_path, claims, executor, allow_install=True, installer=installer)
+
+    assert [s.attempt for s in record.repair_history] == [1, 2]
 
 
 def test_run_reproduction_classifies_against_post_retry_results_not_stale(tmp_path):
