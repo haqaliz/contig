@@ -233,6 +233,50 @@ def test_installer_expected_argv_matching_resolved_pip_argv_heals(tmp_path):
     assert record.repair_history[0].outcome == "installed_and_retried"
 
 
+def test_installer_expected_argv_resolves_sys_executable_sentinel(tmp_path):
+    # A frozen scenario cannot embed a machine-specific interpreter path; the
+    # `<sys.executable>` sentinel in argv[0] resolves to the replay-time
+    # interpreter and the fixed `-m pip install <package>` tail is still
+    # compared byte-for-byte.
+    scenario = _scenario(
+        allow_install=True,
+        installer_steps=[0],
+        installer_expected_argv=[
+            ["<sys.executable>", "-m", "pip", "install", "opencv-python"]
+        ],
+        executor_steps=[
+            ExecStep(exit_code=1, output="No module named 'cv2'"),
+            ExecStep(exit_code=0, output="", write_results={"auc": 0.9}),
+        ],
+    )
+    record, _ = run_reproduce_scenario(
+        scenario, repo_dir=tmp_path, run_started_at=_RUN_START
+    )
+
+    assert record.exit_code == 0
+    assert record.claim_results[0].status == "reproduced"
+    assert record.repair_history[0].outcome == "installed_and_retried"
+
+
+def test_installer_expected_argv_without_sentinel_compares_verbatim(tmp_path):
+    # The sentinel is the ONLY tolerated argv[0]: a literal interpreter path
+    # (even one differing from sys.executable only by a suffix) is compared
+    # verbatim and fails loudly -- strict everywhere but the sentinel slot.
+    scenario = _scenario(
+        allow_install=True,
+        installer_steps=[0],
+        installer_expected_argv=[
+            [sys.executable + "-copy", "-m", "pip", "install", "opencv-python"]
+        ],
+        executor_steps=[
+            ExecStep(exit_code=1, output="No module named 'cv2'"),
+            ExecStep(exit_code=0, output="", write_results={"auc": 0.9}),
+        ],
+    )
+    with pytest.raises(AssertionError, match="argv"):
+        run_reproduce_scenario(scenario, repo_dir=tmp_path, run_started_at=_RUN_START)
+
+
 def test_installer_expected_argv_absent_stays_rc_only(tmp_path):
     # The field defaults to None: a scenario without it replays byte-identically
     # to today (rc-only scripted install, no argv assertion).

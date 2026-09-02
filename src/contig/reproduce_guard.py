@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 from datetime import datetime, timezone
 from os import PathLike
@@ -49,6 +50,12 @@ from contig.verification.reproduce import (
 _CLAIMS_SHA256 = "a" * 64
 _CREATED_AT = "2026-07-18T00:00:00Z"
 _REPRODUCE_ID = "rp_1"
+
+# Frozen scenarios live in the repo, so they can never embed a machine-specific
+# interpreter path. A leading sentinel in `installer_expected_argv` argv[0]
+# resolves to the replay-time interpreter; every other element is compared
+# verbatim, so the fixed `-m pip install <package>` tail stays byte-exact.
+_SYS_EXECUTABLE_SENTINEL = "<sys.executable>"
 
 
 def default_reproduce_scenarios_path() -> Path:
@@ -112,10 +119,15 @@ def run_reproduce_scenario(
     present, each install call also pops one expected argv and asserts
     `cmd == expected` (the resolved pip target must reach the seam verbatim);
     a mismatch or an over-draw is a loud `AssertionError` scenario bug, never
-    a silent fallback. An unexpected extra executor call raises
-    `AssertionError` (loud scenario bug). `installer` is accepted for
-    signature parity with `run_reproduction`'s seam; the driver always scripts
-    the scenario's own steps and never runs a real pip.
+    a silent fallback. A leading `"<sys.executable>"` in an expected argv
+    resolves to the replay-time interpreter (frozen scenarios cannot embed a
+    machine-specific interpreter path); every other element -- including any
+    other argv[0] -- is compared verbatim, so the fixed
+    `-m pip install <package>` tail must match byte-for-byte. An unexpected
+    extra executor call raises `AssertionError` (loud scenario bug).
+    `installer` is accepted for signature parity with `run_reproduction`'s
+    seam; the driver always scripts the scenario's own steps and never runs a
+    real pip.
     """
     repo_dir = Path(repo_dir)
     repo_dir.mkdir(parents=True, exist_ok=True)
@@ -173,6 +185,8 @@ def run_reproduce_scenario(
                     f"entries (scenario {scenario.scenario_id})"
                 )
             expected = expected_argv.pop(0)
+            if expected[:1] == [_SYS_EXECUTABLE_SENTINEL]:
+                expected = [sys.executable, *expected[1:]]
             if cmd != expected:
                 raise AssertionError(
                     f"installer argv mismatch in scenario {scenario.scenario_id}: "
