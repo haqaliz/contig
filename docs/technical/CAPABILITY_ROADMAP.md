@@ -1716,8 +1716,10 @@ reproduce command-executor seam widened from `int` to `(exit_code, combined_outp
 (`default_command_executor` now captures combined stdout+stderr); the Nextflow `Executor`/`IndexBuilder`
 seams are untouched. No new runtime dependency (injected installer). Test-first with a scripted
 executor + scripted installer — **no real repo, network, or pip in CI**. **Deferred:** import→package
-alias map, iterative multi-module resolution, version pinning from a traced execution, venv
-isolation. Plan/PRD under `docs/planning/reproduce-env-resurrection/`.
+alias map and iterative multi-module resolution *(Superseded by the `reproduce-env-alias-map`
+slice (Unreleased) — both now **shipped**, see `docs/planning/reproduce-env-alias-map/prd.md`)*,
+version pinning from a traced execution, venv isolation. Plan/PRD under
+`docs/planning/reproduce-env-resurrection/`.
 
 **Shipped (TSV/CSV output-locator — slice 3, Unreleased).** Slice 1.5 could only bind a claim's
 observed value from a repo's **structured JSON** output; but in bioinformatics the numbers a paper
