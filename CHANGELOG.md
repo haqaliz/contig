@@ -6,6 +6,66 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+- **`contig reproduce --allow-install` now resolves import names to their PyPI
+  package names and chases up to two missing modules (`reproduce-env-alias-map`,
+  the C8 env-resurrection follow-on slice).** Slice 2 (environment resurrection,
+  Unreleased) installed the detected module token **verbatim** and chased **one**
+  missing module only, so a repo one name-mismatched dep from running (`cv2` →
+  `opencv-python`, `sklearn` → `scikit-learn`, …) stayed `UNVERIFIED` and a repo
+  needing two deps was never chased — the exact gaps the slice-2 PRD named as its
+  next slice. Every recovered repo still feeds the shipped `ReproduceCase`
+  capture channel, so the fix compounds the moat's evaluation dataset.
+  - **Import→package alias table + loud resolver.** New packaged
+    `src/contig/data/import_aliases.tsv` (14 hand-curated rows) + pure
+    `verification/import_aliases.py::package_for_import` in the
+    `contig_aliases.py` pattern: a **loud loader** (`ValueError` on a malformed
+    row or a conflicting duplicate, exact duplicates silently deduped, missing
+    file propagates `FileNotFoundError`), **case-normalized lookup** (table keys
+    lowercase; normalization at lookup on `module.lower()`, never at capture —
+    the detector stays case-preserving), unknown name → **verbatim** (the honest
+    default). The seed is **reasoned-not-measured**: most bioinformatics package
+    names already match their imports, so the rows cover common general
+    mismatches (`PIL`→`pillow`, `yaml`→`pyyaml`, `Bio`→`biopython`,
+    `skimage`→`scikit-image`, `dateutil`→`python-dateutil`, `bs4`→`beautifulsoup4`,
+    `zmq`→`pyzmq`, `Crypto`→`pycryptodome`, `dotenv`→`python-dotenv`,
+    `docx`→`python-docx`, `serial`→`pyserial`, `pkg_resources`→`setuptools`).
+  - **Alias-aware installs.** `Patch.operation["install"]` now records the
+    **resolved** package — the record states what was actually installed — and
+    both `Patch.rationale` and `RepairStep.detail` name import and package
+    (`installed opencv-python (import cv2); retry exited 0`).
+  - **Bounded iterative resolution.** The one-install-one-retry block becomes a
+    bounded loop — detect → resolve → install → retry — with at most
+    `_MAX_INSTALLS = 2` installs per run and a per-run seen-set so an
+    already-installed module is never re-installed; a same-module re-detection
+    after a successful install is the different-interpreter symptom, **named in
+    the detail** (`same module re-detected -- not re-installing`) rather than
+    left implicit, and stops the loop as an honest give-up. One `RepairStep` per
+    attempt with incrementing `attempt` (last step wins for the guard). The old
+    "one install + one retry, no re-detection" contract is **superseded** and
+    its pin deliberately retired: the test that asserted a second missing module
+    is *not* chased now asserts it **is**, up to two installs.
+  - **Guard.** `ReproduceScenario.installer_expected_argv` (additive) lets the
+    scripted installer assert each install's recorded argv; a leading
+    `"<sys.executable>"` sentinel keeps the fixed-argv assertion portable across
+    interpreters. Three new frozen scenarios (`env-alias-map-heal`: `cv2` →
+    `opencv-python`; `env-two-install-heal`; `env-second-install-fail-giveup`),
+    and the baseline refreeze is disclosed as a **deliberate composition act**
+    13/14 → 16/17 (92.9% → 94.1%), refrozen twice (once for the scenarios, once
+    after the sentinel fix), with the strong `corpus_sha` pin restored —
+    `baseline.corpus_sha` equals the shipped scenario-file sha again. The
+    `reproduce-guard` CLI docstring now states 17 scenarios / 16/17.
+  - **Dashboard R5 verification.** A multi-step `repair_history` renders on the
+    reproduce page (verified: `dashboard/app/reproduce/[id]/page.tsx` iterates
+    the list); no dashboard change.
+  - **Honest scope.** Push not demand-pull — alias breadth is offered, its value
+    **reasoned, not observed**: the slice-2 real-repo smoke still has never run,
+    and the PRD commits an M8 revisit trigger — smoke 3–5 real repos with
+    name-mismatched deps; if alias hits are ~0 across them, the seed is restated
+    as taxonomy-only and no further breadth is added on push alone. CI stays
+    synthetic (scripted installer, no real pip); stdlib-only (`uv.lock`
+    unchanged); no signature break, `RepairOutcome` unchanged. Test-first,
+    2796 passed / 1 skipped.
+
 ## [0.55.1] - 2026-08-28
 
 - **The failure detector now reads the work dir the run actually used

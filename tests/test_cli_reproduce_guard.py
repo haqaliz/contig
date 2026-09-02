@@ -32,7 +32,7 @@ def _perturb_one_expected(tmp_path):
     """Copy the shipped scenarios but flip `flat-exact`'s expected c1 status to
     "diverged" -- the current replay reproduces it exactly, so this
     deterministically drops the outcome-match rate below the baseline
-    (13/14 -> 12/14) and forces a REGRESSION that names the scenario id."""
+    (16/17 -> 15/17) and forces a REGRESSION that names the scenario id."""
     lines = default_reproduce_scenarios_path().read_text().splitlines()
     perturbed_lines = []
     for line in lines:
@@ -92,7 +92,7 @@ def test_reproduce_guard_default_committed_baseline_passes_clean():
     result = runner.invoke(app, ["reproduce-guard"])
     assert result.exit_code == 0
     assert "reproduce-guard PASS" in result.output
-    assert "92.9%" in result.output  # 13/14, the shipped rate
+    assert "94.1%" in result.output  # 16/17, the shipped rate
     assert "known-miss" in result.output  # the deliberate mismatch, named
     assert "flat" in result.output  # per-family rendering
 
@@ -113,7 +113,7 @@ def test_reproduce_guard_regression_on_perturbed_scenario(tmp_path):
     assert "REGRESSION" in guard.output
     assert "flat-exact" in guard.output
     assert "sha" in guard.output.lower()  # informational sha warning, present
-    assert "92.9%" in guard.output  # the baseline rate in the summary
+    assert "94.1%" in guard.output  # the baseline rate in the summary
 
 
 # --- (c) --json emits the snapshot as parseable JSON ---------------------------
@@ -125,8 +125,8 @@ def test_reproduce_guard_json(tmp_path):
     guard = runner.invoke(app, ["reproduce-guard", "--baseline", str(baseline_path), "--json"])
     assert guard.exit_code == 0
     parsed = json.loads(guard.output)
-    assert parsed["scenario_count"] == 14
-    assert parsed["outcome_match_rate"] == pytest.approx(13 / 14)
+    assert parsed["scenario_count"] == 17
+    assert parsed["outcome_match_rate"] == pytest.approx(16 / 17)
     assert parsed["outcome_match_rate"] < 1.0  # the known-miss keeps it below 1.0
 
 
@@ -138,7 +138,7 @@ def test_reproduce_guard_update_baseline_writes_and_plain_guard_does_not(tmp_pat
 
     baseline = load_reproduce_baseline(baseline_path)
     assert baseline is not None
-    assert baseline.outcome_match_rate == pytest.approx(13 / 14)
+    assert baseline.outcome_match_rate == pytest.approx(16 / 17)
     assert len(load_jsonl(ReproduceSnapshot, history_path)) == 1
 
     before_mtime = baseline_path.stat().st_mtime_ns
@@ -160,7 +160,7 @@ def test_reproduce_guard_update_baseline_message(tmp_path):
     )
     assert freeze.exit_code == 0
     assert "Baseline updated" in freeze.output
-    assert "92.9%" in freeze.output
+    assert "94.1%" in freeze.output
 
 
 # --- (e) missing scenarios file: loud failure, mirroring verify-guard ---------
@@ -251,5 +251,5 @@ def test_reproduce_guard_update_baseline_never_fails_even_on_mutated_corpus(tmp_
 
     baseline = load_reproduce_baseline(baseline_path)
     assert baseline is not None
-    assert baseline.outcome_match_rate == pytest.approx(12 / 14)
+    assert baseline.outcome_match_rate == pytest.approx(15 / 17)
     assert len(load_jsonl(ReproduceSnapshot, history_path)) == 1

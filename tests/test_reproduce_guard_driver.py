@@ -14,6 +14,8 @@ loud, and everything stays deterministic at the repo-wide
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from contig.models import ExecStep, ReproduceScenario
@@ -166,6 +168,134 @@ def test_extra_executor_call_raises_assertion_error(tmp_path):
     )
     with pytest.raises(AssertionError):
         run_reproduce_scenario(scenario, repo_dir=tmp_path, run_started_at=_RUN_START)
+
+
+def test_installer_expected_argv_mismatch_raises_assertion_error(tmp_path):
+    # The scripted installer asserts the resolved pip argv when a scenario
+    # declares `installer_expected_argv`. A wrong expected argv is a scenario
+    # bug and must fail loudly (matching the executor's extra-call posture) --
+    # never a silent rc-only replay that would let a stale scenario "pass".
+    scenario = _scenario(
+        allow_install=True,
+        installer_steps=[0],
+        installer_expected_argv=[
+            ["/usr/bin/python3", "-m", "pip", "install", "opencv-python"]
+        ],
+        executor_steps=[
+            ExecStep(exit_code=1, output="No module named 'cv2'"),
+            ExecStep(exit_code=0, output="", write_results={"auc": 0.9}),
+        ],
+    )
+    with pytest.raises(AssertionError, match="argv"):
+        run_reproduce_scenario(scenario, repo_dir=tmp_path, run_started_at=_RUN_START)
+
+
+def test_installer_expected_argv_over_draw_raises_assertion_error(tmp_path):
+    # One declared expected argv but two install calls: the second pop over-draws
+    # the declared list -- a loud scenario bug, never a fallback to rc-only.
+    scenario = _scenario(
+        allow_install=True,
+        installer_steps=[0, 0],
+        installer_expected_argv=[
+            [sys.executable, "-m", "pip", "install", "opencv-python"]
+        ],
+        executor_steps=[
+            ExecStep(exit_code=1, output="No module named 'cv2'"),
+            ExecStep(exit_code=1, output="No module named 'sklearn'"),
+            ExecStep(exit_code=0, output="", write_results={"auc": 0.9}),
+        ],
+    )
+    with pytest.raises(AssertionError, match="argv"):
+        run_reproduce_scenario(scenario, repo_dir=tmp_path, run_started_at=_RUN_START)
+
+
+def test_installer_expected_argv_matching_resolved_pip_argv_heals(tmp_path):
+    # cv2 -> opencv-python (the alias map), so the scripted installer must have
+    # seen exactly `_pip_install_argv("opencv-python")`. An exact match heals
+    # with no assertion noise.
+    scenario = _scenario(
+        allow_install=True,
+        installer_steps=[0],
+        installer_expected_argv=[
+            [sys.executable, "-m", "pip", "install", "opencv-python"]
+        ],
+        executor_steps=[
+            ExecStep(exit_code=1, output="No module named 'cv2'"),
+            ExecStep(exit_code=0, output="", write_results={"auc": 0.9}),
+        ],
+    )
+    record, _ = run_reproduce_scenario(
+        scenario, repo_dir=tmp_path, run_started_at=_RUN_START
+    )
+
+    assert record.exit_code == 0
+    assert record.claim_results[0].status == "reproduced"
+    assert record.repair_history[0].outcome == "installed_and_retried"
+
+
+def test_installer_expected_argv_resolves_sys_executable_sentinel(tmp_path):
+    # A frozen scenario cannot embed a machine-specific interpreter path; the
+    # `<sys.executable>` sentinel in argv[0] resolves to the replay-time
+    # interpreter and the fixed `-m pip install <package>` tail is still
+    # compared byte-for-byte.
+    scenario = _scenario(
+        allow_install=True,
+        installer_steps=[0],
+        installer_expected_argv=[
+            ["<sys.executable>", "-m", "pip", "install", "opencv-python"]
+        ],
+        executor_steps=[
+            ExecStep(exit_code=1, output="No module named 'cv2'"),
+            ExecStep(exit_code=0, output="", write_results={"auc": 0.9}),
+        ],
+    )
+    record, _ = run_reproduce_scenario(
+        scenario, repo_dir=tmp_path, run_started_at=_RUN_START
+    )
+
+    assert record.exit_code == 0
+    assert record.claim_results[0].status == "reproduced"
+    assert record.repair_history[0].outcome == "installed_and_retried"
+
+
+def test_installer_expected_argv_without_sentinel_compares_verbatim(tmp_path):
+    # The sentinel is the ONLY tolerated argv[0]: a literal interpreter path
+    # (even one differing from sys.executable only by a suffix) is compared
+    # verbatim and fails loudly -- strict everywhere but the sentinel slot.
+    scenario = _scenario(
+        allow_install=True,
+        installer_steps=[0],
+        installer_expected_argv=[
+            [sys.executable + "-copy", "-m", "pip", "install", "opencv-python"]
+        ],
+        executor_steps=[
+            ExecStep(exit_code=1, output="No module named 'cv2'"),
+            ExecStep(exit_code=0, output="", write_results={"auc": 0.9}),
+        ],
+    )
+    with pytest.raises(AssertionError, match="argv"):
+        run_reproduce_scenario(scenario, repo_dir=tmp_path, run_started_at=_RUN_START)
+
+
+def test_installer_expected_argv_absent_stays_rc_only(tmp_path):
+    # The field defaults to None: a scenario without it replays byte-identically
+    # to today (rc-only scripted install, no argv assertion).
+    scenario = _scenario(
+        allow_install=True,
+        installer_steps=[0],
+        executor_steps=[
+            ExecStep(exit_code=1, output="No module named 'cv2'"),
+            ExecStep(exit_code=0, output="", write_results={"auc": 0.9}),
+        ],
+    )
+    assert scenario.installer_expected_argv is None
+    record, _ = run_reproduce_scenario(
+        scenario, repo_dir=tmp_path, run_started_at=_RUN_START
+    )
+
+    assert record.exit_code == 0
+    assert record.claim_results[0].status == "reproduced"
+    assert record.repair_history[0].outcome == "installed_and_retried"
 
 
 def test_scenario_replay_is_deterministic(tmp_path):

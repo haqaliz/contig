@@ -883,6 +883,7 @@ class ReproduceScenario(BaseModel):
     results_path: str = "results.json"
     executor_steps: list[ExecStep]
     installer_steps: list[int] | None = None
+    installer_expected_argv: list[list[str]] | None = None
     allow_install: bool = False
     expected_claim_statuses: dict[str, str]
     expected_repair: RepairOutcome = "none"

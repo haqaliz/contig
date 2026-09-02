@@ -10,6 +10,7 @@ data-file paths, mirroring the verify-guard/heal-guard model tests.
 from __future__ import annotations
 
 import json
+import sys
 
 import pytest
 from pydantic import ValidationError
@@ -46,6 +47,9 @@ def _full_scenario_dict() -> dict:
             }
         ],
         "installer_steps": [0],
+        "installer_expected_argv": [
+            [sys.executable, "-m", "pip", "install", "opencv-python"]
+        ],
         "allow_install": True,
         "expected_claim_statuses": {"c1": "reproduced"},
         "expected_repair": "installed_and_retried",
@@ -75,6 +79,9 @@ def test_reproduce_scenario_parses_from_jsonl_line_with_all_fields():
     assert step.write_artifacts == {"out/metric.txt": "0.91"}
     assert step.artifact_mtimes == {"out/metric.txt": 1_000_000.0}
     assert scenario.installer_steps == [0]
+    assert scenario.installer_expected_argv == [
+        [sys.executable, "-m", "pip", "install", "opencv-python"]
+    ]
     assert scenario.allow_install is True
     assert scenario.expected_claim_statuses == {"c1": "reproduced"}
     assert scenario.expected_repair == "installed_and_retried"
@@ -94,6 +101,7 @@ def test_reproduce_scenario_defaults_hold():
     assert scenario.source == "holdout:synthetic"
     assert scenario.results_path == "results.json"
     assert scenario.installer_steps is None
+    assert scenario.installer_expected_argv is None
     assert scenario.allow_install is False
     assert scenario.expected_repair == "none"
     assert scenario.expected_exit_code == 0

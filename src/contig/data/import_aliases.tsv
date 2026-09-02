@@ -1,0 +1,17 @@
+# Import-name -> PyPI-package alias table for reproduce installs.
+# Format: import_name<TAB>package_name, one row per pair; keys are lowercase.
+# To extend: add a row. Imports whose name matches the package need no row.
+cv2	opencv-python
+sklearn	scikit-learn
+PIL	pillow
+yaml	pyyaml
+Bio	biopython
+skimage	scikit-image
+dateutil	python-dateutil
+bs4	beautifulsoup4
+zmq	pyzmq
+Crypto	pycryptodome
+dotenv	python-dotenv
+docx	python-docx
+serial	pyserial
+pkg_resources	setuptools

@@ -3518,12 +3518,12 @@ def reproduce_guard(
     to the committed reproduce trend; with --history the recorded trend is
     printed instead.
 
-    Honest scope: the number is over **14 SYNTHETIC, self-graded scenarios**
+    Honest scope: the number is over **17 SYNTHETIC, self-graded scenarios**
     (we author the fixtures we grade -- same disclosure as every prior eval
     slice). The corpus only becomes non-tautological as real runs feed it
     through the pending-capture/promote channel. The seed deliberately carries
     ONE known-miss scenario (expected DIVERGED on an exact match) that the
-    current loop gets wrong, so the committed baseline is 13/14 -- below 1.0,
+    current loop gets wrong, so the committed baseline is 16/17 -- below 1.0,
     the guard's liveness demonstration.
     """
     scenarios_path = Path(scenarios) if scenarios else default_reproduce_scenarios_path()
