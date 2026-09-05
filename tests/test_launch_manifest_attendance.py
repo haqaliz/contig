@@ -18,8 +18,9 @@ from tests.test_cli import GOOD_MQC, TRACE_OK, TRACE_RUN_OK, _fake_run_executor,
 runner = CliRunner()
 
 
-def test_launch_manifest_round_trips_auto_approve_true_and_false():
-    # AC#1: auto_approve is a real field, not silently dropped in either state.
+def test_launch_manifest_round_trips_auto_approve_true():
+    # AC#1: auto_approve is a real field that survives a dump/parse round trip,
+    # not silently dropped when set.
     base_kwargs = dict(
         run_id="r1",
         pipeline="nf-core/rnaseq",
@@ -30,11 +31,27 @@ def test_launch_manifest_round_trips_auto_approve_true_and_false():
         created_at="2026-09-06T00:00:00+00:00",
     )
     manifest_true = LaunchManifest(**base_kwargs, auto_approve=True)
-    manifest_false = LaunchManifest(**base_kwargs, auto_approve=False)
     assert json.loads(manifest_true.model_dump_json())["auto_approve"] is True
-    assert json.loads(manifest_false.model_dump_json())["auto_approve"] is False
     round_tripped = LaunchManifest.model_validate_json(manifest_true.model_dump_json())
     assert round_tripped.auto_approve is True
+
+
+def test_launch_manifest_serializes_auto_approve_false_explicitly():
+    # AC#1: `False` is falsy in Python, so a naive `exclude_none`-style dump could
+    # collapse it to "absent" the way it does for other optional fields. It must be
+    # written out explicitly rather than dropped, since Phase 2+ distinguishes a
+    # recorded `False` from an absent field (see the legacy-manifest test below).
+    base_kwargs = dict(
+        run_id="r1",
+        pipeline="nf-core/rnaseq",
+        revision="3.14.0",
+        profiles=["docker"],
+        backend="local",
+        container_runtime="docker",
+        created_at="2026-09-06T00:00:00+00:00",
+    )
+    manifest_false = LaunchManifest(**base_kwargs, auto_approve=False)
+    assert json.loads(manifest_false.model_dump_json())["auto_approve"] is False
 
 
 def test_launch_manifest_without_auto_approve_key_validates_to_none_not_false():
@@ -106,12 +123,19 @@ def test_rerun_of_auto_approved_manifest_writes_false_not_replayed(tmp_path, mon
 
 
 def test_resume_after_auto_approved_run_leaves_manifest_auto_approve_false(tmp_path, monkeypatch):
-    # AC#14: `resume` (cli.py:2508-2514) has no `--auto-approve` flag either, and
-    # it regenerates the RunRecord too -- so both the manifest and the record
-    # describe the LAST invocation (the unattended resume), not the original
-    # `run --auto-approve` that preceded it. Named for that reasoning because a
-    # naive reader could otherwise expect resume to "inherit" attendance the way
-    # it inherits pipeline/revision/caps.
+    # AC#14: `resume` (cli.py:2508-2514) has no `--auto-approve` flag either, and it
+    # re-decides the manifest as False for the LAST invocation (the unattended resume),
+    # not the original `run --auto-approve` that preceded it. Named for that reasoning
+    # because a naive reader could otherwise expect resume to "inherit" attendance the
+    # way it inherits pipeline/revision/caps.
+    #
+    # This does NOT mean the manifest and record always describe the same invocation:
+    # `launch.json` is written before the run starts (cli.py:791) but `run_record.json`
+    # only at the end (self_heal.py:239), so a resume that dies before finishing would
+    # leave this invocation's `auto_approve: false` sitting beside the *previous*
+    # invocation's `repair_history`. That failure mode is conservative -- it can only
+    # relabel a truly unattended gated step as attended, understating the unattended
+    # rate -- and is untested here; this test only covers the resume-completes case.
     sheet = _make_sheet(tmp_path)
     monkeypatch.setattr("contig.cli.default_executor", _fake_run_executor(TRACE_RUN_OK, GOOD_MQC))
     runner.invoke(

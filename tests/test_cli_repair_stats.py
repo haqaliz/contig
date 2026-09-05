@@ -147,7 +147,7 @@ def test_an_attendance_unknown_run_is_excluded_and_the_line_says_why(tmp_path):
     result = runner.invoke(app, ["repair-stats", "--runs-dir", str(tmp_path)])
     assert result.exit_code == 0
     assert (
-        "    1 run(s) attendance unknown (the run did not record --auto-approve)"
+        "    1 run(s) attendance unknown (no readable --auto-approve for this run)"
         " -- excluded from both sides"
     ) in result.output
 

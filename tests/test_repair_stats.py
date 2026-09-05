@@ -273,6 +273,26 @@ def test_every_gated_literal_is_read_from_the_flag_in_all_three_states():
         assert classify_attendance(literal, False) == "attended"
 
 
+def test_every_attended_literal_is_attended_under_every_flag_value():
+    # Pins ALL FIVE members of `ATTENDED_OUTCOMES` by name. The list is written out
+    # VERBATIM rather than iterated from the constant, deliberately: a test that reads
+    # the set it is pinning passes just as happily over a shortened set, so deleting
+    # a literal would silently restore a hole in attendance classification that the
+    # literal exists to close.
+    attended = [
+        "rejected_by_user",
+        "approval_timed_out",
+        "invalid_choice_rejected",
+        "advisory_acknowledged_and_retried",
+        "chose_and_retried",
+    ]
+    for literal in attended:
+        # The literal alone is decisive: only a human can produce it, so no recorded
+        # flag value -- not even a contradicting one -- can reclassify it (R5a).
+        assert classify_attendance(literal, None) == "attended"
+        assert classify_attendance(literal, True) == "attended"
+        assert classify_attendance(literal, False) == "attended"
+
 
 def test_a_machine_only_literal_is_unattended_under_every_flag_value():
     # The safe-patch path calls `apply_patch` directly (self_heal.py:1619) and records

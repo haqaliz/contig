@@ -649,7 +649,7 @@ human help; and a budget test proving the loop terminates.
 **Eval data captured:** each new mode plus its fix lands in the failure-and-fix
 corpus; repair success-rate analytics gain new classes.
 
-**Repair success-rate analytics — SHIPPED (Unreleased, `repair-success-analytics`).** The
+**Repair success-rate analytics — SHIPPED (v0.57.0, `repair-success-analytics`).** The
 "repair success-rate analytics" named one line above existed only as data: `RunRecord.
 repair_history` has been written for every run since the beginning, and nothing read it
 across runs. `contig repair-stats` does — per-step outcome-family and failure-class

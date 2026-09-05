@@ -18,9 +18,10 @@ All notable changes to Contig are recorded here. The format follows
   literals resolve to `unattended` or `attended` once a run records the flag, and stay
   `attendance_unknown` only when it does not.
   - **No reported number moves.** `contig repair-stats --runs-dir` over the real
-    15-bundle corpus was run before this branch (source at `c7b5bf6`) and after (branch
-    HEAD `1f46392`): the two outputs are byte-identical -- `unattended completion: 9/14
-    scored run(s) (64.3%)` both times, no `attendance unknown` line in either.
+    15-bundle corpus was run before this branch (source at `c7b5bf6`) and after (last
+    code commit `1f46392`): the two outputs are byte-identical -- `unattended
+    completion: 9/14 scored run(s) (64.3%)` both times, no `attendance unknown` line in
+    either.
     `eval-guard` (93.3% vs 93.3%, delta +0.0pp) and `heal-guard` (100% vs 100%, delta
     +0.0pp) are likewise unmoved: nothing in this slice touches a detector, a corpus, or
     the heal loop.
@@ -56,7 +57,13 @@ All notable changes to Contig are recorded here. The format follows
   - **Deliberately not replayed.** `auto_approve` is write-only provenance, the same
     category as `harmonized_reference` (`models.py:436`): `rerun`/`resume` re-decide it
     per invocation rather than inheriting the original run's value, so a resumed run's
-    manifest always records that invocation's own truth.
+    manifest is *meant* to record that invocation's own truth. It doesn't always: `launch.json`
+    is written before the run starts (`cli.py:791`) but `run_record.json` only at the end
+    (`self_heal.py:239`), so a resume that dies before finishing leaves the new
+    invocation's `auto_approve` sitting beside the *previous* invocation's
+    `repair_history`. The error is conservative -- it can only relabel a truly
+    unattended gated step as attended, understating the unattended rate, never
+    inflating it -- and needs a gated literal the field has never yet produced.
 
 ## [0.57.0] - 2026-09-05
 
