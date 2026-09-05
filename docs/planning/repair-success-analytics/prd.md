@@ -312,3 +312,90 @@ command, two test files. No model, signature, dependency, or dashboard change.
   padded.
 - **R-Risk-4 stands**: push, not demand-pull; n=15, self-observed, founder's own dev runs.
   Nothing in this slice changes that, and the CHANGELOG must say so plainly.
+
+---
+
+## Addendum 2 — corrections from the Phase-2 agent reports
+
+The three dig agents' reports arrived after the PRD was drafted. They confirm the findings
+above and correct **one load-bearing error** and two smaller ones.
+
+### 🔴 CORRECTION to R3 — `approved_and_retried` is NOT unconditionally attended
+
+R3 and the Addendum-A table classify `approved_and_retried` and `chose_and_retried` as
+attended, on the reasoning that they are reached only through the approval gate. **That is
+wrong.** Both literals also fire under `--auto-approve`, where the engine decides per
+policy and **no human is involved** (`self_heal.py:1449`, `:1497`, `:1553` — auto-approve
+auto-*decides* a gated patch; it does not remove the patch from the gated-outcome
+vocabulary).
+
+**And the record cannot disambiguate them.** `auto_approve` is a CLI flag
+(`cli.py:413`) threaded into `self_heal_run` (`cli.py:452`, `:814`) and **never
+persisted**. The only `auto_approve` field in `models.py` is at `:569`, on
+**`HealScenario`** — the synthetic scenario model, not `RunRecord`. Verified against the
+full `RunRecord` field list; there is no such field, and no `ExecutionTarget` equivalent.
+
+**Resolution — a third attendance state, exactly parallel to R1's three-state applied.**
+The record under-determines the answer, so the command must not invent one:
+
+| attendance | outcomes |
+|---|---|
+| `attended` | `rejected_by_user`, `approval_timed_out`, `invalid_choice_rejected`, `advisory_acknowledged_and_retried` |
+| **`attendance_unknown`** | **`approved_and_retried`, `chose_and_retried`** — a human *or* `--auto-approve`; unknowable from the record |
+| `unattended` | everything else (`patched_and_retried`, `gave_up*`, `qc_verdict_flagged`, the index/recompress fan-out, and all three `reproduce.py` literals — that loop has **no** approval gate at all) |
+
+A run containing an `attendance_unknown` step is reported in its own bucket and excluded
+from both the numerator and the denominator of the unattended-completion rate, with the
+exclusion counted and stated — the same discipline R4 applies to zero-event runs.
+
+**Impact on today's numbers: none.** The real corpus contains only
+`patched_and_retried`, `gave_up`, and `stopped_for_confirmation`, so no step is
+`attendance_unknown` yet. This is a design correction, not a data correction — and it is
+precisely the kind of thing that would otherwise have shipped as a silent overcount of
+"attended".
+
+**Filed as a finding against the engine, not fixed here:** a run record cannot say whether
+a human was in the loop, because `auto_approve` is not captured. That is a genuine
+provenance gap of the same shape as the C2 deferral items. Persisting it (on
+`LaunchManifest` or `ExecutionTarget`) would collapse `attendance_unknown` to empty and is
+the natural follow-on slice. Out of scope here: it is a model/signature change, and this
+slice is read-only by design.
+
+### 🟡 Correction to AC#9 — there is no `--help` testing convention to follow
+
+AC#9 said to assert flags by "introspecting Typer params, never Rich-rendered `--help`".
+The first half is unsupported: **no test in the repo asserts on `--help` output at all,
+and none introspects Click/Typer params either.** The only `--help` string in `tests/` is
+an unrelated parametrize value (`tests/test_paper_intake.py:64`). Restated: **do not test
+`--help`.** Assert exit codes, parsed JSON, and plain-echo substrings, matching
+`tests/test_cli_insight.py`. (The standing rule against asserting on Rich-rendered
+`--help` still holds — it simply never comes up here, because this family renders with
+plain `typer.echo` and no Rich tables.)
+
+### 🟡 Refinement — `RunRecord.verdict` exists and is persisted
+
+The PRD said `RunRecord` has no status field. True, but incomplete: there is a
+`@computed_field verdict` (`models.py:389-401`, `Literal["pass","warn","fail","unverified"]`)
+that **is** serialized into `run_record.json`. It is not a substitute for the completion
+signal — it returns `"fail"` when `RunSummary.from_events(...).succeeded` is False but
+otherwise reports the *QC* verdict, conflating completion with quality. **Keep
+`RunSummary.from_events(record.events).succeeded` as the completion signal** (mirroring
+`heal.py:249-252`), and treat `verdict` as an available extra dimension, not the gate.
+
+### Confirmations (no change required)
+
+- Empty `repair_history` unambiguously means a clean first-attempt success:
+  `repair_history` is freshly `[]` per `self_heal_run` invocation (`self_heal.py:1199`),
+  one call site (`cli.py:792`), no merge/resume-across-invocations path.
+- `stopped_for_confirmation` is dead in `src/`, removed from `OUTCOME_META`, and locked
+  absent by `dashboard/e2e/repair-truthfulness.spec.ts:128` — R5 stands.
+- The 19-literal set and the five dashboard families match `src/` 1:1, no orphans either
+  direction — R2 and the Addendum-A table stand (with the R3 correction above).
+- `heal.py` and `reproduce_guard.py` are the only rate computations and are **both**
+  over frozen synthetic scenarios; `report.py` has no aggregate logic at all — R8 stands,
+  and the new command should not reuse `HealEvalReport`/`ReproduceGuardResult`, which are
+  shaped around scenario expectation-matching.
+- House rendering is plain `typer.echo`, no Rich tables, counts as raw ints always
+  `sorted()` by key for determinism, `--json` dumping the pure function's dict verbatim,
+  `_THIN_THRESHOLD = 3` (`corpus.py:279`) rendered as a literal `"  THIN"` suffix
+  (`cli.py:3733`) — R6/R7 stand, and the new command should match that shape exactly.
