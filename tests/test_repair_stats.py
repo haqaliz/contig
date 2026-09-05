@@ -10,13 +10,15 @@ from contig.corpus import _THIN_THRESHOLD as _CORPUS_THIN_THRESHOLD
 from contig.repair_stats import (
     _THIN_THRESHOLD,
     ACKNOWLEDGED_OUTCOMES,
+    APPLIED_OUTCOMES,
     ATTENDANCE_UNKNOWN_OUTCOMES,
     ATTENDED_OUTCOMES,
-    APPLIED_OUTCOMES,
     DECLINED_OUTCOMES,
     FLAGGED_OUTCOMES,
     GAVE_UP_OUTCOMES,
     OUTCOME_FAMILY,
+    classify_applied,
+    classify_attendance,
     derived_applied,
 )
 
@@ -84,3 +86,59 @@ def test_the_attendance_sets_name_only_literals_the_taxonomy_knows():
 
 def test_the_thin_threshold_matches_the_corpus_one():
     assert _THIN_THRESHOLD == _CORPUS_THIN_THRESHOLD
+
+
+# --- the applied classifier (AC-1, AC-2, AC-3, AC-4) ---------------------------
+# The fixtures below are load-bearing: the legacy ones OMIT the `patch_applied`
+# key entirely, the others SET it. A fixture that always emits the key would make
+# the legacy case pass vacuously, which is the whole guarantee under test.
+
+
+def test_a_step_written_before_the_field_existed_is_legacy_derived():
+    legacy_step = {"outcome": "patched_and_retried"}
+    assert classify_applied("patched_and_retried", legacy_step) == "legacy_derived"
+
+
+def test_a_step_recording_the_field_as_false_is_not_applied():
+    recorded_step = {"outcome": "patched_and_retried", "patch_applied": False}
+    assert classify_applied("patched_and_retried", recorded_step) == "not_applied"
+
+
+def test_a_step_recording_the_field_as_true_is_applied():
+    recorded_step = {"outcome": "patched_and_retried", "patch_applied": True}
+    assert classify_applied("patched_and_retried", recorded_step) == "applied"
+
+
+def test_an_unmapped_literal_is_unknown_even_when_the_field_is_recorded():
+    # Key presence does not rescue a literal the taxonomy does not know: if the
+    # map is out of date, nothing about the step is reported confidently.
+    unmapped_step = {"outcome": "stopped_for_confirmation", "patch_applied": True}
+    assert classify_applied("stopped_for_confirmation", unmapped_step) == "unknown"
+
+
+# --- the attendance classifier (AC-4, AC-5, AC-6) ------------------------------
+
+
+def test_an_unmapped_literal_has_unknown_attendance():
+    assert classify_attendance("stopped_for_confirmation") == "unknown"
+
+
+def test_an_acknowledged_advisory_is_attended():
+    assert classify_attendance("advisory_acknowledged_and_retried") == "attended"
+
+
+def test_an_approved_patch_has_unknown_attendance():
+    # `--auto-approve` reaches this literal with no human involved, and the flag is
+    # not persisted, so the record genuinely cannot say (PRD Addendum 2).
+    assert classify_attendance("approved_and_retried") == "attendance_unknown"
+
+
+def test_a_machine_only_outcome_is_unattended():
+    assert classify_attendance("patched_and_retried") == "unattended"
+
+
+def test_an_acknowledged_advisory_enacted_nothing_despite_its_suffix():
+    # The tempting heuristic "the literal ends in _and_retried, so a patch ran" is
+    # wrong exactly here: a human acknowledged guidance outside Contig and asked
+    # the loop to retry; no patch was enacted (self_heal.py:1411-1423).
+    assert derived_applied("advisory_acknowledged_and_retried") is False

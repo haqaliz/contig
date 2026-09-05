@@ -123,3 +123,42 @@ def derived_applied(outcome: str) -> bool | None:
         return None
     return family == "applied"
 
+
+
+def classify_applied(outcome: str, raw_step: dict) -> str:
+    """Whether this step enacted its patch: applied / not_applied / legacy_derived.
+
+    Takes the **raw JSON dict** alongside the outcome, deliberately, and this is
+    the only place in the codebase that reads a step twice. `RepairStep` declares
+    `patch_applied: bool = False` (`models.py:322`), not `bool | None`, so pydantic
+    fills `False` for a record written before the field existed: on the validated
+    model an absent key and an explicit `False` are the same value. The raw dict is
+    the only source of key presence, and therefore the only way to tell "we did not
+    record this" from "we recorded that nothing was enacted".
+
+    An outcome the taxonomy does not know is `unknown` on this axis whether or not
+    the key is present: an out-of-date map is not a basis for a confident answer,
+    and the unmapped literal is surfaced in its own bucket instead.
+    """
+    if outcome not in OUTCOME_FAMILY:
+        return "unknown"
+    if "patch_applied" not in raw_step:
+        return "legacy_derived"
+    return "applied" if raw_step["patch_applied"] else "not_applied"
+
+
+def classify_attendance(outcome: str) -> str:
+    """Whether a human was in the loop for this step.
+
+    Three states, because the record under-determines the answer for two literals:
+    `approved_and_retried` and `chose_and_retried` fire both on a real approval and
+    under `--auto-approve`, and the flag is never persisted. Those are
+    `attendance_unknown` rather than a guess in either direction.
+    """
+    if outcome not in OUTCOME_FAMILY:
+        return "unknown"
+    if outcome in ATTENDANCE_UNKNOWN_OUTCOMES:
+        return "attendance_unknown"
+    if outcome in ATTENDED_OUTCOMES:
+        return "attended"
+    return "unattended"
