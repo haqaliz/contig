@@ -6,6 +6,58 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+- **`--auto-approve` is now persisted, and `contig repair-stats` attendance is derived
+  from it instead of guessing (`auto-approve-attendance`).** Push, not demand-pull: no
+  user asked for this; it is the "filed, not fixed" follow-on the v0.57.0 entry below
+  named for itself. `LaunchManifest.auto_approve: bool | None = None` (`models.py:444`)
+  is written by `contig run` (`cli.py:786`) and read back, tolerantly, by
+  `workspace.load_launch_manifest` -- a missing `launch.json`, an unreadable one, or one
+  written before the field existed all yield `None`, never `False`, the same lesson the
+  `patch_applied` slice already paid for, applied here up front instead of repeated.
+  `repair_stats.classify_attendance` now takes that fact: the seven `GATED_OUTCOMES`
+  literals resolve to `unattended` or `attended` once a run records the flag, and stay
+  `attendance_unknown` only when it does not.
+  - **No reported number moves.** `contig repair-stats --runs-dir` over the real
+    15-bundle corpus was run before this branch (source at `c7b5bf6`) and after (branch
+    HEAD `1f46392`): the two outputs are byte-identical -- `unattended completion: 9/14
+    scored run(s) (64.3%)` both times, no `attendance unknown` line in either.
+    `eval-guard` (93.3% vs 93.3%, delta +0.0pp) and `heal-guard` (100% vs 100%, delta
+    +0.0pp) are likewise unmoved: nothing in this slice touches a detector, a corpus, or
+    the heal loop.
+  - **`attendance_unknown` was 0 before this slice.** Persisting the flag stops that
+    bucket from filling on future runs; it does not empty a full one today, since none
+    of the 15 real bundles carries a `launch.json` at all. Read the identical
+    before/after as exactly that -- not as runs "recovered" that were previously
+    excluded.
+  - **Fixes a pre-existing over-claim, reasoned from control flow and never observed in
+    the field.** Six of the seven `GATED_OUTCOMES` literals -- every one except
+    `approved_and_retried` -- previously fell through `classify_attendance`'s untagged
+    `unattended` default with no record behind the claim, because attendance tracking
+    only ever named the two literals a human's approval or choice could plausibly
+    produce. None of the six appears in the real corpus (confirmed by the manual gate
+    above: no `attendance unknown` line appears even now, with every bundle's
+    `auto_approve` reading `None`), so the correction is provable from
+    `self_heal.py`'s call graph but unwitnessed by any run we have.
+  - **No signature break.** The field lives on `LaunchManifest` (`launch.json`), which
+    appears in neither `signing.py` nor `bundle.py`'s attested-payload list;
+    `RunRecord` and `canonical_record_bytes` are untouched. Recording it on `RunRecord`
+    instead would have been a fifth disclosed signature break, and the widest yet -- a
+    top-level field emitted on every signed bundle, with none of the empty-list
+    narrowing that made the `patch_applied` break defensible. This slice took the
+    zero-cost side of that trade.
+  - **R4 was a real defect in shipped output, fixed separately as its own commit
+    (`d5551ee`) with a clean blame boundary, ahead of the persistence work.**
+    `chose_and_retried` was classified `attendance_unknown` alongside
+    `approved_and_retried`, on the theory that `--auto-approve` could produce either.
+    False for `chose_and_retried`: the `if auto_approve:` block in `self_heal.py`
+    always returns or continues before the ambiguous-choice gate that assigns it, so it
+    can only be produced by a human choosing among ranked candidates. It now belongs in
+    `ATTENDED_OUTCOMES`, unconditionally.
+  - **Deliberately not replayed.** `auto_approve` is write-only provenance, the same
+    category as `harmonized_reference` (`models.py:436`): `rerun`/`resume` re-decide it
+    per invocation rather than inheriting the original run's value, so a resumed run's
+    manifest always records that invocation's own truth.
+
 ## [0.57.0] - 2026-09-05
 
 - **`contig repair-stats` reads `repair_history` across every bundled run, so the
