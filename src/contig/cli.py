@@ -3788,6 +3788,12 @@ def repair_stats(
             " (a human, or --auto-approve, which is never recorded)"
             " -- excluded from both sides"
         )
+    if rate is not None:
+        # A property of the metric, not of today's corpus: the rate counts runs that
+        # finished with no human in the loop, most of which never failed at all.
+        typer.echo(
+            "    a completion rate, not a recovery rate: it counts runs that never failed"
+        )
     if step_counts["by_family"]:
         typer.echo("  by outcome family (per step):")
         for family, count in sorted(step_counts["by_family"].items()):

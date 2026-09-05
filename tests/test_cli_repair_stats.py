@@ -152,6 +152,15 @@ def test_an_attendance_unknown_run_is_excluded_and_the_line_says_why(tmp_path):
     ) in result.output
 
 
+def test_the_rate_is_qualified_as_a_completion_rate_not_a_recovery_rate(tmp_path):
+    # "64.3%" otherwise reads as "the self-heal loop works two thirds of the time".
+    # It is high mostly because most runs never failed at all.
+    _write_run(tmp_path, "r1")
+    result = runner.invoke(app, ["repair-stats", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "    a completion rate, not a recovery rate: it counts runs that never failed" in result.output
+
+
 def test_the_family_block_states_that_it_counts_steps(tmp_path):
     _write_run(
         tmp_path,
@@ -265,6 +274,13 @@ def test_a_rate_with_nothing_to_divide_by_is_not_computable_not_zero(tmp_path):
     assert result.exit_code == 0
     assert "  unattended completion: not computable (0 scored run(s))" in result.output
     assert "%" not in result.output
+
+
+def test_the_qualifier_is_omitted_when_there_is_no_rate_to_qualify(tmp_path):
+    _write_run(tmp_path, "empty", events=())
+    result = runner.invoke(app, ["repair-stats", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "recovery rate" not in result.output
 
 
 def test_a_corpus_with_no_repair_steps_omits_the_per_step_blocks(tmp_path):
