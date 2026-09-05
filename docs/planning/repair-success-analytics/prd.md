@@ -399,3 +399,56 @@ otherwise reports the *QC* verdict, conflating completion with quality. **Keep
   `sorted()` by key for determinism, `--json` dumping the pure function's dict verbatim,
   `_THIN_THRESHOLD = 3` (`corpus.py:279`) rendered as a literal `"  THIN"` suffix
   (`cli.py:3733`) — R6/R7 stand, and the new command should match that shape exactly.
+
+---
+
+## Addendum 3 — the prediction, checked (2026-09-05, `stats-core` complete)
+
+Addendum C committed a predicted output over the 15 real records and said *"if the
+command prints anything else, the discrepancy is the finding."* It printed something
+else in two places. Both are the **code being right and the prediction being wrong**.
+
+Actual, via `repair_stats_report(collect_runs("runs"))`:
+
+```
+runs:  total 15 | analyzable 14 | not_analyzable 1 | attendance_unknown 0
+       rate_denominator 14 | unattended_completed 9
+       unattended_completion_rate 0.6428571428571429
+steps: total 7
+       by_family        {applied: 2, gave_up: 4}
+       by_failure_class {tool_crash: 3, oom: 2, missing_index: 1, unknown: 1}
+       by_applied       {applied: 0, not_applied: 0, legacy_derived: 6, unknown: 1}
+       by_attendance    {attended: 0, unattended: 6, attendance_unknown: 0, unknown: 1}
+       legacy_derived_applied {applied: 2, not_applied: 4}
+thin:  [missing_index, oom, unknown]
+unmapped_outcomes: {stopped_for_confirmation: 1}
+```
+
+**Matched:** 15 runs; 1 `not_analyzable` (`testpass`, 0 events); 7 steps; families
+APPLIED ×2 / GAVE_UP ×4; all four failure classes exactly; **0 steps read from the
+field** — the central claim of R1 and R-Risk-5, confirmed against real data.
+
+**Discrepancy 1 — "all 7 `legacy_derived`" was wrong; it is 6 + 1 `unknown`.** The
+prediction was internally inconsistent: it also said `unknown ×1`. `stopped_for_confirmation`
+is unmapped, so it is `unknown` on the applied axis and never derived — exactly R5. The
+prediction, not the code, was sloppy.
+
+**Discrepancy 2 — "the thin flag raised on every class" was wrong.** `tool_crash` has
+**3** steps and the threshold is `< 3`, so it is not thin. Three of four classes are.
+This also retires the concern raised during implementation that the flag "always fires
+and carries no discriminating information" — at n=7 it already discriminates.
+
+**The headline number: 64.3% unattended completion (9 of 14 analyzable runs).**
+Read it honestly, against our own interest:
+
+- It sits just under `ROADMAP.md:109`'s ≥70% gate, and **it must not be reported as
+  progress toward that gate.** The denominator is 14 runs of which most are dev, proof
+  and demo bundles (`_livetest2-proof`, `dash-livetest`, `test-2026-*`) that never failed.
+  This is the "count all, classify + disclose" decision working as designed — the number
+  is true for its stated denominator and worthless as a field measurement.
+- It is high mostly because **most runs never failed at all.** "Unattended completion"
+  counts clean runs; it is not a recovery rate. Applying `heal.py:250-252`'s recovery
+  formula to the same corpus still yields **0**, because no step carries the field.
+- `cli-surface` must therefore state the denominator, the `not_analyzable` exclusion, and
+  the legacy-derived count **beside** the rate, never the rate alone. That requirement is
+  now evidence-backed rather than anticipated.
