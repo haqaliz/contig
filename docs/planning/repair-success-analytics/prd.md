@@ -344,6 +344,15 @@ The record under-determines the answer, so the command must not invent one:
 | **`attendance_unknown`** | **`approved_and_retried`, `chose_and_retried`** — a human *or* `--auto-approve`; unknowable from the record |
 | `unattended` | everything else (`patched_and_retried`, `gave_up*`, `qc_verdict_flagged`, the index/recompress fan-out, and all three `reproduce.py` literals — that loop has **no** approval gate at all) |
 
+> **Correction (2026-09-06):** the row above is wrong about `chose_and_retried`. The
+> `if auto_approve:` block in `self_heal.py` (`:1442`) always `return`s (`:1466-1471`)
+> or `continue`s (`:1469-1470`) before the ambiguous-choice gate that assigns
+> `chose_and_retried` (`:1472`, `:1497`), so `--auto-approve` can never produce that
+> literal — only a human choosing among ranked candidates can. `chose_and_retried` is
+> `attended`, not `attendance_unknown`; only `approved_and_retried` belongs in the
+> unknown row. Fixed in `repair_stats.py`'s `ATTENDED_OUTCOMES` /
+> `ATTENDANCE_UNKNOWN_OUTCOMES`; the row above is left as originally written.
+
 A run containing an `attendance_unknown` step is reported in its own bucket and excluded
 from both the numerator and the denominator of the unattended-completion rate, with the
 exclusion counted and stated — the same discipline R4 applies to zero-event runs.

@@ -144,10 +144,23 @@ def test_an_acknowledged_advisory_is_attended():
     assert classify_attendance("advisory_acknowledged_and_retried") == "attended"
 
 
-def test_an_approved_patch_has_unknown_attendance():
-    # `--auto-approve` reaches this literal with no human involved, and the flag is
-    # not persisted, so the record genuinely cannot say (PRD Addendum 2).
-    assert classify_attendance("approved_and_retried") == "attendance_unknown"
+def test_a_chosen_patch_is_attended():
+    # Unlike `approved_and_retried`, `--auto-approve` can never produce this literal:
+    # the `if auto_approve:` block (self_heal.py:1442) always `return`s (:1466-1471)
+    # or `continue`s (:1469-1470) before the ambiguous-choice gate that assigns
+    # `chose_and_retried` (:1497), which sits below it at :1472. So every
+    # `chose_and_retried` step came from a human picking among ranked candidates.
+    assert classify_attendance("chose_and_retried") == "attended"
+
+
+def test_the_auto_approve_block_never_reaches_the_ambiguous_choice_gate():
+    # Pins the reachability premise `test_a_chosen_patch_is_attended` relies on,
+    # independent of the classifier: `if auto_approve:` (self_heal.py:1442) is
+    # unconditionally terminal for the loop iteration (return or continue,
+    # :1466-1471), and the ambiguous-choice gate that produces `chose_and_retried`
+    # (:1472) sits below it, so the two branches can never both fire for one step.
+    assert "chose_and_retried" not in ATTENDANCE_UNKNOWN_OUTCOMES
+    assert "chose_and_retried" in ATTENDED_OUTCOMES
 
 
 def test_a_machine_only_outcome_is_unattended():

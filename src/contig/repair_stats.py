@@ -75,24 +75,29 @@ ACKNOWLEDGED_OUTCOMES: frozenset[str] = frozenset({"advisory_acknowledged_and_re
 
 # Attendance is a separate axis from the family (PRD Addendum 2). These are the
 # outcomes that only a human can produce: a rejection, a lapsed approval window, a
-# choice outside the offered options, and an advisory a human acknowledged.
+# choice outside the offered options, an advisory a human acknowledged, and a pick
+# among ambiguous candidates.
 ATTENDED_OUTCOMES: frozenset[str] = frozenset(
     {
         "rejected_by_user",
         "approval_timed_out",
         "invalid_choice_rejected",
         "advisory_acknowledged_and_retried",
+        "chose_and_retried",
     }
 )
 
-# Under-determined, and deliberately not guessed: both literals fire on a real human
+# Under-determined, and deliberately not guessed: this literal fires on a real human
 # approval AND under `--auto-approve`, where the engine decides per policy and no
 # human is involved. `auto_approve` is a CLI flag that is never persisted on
-# `RunRecord`, so the record cannot tell the two apart.
+# `RunRecord`, so the record cannot tell the two apart. `chose_and_retried` does NOT
+# belong here despite the similar name: the `if auto_approve:` block always returns
+# or continues (self_heal.py:1466-1471) before the ambiguous-choice gate that
+# assigns `chose_and_retried` (self_heal.py:1472, :1497), so `--auto-approve` can
+# never produce it — only a human choosing among ranked candidates can.
 ATTENDANCE_UNKNOWN_OUTCOMES: frozenset[str] = frozenset(
     {
         "approved_and_retried",
-        "chose_and_retried",
     }
 )
 
@@ -163,10 +168,11 @@ def classify_applied(outcome: str, raw_step: dict) -> str:
 def classify_attendance(outcome: str) -> str:
     """Whether a human was in the loop for this step.
 
-    Three states, because the record under-determines the answer for two literals:
-    `approved_and_retried` and `chose_and_retried` fire both on a real approval and
-    under `--auto-approve`, and the flag is never persisted. Those are
-    `attendance_unknown` rather than a guess in either direction.
+    Three states, because the record under-determines the answer for one literal:
+    `approved_and_retried` fires both on a real human approval and under
+    `--auto-approve`, and the flag is never persisted. That one is
+    `attendance_unknown` rather than a guess in either direction — see
+    `ATTENDANCE_UNKNOWN_OUTCOMES` for why `chose_and_retried` does not join it.
     """
     if outcome not in OUTCOME_FAMILY:
         return "unknown"
