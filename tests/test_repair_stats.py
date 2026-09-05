@@ -11,7 +11,8 @@ from pathlib import Path
 
 from contig.bundle import write_bundle
 from contig.corpus import _THIN_THRESHOLD as _CORPUS_THIN_THRESHOLD
-from contig.models import ExecutionTarget, RepairStep, RunRecord, TaskEvent
+from contig.models import ExecutionTarget, LaunchManifest, RepairStep, RunRecord, TaskEvent
+from contig.workspace import load_launch_manifest
 from contig.repair_stats import (
     LoadedRun,
     _THIN_THRESHOLD,
@@ -555,3 +556,73 @@ def test_a_bundle_whose_json_omits_repair_history_loads_with_no_steps(tmp_path):
     path.write_text(json.dumps(data))
     [run] = collect_runs(tmp_path)
     assert run.raw_steps == []
+
+
+# --- auto_approve carriage (Phase 2, R3) ---------------------------------------
+
+
+def _write_launch_manifest(runs_dir, run_id, *, auto_approve=None):
+    """Write a real `launch.json` sidecar next to a bundled run.
+
+    Mirrors `_write_run_bundle`'s "write the model, then edit the file on disk"
+    shape where a raw/corrupt fixture is needed, but a `LaunchManifest` has no
+    field whose presence-vs-value distinction matters here, so the model-written
+    JSON is used directly.
+    """
+    manifest = LaunchManifest(
+        run_id=run_id,
+        pipeline="nf-core/rnaseq",
+        revision="3.26.0",
+        profiles=["docker"],
+        backend="local",
+        container_runtime="docker",
+        auto_approve=auto_approve,
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    (Path(runs_dir) / run_id / "launch.json").write_text(manifest.model_dump_json(indent=2))
+
+
+def test_load_launch_manifest_is_none_when_no_launch_json_exists(tmp_path):
+    _write_run_bundle(tmp_path, "r1")
+    assert load_launch_manifest(tmp_path, "r1") is None
+
+
+def test_load_launch_manifest_is_none_for_corrupt_json(tmp_path):
+    _write_run_bundle(tmp_path, "r1")
+    (tmp_path / "r1" / "launch.json").write_text("{not valid json")
+    assert load_launch_manifest(tmp_path, "r1") is None
+
+
+def test_load_launch_manifest_is_none_for_json_that_fails_validation(tmp_path):
+    _write_run_bundle(tmp_path, "r1")
+    (tmp_path / "r1" / "launch.json").write_text('{"run_id": "r1"}')
+    assert load_launch_manifest(tmp_path, "r1") is None
+
+
+def test_load_launch_manifest_returns_the_recorded_auto_approve_flag(tmp_path):
+    _write_run_bundle(tmp_path, "r1")
+    _write_launch_manifest(tmp_path, "r1", auto_approve=True)
+    assert load_launch_manifest(tmp_path, "r1").auto_approve is True
+
+
+def test_a_bundle_with_no_launch_manifest_has_auto_approve_unknown(tmp_path):
+    _write_run_bundle(tmp_path, "r1")
+    [run] = collect_runs(tmp_path)
+    assert run.auto_approve is None
+
+
+def test_a_bundle_with_a_launch_manifest_carries_its_auto_approve_flag(tmp_path):
+    _write_run_bundle(tmp_path, "r1")
+    _write_launch_manifest(tmp_path, "r1", auto_approve=True)
+    [run] = collect_runs(tmp_path)
+    assert run.auto_approve is True
+
+
+def test_a_corrupt_launch_manifest_does_not_blind_the_report_to_the_run(tmp_path):
+    # Unlike a corrupt run_record.json (which skips the whole run), a corrupt
+    # launch.json only costs the one derived fact -- the run itself still loads.
+    _write_run_bundle(tmp_path, "r1")
+    (tmp_path / "r1" / "launch.json").write_text("{not valid json")
+    [run] = collect_runs(tmp_path)
+    assert run.run_id == "r1"
+    assert run.auto_approve is None

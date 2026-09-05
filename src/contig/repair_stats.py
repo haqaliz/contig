@@ -28,7 +28,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from contig.models import RunRecord, RunSummary
-from contig.workspace import bundle_dir_for, list_run_ids, load_run
+from contig.workspace import (
+    bundle_dir_for,
+    list_run_ids,
+    load_launch_manifest,
+    load_run,
+)
 
 # The five families, mirroring the shipped dashboard taxonomy 1:1
 # (`dashboard/components/run/repair-timeline.tsx:86-192`). 19 literals; the
@@ -195,6 +200,14 @@ class LoadedRun:
     run_id: str
     record: RunRecord
     raw_steps: list[dict]
+    # Whether `--auto-approve` was passed to `contig run` for this run, read from
+    # `launch.json` (`models.py:437-443`). Defaulted -- not just for a run bundled
+    # before `auto_approve` existed on `LaunchManifest`, but because the dataclass
+    # is frozen and every existing `LoadedRun(...)` call site in this test suite
+    # predates this field. `None` covers both "no launch.json" and "one that failed
+    # to load" (`workspace.load_launch_manifest`); a later phase, not this one,
+    # turns it into an attendance classification.
+    auto_approve: bool | None = None
 
 
 def _bump(counts: dict[str, int], key: str) -> None:
@@ -324,6 +337,15 @@ def collect_runs(runs_dir: str | Path) -> list[LoadedRun]:
     and therefore the only way to tell a pre-v0.49.0 record from one that recorded
     nothing was enacted.
 
+    A THIRD file, `launch.json`, is read once through `workspace.load_launch_manifest`
+    for `LoadedRun.auto_approve`. No raw-JSON double-read is needed here the way it is
+    for `patch_applied`: `LaunchManifest.auto_approve` is `bool | None` (`models.py:443`),
+    so an absent key and a genuinely recorded value are already distinguishable on the
+    validated model — `None` means "not recorded or not loadable", never a stand-in for
+    `False`. That is the `patch_applied` lesson applied rather than repeated: give the
+    ambiguous fact a `None` state on the model itself, and the second read becomes
+    unnecessary rather than merely inconvenient.
+
     A missing runs directory simply has no runs (`workspace.list_run_ids`).
     """
     runs: list[LoadedRun] = []
@@ -339,11 +361,15 @@ def collect_runs(runs_dir: str | Path) -> list[LoadedRun]:
             # not load must not blind the report to every other run in it. (Defensive
             # — every record in the real corpus loads cleanly today.)
             continue
+        # A missing or corrupt launch.json costs only this one derived fact, not the
+        # whole run: `load_launch_manifest` already folds every such case to `None`.
+        manifest = load_launch_manifest(runs_dir, run_id)
         runs.append(
             LoadedRun(
                 run_id=run_id,
                 record=record,
                 raw_steps=raw.get("repair_history", []),
+                auto_approve=manifest.auto_approve if manifest is not None else None,
             )
         )
     return runs
