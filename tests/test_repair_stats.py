@@ -6,6 +6,10 @@ inventing a second. These tests pin the 19-literal taxonomy against the shipped
 dashboard families and hold the three-state answers honest.
 """
 
+import json
+from pathlib import Path
+
+from contig.bundle import write_bundle
 from contig.corpus import _THIN_THRESHOLD as _CORPUS_THIN_THRESHOLD
 from contig.models import ExecutionTarget, RepairStep, RunRecord, TaskEvent
 from contig.repair_stats import (
@@ -21,6 +25,7 @@ from contig.repair_stats import (
     OUTCOME_FAMILY,
     classify_applied,
     classify_attendance,
+    collect_runs,
     derived_applied,
     repair_stats_report,
 )
@@ -448,3 +453,83 @@ def test_every_count_map_is_ordered_by_key_for_a_deterministic_render():
     ]
     for count_map in maps:
         assert list(count_map) == sorted(count_map)
+
+
+# --- loading (AC-11's I/O half) ------------------------------------------------
+
+
+def test_a_missing_runs_dir_has_no_runs_rather_than_raising():
+    assert collect_runs(Path("/nonexistent/runs")) == []
+
+
+def _write_run_bundle(
+    runs_dir, run_id, *, raw_steps=(), events=(_COMPLETED,), drop_patch_applied=False
+):
+    """Write a real bundle, optionally stripped back to the pre-v0.49.0 shape.
+
+    `model_dump_json` ALWAYS emits `patch_applied`, so a bundle written straight from
+    the model can never be a legacy fixture. The post-write edit is the only way to
+    produce a record that genuinely omits the key on disk.
+    """
+    loaded = _loaded_run(run_id, raw_steps=raw_steps, events=events)
+    write_bundle(loaded.record, Path(runs_dir) / run_id)
+    if drop_patch_applied:
+        path = Path(runs_dir) / run_id / "run_record.json"
+        data = json.loads(path.read_text())
+        for step in data["repair_history"]:
+            del step["patch_applied"]
+        path.write_text(json.dumps(data, indent=2))
+
+
+def test_every_bundled_run_under_the_dir_is_loaded(tmp_path):
+    _write_run_bundle(tmp_path, "r2", raw_steps=[_raw_step("gave_up")], events=(_FAILED,))
+    _write_run_bundle(tmp_path, "r1")
+    loaded = collect_runs(tmp_path)
+    assert [run.run_id for run in loaded] == ["r1", "r2"]
+    assert loaded[1].record.repair_history[0].outcome == "gave_up"
+
+
+def test_a_bundle_written_before_the_field_existed_loads_as_legacy(tmp_path):
+    # The whole reason `collect_runs` reads each bundle twice: going through the model
+    # alone would resurrect the key as `False` and silently reclassify this step.
+    _write_run_bundle(
+        tmp_path,
+        "r1",
+        raw_steps=[_raw_step("patched_and_retried")],
+        drop_patch_applied=True,
+    )
+    [run] = collect_runs(tmp_path)
+    assert "patch_applied" not in run.raw_steps[0]
+    assert repair_stats_report([run])["steps"]["by_applied"]["legacy_derived"] == 1
+
+
+def test_a_bundle_carrying_the_field_loads_it_as_read(tmp_path):
+    _write_run_bundle(
+        tmp_path,
+        "r1",
+        raw_steps=[_raw_step("patched_and_retried", patch_applied=True)],
+    )
+    [run] = collect_runs(tmp_path)
+    assert run.raw_steps[0]["patch_applied"] is True
+    assert repair_stats_report([run])["steps"]["by_applied"]["applied"] == 1
+
+
+def test_a_bundle_that_fails_to_validate_is_skipped_not_raised(tmp_path):
+    # A runs dir is user data. `load_corpus` may raise over one curated file, but one
+    # unreadable bundle here must not blind the report to every other run.
+    _write_run_bundle(tmp_path, "good")
+    _write_run_bundle(tmp_path, "bad")
+    (tmp_path / "bad" / "run_record.json").write_text('{"run_id": "bad"}')
+    assert [run.run_id for run in collect_runs(tmp_path)] == ["good"]
+
+
+def test_a_bundle_whose_json_omits_repair_history_loads_with_no_steps(tmp_path):
+    # `repair_history` is a defaulted field, so a record written before it existed can
+    # be absent from the JSON while still validating into an empty list on the model.
+    _write_run_bundle(tmp_path, "r1")
+    path = tmp_path / "r1" / "run_record.json"
+    data = json.loads(path.read_text())
+    del data["repair_history"]
+    path.write_text(json.dumps(data))
+    [run] = collect_runs(tmp_path)
+    assert run.raw_steps == []

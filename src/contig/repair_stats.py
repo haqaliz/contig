@@ -23,9 +23,12 @@ cannot rot. Records that carry the key are read from the field and never touched
 by the map at all.
 """
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 
 from contig.models import RunRecord, RunSummary
+from contig.workspace import bundle_dir_for, list_run_ids, load_run
 
 # The five families, mirroring the shipped dashboard taxonomy 1:1
 # (`dashboard/components/run/repair-timeline.tsx:86-192`). 19 literals; the
@@ -297,3 +300,38 @@ def repair_stats_report(runs: list[LoadedRun]) -> dict:
         ),
         "unmapped_outcomes": dict(sorted(unmapped_outcomes.items())),
     }
+
+
+def collect_runs(runs_dir: str | Path) -> list[LoadedRun]:
+    """Load every bundled run under `runs_dir` as a `LoadedRun`.
+
+    Reads each bundle TWICE, deliberately: once through `load_run` for the validated
+    model, and once as raw JSON for `repair_history`. `RepairStep.patch_applied` is
+    `bool = False` (`models.py:322`), so on the model an absent key and an explicit
+    `False` are the same value — the raw dicts are the only evidence of key presence
+    and therefore the only way to tell a pre-v0.49.0 record from one that recorded
+    nothing was enacted.
+
+    A missing runs directory simply has no runs (`workspace.list_run_ids`).
+    """
+    runs: list[LoadedRun] = []
+    for run_id in list_run_ids(runs_dir):
+        record_path = bundle_dir_for(runs_dir, run_id) / "run_record.json"
+        try:
+            record = load_run(runs_dir, run_id)
+            raw = json.loads(record_path.read_text())
+        # pydantic's ValidationError and json's JSONDecodeError are both
+        # ValueError; OSError covers an unreadable file.
+        except (ValueError, OSError):
+            # Skipped, not raised: a runs dir is user data, and one bundle that will
+            # not load must not blind the report to every other run in it. (Defensive
+            # — every record in the real corpus loads cleanly today.)
+            continue
+        runs.append(
+            LoadedRun(
+                run_id=run_id,
+                record=record,
+                raw_steps=raw.get("repair_history", []),
+            )
+        )
+    return runs
