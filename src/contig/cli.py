@@ -783,6 +783,7 @@ def _dispatch_run(
         max_attempts=max_attempts,
         allow_reference_mismatch=allow_reference_mismatch,
         harmonized_reference=bool(harmonized_direction),
+        auto_approve=auto_approve,
         created_at=datetime.now(timezone.utc).isoformat(),
     )
     manifest_dir = Path(runs_dir) / run_id
