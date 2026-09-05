@@ -130,6 +130,7 @@ from contig.reference import ReferenceError, resolve_reference
 from contig.reference_check import check_reference_consistency, fasta_contigs, gtf_contigs
 from contig.reference_harmonize import harmonize_gtf, plan_harmonization
 from contig.registry import VARIANT_ASSAYS, UnknownAssayError, assay_for_pipeline, select_pipeline
+from contig.repair_stats import collect_runs, repair_stats_report
 from contig.report import (
     render_explain,
     render_reproduction,
@@ -3734,3 +3735,25 @@ def coverage(
         typer.echo(f"  {cls}: {count}{thin}")
     sources = ", ".join(f"{k}={v}" for k, v in sorted(report["by_source"].items()))
     typer.echo(f"  by source: {sources}")
+
+
+@app.command(name="repair-stats")
+def repair_stats(
+    runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the report as JSON (for the dashboard)."),
+) -> None:
+    """Report repair-step outcomes and unattended completion over a runs directory.
+
+    Counts two axes per repair step (which outcome family, which failure class)
+    and computes completion per run, over real runs rather than the frozen
+    synthetic scenarios `heal-guard` scores.
+    """
+    runs = collect_runs(runs_dir)
+    report = repair_stats_report(runs)
+
+    if json_out:
+        typer.echo(_json.dumps(report))
+        return
+    if not runs:
+        typer.echo(f"No runs found in {runs_dir}.")
+        return
