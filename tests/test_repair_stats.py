@@ -117,10 +117,19 @@ def test_a_step_recording_the_field_as_true_is_applied():
     assert classify_applied("patched_and_retried", recorded_step) == "applied"
 
 
-def test_an_unmapped_literal_is_unknown_even_when_the_field_is_recorded():
-    # Key presence does not rescue a literal the taxonomy does not know: if the
-    # map is out of date, nothing about the step is reported confidently.
+def test_a_recorded_field_outranks_an_unmapped_outcome():
+    # Replaces an earlier pin that returned `unknown` here. Key presence WINS: when the
+    # record states that the patch was enacted, that is a fact about this step. The map
+    # exists only to reconstruct what an ABSENT key must have meant, so leaning on it
+    # over a stated value would discard information the record actually carries.
     unmapped_step = {"outcome": "stopped_for_confirmation", "patch_applied": True}
+    assert classify_applied("stopped_for_confirmation", unmapped_step) == "applied"
+
+
+def test_an_unmapped_literal_with_no_recorded_field_is_unknown():
+    # The surviving half of that older pin: nothing stated, and the map — the only
+    # evidence for an absent key — does not know this literal.
+    unmapped_step = {"outcome": "stopped_for_confirmation"}
     assert classify_applied("stopped_for_confirmation", unmapped_step) == "unknown"
 
 

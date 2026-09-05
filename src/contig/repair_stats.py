@@ -143,15 +143,21 @@ def classify_applied(outcome: str, raw_step: dict) -> str:
     the only source of key presence, and therefore the only way to tell "we did not
     record this" from "we recorded that nothing was enacted".
 
-    An outcome the taxonomy does not know is `unknown` on this axis whether or not
-    the key is present: an out-of-date map is not a basis for a confident answer,
-    and the unmapped literal is surfaced in its own bucket instead.
+    Key presence therefore OUTRANKS the taxonomy: a recorded value is a fact this
+    step states about itself, and it stands whether or not the map knows the literal.
+    The map is consulted only for an absent key, and an outcome it does not know is
+    `unknown` on this axis — nothing stated, and nothing to derive from. The literal
+    is surfaced in its own bucket either way.
+
+    Deliberately asymmetric with `classify_attendance`, which stays `unknown` for an
+    unmapped literal even here: attendance has no field to read at all, so the map is
+    its ONLY evidence. Do not "fix" one of the two to match the other.
     """
+    if "patch_applied" in raw_step:
+        return "applied" if raw_step["patch_applied"] else "not_applied"
     if outcome not in OUTCOME_FAMILY:
         return "unknown"
-    if "patch_applied" not in raw_step:
-        return "legacy_derived"
-    return "applied" if raw_step["patch_applied"] else "not_applied"
+    return "legacy_derived"
 
 
 def classify_attendance(outcome: str) -> str:
