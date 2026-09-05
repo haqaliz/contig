@@ -101,3 +101,194 @@ def test_a_missing_runs_dir_reports_no_runs_rather_than_a_zero_rate(tmp_path):
     assert result.exit_code == 0
     assert f"No runs found in {missing}." in result.output
     assert "%" not in result.output
+
+
+# --- text rendering: the disclosures -------------------------------------------
+
+
+def test_the_totals_line_labels_both_runs_and_steps(tmp_path):
+    _write_run(tmp_path, "r1", raw_steps=[_raw_step("gave_up")], events=(_FAILED,))
+    result = runner.invoke(app, ["repair-stats", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "Repair stats: 1 run(s), 1 repair step(s)." in result.output
+
+
+def test_the_rate_carries_its_denominator_on_the_same_line(tmp_path):
+    # A bare percentage invites the reader to take 66.7% as a field measurement.
+    _write_run(tmp_path, "r1")
+    _write_run(tmp_path, "r2")
+    _write_run(tmp_path, "r3", raw_steps=[_raw_step("gave_up")], events=(_FAILED,))
+    result = runner.invoke(app, ["repair-stats", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    percent_lines = [line for line in result.output.splitlines() if "%" in line]
+    assert percent_lines == ["  unattended completion: 2/3 scored run(s) (66.7%)"]
+
+
+def test_a_zero_event_run_is_excluded_and_the_reason_is_stated(tmp_path):
+    _write_run(tmp_path, "r1")
+    _write_run(tmp_path, "empty", events=())
+    result = runner.invoke(app, ["repair-stats", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "1 run(s) not analyzable (no task events) -- excluded from both sides" in result.output
+
+
+def test_the_not_analyzable_line_is_absent_when_every_run_is_analyzable(tmp_path):
+    _write_run(tmp_path, "r1")
+    result = runner.invoke(app, ["repair-stats", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "not analyzable" not in result.output
+
+
+def test_an_attendance_unknown_run_is_excluded_and_the_line_says_why(tmp_path):
+    # `approved_and_retried` fires on a human approval AND under `--auto-approve`,
+    # and the flag is never persisted, so the record cannot tell the two apart.
+    _write_run(tmp_path, "r1")
+    _write_run(tmp_path, "r2", raw_steps=[_raw_step("approved_and_retried")])
+    result = runner.invoke(app, ["repair-stats", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert (
+        "    1 run(s) attendance unknown (a human, or --auto-approve, which is never"
+        " recorded) -- excluded from both sides"
+    ) in result.output
+
+
+def test_the_family_block_states_that_it_counts_steps(tmp_path):
+    _write_run(
+        tmp_path,
+        "r1",
+        raw_steps=[_raw_step("patched_and_retried"), _raw_step("gave_up", attempt=2)],
+        events=(_FAILED,),
+    )
+    result = runner.invoke(app, ["repair-stats", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "  by outcome family (per step):\n    applied: 1\n    gave_up: 1\n" in result.output
+
+
+def _thin_and_thick(tmp_path):
+    _write_run(
+        tmp_path,
+        "r1",
+        raw_steps=[
+            _raw_step("gave_up", failure_class="tool_crash", attempt=1),
+            _raw_step("gave_up", failure_class="tool_crash", attempt=2),
+            _raw_step("gave_up", failure_class="tool_crash", attempt=3),
+            _raw_step("gave_up", failure_class="oom", attempt=4),
+        ],
+        events=(_FAILED,),
+    )
+    return runner.invoke(app, ["repair-stats", "--runs-dir", str(tmp_path)])
+
+
+def test_a_failure_class_below_the_thin_threshold_is_suffixed_thin(tmp_path):
+    result = _thin_and_thick(tmp_path)
+    assert result.exit_code == 0
+    assert "    oom: 1  THIN" in result.output
+
+
+def test_a_failure_class_at_the_thin_threshold_is_not_suffixed(tmp_path):
+    # At n=3 the flag already discriminates, which is the whole reason it earns space.
+    result = _thin_and_thick(tmp_path)
+    assert result.exit_code == 0
+    assert "    tool_crash: 3\n" in result.output
+
+
+def test_the_read_count_is_stated_outright_when_it_is_zero(tmp_path):
+    # "read 0" is the sharpest fact in the report: not one step in this corpus says
+    # for itself whether its patch was enacted. It must not need subtraction to see.
+    _write_run(
+        tmp_path,
+        "r1",
+        raw_steps=[_raw_step("patched_and_retried"), _raw_step("gave_up", attempt=2)],
+        events=(_FAILED,),
+        legacy=True,
+    )
+    result = runner.invoke(app, ["repair-stats", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "  patch enacted (per step): read 0, legacy-derived 2, unknown 0" in result.output
+
+
+def test_the_legacy_derivation_is_broken_out_from_the_counts_read(tmp_path):
+    # Derived numbers are kept apart so a reader can discard all of them at once.
+    _write_run(
+        tmp_path,
+        "r1",
+        raw_steps=[_raw_step("patched_and_retried"), _raw_step("gave_up", attempt=2)],
+        events=(_FAILED,),
+        legacy=True,
+    )
+    result = runner.invoke(app, ["repair-stats", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "    of the 2 legacy-derived: applied 1, not applied 1" in result.output
+
+
+def test_a_step_that_records_the_field_is_counted_as_read(tmp_path):
+    _write_run(
+        tmp_path,
+        "r1",
+        raw_steps=[_raw_step("patched_and_retried", patch_applied=True)],
+        events=(_FAILED,),
+    )
+    result = runner.invoke(app, ["repair-stats", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "    of the 1 read: applied 1, not applied 0" in result.output
+
+
+def test_an_outcome_outside_the_taxonomy_is_surfaced_by_name(tmp_path):
+    # An out-of-date map is a finding, not a rounding error, so the literal is named.
+    _write_run(
+        tmp_path,
+        "r1",
+        raw_steps=[_raw_step("stopped_for_confirmation")],
+        events=(_FAILED,),
+    )
+    result = runner.invoke(app, ["repair-stats", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "  unmapped outcome(s): stopped_for_confirmation=1" in result.output
+
+
+def test_the_note_distinguishing_this_from_heal_guard_is_always_printed(tmp_path):
+    # Two numbers named "recovery" over two different populations is the confusion
+    # this report is most likely to cause, so the note is unconditional.
+    _write_run(tmp_path, "r1")
+    result = runner.invoke(app, ["repair-stats", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert (
+        "  note: over real runs -- not `heal-guard`'s recovery_rate,"
+        " which scores synthetic scenarios."
+    ) in result.output
+
+
+def test_a_rate_with_nothing_to_divide_by_is_not_computable_not_zero(tmp_path):
+    # "0%" would say every run failed unattended; the truth is that none was scorable.
+    _write_run(tmp_path, "empty", events=())
+    result = runner.invoke(app, ["repair-stats", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "  unattended completion: not computable (0 scored run(s))" in result.output
+    assert "%" not in result.output
+
+
+def test_a_corpus_with_no_repair_steps_omits_the_per_step_blocks(tmp_path):
+    _write_run(tmp_path, "r1")
+    result = runner.invoke(app, ["repair-stats", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "per step" not in result.output
+
+
+def test_two_invocations_over_one_fixture_render_identical_output(tmp_path):
+    _write_run(
+        tmp_path,
+        "r1",
+        raw_steps=[
+            _raw_step("patched_and_retried", failure_class="oom"),
+            _raw_step("gave_up", failure_class="tool_crash", attempt=2),
+            _raw_step("stopped_for_confirmation", failure_class="unknown", attempt=3),
+        ],
+        events=(_FAILED,),
+        legacy=True,
+    )
+    _write_run(tmp_path, "r2")
+    args = ["repair-stats", "--runs-dir", str(tmp_path)]
+    first = runner.invoke(app, args)
+    second = runner.invoke(app, args)
+    assert first.exit_code == 0
+    assert first.output == second.output

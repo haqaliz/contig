@@ -3757,3 +3757,72 @@ def repair_stats(
     if not runs:
         typer.echo(f"No runs found in {runs_dir}.")
         return
+
+    run_counts = report["runs"]
+    step_counts = report["steps"]
+    typer.echo(
+        f"Repair stats: {run_counts['total']} run(s), {step_counts['total']} repair step(s)."
+    )
+    rate = run_counts["unattended_completion_rate"]
+    denominator = run_counts["rate_denominator"]
+    # "scored", not "analyzable": a run can be analyzable and still fall out of the
+    # denominator for attendance_unknown, and a label that says otherwise would be
+    # exactly the kind of unstated denominator this report exists to avoid.
+    if rate is None:
+        # Distinct from 0.0%: nothing was scorable, which is not the same claim as
+        # "no scorable run completed unattended".
+        typer.echo(f"  unattended completion: not computable ({denominator} scored run(s))")
+    else:
+        typer.echo(
+            f"  unattended completion: {run_counts['unattended_completed']}/{denominator}"
+            f" scored run(s) ({rate:.1%})"
+        )
+    if run_counts["not_analyzable"]:
+        typer.echo(
+            f"    {run_counts['not_analyzable']} run(s) not analyzable (no task events)"
+            " -- excluded from both sides"
+        )
+    if run_counts["attendance_unknown"]:
+        typer.echo(
+            f"    {run_counts['attendance_unknown']} run(s) attendance unknown"
+            " (a human, or --auto-approve, which is never recorded)"
+            " -- excluded from both sides"
+        )
+    if step_counts["by_family"]:
+        typer.echo("  by outcome family (per step):")
+        for family, count in sorted(step_counts["by_family"].items()):
+            typer.echo(f"    {family}: {count}")
+    if step_counts["by_failure_class"]:
+        typer.echo("  by failure class (per step):")
+        for failure_class, count in sorted(step_counts["by_failure_class"].items()):
+            thin = "  THIN" if failure_class in report["thin"] else ""
+            typer.echo(f"    {failure_class}: {count}{thin}")
+    if step_counts["total"]:
+        by_applied = step_counts["by_applied"]
+        read = by_applied["applied"] + by_applied["not_applied"]
+        legacy = by_applied["legacy_derived"]
+        typer.echo(
+            f"  patch enacted (per step): read {read}, legacy-derived {legacy},"
+            f" unknown {by_applied['unknown']}"
+        )
+        if read:
+            typer.echo(
+                f"    of the {read} read: applied {by_applied['applied']},"
+                f" not applied {by_applied['not_applied']}"
+            )
+        if legacy:
+            derived = step_counts["legacy_derived_applied"]
+            typer.echo(
+                f"    of the {legacy} legacy-derived: applied {derived['applied']},"
+                f" not applied {derived['not_applied']}"
+            )
+    if report["unmapped_outcomes"]:
+        unmapped = ", ".join(
+            f"{outcome}={count}"
+            for outcome, count in sorted(report["unmapped_outcomes"].items())
+        )
+        typer.echo(f"  unmapped outcome(s): {unmapped}")
+    typer.echo(
+        "  note: over real runs -- not `heal-guard`'s recovery_rate,"
+        " which scores synthetic scenarios."
+    )
