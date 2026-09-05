@@ -3786,7 +3786,7 @@ def repair_stats(
     if run_counts["attendance_unknown"]:
         typer.echo(
             f"    {run_counts['attendance_unknown']} run(s) attendance unknown"
-            " (a human, or --auto-approve, which is never recorded)"
+            " (the run did not record --auto-approve)"
             " -- excluded from both sides"
         )
     if rate is not None:

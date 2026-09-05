@@ -140,15 +140,15 @@ def test_the_not_analyzable_line_is_absent_when_every_run_is_analyzable(tmp_path
 
 
 def test_an_attendance_unknown_run_is_excluded_and_the_line_says_why(tmp_path):
-    # `approved_and_retried` fires on a human approval AND under `--auto-approve`,
-    # and the flag is never persisted, so the record cannot tell the two apart.
+    # No `launch.json` means the run itself never recorded the `--auto-approve` fact,
+    # so the record -- not the outcome -- is what's unknown here.
     _write_run(tmp_path, "r1")
     _write_run(tmp_path, "r2", raw_steps=[_raw_step("approved_and_retried")])
     result = runner.invoke(app, ["repair-stats", "--runs-dir", str(tmp_path)])
     assert result.exit_code == 0
     assert (
-        "    1 run(s) attendance unknown (a human, or --auto-approve, which is never"
-        " recorded) -- excluded from both sides"
+        "    1 run(s) attendance unknown (the run did not record --auto-approve)"
+        " -- excluded from both sides"
     ) in result.output
 
 
