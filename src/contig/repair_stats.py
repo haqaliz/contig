@@ -23,6 +23,10 @@ cannot rot. Records that carry the key are read from the field and never touched
 by the map at all.
 """
 
+from dataclasses import dataclass
+
+from contig.models import RunRecord, RunSummary
+
 # The five families, mirroring the shipped dashboard taxonomy 1:1
 # (`dashboard/components/run/repair-timeline.tsx:86-192`). 19 literals; the
 # equivalence "applied <=> APPLIED family" holds only because that taxonomy split
@@ -162,3 +166,134 @@ def classify_attendance(outcome: str) -> str:
     if outcome in ATTENDED_OUTCOMES:
         return "attended"
     return "unattended"
+
+
+@dataclass(frozen=True)
+class LoadedRun:
+    """One run as the stats need it: the validated model AND its raw step dicts.
+
+    Both halves come from the same `run_record.json`. The model is what every other
+    caller uses; `raw_steps` exists only because key presence is invisible on the
+    model (see `classify_applied`).
+    """
+
+    run_id: str
+    record: RunRecord
+    raw_steps: list[dict]
+
+
+def _bump(counts: dict[str, int], key: str) -> None:
+    counts[key] = counts.get(key, 0) + 1
+
+
+def _run_is_attended(run: LoadedRun) -> bool:
+    """Whether a human was in the loop for ANY step of this run.
+
+    Not last-step-wins: a human who rejected attempt 1 was in the loop for the run,
+    whatever the machine did afterwards.
+    """
+    return any(
+        classify_attendance(step.outcome) == "attended"
+        for step in run.record.repair_history
+    )
+
+
+def _run_attendance_is_unknown(run: LoadedRun) -> bool:
+    return any(
+        classify_attendance(step.outcome) == "attendance_unknown"
+        for step in run.record.repair_history
+    )
+
+
+def repair_stats_report(runs: list[LoadedRun]) -> dict:
+    """Per-step and per-run repair statistics, as a plain dict.
+
+    Mirrors `corpus.py:291 coverage_report`: pure, deterministic, and rendered by
+    somebody else. Two axes are counted per **step** (which family the outcome is in,
+    what its failure class was) and the completion rate is computed per **run**.
+
+    The rate is deliberately narrow. A run is scored only when the record can actually
+    answer both questions the rate asks:
+
+    - A zero-event run is `not_analyzable`. It derives `succeeded=True` vacuously
+      (`models.py:156-158`: `succeeded = failed_tasks == 0`), so scoring it would
+      invent a completion out of an absence of evidence.
+    - A run with any `attendance_unknown` step cannot be placed on the attended axis
+      at all, so it is excluded rather than guessed in either direction.
+
+    Both sit outside numerator AND denominator, and the rate is `None` — never `0.0` —
+    when nothing is left to divide by. Completion comes from
+    `RunSummary.from_events`, never `RunRecord.verdict`, which is a QC judgement and
+    not a statement about whether the run finished.
+    """
+    by_applied = {"applied": 0, "not_applied": 0, "legacy_derived": 0, "unknown": 0}
+    by_attendance = {
+        "attended": 0,
+        "unattended": 0,
+        "attendance_unknown": 0,
+        "unknown": 0,
+    }
+    legacy_derived_applied = {"applied": 0, "not_applied": 0}
+    by_family: dict[str, int] = {}
+    by_failure_class: dict[str, int] = {}
+    unmapped_outcomes: dict[str, int] = {}
+    total_steps = 0
+
+    for run in runs:
+        # strict: both halves come from the same JSON array, so a length mismatch is
+        # corruption rather than a shape worth tolerating silently.
+        for step, raw in zip(run.record.repair_history, run.raw_steps, strict=True):
+            total_steps += 1
+            applied_state = classify_applied(step.outcome, raw)
+            by_applied[applied_state] += 1
+            if applied_state == "legacy_derived":
+                # Kept apart from `by_applied` on purpose: this is inference over a
+                # frozen record set, not something the record says, so a reader must
+                # be able to discard every derived number without touching the rest.
+                derived = "applied" if derived_applied(step.outcome) else "not_applied"
+                legacy_derived_applied[derived] += 1
+            by_attendance[classify_attendance(step.outcome)] += 1
+            _bump(by_failure_class, step.diagnosis.failure_class)
+            family = OUTCOME_FAMILY.get(step.outcome)
+            if family is None:
+                # Surfaced by name rather than folded into a family it may not belong
+                # to: an out-of-date map is a finding, not a rounding error.
+                _bump(unmapped_outcomes, step.outcome)
+            else:
+                _bump(by_family, family)
+
+    analyzable = [run for run in runs if run.record.events]
+    scorable = [run for run in analyzable if not _run_attendance_is_unknown(run)]
+    unattended_completed = sum(
+        1
+        for run in scorable
+        if RunSummary.from_events(run.record.events).succeeded
+        and not _run_is_attended(run)
+    )
+    rate_denominator = len(scorable)
+
+    return {
+        "runs": {
+            "total": len(runs),
+            "analyzable": len(analyzable),
+            "not_analyzable": len(runs) - len(analyzable),
+            "attendance_unknown": len(analyzable) - len(scorable),
+            "rate_denominator": rate_denominator,
+            "unattended_completed": unattended_completed,
+            "unattended_completion_rate": (
+                unattended_completed / rate_denominator if rate_denominator else None
+            ),
+        },
+        "steps": {
+            "total": total_steps,
+            "by_family": dict(sorted(by_family.items())),
+            "by_failure_class": dict(sorted(by_failure_class.items())),
+            "by_applied": dict(sorted(by_applied.items())),
+            "by_attendance": dict(sorted(by_attendance.items())),
+            "legacy_derived_applied": dict(sorted(legacy_derived_applied.items())),
+        },
+        "thin": sorted(
+            cls for cls, count in by_failure_class.items() if count < _THIN_THRESHOLD
+        ),
+        "unmapped_outcomes": dict(sorted(unmapped_outcomes.items())),
+    }
