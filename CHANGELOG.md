@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.57.0] - 2026-09-05
+
 - **`contig repair-stats` reads `repair_history` across every bundled run, so the
   unattended-completion rate that gates Phase 2 can be computed at all
   (`repair-success-analytics`).** `RunRecord.repair_history` has been written for every run
@@ -3951,6 +3953,7 @@ compute. Pre-revenue, validation phase.
 [0.12.0]: https://github.com/haqaliz/contig/releases/tag/v0.12.0
 [0.53.0]: https://github.com/haqaliz/contig/releases/tag/v0.53.0
 [0.55.1]: https://github.com/haqaliz/contig/releases/tag/v0.55.1
+[0.57.0]: https://github.com/haqaliz/contig/releases/tag/v0.57.0
 [0.56.0]: https://github.com/haqaliz/contig/releases/tag/v0.56.0
 [0.55.0]: https://github.com/haqaliz/contig/releases/tag/v0.55.0
 [0.54.0]: https://github.com/haqaliz/contig/releases/tag/v0.54.0
