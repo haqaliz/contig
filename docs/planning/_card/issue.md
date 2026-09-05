@@ -1,94 +1,73 @@
-# Card — feat/repair-success-analytics/aliz
+# Card: feat/auto-approve-attendance/aliz
 
-**Type:** feat · **Id (slug):** `repair-success-analytics` · **Owner:** aliz
-**Source:** inline brief (no GitHub issue — `gh issue list` finds none related;
-the only open issue, #33 "Flaky: reproduce freshness guard can report a false
-UNVERIFIED", is unrelated).
-**Selected by:** `/contig-next` on 2026-09-05, against v0.56.0 (`[Unreleased]` empty).
+**Source:** inline brief (no GitHub issue — `id` is a slug). Tracker probe:
+`gh issue list` shows one open issue, #33 (flaky reproduce freshness guard),
+unrelated to this work.
+
+**Owner:** aliz · **Branch:** `feat/auto-approve-attendance/aliz`
 
 ---
 
 ## Brief
 
-Build the cross-run repair / unattended-completion analytic that `FEATURES.md:216`
-leaves as *"cross-run aggregation still to build"* — the metric `docs/ROADMAP.md:109`
-makes the Phase 1 → Phase 2 exit gate ("≥70% unattended completion on the core
-pipeline") and that nothing in the CLI can currently compute.
+Persist whether a human was in the loop so `contig repair-stats` stops reporting
+`attendance_unknown`.
 
-Aggregate `repair_history` across every run record under `runs/` into
-auto-healed vs human-declined vs gave-up, by failure class, following the shipped
-`contig clusters` / `contig coverage` aggregation pattern (`cli.py:3673`, `:3707`)
-and the outcome families already defined in
-`docs/planning/repair-patch-applied/dashboard-repair-surface/spec.md`.
+Today `--auto-approve` (`src/contig/cli.py:414`) is never persisted anywhere in the
+bundle, so the two self-heal outcome literals `approved_and_retried` and
+`chose_and_retried` (recorded at `src/contig/self_heal.py:1379,1442`) are ambiguous:
+each fires on a genuine human approval **and** under `--auto-approve`, where the
+engine decides per policy and no human is involved. `src/contig/repair_stats.py:88-96`
+correctly refuses to guess and files both literals into `ATTENDANCE_UNKNOWN_OUTCOMES`,
+which leaves **both sides** of the unattended-completion rate unmeasurable.
 
-### Verified caveats (measured against the 15 real records in `runs/`, do not re-derive)
+That rate is the Phase 1 → Phase 2 exit gate: "≥70% unattended completion on the core
+pipeline" (`docs/ROADMAP.md:109`). `contig repair-stats` shipped in v0.57.0 to compute
+it, and filed this gap against itself:
 
-1. All **7** repair steps in the 15 real records on disk **predate v0.49.0 and carry
-   no `patch_applied` key**. A naive aggregator reading the field would report 0%
-   applied across the entire real corpus — exactly the over-claim the
-   `patch-applied-field` slice existed to kill. The field must be **three-state**
-   (applied / not-applied / unknown-legacy), counted separately, never collapsed
-   into a single percentage.
-2. One real record carries `outcome: "stopped_for_confirmation"` — the literal the
-   dashboard spec correctly called **dead in `src/`**. Legacy data still has it, so
-   the outcome map needs a legacy branch.
-3. n=15 runs / 7 steps: the command must **lead with counts plus a thin-data flag**,
-   not a headline rate.
-4. This recovers nothing new for a user — it only makes the self-heal loop's field
-   performance legible, and the output should say so.
+> **Filed, not fixed:** a run record cannot say whether a human was in the loop, because
+> `auto_approve` is captured nowhere in the bundle. Persisting it (on `LaunchManifest` or
+> `ExecutionTarget`) would empty the `attendance_unknown` bucket and is the natural
+> follow-on; it is a model/signature change and this slice is read-only by design.
+> — `CHANGELOG.md:82-86`
 
-### Observed shape of the real data (`runs/**/run_record.json`, n=15)
+## The first question (decide before implementing)
 
-- `repair_history` steps: 7 total, across 15 records.
-- Diagnosis classes present: `oom` ×2, `tool_crash` ×3, `missing_index` ×1, `unknown` ×1.
-  (`failure_class` lives on `step.diagnosis`, **not** on the step itself — the step's
-  own `failure_class` key is absent/None in every record.)
-- Outcomes present: `patched_and_retried` ×2, `gave_up` ×4, `stopped_for_confirmation` ×1.
-- `patch_applied` present: 0 / 7.
-- Top-level `status` is None on all 15 records (status lives on the summary, not the
-  record root) — confirm the real completion signal during the dig.
+Where the field lives is a real trade-off, not a detail:
 
----
+- **`LaunchManifest`** (`src/contig/models.py:411`) — precedent exists at
+  `models.py:432-435` (`allow_reference_mismatch: bool = False`, with the legacy
+  back-compat comment), written at `cli.py:769-790`. **No signature break** (signing
+  covers `RunRecord` only, `src/contig/signing.py:55`). **But** `launch.json` is a
+  *replay* surface: `rerun`/`reproduce` rebuild the invocation from it, so persisting
+  attendance there means a replay silently inherits an unattended policy. That is the
+  same objection that kept `--detect-stalls`/`--stall-timeout` deliberately off the
+  manifest ("a stall is a property of the machine, not the analysis", `FEATURES.md:251`).
+- **`RunRecord`** (`src/contig/models.py:325`) — semantically right: a fact about what
+  happened, not an instruction for what to do again. **But** it is the signed payload
+  (`signing.py:55` `canonical_record_bytes`), making this the **fifth** disclosed
+  signature break, after C8 slice 6, C8 slice 8, the somatic FAIL floor, and
+  `patch_applied`.
+- A third option worth pricing: `ExecutionTarget` (`models.py:30`), which is nested
+  *inside* `RunRecord` — so it carries the signature cost without the semantic win, and
+  "was a human at the keyboard" is not a property of where the run executes.
 
-## Why this was picked (grounded citations)
+## Scope
 
-- `docs/ROADMAP.md:109` — Phase 1 → Phase 2 gate: "≥70% unattended completion on the
-  core pipeline". `docs/ROADMAP.md:101` — success metric: "Runs completed without
-  human intervention: ≥70% of real runs". **Neither is computable today.**
-- `FEATURES.md:216` — "Repair success-rate analytics | Across all runs: auto-healed vs
-  paused vs gave-up, by failure class | Built data (the `patch_applied` slice supplied
-  the missing field — proposed vs applied was previously indistinguishable, so any such
-  analytic would have over-counted); **cross-run aggregation still to build** | M".
-- `docs/technical/CAPABILITY_ROADMAP.md` (C2) — "Unattended-completion rate is the
-  headline reliability metric (ROADMAP Phase 1)"; "Eval data captured: ... repair
-  success-rate analytics gain new classes".
-- `docs/technical/CAPABILITY_ROADMAP.md:617` — the inert-repairs revisit trigger commits
-  to counting "the next 20 diagnosed failures appended to the pending corpus ... by
-  grouping `runs/pending_corpus.jsonl` by `failure_class`, no new instrumentation" —
-  currently a by-hand act this command would make checkable.
-- Unblocked by v0.49.0 (`patch_applied`) and the inert-repairs slice (advisory /
-  `gave_up` outcome taxonomy).
+- Persist the attendance fact at launch.
+- Thread it into the `repair_stats` attendance axis so `approved_and_retried` /
+  `chose_and_retried` resolve to attended vs unattended when the fact is present.
+- Legacy bundles (no field) must stay `attendance_unknown` — never defaulted into a
+  state the record does not assert.
 
-## Guardrails check (CLAUDE.md)
+## Honest limits to carry into the writeup
 
-Layer 2 (the run/self-heal/verify loop's own telemetry) ✓. No Layer 1 ✓. No wet-lab /
-clinical / proprietary data ✓. Deepens moat #2 (accumulated evaluation data becomes
-legible rather than push-built and unmeasured) ✓. Read-only over existing artifacts —
-no new instrumentation, per the roadmap's own revisit-trigger wording ✓.
+- The existing 15 real bundles are a **frozen** record set, so the reported 64.3%
+  (9/14 scored runs) does **not** move retroactively — only future runs get attendance.
+- **Push, not demand-pull:** no design partner asked for this. It makes the self-heal
+  loop's field performance legible; it recovers nothing for a user.
 
-## Ruled out as already shipped (verified in code, prose is stale)
+## Guardrail check
 
-- Runtime `reference_mismatch` detector — `CHANGELOG.md:243`, `models.py:269`,
-  `detect.py:445` (its planning dir has only doc commits, which misleads).
-- Dashboard repair surface — `dashboard/lib/derive.ts:41` now reads `patch_applied`.
-- Reproduce dashboard card + DOI/PDF intake — both have `feat:` commits, though
-  `CAPABILITY_ROADMAP.md` still lists them as standing C8 deferrals.
-
-## Considered alternates (not this slice)
-
-- **C8 M8 real-repo smoke** (`docs/planning/reproduce-env-alias-map/prd.md:112-116`) — a
-  committed revisit trigger; 11 C8 slices have shipped without ever touching a real repo.
-  Highest truth-value per hour, but a manual network gate, not a build slice.
-- **C2 deferral (b)** — `risk="destructive"` is a no-op to the engine; nothing branches on
-  it and `--auto-approve` has no carve-out (`self_heal.py:1379`, `:1442`), so only the
-  dashboard honors it.
+Layer 2 (run / self-heal / verify / reproduce) — this is provenance + eval
+instrumentation on the self-heal loop. No Layer 1, no wet-lab/clinical dependency.
