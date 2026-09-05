@@ -44,7 +44,7 @@ def load_launch_manifest(runs_dir: str | Path, run_id: str) -> LaunchManifest | 
     this never raises a domain error -- callers such as `repair_stats.collect_runs`
     treat the manifest as a nice-to-have derived fact about a run, not a
     precondition for loading it, so one bad `launch.json` must cost only that one
-    fact rather than the whole run (mirrors the `except` at `repair_stats.py:329-335`,
+    fact rather than the whole run (mirrors the `except` at `repair_stats.py:404-410`,
     and for the same reason: a runs dir is user data).
     """
     manifest_path = bundle_dir_for(runs_dir, run_id) / "launch.json"

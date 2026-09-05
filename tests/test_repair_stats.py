@@ -248,6 +248,31 @@ def test_an_interactive_only_literal_beats_a_contradicting_auto_approve_flag():
     for literal in ATTENDED_OUTCOMES:
         assert classify_attendance(literal, auto_approve=True) == "attended"
 
+def test_every_gated_literal_is_read_from_the_flag_in_all_three_states():
+    # Pins ALL SEVEN members of `GATED_OUTCOMES` by name. The list is written out
+    # VERBATIM rather than iterated from the constant, deliberately: a test that reads
+    # the set it is pinning passes just as happily over a shortened set, so deleting
+    # a literal would silently restore the F2 over-claim that literal exists to close.
+    # Five of these were previously pinned by nothing but a one-way subset assertion.
+    gated = [
+        "approved_and_retried",
+        "built_index_and_retried",
+        "index_build_failed",
+        "index_unresolvable",
+        "recompressed_reference_and_retried",
+        "reference_recompress_failed",
+        "reference_recompress_unresolvable",
+    ]
+    for literal in gated:
+        # No recorded flag: the run cannot say who opened the gate.
+        assert classify_attendance(literal, None) == "attendance_unknown"
+        # `--auto-approve`: the engine took the gated fix on policy, nobody watching.
+        assert classify_attendance(literal, True) == "unattended"
+        # Interactive: a human had to approve the gate for this literal to exist, so
+        # crediting it to the machine would inflate the unattended-completion rate.
+        assert classify_attendance(literal, False) == "attended"
+
+
 
 def test_a_machine_only_literal_is_unattended_under_every_flag_value():
     # The safe-patch path calls `apply_patch` directly (self_heal.py:1619) and records
@@ -843,6 +868,20 @@ def test_a_bundle_with_a_launch_manifest_carries_its_auto_approve_flag(tmp_path)
     _write_launch_manifest(tmp_path, "r1", auto_approve=True)
     [run] = collect_runs(tmp_path)
     assert run.auto_approve is True
+
+def test_a_recorded_interactive_run_carries_false_rather_than_none(tmp_path):
+    # `False` end to end -- launch.json on disk -> `load_launch_manifest` ->
+    # `collect_runs` -> `LoadedRun.auto_approve`. Pinned separately from the `True`
+    # case because it is the value at risk: `False` and `None` are both falsey, so any
+    # truthiness shortcut anywhere on this path (`manifest.auto_approve or None`, a
+    # `if manifest.auto_approve:` guard) would flatten a positively recorded
+    # interactive run into "did not record it" and quietly drop it from the rate's
+    # denominator. `is False` is asserted, not `== False`, so `None` cannot satisfy it.
+    _write_run_bundle(tmp_path, "r1")
+    _write_launch_manifest(tmp_path, "r1", auto_approve=False)
+    [run] = collect_runs(tmp_path)
+    assert run.auto_approve is False
+
 
 
 def test_a_corrupt_launch_manifest_does_not_blind_the_report_to_the_run(tmp_path):

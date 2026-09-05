@@ -8,7 +8,7 @@ states rather than inventing a second:
    `False` and is indistinguishable, on the model, from one that genuinely
    recorded `False`.
 2. *Was a human in the loop?* `auto_approve` is now persisted on the launch
-   manifest (`models.py:443`) and carried on `LoadedRun.auto_approve`, so a run
+   manifest (`models.py:444`) and carried on `LoadedRun.auto_approve`, so a run
    bundled since then answers this. A run bundled BEFORE it did not record the
    fact, and for those `approved_and_retried` may still be a human approval or a
    policy decision under `--auto-approve`. `None` is that "did not record it"
@@ -194,7 +194,7 @@ def classify_attendance(outcome: str, auto_approve: bool | None = None) -> str:
     """Whether a human was in the loop for this step, given the run's launch record.
 
     `auto_approve` is the run's persisted `--auto-approve` fact
-    (`LaunchManifest.auto_approve`, `models.py:443`), carried here on
+    (`LaunchManifest.auto_approve`, `models.py:444`), carried here on
     `LoadedRun.auto_approve`. `None` means the run did not record it — a bundle
     written before the field existed, or one with no readable `launch.json` — and is
     the DEFAULT so that every pre-flag single-argument call still means what it did.
@@ -241,7 +241,7 @@ class LoadedRun:
     record: RunRecord
     raw_steps: list[dict]
     # Whether `--auto-approve` was passed to `contig run` for this run, read from
-    # `launch.json` (`models.py:437-443`). Defaulted -- not just for a run bundled
+    # `launch.json` (`models.py:437-444`). Defaulted -- not just for a run bundled
     # before `auto_approve` existed on `LaunchManifest`, but because the dataclass
     # is frozen and every existing `LoadedRun(...)` call site in this test suite
     # predates this field. `None` covers both "no launch.json" and "one that failed
@@ -386,7 +386,7 @@ def collect_runs(runs_dir: str | Path) -> list[LoadedRun]:
 
     A THIRD file, `launch.json`, is read once through `workspace.load_launch_manifest`
     for `LoadedRun.auto_approve`. No raw-JSON double-read is needed here the way it is
-    for `patch_applied`: `LaunchManifest.auto_approve` is `bool | None` (`models.py:443`),
+    for `patch_applied`: `LaunchManifest.auto_approve` is `bool | None` (`models.py:444`),
     so an absent key and a genuinely recorded value are already distinguishable on the
     validated model — `None` means "not recorded or not loadable", never a stand-in for
     `False`. That is the `patch_applied` lesson applied rather than repeated: give the
