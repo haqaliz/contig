@@ -649,6 +649,56 @@ human help; and a budget test proving the loop terminates.
 **Eval data captured:** each new mode plus its fix lands in the failure-and-fix
 corpus; repair success-rate analytics gain new classes.
 
+**Repair success-rate analytics — SHIPPED (Unreleased, `repair-success-analytics`).** The
+"repair success-rate analytics" named one line above existed only as data: `RunRecord.
+repair_history` has been written for every run since the beginning, and nothing read it
+across runs. `contig repair-stats` does — per-step outcome-family and failure-class
+counts, plus the per-run **unattended-completion rate** that `ROADMAP.md:109` makes the
+Phase 1 -> Phase 2 exit gate and that no command could compute until now. Read-only over
+existing bundles: **no new instrumentation**, matching the wording of the revisit triggers
+it exists to make checkable (this section's own trigger (a), and the `qc_anomaly` and
+env-alias-map ones).
+
+**Both of its axes are three-state, because the record under-determines both, and the
+slice's whole content is refusing to invent the missing state.** (1) *Was the patch
+enacted?* `models.py:322` declares `patch_applied: bool = False`, not `bool | None`, so
+pydantic fills `False` for any record written before v0.49.0 and the validated model
+cannot tell an absent key from a recorded `False`. The classifier therefore reads **raw
+JSON key presence** -- the only place in the codebase that reads a step twice -- yielding
+read / `legacy_derived` / `unknown`, with the derived count always reported apart from the
+read count so a reader can discard it. Deriving a legacy step's answer from a
+hand-maintained map is the very thing `CHANGELOG.md:869-876` rejected for the model field;
+it is sound **only** here because the pre-v0.49.0 record set is **frozen** and cannot grow.
+(2) *Was a human in the loop?* `approved_and_retried` and `chose_and_retried` fire on a
+real approval **and** under `--auto-approve` (`self_heal.py:1449,1497,1553`), and
+`auto_approve` is **never persisted** -- the only such field is `HealScenario.auto_approve`
+(`models.py:569`). Those two literals are `attendance_unknown`, and such runs leave both
+sides of the rate. A recorded `patch_applied` outranks an unmapped outcome (a stated fact
+beats a stale map); attendance stays `unknown` for an unmapped literal because it has no
+field to read at all -- a deliberate asymmetry, commented on both sides.
+
+**Read honestly, against our own interest.** Over the 15 real bundles the number is
+**64.3% unattended completion (9/14 scored runs)** -- and it is **not** a measurement of
+the ROADMAP gate. The denominator is mostly dev, proof and demo bundles that never failed;
+the metric counts **clean runs, not recoveries** (the CLI says so in its own output); and
+**0 of 7 real repair steps carry `patch_applied`**, so applying `heal.py:250-252`'s
+recovery formula to the same corpus still yields **0**. Push, not demand-pull; n=15,
+self-observed. Zero-event runs are `not_analyzable` because `succeeded = failed_tasks == 0`
+(`models.py:156-158`) makes an empty event list vacuously green -- the same
+green-by-construction artifact the `patch_applied` slice fixed in heal-guard's `recovered`.
+`_THIN_THRESHOLD` is pinned to `corpus.py:279`'s 3; three of four classes flag thin.
+
+**Filed, not fixed:** a run record cannot say whether a human was in the loop, because
+`auto_approve` is not captured anywhere in the bundle. Persisting it (on `LaunchManifest`
+or `ExecutionTarget`) would empty the `attendance_unknown` bucket and is the natural
+follow-on; it is a model/signature change, and this slice is read-only by design. Also
+deferred: a `--snapshot`/`--history` trend (every other guard has one, but they read a
+**frozen committed** corpus while this reads a mutable runs directory, so a trend point is
+not reproducible from committed data), a dashboard card, and aligning `report.py:93-101`'s
+deliberately binary `_applied_word` with the new three-state -- accepted divergence, since
+one record under-claiming is harmless where a **rate** built on the same default is wrong.
+No model change, no signed-payload change, no new dependency, no signature break.
+
 **Dependencies:** builds on the existing detect, repair, self-heal loop.
 
 ---
