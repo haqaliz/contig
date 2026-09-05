@@ -6,6 +6,90 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+- **`contig repair-stats` reads `repair_history` across every bundled run, so the
+  unattended-completion rate that gates Phase 2 can be computed at all
+  (`repair-success-analytics`).** `RunRecord.repair_history` has been written for every run
+  since the beginning and **nothing has ever read it across runs**: `contig clusters` and
+  `contig coverage` aggregate the labeled failure *corpus*, not runs. So
+  `ROADMAP.md:109`'s exit gate -- "≥70% unattended completion on the core pipeline" --
+  and the several revisit triggers that promise to count real outcomes by hand
+  (`CAPABILITY_ROADMAP.md:617`, and the `qc_anomaly` and env-alias-map ones) had no command
+  behind them. `FEATURES.md` named the gap in its own words: *"cross-run aggregation still
+  to build"*. This is read-only over existing bundles -- **no new instrumentation**, which
+  is what those triggers committed to.
+  - **Both axes are three-state, because the record under-determines both, and refusing to
+    invent the missing state is the whole content of the slice.** *Was the patch enacted?*
+    `models.py:322` declares `patch_applied: bool = False`, **not** `bool | None`, so
+    pydantic fills `False` for any record written before v0.49.0 and the validated model
+    **cannot** distinguish an absent key from a recorded `False`. The classifier reads
+    **raw JSON key presence** -- the only place in the codebase that reads a step twice,
+    commented as such -- giving read / `legacy_derived` / `unknown`, with the derived count
+    always reported **apart from** the read count so a reader can discard it. A naive
+    implementation reading the field would have reported **0% applied across the entire
+    real corpus**, including two `patched_and_retried` steps that are definitionally
+    enacted: not a conservative under-claim but a wrong rate, for the number that gates
+    Phase 2. *Was a human in the loop?* `approved_and_retried` and `chose_and_retried` fire
+    on a real approval **and** under `--auto-approve` (`self_heal.py:1449,1497,1553`), and
+    `auto_approve` is **never persisted** -- the only such field is
+    `HealScenario.auto_approve` (`models.py:569`), on the synthetic model. Those two
+    literals are `attendance_unknown` and such runs leave **both** sides of the rate.
+  - **Deriving a legacy answer from a hand-maintained map is the exact thing the
+    `patch_applied` slice rejected, and it is sound here for a reason that does not
+    generalize.** That rejection (this file, the v0.49.0 entry) was for the *model field*:
+    a literal added later would silently default to "not applied", wrong by construction.
+    The map here answers what a **pre-v0.49.0** record must have meant, and **that record
+    set is frozen** -- it cannot grow, so the map cannot rot. Records carrying the key
+    never touch the map. The equivalence it relies on, `applied` ⟺ APPLIED-family, holds
+    only because the shipped dashboard split `ACKNOWLEDGED` and `FLAGGED` out of `APPLIED`
+    (`advisory_acknowledged_and_retried` ends in `_and_retried` and enacts **nothing**), so
+    it is **pinned by a test** that reddens if a future literal joins `APPLIED` with
+    `patch_applied=False`. A recorded `patch_applied` **outranks** an unmapped outcome -- a
+    stated fact beats a stale map -- while attendance stays `unknown` for an unmapped
+    literal because it has no field to read at all. That asymmetry is deliberate and
+    commented on both sides so neither is later "fixed" to match the other.
+  - **The denominator is guarded, because green is vacuous at zero events.**
+    `succeeded = failed_tasks == 0` (`models.py:156-158`), so an **empty event list is
+    `succeeded=True`** -- the same green-by-construction artifact the `patch_applied` slice
+    fixed in heal-guard's `recovered`. A run with no task events is `not_analyzable` and
+    sits in neither side of the rate; the real corpus has exactly one (`testpass`, 0 events,
+    whose only repair step is `gave_up`). Family and failure-class counts are per **step**
+    (a 2-attempt run contributes two rows); the rate is per **run**, and a run is attended
+    if **any** step is, never last-step-wins. The failure class is read from
+    `step.diagnosis.failure_class` -- the step's own key is absent in every real record.
+    The denominator is labelled **`scored run(s)`**, not "analyzable": the two differ the
+    moment `attendance_unknown` is non-zero, and a label that says otherwise would be the
+    exact unstated denominator the report exists to prevent.
+  - **Read honestly, against our own interest.** Over the 15 real bundles it prints
+    **64.3% unattended completion (9/14 scored runs)** -- and that is **not** a measurement
+    of the ROADMAP gate. The denominator is mostly dev, proof and demo bundles that never
+    failed; the metric counts **clean runs, not recoveries**, which the CLI states in its
+    own output rather than leaving to a reader; and **0 of 7 real repair steps carry
+    `patch_applied`**, so `heal.py:250-252`'s recovery formula over the same corpus still
+    yields **0**. The runs directory is **not** filtered by name -- excluding `_*` bundles
+    would invent a convention the codebase does not define -- so everything is counted and
+    the exclusions are printed instead. Push, not demand-pull: no design partner asked, and
+    the corpus is the founder's own runs, n=15. **This recovers nothing for a user**; it
+    makes the self-heal loop's field performance legible, and says so.
+  - **Predicted before it ran, then checked.** The PRD committed a predicted output and
+    said any discrepancy was the finding. Two appeared, both the **prediction** being wrong:
+    the unmapped `stopped_for_confirmation` is `unknown`, not `legacy_derived` (the
+    prediction contradicted itself), and `tool_crash` at exactly **3** steps escapes the
+    `< 3` thin flag, so three of four classes flag thin rather than all four -- which also
+    retires the implementation-time worry that the flag would always fire and discriminate
+    nothing. The load-bearing prediction held: 0 steps read from the field.
+  - **Filed, not fixed:** a run record cannot say whether a human was in the loop, because
+    `auto_approve` is captured nowhere in the bundle. Persisting it (on `LaunchManifest` or
+    `ExecutionTarget`) would empty the `attendance_unknown` bucket and is the natural
+    follow-on; it is a model/signature change and this slice is read-only by design. Also
+    deferred: a `--snapshot`/`--history` trend -- every other guard ships one, but they read
+    a **frozen committed** corpus while this reads a mutable runs directory, so a trend
+    point is not reproducible from committed data -- a dashboard card, and aligning
+    `report.py:93-101`'s deliberately binary `_applied_word` with the new three-state
+    (accepted divergence: one record under-claiming is harmless where a **rate** built on
+    the same default is wrong). No model change, no signed-payload change, no new
+    dependency, no signature break; `_THIN_THRESHOLD` is pinned to `corpus.py:279`'s 3.
+    Test-first throughout.
+
 ## [0.56.0] - 2026-09-02
 
 - **`contig reproduce --allow-install` now resolves import names to their PyPI
