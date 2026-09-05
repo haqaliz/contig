@@ -2,8 +2,10 @@
 
 The record under-determines two questions — was the patch enacted, and was a
 human in the loop — so the classifiers answer in three states rather than
-inventing a second. These tests pin the 19-literal taxonomy against the shipped
-dashboard families and hold the three-state answers honest.
+inventing a second. The second question now has a recorded answer for runs that
+bundled a `launch.json` carrying `--auto-approve`; the third state survives for
+the runs that did not record it. These tests pin the 19-literal taxonomy against
+the shipped dashboard families and hold the three-state answers honest.
 """
 
 import json
@@ -18,7 +20,7 @@ from contig.repair_stats import (
     _THIN_THRESHOLD,
     ACKNOWLEDGED_OUTCOMES,
     APPLIED_OUTCOMES,
-    ATTENDANCE_UNKNOWN_OUTCOMES,
+    GATED_OUTCOMES,
     ATTENDED_OUTCOMES,
     DECLINED_OUTCOMES,
     FLAGGED_OUTCOMES,
@@ -90,7 +92,11 @@ def test_derived_applied_is_none_for_an_unmapped_literal():
 
 
 def test_the_attendance_sets_name_only_literals_the_taxonomy_knows():
-    assert (ATTENDED_OUTCOMES | ATTENDANCE_UNKNOWN_OUTCOMES) <= _DOCUMENTED_LITERALS
+    # `ATTENDANCE_UNKNOWN_OUTCOMES` was renamed to `GATED_OUTCOMES` when attendance
+    # became flag-derived: the set is the same KIND of thing (attendance literals the
+    # taxonomy must know), so the subset semantics are unchanged and only the name and
+    # the membership grew. Deliberate rename, not an expectation edited to fit output.
+    assert (ATTENDED_OUTCOMES | GATED_OUTCOMES) <= _DOCUMENTED_LITERALS
 
 
 def test_the_thin_threshold_matches_the_corpus_one():
@@ -147,7 +153,7 @@ def test_an_acknowledged_advisory_is_attended():
 
 def test_a_chosen_patch_is_attended():
     # Unlike `approved_and_retried`, `--auto-approve` can never produce this literal:
-    # the `if auto_approve:` block (self_heal.py:1442) always `return`s (:1466-1471)
+    # the `if auto_approve:` block (self_heal.py:1442) always `return`s (:1464-1468)
     # or `continue`s (:1469-1470) before the ambiguous-choice gate that assigns
     # `chose_and_retried` (:1497), which sits below it at :1472. So every
     # `chose_and_retried` step came from a human picking among ranked candidates.
@@ -158,9 +164,15 @@ def test_the_auto_approve_block_never_reaches_the_ambiguous_choice_gate():
     # Pins the reachability premise `test_a_chosen_patch_is_attended` relies on,
     # independent of the classifier: `if auto_approve:` (self_heal.py:1442) is
     # unconditionally terminal for the loop iteration (return or continue,
-    # :1466-1471), and the ambiguous-choice gate that produces `chose_and_retried`
+    # :1463-1470), and the ambiguous-choice gate that produces `chose_and_retried`
     # (:1472) sits below it, so the two branches can never both fire for one step.
-    assert "chose_and_retried" not in ATTENDANCE_UNKNOWN_OUTCOMES
+    #
+    # The exclusion now reads against `GATED_OUTCOMES` (renamed from
+    # `ATTENDANCE_UNKNOWN_OUTCOMES`) and needs its reason restated, because the rename
+    # changed what membership MEANS: `chose_and_retried` IS produced from a gated call
+    # site (:1492), so it is excluded not for being ungated but for being
+    # interactive-ONLY -- the flag has nothing to disambiguate about it.
+    assert "chose_and_retried" not in GATED_OUTCOMES
     assert "chose_and_retried" in ATTENDED_OUTCOMES
 
 
@@ -174,6 +186,83 @@ def test_an_acknowledged_advisory_enacted_nothing_despite_its_suffix():
     # the loop to retry; no patch was enacted (self_heal.py:1411-1423).
     assert derived_applied("advisory_acknowledged_and_retried") is False
 
+
+# --- the attendance classifier reads the persisted flag (AC-5..AC-9, AC-15) -----
+# `--auto-approve` is now persisted on the launch manifest (`models.py:443`) and
+# carried onto `LoadedRun.auto_approve`, so the one question the record could not
+# answer -- was a human in the loop -- has a recorded answer for runs that bundled
+# one. These pin the derivation, not the plumbing.
+
+
+def test_an_approved_step_under_a_recorded_auto_approve_is_unattended():
+    # AC-5. The engine took the best-ranked gated fix on policy; no human approved
+    # it, so the run stays eligible for the unattended-completion numerator.
+    assert classify_attendance("approved_and_retried", auto_approve=True) == "unattended"
+
+
+def test_an_approved_step_under_a_recorded_interactive_run_is_attended():
+    # AC-6. `auto_approve=False` is a positive record that the approval gate was
+    # interactive, so this literal can only have come from a human pressing approve.
+    assert classify_attendance("approved_and_retried", auto_approve=False) == "attended"
+
+
+def test_a_built_index_step_under_a_recorded_interactive_run_is_attended():
+    # AC-7, the over-claim this slice exists to close. `built_index_and_retried` is
+    # only reachable through `_apply_patch_and_maybe_build` (self_heal.py:1157), whose
+    # only call sites are the three GATED ones (:1444, :1492, :1548). On an interactive
+    # run a human had to approve that gate first, so scoring the step `unattended` --
+    # which is what the pre-flag classifier did -- credited a human's approval to the
+    # machine and inflated the gate metric in our own favour.
+    assert classify_attendance("built_index_and_retried", auto_approve=False) == "attended"
+
+
+def test_a_built_index_step_with_no_recorded_flag_is_attendance_unknown():
+    # AC-8. A run bundled before the flag was persisted cannot say who opened the
+    # gate, and the gated literal alone does not decide it, so the honest answer is
+    # the third state rather than the pre-flag guess of `unattended`.
+    assert classify_attendance("built_index_and_retried") == "attendance_unknown"
+
+
+def test_an_approved_step_with_no_recorded_flag_is_attendance_unknown():
+    # AC-8, the default-argument path stated directly: every pre-flag call site passes
+    # one argument, and the ambiguity they relied on must survive unchanged.
+    assert classify_attendance("approved_and_retried", auto_approve=None) == "attendance_unknown"
+    assert classify_attendance("approved_and_retried") == "attendance_unknown"
+
+
+def test_a_chosen_patch_stays_attended_under_every_flag_value():
+    # AC-9. Phase 0's ruling -- `chose_and_retried` is strictly attended -- must not be
+    # re-opened by the flag. It IS produced from a gated call site (self_heal.py:1497),
+    # but only from the ambiguous-choice branch that `--auto-approve` returns or
+    # continues past (:1463-1470), so no recorded flag value can make it machine work.
+    for flag in (True, False, None):
+        assert classify_attendance("chose_and_retried", auto_approve=flag) == "attended"
+
+
+def test_an_interactive_only_literal_beats_a_contradicting_auto_approve_flag():
+    # AC-15. A bundle claiming `auto_approve: true` while carrying an interactive-only
+    # literal is impossible by construction, so one of the two is wrong. The LITERAL
+    # wins, deliberately and asymmetrically: relabelling a human's rejection as
+    # "unattended" would inflate the very gate metric this slice exists to make honest,
+    # while the reverse error only understates it.
+    for literal in ATTENDED_OUTCOMES:
+        assert classify_attendance(literal, auto_approve=True) == "attended"
+
+
+def test_a_machine_only_literal_is_unattended_under_every_flag_value():
+    # The safe-patch path calls `apply_patch` directly (self_heal.py:1619) and records
+    # `patched_and_retried` (:1643) without ever passing an approval gate, so the flag
+    # has nothing to disambiguate here.
+    for flag in (True, False, None):
+        assert classify_attendance("patched_and_retried", auto_approve=flag) == "unattended"
+
+
+def test_an_unmapped_literal_has_unknown_attendance_under_every_flag_value():
+    # The taxonomy check stays first: a literal the map does not know is unknown on
+    # this axis whatever the launch manifest recorded, because the flag says who was
+    # at the keyboard, not what the outcome means.
+    for flag in (True, False, None):
+        assert classify_attendance("stopped_for_confirmation", auto_approve=flag) == "unknown"
 
 # --- aggregation: the guarded rate (AC-11) -------------------------------------
 
@@ -256,7 +345,15 @@ def _raw_step(outcome, *, failure_class="tool_crash", attempt=1, patch_applied=_
     return raw
 
 
-def _loaded_run(run_id, *, raw_steps=(), events=(_COMPLETED,)):
+def _loaded_run(run_id, *, raw_steps=(), events=(_COMPLETED,), auto_approve=None):
+    """A `LoadedRun` fixture. `auto_approve` DEFAULTS to `None`, deliberately.
+
+    `None` is the pre-flag shape -- a bundle with no `launch.json`, or one written
+    before `LaunchManifest.auto_approve` existed -- so every fixture that does not
+    care keeps exercising the ambiguous path it always exercised. A helper that
+    defaulted to `False` would silently reclassify every gated step in this file as
+    attended and make the flag-aware assertions pass without the flag being read.
+    """
     raw_steps = list(raw_steps)
     record = RunRecord(
         run_id=run_id,
@@ -267,7 +364,9 @@ def _loaded_run(run_id, *, raw_steps=(), events=(_COMPLETED,)):
         events=list(events),
         repair_history=[RepairStep.model_validate(raw) for raw in raw_steps],
     )
-    return LoadedRun(run_id=run_id, record=record, raw_steps=raw_steps)
+    return LoadedRun(
+        run_id=run_id, record=record, raw_steps=raw_steps, auto_approve=auto_approve
+    )
 
 
 # --- aggregation: run-level rules (AC-5, AC-7, AC-8) ---------------------------
@@ -317,8 +416,12 @@ def test_a_run_is_attended_when_any_step_is_attended_not_only_the_last():
 
 
 def test_a_succeeded_run_whose_only_step_is_approved_is_in_neither_side_of_the_rate():
-    # AC-5. `--auto-approve` reaches `approved_and_retried` with no human involved and
-    # the flag is not persisted, so counting the run either way would be a guess.
+    # The EXPECTATIONS below are unchanged; only this reason is, and deliberately so.
+    # It used to say "the flag is not persisted", which is now false. What this run
+    # actually shows is the narrower surviving case: `_loaded_run` leaves
+    # `auto_approve=None`, i.e. a bundle that did not RECORD the flag, and for those
+    # `approved_and_retried` is still reachable with or without a human, so counting
+    # the run either way would be a guess.
     report = repair_stats_report(
         [_loaded_run("r1", raw_steps=[_raw_step("approved_and_retried")])]
     )
@@ -340,6 +443,127 @@ def test_a_zero_event_run_is_in_neither_side_of_the_rate():
     assert report["runs"]["rate_denominator"] == 1
     assert report["runs"]["unattended_completed"] == 1
 
+
+# --- aggregation: the rate reads the persisted flag (AC-5, AC-6, AC-12) --------
+
+
+def test_an_auto_approved_run_is_scored_as_an_unattended_completion():
+    # AC-5 at the run level. With the flag recorded, the run that used to fall out of
+    # BOTH sides of the rate is now a measurable unattended completion -- which is the
+    # whole point of persisting the flag: the metric gates a roadmap phase, and a run
+    # nobody touched is exactly what it is supposed to be counting.
+    report = repair_stats_report(
+        [_loaded_run("r1", raw_steps=[_raw_step("approved_and_retried")], auto_approve=True)]
+    )
+    assert report["runs"]["attendance_unknown"] == 0
+    assert report["runs"]["rate_denominator"] == 1
+    assert report["runs"]["unattended_completed"] == 1
+    assert report["runs"]["unattended_completion_rate"] == 1.0
+
+
+def test_an_interactive_run_is_scored_but_excluded_from_the_numerator():
+    # AC-6. `auto_approve=False` makes the run measurable AND attended: it belongs in
+    # the denominator, because we know the answer, but never in the numerator, because
+    # a human pressed approve.
+    report = repair_stats_report(
+        [_loaded_run("r1", raw_steps=[_raw_step("approved_and_retried")], auto_approve=False)]
+    )
+    assert report["runs"]["attendance_unknown"] == 0
+    assert report["runs"]["rate_denominator"] == 1
+    assert report["runs"]["unattended_completed"] == 0
+    assert report["runs"]["unattended_completion_rate"] == 0.0
+
+
+def test_a_gated_machine_step_makes_an_interactive_run_attended():
+    # AC-7 at the run level, and the reason the F2 over-claim mattered: this run
+    # contains no obviously human literal at all, yet a human had to open the gate for
+    # `built_index_and_retried` to exist. Before the flag it scored as an unattended
+    # completion outright.
+    report = repair_stats_report(
+        [
+            _loaded_run(
+                "r1", raw_steps=[_raw_step("built_index_and_retried")], auto_approve=False
+            )
+        ]
+    )
+    assert report["runs"]["rate_denominator"] == 1
+    assert report["runs"]["unattended_completed"] == 0
+
+
+def test_a_human_step_still_wins_over_a_recorded_auto_approve_flag():
+    # R8 under the flag: the any-step-wins contract is not weakened by the manifest.
+    # `--auto-approve` skips the approval PROMPT, not every interaction, and a bundle
+    # asserting both is contradictory anyway -- the literal is the harder evidence.
+    steps = [
+        _raw_step("rejected_by_user", attempt=1),
+        _raw_step("approved_and_retried", attempt=2),
+    ]
+    report = repair_stats_report([_loaded_run("r1", raw_steps=steps, auto_approve=True)])
+    assert report["runs"]["rate_denominator"] == 1
+    assert report["runs"]["unattended_completed"] == 0
+
+
+def test_the_attendance_axis_reads_the_flag_of_the_run_each_step_belongs_to():
+    # The per-STEP axis is derived from the OWNING RUN's flag, not from a report-wide
+    # setting: two runs in one report may disagree about the flag, and each step has to
+    # be read against its own run's manifest.
+    auto = _loaded_run(
+        "auto", raw_steps=[_raw_step("approved_and_retried")], auto_approve=True
+    )
+    interactive = _loaded_run(
+        "interactive", raw_steps=[_raw_step("approved_and_retried")], auto_approve=False
+    )
+    unrecorded = _loaded_run("legacy", raw_steps=[_raw_step("approved_and_retried")])
+    report = repair_stats_report([auto, interactive, unrecorded])
+    assert report["steps"]["by_attendance"] == {
+        "attended": 1,
+        "unattended": 1,
+        "attendance_unknown": 1,
+        "unknown": 0,
+    }
+
+
+def test_the_recorded_corpus_composition_reports_the_same_rate_as_before_the_flag():
+    # AC-12. Stands in for the real corpus, which CI can never read: `/runs/` is
+    # gitignored (`.gitignore:9`) and lives outside the repo. This fixture reproduces
+    # its outcome composition exactly -- `patched_and_retried` x2, `gave_up` x4,
+    # `stopped_for_confirmation` x1, plus one zero-event run -- so it answers the
+    # question the real corpus would: does making attendance flag-derived move the
+    # number we have already published? It must not. None of those literals is gated,
+    # so no recorded flag value can touch them, and the rate is identical whether the
+    # runs recorded the flag or not.
+    def corpus(auto_approve):
+        return [
+            _loaded_run(
+                "c1",
+                raw_steps=[_raw_step("patched_and_retried", attempt=1)],
+                auto_approve=auto_approve,
+            ),
+            _loaded_run(
+                "c2",
+                raw_steps=[_raw_step("patched_and_retried", attempt=1)],
+                auto_approve=auto_approve,
+            ),
+            _loaded_run(
+                "c3",
+                events=(_FAILED,),
+                raw_steps=[_raw_step("gave_up", attempt=n) for n in range(1, 5)],
+                auto_approve=auto_approve,
+            ),
+            _loaded_run(
+                "c4",
+                raw_steps=[_raw_step("stopped_for_confirmation", attempt=1)],
+                auto_approve=auto_approve,
+            ),
+            _loaded_run("c5", events=(), auto_approve=auto_approve),
+        ]
+
+    unrecorded = repair_stats_report(corpus(None))
+    assert unrecorded["runs"]["rate_denominator"] == 4
+    assert unrecorded["runs"]["unattended_completed"] == 3
+    assert unrecorded["runs"]["unattended_completion_rate"] == 0.75
+    for flag in (True, False):
+        assert repair_stats_report(corpus(flag))["runs"] == unrecorded["runs"]
 
 # --- aggregation: the per-step / per-run split (AC-8) ---------------------------
 
@@ -407,6 +631,9 @@ def test_an_unmapped_step_still_counts_on_the_applied_axis_as_unknown():
 
 
 def test_the_attendance_axis_counts_every_step_including_the_unknown_ones():
+    # Expectations unchanged, and that is the assertion: this run records no flag
+    # (`_loaded_run` defaults `auto_approve=None`), so making attendance flag-derived
+    # must leave the pre-flag reading of an unrecorded run exactly where it was.
     steps = [
         _raw_step("rejected_by_user", attempt=1),
         _raw_step("patched_and_retried", attempt=2),
@@ -626,3 +853,15 @@ def test_a_corrupt_launch_manifest_does_not_blind_the_report_to_the_run(tmp_path
     [run] = collect_runs(tmp_path)
     assert run.run_id == "r1"
     assert run.auto_approve is None
+
+
+def test_a_bundled_run_with_a_recorded_flag_is_scored_from_disk(tmp_path):
+    # The wiring end to end: bundle -> `collect_runs` -> report. Every hop is unit-pinned
+    # above, but nothing yet proved they are connected, and a `LoadedRun` built by hand
+    # in a fixture cannot show that `collect_runs` actually puts the manifest's value
+    # where `classify_attendance` reads it.
+    _write_run_bundle(tmp_path, "r1", raw_steps=[_raw_step("approved_and_retried")])
+    _write_launch_manifest(tmp_path, "r1", auto_approve=True)
+    report = repair_stats_report(collect_runs(tmp_path))
+    assert report["runs"]["rate_denominator"] == 1
+    assert report["runs"]["unattended_completed"] == 1
