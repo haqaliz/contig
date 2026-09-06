@@ -7,9 +7,12 @@ states rather than inventing a second:
    (`models.py:322`), so a record written before the field existed validates with
    `False` and is indistinguishable, on the model, from one that genuinely
    recorded `False`.
-2. *Was a human in the loop?* `auto_approve` is a CLI flag that is never
-   persisted on `RunRecord`, so `approved_and_retried` may be a human approval or
-   a policy decision under `--auto-approve`.
+2. *Was a human in the loop?* `auto_approve` is now persisted on the launch
+   manifest (`models.py:444`) and carried on `LoadedRun.auto_approve`, so a run
+   bundled since then answers this. A run bundled BEFORE it did not record the
+   fact, and for those `approved_and_retried` may still be a human approval or a
+   policy decision under `--auto-approve`. `None` is that "did not record it"
+   state, and it is why the third state survives rather than being retired.
 
 **Why a hand-maintained derived map is acceptable here, when
 `CHANGELOG.md:869-876` rejected one.** That rejection was for the *model field*:
@@ -28,7 +31,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from contig.models import RunRecord, RunSummary
-from contig.workspace import bundle_dir_for, list_run_ids, load_run
+from contig.workspace import (
+    bundle_dir_for,
+    list_run_ids,
+    load_launch_manifest,
+    load_run,
+)
 
 # The five families, mirroring the shipped dashboard taxonomy 1:1
 # (`dashboard/components/run/repair-timeline.tsx:86-192`). 19 literals; the
@@ -75,24 +83,46 @@ ACKNOWLEDGED_OUTCOMES: frozenset[str] = frozenset({"advisory_acknowledged_and_re
 
 # Attendance is a separate axis from the family (PRD Addendum 2). These are the
 # outcomes that only a human can produce: a rejection, a lapsed approval window, a
-# choice outside the offered options, and an advisory a human acknowledged.
+# choice outside the offered options, an advisory a human acknowledged, and a pick
+# among ambiguous candidates.
 ATTENDED_OUTCOMES: frozenset[str] = frozenset(
     {
         "rejected_by_user",
         "approval_timed_out",
         "invalid_choice_rejected",
         "advisory_acknowledged_and_retried",
+        "chose_and_retried",
     }
 )
 
-# Under-determined, and deliberately not guessed: both literals fire on a real human
-# approval AND under `--auto-approve`, where the engine decides per policy and no
-# human is involved. `auto_approve` is a CLI flag that is never persisted on
-# `RunRecord`, so the record cannot tell the two apart.
-ATTENDANCE_UNKNOWN_OUTCOMES: frozenset[str] = frozenset(
+# The literals whose attendance the `--auto-approve` flag decides: every one of them
+# comes off the GATED path, and every one of them is reachable both with the flag (the
+# engine took the best-ranked fix on policy) and without it (a human pressed approve
+# first). Without the flag they are genuinely under-determined; with it they are not.
+#
+# **Why the membership list is provable rather than guessed.** All seven are produced
+# only by `_apply_patch_and_maybe_build` and the two helpers it delegates to
+# (`self_heal.py:1044`; `_recompress_reference` at :793, called only from :1087;
+# `_rebuild_stale_index`/`_build_star_index` at :877/:629, called only from :1104 and
+# :1117). That function has exactly THREE call sites — :1444 (auto-approve), :1492
+# (human choice) and :1548 (human approve) — and all three sit below an approval gate.
+# The non-gated "safe patch" path never reaches it: it calls `apply_patch` directly
+# (:1619) and records `patched_and_retried` (:1643), so it can produce NONE of these.
+#
+# `chose_and_retried` is deliberately absent even though :1492 is a gated call site.
+# It is gated but *interactive-only*: the `if auto_approve:` block returns
+# (self_heal.py:1463-1468) or continues (:1469-1470) before the ambiguous-choice gate
+# at :1472 that assigns it (:1497), so `--auto-approve` can never produce it. It
+# therefore belongs in `ATTENDED_OUTCOMES`, where the flag cannot re-open the question.
+GATED_OUTCOMES: frozenset[str] = frozenset(
     {
         "approved_and_retried",
-        "chose_and_retried",
+        "built_index_and_retried",
+        "index_build_failed",
+        "index_unresolvable",
+        "recompressed_reference_and_retried",
+        "reference_recompress_failed",
+        "reference_recompress_unresolvable",
     }
 )
 
@@ -160,20 +190,41 @@ def classify_applied(outcome: str, raw_step: dict) -> str:
     return "legacy_derived"
 
 
-def classify_attendance(outcome: str) -> str:
-    """Whether a human was in the loop for this step.
+def classify_attendance(outcome: str, auto_approve: bool | None = None) -> str:
+    """Whether a human was in the loop for this step, given the run's launch record.
 
-    Three states, because the record under-determines the answer for two literals:
-    `approved_and_retried` and `chose_and_retried` fire both on a real approval and
-    under `--auto-approve`, and the flag is never persisted. Those are
-    `attendance_unknown` rather than a guess in either direction.
+    `auto_approve` is the run's persisted `--auto-approve` fact
+    (`LaunchManifest.auto_approve`, `models.py:444`), carried here on
+    `LoadedRun.auto_approve`. `None` means the run did not record it — a bundle
+    written before the field existed, or one with no readable `launch.json` — and is
+    the DEFAULT so that every pre-flag single-argument call still means what it did.
+
+    Three states remain, but the third is now a statement about the *record*, not
+    about the outcome vocabulary: a gated literal is `attendance_unknown` only while
+    the run cannot say who opened the gate. Once it can, the same literal resolves to
+    `unattended` (engine policy) or `attended` (a human pressed approve).
+
+    **The `ATTENDED_OUTCOMES` check precedes the `GATED_OUTCOMES` check deliberately;
+    that ordering IS the contradiction rule.** A bundle claiming `auto_approve: true`
+    while carrying an interactive-only literal (say `rejected_by_user`) is impossible
+    by construction, so one of the two is wrong — and the LITERAL wins. The asymmetry
+    is the point: relabelling a human's rejection as "unattended" would inflate the
+    unattended-completion rate in our own favour, which is the exact error class this
+    whole slice exists to close, while trusting the literal can only understate it.
+
+    Deliberately asymmetric with `classify_applied`, which lets a recorded value
+    outrank the taxonomy. Do not "fix" one of the two to match the other: there, the
+    record states a fact about the step itself; here, the flag states a fact about the
+    RUN, and an outcome literal is the more local evidence of the two.
     """
     if outcome not in OUTCOME_FAMILY:
         return "unknown"
-    if outcome in ATTENDANCE_UNKNOWN_OUTCOMES:
-        return "attendance_unknown"
     if outcome in ATTENDED_OUTCOMES:
         return "attended"
+    if outcome in GATED_OUTCOMES:
+        if auto_approve is None:
+            return "attendance_unknown"
+        return "unattended" if auto_approve else "attended"
     return "unattended"
 
 
@@ -189,6 +240,14 @@ class LoadedRun:
     run_id: str
     record: RunRecord
     raw_steps: list[dict]
+    # Whether `--auto-approve` was passed to `contig run` for this run, read from
+    # `launch.json` (`models.py:437-444`). Defaulted -- not just for a run bundled
+    # before `auto_approve` existed on `LaunchManifest`, but because the dataclass
+    # is frozen and every existing `LoadedRun(...)` call site in this test suite
+    # predates this field. `None` covers both "no launch.json" and "one that failed
+    # to load" (`workspace.load_launch_manifest`), and `classify_attendance` reads
+    # it as "the run did not record the fact" -- never as a stand-in for `False`.
+    auto_approve: bool | None = None
 
 
 def _bump(counts: dict[str, int], key: str) -> None:
@@ -199,17 +258,19 @@ def _run_is_attended(run: LoadedRun) -> bool:
     """Whether a human was in the loop for ANY step of this run.
 
     Not last-step-wins: a human who rejected attempt 1 was in the loop for the run,
-    whatever the machine did afterwards.
+    whatever the machine did afterwards. Unchanged by the flag, deliberately:
+    `--auto-approve` skips the approval PROMPT, not every possible interaction, so a
+    recorded `True` never overrules a step whose literal only a human can produce.
     """
     return any(
-        classify_attendance(step.outcome) == "attended"
+        classify_attendance(step.outcome, run.auto_approve) == "attended"
         for step in run.record.repair_history
     )
 
 
 def _run_attendance_is_unknown(run: LoadedRun) -> bool:
     return any(
-        classify_attendance(step.outcome) == "attendance_unknown"
+        classify_attendance(step.outcome, run.auto_approve) == "attendance_unknown"
         for step in run.record.repair_history
     )
 
@@ -228,7 +289,10 @@ def repair_stats_report(runs: list[LoadedRun]) -> dict:
       (`models.py:156-158`: `succeeded = failed_tasks == 0`), so scoring it would
       invent a completion out of an absence of evidence.
     - A run with any `attendance_unknown` step cannot be placed on the attended axis
-      at all, so it is excluded rather than guessed in either direction.
+      at all, so it is excluded rather than guessed in either direction. Since the
+      launch manifest records `--auto-approve`, this bucket holds only runs bundled
+      before that fact was written (or whose `launch.json` will not load): a run that
+      recorded the flag is always placeable, whichever way it recorded it.
 
     Both sit outside numerator AND denominator, and the rate is `None` — never `0.0` —
     when nothing is left to divide by. Completion comes from
@@ -261,7 +325,9 @@ def repair_stats_report(runs: list[LoadedRun]) -> dict:
                 # be able to discard every derived number without touching the rest.
                 derived = "applied" if derived_applied(step.outcome) else "not_applied"
                 legacy_derived_applied[derived] += 1
-            by_attendance[classify_attendance(step.outcome)] += 1
+            # The OWNING run's flag, not a report-wide one: two runs in one report
+            # may disagree, so each step is read against its own launch record.
+            by_attendance[classify_attendance(step.outcome, run.auto_approve)] += 1
             _bump(by_failure_class, step.diagnosis.failure_class)
             family = OUTCOME_FAMILY.get(step.outcome)
             if family is None:
@@ -318,6 +384,15 @@ def collect_runs(runs_dir: str | Path) -> list[LoadedRun]:
     and therefore the only way to tell a pre-v0.49.0 record from one that recorded
     nothing was enacted.
 
+    A THIRD file, `launch.json`, is read once through `workspace.load_launch_manifest`
+    for `LoadedRun.auto_approve`. No raw-JSON double-read is needed here the way it is
+    for `patch_applied`: `LaunchManifest.auto_approve` is `bool | None` (`models.py:444`),
+    so an absent key and a genuinely recorded value are already distinguishable on the
+    validated model — `None` means "not recorded or not loadable", never a stand-in for
+    `False`. That is the `patch_applied` lesson applied rather than repeated: give the
+    ambiguous fact a `None` state on the model itself, and the second read becomes
+    unnecessary rather than merely inconvenient.
+
     A missing runs directory simply has no runs (`workspace.list_run_ids`).
     """
     runs: list[LoadedRun] = []
@@ -333,11 +408,15 @@ def collect_runs(runs_dir: str | Path) -> list[LoadedRun]:
             # not load must not blind the report to every other run in it. (Defensive
             # — every record in the real corpus loads cleanly today.)
             continue
+        # A missing or corrupt launch.json costs only this one derived fact, not the
+        # whole run: `load_launch_manifest` already folds every such case to `None`.
+        manifest = load_launch_manifest(runs_dir, run_id)
         runs.append(
             LoadedRun(
                 run_id=run_id,
                 record=record,
                 raw_steps=raw.get("repair_history", []),
+                auto_approve=manifest.auto_approve if manifest is not None else None,
             )
         )
     return runs

@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from contig.bundle import load_bundle
-from contig.models import RunRecord
+from contig.models import LaunchManifest, RunRecord
 
 
 class RunNotFoundError(Exception):
@@ -34,6 +34,26 @@ def load_run(runs_dir: str | Path, run_id: str) -> RunRecord:
     if not (bundle_dir / "run_record.json").exists():
         raise RunNotFoundError(f"no bundled run {run_id!r} in {runs_dir}")
     return load_bundle(bundle_dir)
+
+
+def load_launch_manifest(runs_dir: str | Path, run_id: str) -> LaunchManifest | None:
+    """Load the launch sidecar for ``run_id`` from ``runs_dir``, tolerantly.
+
+    Returns ``None`` on anything short of a clean read: no ``launch.json``, an
+    unreadable file, or one that fails model validation. Unlike ``load_run``,
+    this never raises a domain error -- callers such as `repair_stats.collect_runs`
+    treat the manifest as a nice-to-have derived fact about a run, not a
+    precondition for loading it, so one bad `launch.json` must cost only that one
+    fact rather than the whole run (mirrors the `except` at `repair_stats.py:404-410`,
+    and for the same reason: a runs dir is user data).
+    """
+    manifest_path = bundle_dir_for(runs_dir, run_id) / "launch.json"
+    try:
+        return LaunchManifest.model_validate_json(manifest_path.read_text())
+    # pydantic's ValidationError and json's JSONDecodeError are both ValueError;
+    # OSError covers a missing/unreadable file.
+    except (ValueError, OSError):
+        return None
 
 
 def list_run_ids(runs_dir: str | Path) -> list[str]:

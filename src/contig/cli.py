@@ -783,6 +783,7 @@ def _dispatch_run(
         max_attempts=max_attempts,
         allow_reference_mismatch=allow_reference_mismatch,
         harmonized_reference=bool(harmonized_direction),
+        auto_approve=auto_approve,
         created_at=datetime.now(timezone.utc).isoformat(),
     )
     manifest_dir = Path(runs_dir) / run_id
@@ -3785,7 +3786,7 @@ def repair_stats(
     if run_counts["attendance_unknown"]:
         typer.echo(
             f"    {run_counts['attendance_unknown']} run(s) attendance unknown"
-            " (a human, or --auto-approve, which is never recorded)"
+            " (no readable --auto-approve for this run)"
             " -- excluded from both sides"
         )
     if rate is not None:

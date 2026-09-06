@@ -649,7 +649,7 @@ human help; and a budget test proving the loop terminates.
 **Eval data captured:** each new mode plus its fix lands in the failure-and-fix
 corpus; repair success-rate analytics gain new classes.
 
-**Repair success-rate analytics — SHIPPED (Unreleased, `repair-success-analytics`).** The
+**Repair success-rate analytics — SHIPPED (v0.57.0, `repair-success-analytics`).** The
 "repair success-rate analytics" named one line above existed only as data: `RunRecord.
 repair_history` has been written for every run since the beginning, and nothing read it
 across runs. `contig repair-stats` does — per-step outcome-family and failure-class
@@ -698,6 +698,23 @@ not reproducible from committed data), a dashboard card, and aligning `report.py
 deliberately binary `_applied_word` with the new three-state -- accepted divergence, since
 one record under-claiming is harmless where a **rate** built on the same default is wrong.
 No model change, no signed-payload change, no new dependency, no signature break.
+
+**Correction (2026-09-06, `auto-approve-attendance`).** Two things above are no longer
+true, and one was never true. (1) *"`auto_approve` is never persisted"* and the "Filed,
+not fixed" paragraph above are now stale: `auto_approve` is persisted on
+`LaunchManifest` (`models.py:444`), read back by `workspace.load_launch_manifest`, and
+`repair-stats` attendance is derived from it. The `attendance_unknown` bucket is not
+emptied by this -- it was already 0 over the real corpus -- but it no longer means "we
+never asked"; it means only that a given run's `launch.json` does not record the fact.
+(2) The claim that `approved_and_retried` **and** `chose_and_retried` both fire under
+`--auto-approve` was only ever half right. `chose_and_retried` cannot: the
+`if auto_approve:` block in `self_heal.py` always returns or continues before the
+ambiguous-choice gate that assigns it, so it is produced only by a human choosing among
+ranked candidates. That was a real defect in the shipped v0.57.0 classification (not
+introduced by this correction), fixed as its own commit (`d5551ee`) ahead of the
+persistence work above. See `CHANGELOG.md`'s `[Unreleased]` entry for the full account,
+including the real-corpus before/after (byte-identical) and why the field went on
+`LaunchManifest` rather than `RunRecord`.
 
 **Dependencies:** builds on the existing detect, repair, self-heal loop.
 

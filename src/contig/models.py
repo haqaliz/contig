@@ -434,6 +434,14 @@ class LaunchManifest(BaseModel):
     # defaults False so a legacy launch.json (written before this field) stays valid.
     allow_reference_mismatch: bool = False
     harmonized_reference: bool = False
+    # Whether this run was launched with --auto-approve, i.e. whether a human COULD
+    # be in the loop at the approval gate. Recorded for `repair-stats` attendance
+    # (repair_stats.py); deliberately NOT replayed -- `rerun`/`resume` re-decide it
+    # per invocation, mirroring harmonized_reference (:436), which is likewise
+    # write-only provenance. `bool | None`, not `bool`: absent must stay
+    # distinguishable from a recorded False, or every legacy bundle silently reads
+    # as "a human was there" -- the patch_applied defect (:317-322).
+    auto_approve: bool | None = None
     # The resolved assay used for this run (e.g. "somatic_variant_calling"), so a
     # reproduce (`rerun`) re-applies the same assay rather than re-deriving it from
     # the pipeline string. Defaults None so a legacy launch.json (written before
