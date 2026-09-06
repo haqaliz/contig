@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.58.0] - 2026-09-06
+
 - **`--auto-approve` is now persisted, and `contig repair-stats` attendance is derived
   from it instead of guessing (`auto-approve-attendance`).** Push, not demand-pull: no
   user asked for this; it is the "filed, not fixed" follow-on the v0.57.0 entry below
@@ -4012,6 +4014,7 @@ compute. Pre-revenue, validation phase.
 [0.12.0]: https://github.com/haqaliz/contig/releases/tag/v0.12.0
 [0.53.0]: https://github.com/haqaliz/contig/releases/tag/v0.53.0
 [0.55.1]: https://github.com/haqaliz/contig/releases/tag/v0.55.1
+[0.58.0]: https://github.com/haqaliz/contig/releases/tag/v0.58.0
 [0.57.0]: https://github.com/haqaliz/contig/releases/tag/v0.57.0
 [0.56.0]: https://github.com/haqaliz/contig/releases/tag/v0.56.0
 [0.55.0]: https://github.com/haqaliz/contig/releases/tag/v0.55.0
