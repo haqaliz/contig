@@ -15,3 +15,5 @@ dist/
 
 # SDD scratch ledger (not part of the deliverable)
 .superpowers/
+
+.serena/
