@@ -9,6 +9,7 @@ same text every time.
 from contig.methods import render_methods
 from contig.models import (
     ExecutionTarget,
+    KnownSiteIdentity,
     QCResult,
     ReferenceIdentity,
     RunRecord,
@@ -177,6 +178,117 @@ def test_methods_explicit_reference_degraded_no_checksums():
     # The reference clause must not emit a sha256 snippet when the hash is absent.
     assert "sha256" not in text
     assert "None" not in text
+
+
+# ---------------------------------------------------------------------------
+# known-sites clause (C5 capture: dbSNP/indels/snps rendered, never resolved)
+# ---------------------------------------------------------------------------
+
+
+def test_methods_explicit_known_sites_name_role_basename_and_hash_snippet():
+    """Explicit known-sites: each role's basename and the first-12 sha256 hex;
+    a role with no hash degrades to just its basename (no orphan sha256)."""
+    ri = ReferenceIdentity(
+        mode="explicit",
+        fasta="/data/GRCh38.fa",
+        gtf="/data/genes.gtf",
+        known_sites=[
+            KnownSiteIdentity(
+                role="dbsnp",
+                path="/data/dbsnp_146.hg38.vcf.gz",
+                sha256="c" * 64,
+                source="explicit",
+            ),
+            KnownSiteIdentity(
+                role="known_indels",
+                path="/data/Mills_and_1000G_gold_standard.indels.hg38.vcf.gz",
+                sha256=None,
+                source="explicit",
+            ),
+        ],
+    )
+    text = render_methods(_record(reference_identity=ri, container_digests={}))
+    assert "dbsnp" in text
+    assert "dbsnp_146.hg38.vcf.gz" in text
+    # first 12 chars of "c"*64 is "cccccccccccc"
+    assert "cccccccccccc" in text
+    assert "known_indels" in text
+    assert "Mills_and_1000G_gold_standard.indels.hg38.vcf.gz" in text
+    # No hash for known_indels: no sha256 fragment, no literal None.
+    assert "sha256 None" not in text
+    assert "None" not in text
+
+
+def test_methods_igenomes_known_sites_say_downloaded_by_the_pipeline():
+    """iGenomes known-sites: names the asset basename and says the pipeline
+    downloaded it, rather than rendering a local path or a checksum."""
+    ri = ReferenceIdentity(
+        mode="igenomes",
+        genome="GATK.GRCh38",
+        known_sites=[
+            KnownSiteIdentity(
+                role="dbsnp",
+                path=(
+                    "s3://ngi-igenomes/igenomes/Homo_sapiens/GATK/GRCh38/"
+                    "Annotation/GATKBundle/dbsnp_146.hg38.vcf.gz"
+                ),
+                sha256=None,
+                source="igenomes",
+            ),
+        ],
+    )
+    text = render_methods(_record(reference_identity=ri))
+    assert "dbsnp_146.hg38.vcf.gz" in text
+    assert "downloaded by the pipeline" in text
+    # The filename is named, never resolved into a build label.
+    assert "build 146" not in text
+    assert "GRCh38 dbsnp" not in text
+
+
+def test_methods_known_sites_absent_leaves_reference_clause_unchanged():
+    """None and an empty list render exactly as a record without known-sites,
+    and no known-sites marker appears."""
+    ri_none = ReferenceIdentity(
+        mode="explicit",
+        fasta="/data/GRCh38.fa",
+        gtf="/data/genes.gtf",
+        fasta_sha256="a" * 64,
+        known_sites=None,
+    )
+    ri_empty = ReferenceIdentity(
+        mode="explicit",
+        fasta="/data/GRCh38.fa",
+        gtf="/data/genes.gtf",
+        fasta_sha256="a" * 64,
+        known_sites=[],
+    )
+    text_none = render_methods(_record(reference_identity=ri_none))
+    text_empty = render_methods(_record(reference_identity=ri_empty))
+    assert text_empty == text_none
+    assert "known-sites" not in text_none.lower()
+
+
+def test_methods_known_sites_never_fabricate_a_build_label():
+    """PIN: the filename is carried verbatim; Contig never resolves it into an
+    assembly/build label (e.g. "dbsnp_146" must not become a "build 146")."""
+    ri = ReferenceIdentity(
+        mode="explicit",
+        fasta="/data/GRCh38.fa",
+        gtf="/data/genes.gtf",
+        known_sites=[
+            KnownSiteIdentity(
+                role="dbsnp",
+                path="/data/dbsnp_146.hg38.vcf.gz",
+                sha256="d" * 64,
+                source="explicit",
+            ),
+        ],
+    )
+    text = render_methods(_record(reference_identity=ri))
+    assert "dbsnp_146.hg38.vcf.gz" in text
+    assert "build 146" not in text
+    assert "GRCh38 dbsnp" not in text
+    assert "dbsnp build" not in text
 
 
 # ---------------------------------------------------------------------------
