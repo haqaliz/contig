@@ -406,6 +406,9 @@ def run(
     genome: str = typer.Option(None, "--genome", help="iGenomes reference key (e.g. GRCh38)."),
     fasta: str = typer.Option(None, "--fasta", help="Reference FASTA (with --gtf)."),
     gtf: str = typer.Option(None, "--gtf", help="Reference GTF annotation (with --fasta)."),
+    dbsnp: str = typer.Option(None, "--dbsnp", help="dbSNP known-sites VCF (germline variant_calling only)."),
+    known_indels: str = typer.Option(None, "--known-indels", help="Known-indels VCF (germline variant_calling only)."),
+    known_snps: str = typer.Option(None, "--known-snps", help="Known-SNPs VCF (germline variant_calling only)."),
     outdir: str = typer.Option(None, "--outdir", help="Pipeline output directory (pipeline --outdir)."),
     max_memory: str = typer.Option(None, "--max-memory", help="Cap per-process memory (e.g. '6.GB'), needed to fit nf-core on a laptop."),
     max_cpus: int = typer.Option(None, "--max-cpus", help="Cap per-process CPUs."),
@@ -445,6 +448,9 @@ def run(
         genome=genome,
         fasta=fasta,
         gtf=gtf,
+        dbsnp=dbsnp,
+        known_indels=known_indels,
+        known_snps=known_snps,
         outdir=outdir,
         max_memory=max_memory,
         max_cpus=max_cpus,
@@ -481,6 +487,25 @@ def _inject_default_params(params: dict[str, object], assay: str) -> None:
         return
     for key, value in defaults.items():
         params.setdefault(key, value)
+
+
+def _known_sites_params(
+    *, dbsnp: str | None, known_indels: str | None, known_snps: str | None
+) -> dict[str, str]:
+    """Collect the explicitly-given germline known-sites roles into params keys.
+
+    Only set values are returned, so `build_nextflow_command` forwards them as
+    `--dbsnp X` / `--known_indels X` / `--known_snps X` to the pipeline.
+    """
+    return {
+        key: value
+        for key, value in (
+            ("dbsnp", dbsnp),
+            ("known_indels", known_indels),
+            ("known_snps", known_snps),
+        )
+        if value
+    }
 
 
 def _enable_annotation_cache(
@@ -530,6 +555,9 @@ def _dispatch_run(
     genome: str | None,
     fasta: str | None,
     gtf: str | None,
+    dbsnp: str | None = None,
+    known_indels: str | None = None,
+    known_snps: str | None = None,
     outdir: str | None,
     max_memory: str | None,
     max_cpus: int | None,
@@ -632,6 +660,16 @@ def _dispatch_run(
     # (so rerun re-applies it) and the RunRecord (so methods/benchmark read it
     # directly instead of re-deriving from the ambiguous pipeline string).
     resolved_assay = assay or assay_for_pipeline(effective_pipeline) or "rnaseq"
+
+    # Germline-only known-sites roles (dbSNP/known indels/known SNPs) are never
+    # silently dropped: on any other assay a set flag is refused before launch.
+    if (dbsnp or known_indels or known_snps) and resolved_assay != "variant_calling":
+        typer.echo(
+            "--dbsnp/--known-indels/--known-snps are only valid for the "
+            f"variant_calling assay (resolved assay: {resolved_assay}).",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
     params: dict[str, object] = {}
     input_paths: list = []
@@ -745,6 +783,17 @@ def _dispatch_run(
         # so Nextflow (which runs in the run dir) writes to the right place.
         outdir_path = Path(outdir) if outdir else Path(runs_dir) / run_id / "results"
         params["outdir"] = str(outdir_path.resolve())
+    # Germline known-sites resources ride as pipeline params next to the
+    # reference. A missing explicit path is only a warning (honest degradation:
+    # finalize hashes it to None) — never a refusal.
+    if resolved_assay == "variant_calling":
+        known_sites = _known_sites_params(
+            dbsnp=dbsnp, known_indels=known_indels, known_snps=known_snps
+        )
+        for key, path in known_sites.items():
+            if not Path(path).is_file():
+                typer.echo(f"Warning: known-sites file does not exist: {path}", err=True)
+        params.update(known_sites)
     selected_profiles = profiles or ("docker" if input else "test,docker")
 
     # Merge the resolved assay's declarative default_params into `params` BEFORE the
