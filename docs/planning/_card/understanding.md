@@ -1,172 +1,107 @@
-# Understanding — self-heal-custom-work-dir
+# Understanding — reference-known-sites-capture
 
-Phase 2 dig note. Every citation below was verified by reading the file in this
-worktree (not from memory, not from the roadmap's own line numbers, which are stale).
+Phase 2 dig note. Grounded in the Phase 1 card (`docs/planning/_card/issue.md`) and
+two read-only dig agents over the worktree (branch `feat/reference-known-sites-capture/aliz`):
+one mapped the C5 reference-identity machinery, one verified the nf-core/sarek 3.5.1
+known-sites surface against the pinned tag's `nextflow_schema.json`/source. All citations
+were verified in this worktree unless marked otherwise.
 
 ## What the work is really asking
 
-`read_task_errors` is the function that feeds the failure detector the **real** error
-text. Its own docstring says so:
+Capture the **known-sites reference resources** a run used (dbSNP, known indels,
+panel-of-normals, germline resource) into C5's `ReferenceIdentity` provenance — the next
+slice of the least-complete capability. The C5 capture slice (shipped) pins FASTA/GTF
+identity + checksums; this pins the second data class, capture-only: no verdict/exit-code
+change, rendered in `contig methods` + HTML, round-tripped through `rerun`/`resume`, and
+degrading honestly (`None`, never a fabricated hash) exactly like the shipped slice.
 
-> The main run.log only says which process failed; the real error (a tool's stderr, a
-> container/platform warning) lives in the failing task's `.command.err`. The detector
-> needs it (ARCHITECTURE §5.2).
-> — `src/contig/runner.py:1192-1197`
+## The roadmap premise is STALE — surfaced, not papered over
 
-It finds that text by globbing `<run_dir>/work/**/.command.err`
-(`src/contig/runner.py:1198`). But the work dir Nextflow is actually given is
-`target.work_dir` (`src/contig/nfconfig.py:100`, `workDir = '{target.work_dir}'`),
-which the user sets with `--work-dir` (`src/contig/cli.py:400`) and which defaults to
-`f"{runs_dir}/{run_id}/work"` (`src/contig/cli.py:596`).
+`CAPABILITY_ROADMAP.md:1197-1198` defers known-sites with *"nf-core config assets, not
+CLI params"*. **That is false for sarek 3.5.1, Contig's pinned revision** (`registry.py:27,47`).
+The sarek 3.5.1 schema exposes first-class CLI params in group `reference_genome_options`
+(and `pon`/`germline_resource` in `variant_calling`): `dbsnp`, `dbsnp_tbi`, `dbsnp_vqsr`,
+`known_indels(+tbi/vqsr)`, `known_snps(+tbi/vqsr)`, `pon(+tbi)`, `germline_resource(+tbi)`,
+all `default: None`. The config-asset half is real **only in iGenomes mode**:
+`conf/igenomes.config`'s `GATK.GRCh38` block wires them to `s3://ngi-igenomes/...`
+paths that Nextflow downloads. Verified in sarek `main.nf:37-56` (`getGenomeAttribute`),
+`workflows/sarek/main.nf:186-191,512-520,692-721,749-777`.
 
-**In the default case the two agree**, which is why this has never been caught. Set
-`--work-dir` to anything else and the glob points at a directory that does not exist,
-`work.is_dir()` is false, and the function returns `""` (`runner.py:1199-1200`).
+So the deferral's real shape is: **Contig has no surface** (no CLI flag, no param key, no
+passthrough), not "sarek can't expose it". The `--known-sites` design the roadmap asks for
+is therefore a genuine CLI/passthrough design, not a "read config assets" design.
 
-## The concrete cost (verified, not asserted)
+## Affected areas (all paths relative to the worktree root)
 
-The sole call site is `src/contig/self_heal.py:1310`:
+- `src/contig/models.py:207-218` — `ReferenceIdentity`, optional nested on `RunRecord`
+  (`models.py:346`), fields `mode/genome/fasta/gtf/fasta_sha256/gtf_sha256/annotation_version/
+  harmonized/harmonized_direction`. Extending it is a **bundle-format + signed-payload change**
+  (signing canonicalizes the whole record, `signing.py:55-64`).
+- `src/contig/bundle.py:147-180` — `compute_reference_identity(params)`; the capture core,
+  called at `_finalize` (`self_heal.py:1715`); re-derived from `record.parameters`, never
+  copied. iGenomes early-returns on `genome` (`bundle.py:163-164`) — a known-sites branch
+  must not be swallowed by that return.
+- `src/contig/cli.py:636-764` — `_dispatch_run` builds `params`; the seams are
+  `resolve_reference` (`:657`), `_inject_default_params` (`:462-483`), `_enable_annotation_cache`
+  (`:486-513`, the assay-gated setdefault pattern). `build_nextflow_command` serializes any
+  param as `--key value` (`runner.py:1326-1327`) — a param in the dict reaches sarek.
+- `src/contig/reference.py:21-41` — `resolve_reference`, the only validator (genome vs
+  fasta+gtf).
+- `src/contig/methods.py:56-79` (`_reference_clause`), `src/contig/report.py:409-428`
+  (Reference identity table) — render sites. Dashboard: `reference_identity` is **absent**
+  from `dashboard/lib/types.ts` entirely; only surfaced via the parameters table.
+- `src/contig/cli.py:769-791` — `LaunchManifest` holds the original genome/fasta/gtf; the
+  round-trip mechanism is manifest-holds-spec + re-derive-at-finalize (`rerun` `cli.py:837-902`,
+  `resume` `cli.py:2509-2572`). A `--known-sites` value must join the manifest and both
+  replay commands.
 
-```python
-log_text = read_run_log(run_dir) + "\n" + read_task_errors(run_dir)
-diagnosis = diagnose_failure(events, log_text)
-```
+## Existing known-sites surface: confirmed absence
 
-`diagnose_failure` (`src/contig/detect.py`) is a chain of regex/substring rules over
-`log_text`. With the `.command.err` text gone, every specific branch misses and control
-reaches the fallback at `detect.py:454-466`:
+Grep of `src/contig/` for `dbsnp|known_indels|known_sites|known-sites` matches only a
+comment (`models.py:204`, "no known-sites — those belong to later slices"). No flag, no
+param key, no model field, no dashboard field. sarek consumes the params in BQSR
+(known-sites indels/snps), germline HaplotypeCaller (`--dbsnp` on the GATK command,
+`gatk4/haplotypecaller/main.nf:30`), VQSR labels, and somatic Mutect2 (pon +
+germline_resource).
 
-```python
-if any(e.is_failure for e in events):
-    crash_lines = [line for line in log_text.splitlines() if line.strip()][-1:]
-    return Diagnosis(failure_class="tool_crash",
-                     root_cause="A task failed with an unrecognized error.",
-                     evidence=crash_lines, confidence=0.4)
-```
+## Design options (for the interview)
 
-So the damage is **three-fold**, and none of it is loud:
+- **Option A — CLI passthrough (forward + capture):** new flags on `contig run`
+  (`--dbsnp`, `--known-indels`, `--pon`, `--germline-resource`, or a generic role=path),
+  merged into `params` beside `resolve_reference`; capture in `compute_reference_identity`.
+  Honest degradation: absent → `None`; iGenomes → key/path-only with checksum `None`.
+- **Option B — read-after-launch (least surface):** once any passthrough exists,
+  `compute_reference_identity` picks the keys out of `record.parameters` at `_finalize`
+  with zero extra plumbing; and/or scan the run's VCF `##GATKCommandLine` headers (the
+  `_pon_status` precedent, `somatic_plausibility.py:307-329`) for `--panel-of-normals`/
+  `--germline-resource`/`--dbsnp` paths. Post-hoc; can't see BQSR known-sites.
+- **Option C — config-asset table (iGenomes):** teach Contig the iGenomes asset map so a
+  `--genome` run records role + s3 asset path, checksum `None` (pipeline-downloaded).
+  Records intent/config, not what actually ran; weak alone.
 
-1. **Diagnosis degrades** to `tool_crash` @ 0.4 regardless of the true class.
-2. **Self-heal stops.** `propose_patches` has no `tool_crash` branch, so it returns
-   `[]` — an OOM, a missing index, a bad param, a platform mismatch all become
-   "unrecognized", and the run that *was* recoverable is not recovered.
-3. **The corpus is poisoned, not merely thinned.** `self_heal.py:1311-1325` appends the
-   failure to the pending corpus with `log_text` as the case body and the detector's
-   class as a PROVISIONAL label — so a custom-work-dir run files a case whose evidence
-   is missing *and* whose label says `tool_crash`. That is moat #2 accumulating wrong
-   data, which is worse than accumulating none.
+## Ambiguities / open questions for the interview
 
-## The sharp case: AWS Batch is blind by construction
-
-`preflight_aws_batch` **requires** an `s3://` work dir and refuses the launch otherwise
-(`src/contig/nfconfig.py:119-122`). So on AWS Batch the work dir is *always* remote and
-`.command.err` can *never* be read off local disk. This is not a bug we can fix by
-threading a path — it is a structural limit, and the slice must say so rather than
-imply Batch self-heal is restored. It is a live instance of `docs/ROADMAP.md:219` R8
-("running on customer compute is too brittle/varied — HPC vs cloud vs local").
-
-## The design tension the brief did not see
-
-The brief asks for two things that collide in the default case:
-
-- "make an unreadable work dir an explicit honest note rather than a silent empty string"
-- "keep the `run_dir`-only default so `tests/test_runner.py:60-90` passes untouched"
-
-`tests/test_runner.py:73-76` asserts **exact equality**:
-
-```python
-def test_read_task_errors_empty_when_no_work_dirs(tmp_path):
-    assert read_task_errors(tmp_path) == ""
-```
-
-And that empty return is **legitimate and common**: a run that fails before any task
-starts (bad param, container pull failure, a config error) never creates `work/` at
-all. An unconditional note would inject noise into `log_text` on every early failure —
-and since `detect.py:457-459` takes the **last non-empty line** as `tool_crash`
-evidence, a trailing note would become the recorded evidence for those runs. That is a
-regression dressed as honesty.
-
-**Resolution to carry into the PRD:** the honest note is owed for the case that is
-*structurally unreadable*, not the case that is *legitimately empty*:
-
-- work dir is **local and absent** → `""`, unchanged (no tasks ran; existing test holds)
-- work dir is **remote** (`s3://`, `gs://`, `az://`, …) → an explicit one-line note,
-  because no amount of looking locally will ever find it
-
-That preserves all four existing tests byte-for-byte and puts the note exactly where a
-human debugging a Batch run needs it.
-
-## Affected areas
-
-- `src/contig/runner.py:1191-1214` — `read_task_errors`; add an optional work-dir
-  parameter, keep `run_dir` positional and the `<run_dir>/work` fallback so the three
-  existing call shapes in tests are untouched.
-- `src/contig/self_heal.py:1310` — the one call site. `current_target` is in scope
-  (`self_heal.py:1198`, `current_target = target`), so `current_target.work_dir` is
-  available. **Verified stable across attempts:** the only rebinding path is
-  `apply_patch` (`self_heal.py:531-626`), which `model_copy`s `resource_limits` or
-  `backend_options` only — never `work_dir`.
-- `src/contig/models.py:38` — `ExecutionTarget.work_dir: str` (required, plain str).
-
-Nothing else in `src/` hardcodes a `work` path — grepped, two hits total, both above.
+1. **Does the slice still want a purpose-built `--known-sites` flag, or a generic nf-core
+   `-p key=value` passthrough + header capture?** The design was premised on the stale
+   "no CLI param exists" claim.
+2. **Scope of roles**: germline (`dbsnp`, `known_indels`, `known_snps` — the 3rd is
+   VQSR-only 1000G omni) and/or somatic (`pon`, `germline_resource`)?
+3. **BQSR blind spot**: BQSR's known-sites are invisible to any VCF header — acceptable
+   honest `None`, or does it force Option A/C?
+4. **Explicit-mode reality**: a Contig `--fasta/--gtf` run today has known-sites all `None`
+   (user never passes them). Is capture demand real yet, or is this wire-before-the-mismatch-
+   detector groundwork (C5 dependencies, `CAPABILITY_ROADMAP.md:1194`)?
+5. **Multi-file params**: iGenomes `known_indels` is a brace-expanded multi-file glob —
+   one entry per file vs. one role entry with a path list?
+6. **Signature/bundle cost**: extending `ReferenceIdentity` is a disclosed, non-narrow
+   signed-payload break (nearly every real run has non-None identity). Alternative: put
+   known-sites on `LaunchManifest` + `params` only (zero signature cost, replay surface).
+7. **Checksum semantics**: hash the data VCF.gz only, ignore `.tbi` (recommended, mirrors
+   FASTA/GTF)?
 
 ## Guardrails check (CLAUDE.md)
 
-Layer 2 (detect/self-heal) ✓. Read-path only — no manifest, verdict, exit-code, or
-signature change; `LaunchManifest` deliberately stores no `work_dir`
-(`models.py:408-415`) and we are not adding it ✓. No raw-read egress ✓. No correctness
-over-claim — the remote case gets an honest note, not a fake fix ✓. Test-first,
-synthetic fixtures, no real Nextflow in CI ✓. Not Layer 1 ✓. Not blocker-deferred work
-(filed as out-of-scope for the inert-repair slice, never as infeasible) ✓.
-
-## Open questions for the interview
-
-1. **Note wording and placement** — does the note go into `log_text` (visible to the
-   detector, and therefore to `tool_crash` evidence) or only to a surface a human
-   reads? Putting it in `log_text` risks becoming the `detect.py:457` evidence line.
-2. **Which schemes count as remote** — just `s3://`, or any `<scheme>://`? A generic
-   "has a URI scheme and is not `file://`" rule is broader and needs no future edit.
-3. **Should the remote case be caught earlier** — e.g. a one-time note at launch
-   ("task-level error capture is unavailable with a remote work dir") rather than per
-   failure? Cheaper for the user, but outside a read-path slice.
-4. **Does `read_run_log` have the same bug?** It reads `<run_dir>/run.log`, which
-   Contig itself writes (not Nextflow), so no — but confirm nothing else in the
-   diagnosis context is work-dir-relative.
-5. **Corpus back-fill** — existing pending-corpus cases captured from custom-work-dir
-   runs carry a wrong `tool_crash` label. Out of scope, or worth a note?
-
-## Why this survived: `read_task_errors` has no end-to-end coverage
-
-Two facts found while checking the test surface, both verified:
-
-1. **The self-heal suite already runs in the buggy configuration.** The canonical
-   fixture is `tests/test_self_heal.py:29-30`:
-   ```python
-   def _target(d):
-       return ExecutionTarget(backend="local", container_runtime="docker", work_dir=str(d))
-   ```
-   called as `_target(tmp_path / "w")` (`tests/test_self_heal.py:38`), while `run_dir`
-   is `<runs_dir>/<run_id>`. So `target.work_dir` and `<run_dir>/work` have **never**
-   agreed in these tests.
-2. **No test anywhere writes a `.command.err` into a self-healed run.** Grepping
-   `tests/` for `command.err` returns hits only in `tests/test_runner.py` (the four
-   unit tests of the function in isolation) and two unrelated `test_cli_reproduce.py`
-   names. Every self-heal test feeds the detector through `run.log` alone
-   (`_write`, `tests/test_self_heal.py:24-26`).
-
-Together those explain the survival: the function is unit-tested against a hand-built
-`<tmp>/work` tree that matches its hardcoded assumption, and the integration path that
-would expose the mismatch never supplies the file whose absence is the bug. **Both
-directions are currently green for the wrong reason.**
-
-This also hands us a clean RED test: in a `self_heal_run` test, write a `.command.err`
-carrying an unambiguous classifiable signature (e.g. the platform-mismatch wording
-already used at `tests/test_runner.py:64-67`) under the target's **actual** `work_dir`,
-and assert the resulting diagnosis is that specific class rather than the
-`tool_crash` @ 0.4 fallback (`src/contig/detect.py:454-466`). That test fails today and
-passes after the fix, with no fixture contortion.
-
-## Baseline
-
-`uv run pytest tests/test_runner.py tests/test_detect.py -q` → 116 passed in this
-worktree before any change.
+Layer 2 (reference-integrity provenance on the reproduce layer) ✓. No Layer 1 ✓. No
+raw-read egress (hashes + metadata only) ✓. No correctness over-claiming (checksum `None`,
+never fabricated) ✓. Test-first, no real nf-core/sarek in CI ✓. Not a blocker-deferred item —
+the GTF-version and assembly-signature siblings stay out of scope by the card.
