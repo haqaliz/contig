@@ -827,6 +827,9 @@ def _dispatch_run(
         genome=genome,
         fasta=fasta,
         gtf=gtf,  # ORIGINAL path — reproduce re-enters dispatch and re-derives harmonization
+        dbsnp=dbsnp,  # ORIGINAL explicit paths — reproduce re-enters dispatch and re-derives identity
+        known_indels=known_indels,
+        known_snps=known_snps,
         max_memory=max_memory,
         max_cpus=max_cpus,
         max_attempts=max_attempts,
@@ -941,6 +944,9 @@ def rerun(
         genome=manifest.genome,
         fasta=manifest.fasta,
         gtf=manifest.gtf,
+        dbsnp=manifest.dbsnp,
+        known_indels=manifest.known_indels,
+        known_snps=manifest.known_snps,
         outdir=None,  # re-defaulted under the new run dir
         max_memory=manifest.max_memory,
         max_cpus=manifest.max_cpus,
@@ -2610,6 +2616,9 @@ def resume(
         genome=manifest.genome,
         fasta=manifest.fasta,
         gtf=manifest.gtf,
+        dbsnp=manifest.dbsnp,
+        known_indels=manifest.known_indels,
+        known_snps=manifest.known_snps,
         outdir=None,
         max_memory=manifest.max_memory,
         max_cpus=manifest.max_cpus,

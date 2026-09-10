@@ -436,6 +436,13 @@ class LaunchManifest(BaseModel):
     genome: str | None = None
     fasta: str | None = None
     gtf: str | None = None
+    # The explicit germline known-sites VCFs supplied via --dbsnp/--known-indels/
+    # --known-snps. Persisted so `rerun`/`resume` re-feed them and the finalize
+    # reference identity is byte-identical; None (or a legacy launch.json written
+    # before these fields) means no known-sites were supplied.
+    dbsnp: str | None = None
+    known_indels: str | None = None
+    known_snps: str | None = None
     max_memory: str | None = None
     max_cpus: int | None = None
     max_attempts: int = 3
