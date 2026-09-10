@@ -12,9 +12,11 @@ import json
 import os
 import re
 from pathlib import Path
+from typing import Literal
 
 from contig.models import (
     AnnotationProvenance,
+    KnownSiteIdentity,
     ReferenceIdentity,
     ReproduceRecord,
     RunRecord,
@@ -144,6 +146,63 @@ def compute_input_checksums(paths: list[str | Path]) -> dict[str, str]:
     return checksums
 
 
+# Verified known-sites assets from the nf-core/sarek 3.5.1 iGenomes conf (the
+# GATK.GRCh38 block). The full s3 asset path is stored rather than the bare
+# filename: it is provenance a stranger can re-fetch. The known_indels brace
+# glob serializes as-is -- no expansion attempt (path is provenance text).
+_IGENOMES_KNOWN_SITES: dict[str, dict[str, str]] = {
+    "GATK.GRCh38": {
+        "dbsnp": "s3://ngi-igenomes/igenomes/Homo_sapiens/GATK/GRCh38/Annotation/GATKBundle/dbsnp_146.hg38.vcf.gz",
+        "known_indels": "s3://ngi-igenomes/igenomes/Homo_sapiens/GATK/GRCh38/Annotation/GATKBundle/{Mills_and_1000G_gold_standard.indels.hg38,Homo_sapiens_assembly38.known_indels}.vcf.gz",
+        "known_snps": "s3://ngi-igenomes/igenomes/Homo_sapiens/GATK/GRCh38/Annotation/GATKBundle/1000G_omni2.5.hg38.vcf.gz",
+    },
+}
+_KNOWN_SITE_ROLES: tuple[Literal["dbsnp", "known_indels", "known_snps"], ...] = (
+    "dbsnp",
+    "known_indels",
+    "known_snps",
+)
+
+
+def _hash(p) -> str | None:
+    """SHA-256 of an existing local file, or None (missing/unreadable → honest None)."""
+    try:
+        return sha256_file(p) if p and Path(p).is_file() else None
+    except OSError:
+        return None
+
+
+def _known_sites(params: dict[str, object]) -> list[KnownSiteIdentity] | None:
+    """Capture known-sites resources from run params, or None when none apply.
+
+    Explicit params (--dbsnp/--known-indels/--known-snps) win per role and are hashed
+    from disk; otherwise a known iGenomes genome key (e.g. GATK.GRCh38) contributes the
+    pipeline-downloaded asset path with no local checksum. An unknown genome key adds
+    nothing -- never guessed. Deterministic role order (dbsnp, known_indels, known_snps).
+    """
+    genome = params.get("genome")
+    assets = _IGENOMES_KNOWN_SITES.get(str(genome)) if genome else None
+    entries: list[KnownSiteIdentity] = []
+    for role in _KNOWN_SITE_ROLES:
+        explicit = params.get(role)
+        if explicit:
+            entries.append(
+                KnownSiteIdentity(
+                    role=role,
+                    path=str(explicit),
+                    sha256=_hash(explicit),
+                    source="explicit",
+                )
+            )
+        elif assets and role in assets:
+            entries.append(
+                KnownSiteIdentity(
+                    role=role, path=assets[role], sha256=None, source="igenomes"
+                )
+            )
+    return entries or None
+
+
 def compute_reference_identity(
     params: dict[str, object] | None,
 ) -> ReferenceIdentity | None:
@@ -151,25 +210,22 @@ def compute_reference_identity(
 
     Explicit mode (--fasta/--gtf): record the paths and their sha256. iGenomes mode
     (--genome KEY): record the key only — the pipeline downloads the files, so Contig
-    has no local path to hash. No reference keys → None (e.g. Snakemake runs).
-    A missing/unreadable local reference degrades to a None checksum, never a crash
-    and never a fabricated hash.
+    has no local path to hash. Known-sites (--dbsnp/--known-indels/--known-snps, or the
+    iGenomes asset map for a known genome key) attach in both modes; explicit params win
+    per role over the map. No reference keys → None (e.g. Snakemake runs). A
+    missing/unreadable local reference degrades to a None checksum, never a crash and
+    never a fabricated hash.
     """
     if not params:
         return None
+    known = _known_sites(params)
     genome = params.get("genome")
     fasta = params.get("fasta")
     gtf = params.get("gtf")
     if genome:
-        return ReferenceIdentity(mode="igenomes", genome=str(genome))
+        return ReferenceIdentity(mode="igenomes", genome=str(genome), known_sites=known)
     if not fasta and not gtf:
         return None
-
-    def _hash(p):
-        try:
-            return sha256_file(p) if p and Path(p).is_file() else None
-        except OSError:
-            return None
 
     return ReferenceIdentity(
         mode="explicit",
@@ -177,6 +233,7 @@ def compute_reference_identity(
         gtf=str(gtf) if gtf else None,
         fasta_sha256=_hash(fasta),
         gtf_sha256=_hash(gtf),
+        known_sites=known,
     )
 
 
