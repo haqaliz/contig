@@ -18,7 +18,10 @@ from contig.models import (
     RunSummary,
     overall_verdict,
 )
-from contig.verification.annotation_surface import corroborated_by_line
+from contig.verification.annotation_surface import (
+    cache_inputs_note,
+    corroborated_by_line,
+)
 from contig.verification.reproduce import reduce_reproduction
 
 
@@ -453,6 +456,12 @@ def render_run_report_html(
             ai.tool: _ann_value(ai) for ai in annotation_identity
         }
         parts.append(f"<table><tbody>{_provenance_rows(ann_rows)}</tbody></table>")
+        # The input end of the cache chain (which cache was configured), echoed
+        # with the exact wording shared with `contig methods`; None -> no line
+        # (no orphan label, mirroring the db_version omission rule).
+        cache_note = cache_inputs_note(record.parameters)
+        if cache_note is not None:
+            parts.append(f'<p class="note">{escape(cache_note)}</p>')
 
     # Sex inference — germline karyotypic-sex provenance (PRD
     # germline-sex-check-plausibility). Research-use inference only, never a

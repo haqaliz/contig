@@ -89,3 +89,38 @@ def test_methods_omits_cache_inputs_when_parameters_clean():
     text = render_methods(_record())
     assert "cache inputs" not in text
     assert "cache download" not in text
+
+
+# ---------------------------------------------------------------------------
+# Task 2 — HTML provenance panel (M5b): the annotation identity block echoes
+# the same cache-input line, using the exact shared wording.
+# ---------------------------------------------------------------------------
+
+
+def test_html_report_echoes_user_supplied_cache_inputs():
+    record = _record(parameters={"vep_cache": "/v", "snpeff_cache": "/s"})
+    html = render_run_report_html(record)
+    assert "Annotation identity" in html
+    assert "cache inputs VEP=/v, SnpEff=/s" in html
+
+
+def test_html_report_echoes_auto_download_cache_input():
+    record = _record(parameters={"download_cache": "true", "outdir_cache": "/c"})
+    html = render_run_report_html(record)
+    assert "Annotation identity" in html
+    assert "cache download" in html
+
+
+def test_html_report_omits_cache_input_echo_when_parameters_clean():
+    html = render_run_report_html(_record())
+    assert "cache inputs" not in html
+    assert "cache download" not in html
+
+
+def test_html_report_escapes_cache_input_values():
+    # Paths are user-controlled free text; the echo must escape them like every
+    # other free text in the report.
+    record = _record(parameters={"vep_cache": "/v<x>"})
+    html = render_run_report_html(record)
+    assert "cache inputs VEP=/v&lt;x&gt;" in html
+    assert "VEP=/v<x>" not in html
