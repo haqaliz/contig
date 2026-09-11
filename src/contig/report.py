@@ -157,6 +157,13 @@ def render_run_report(record: RunRecord) -> str:
         lines.append(f"Contig version: {record.contig_version}")
     if record.nextflow_version is not None:
         lines.append(f"Nextflow version: {record.nextflow_version}")
+    # The input end of the annotation-cache chain (which cache was configured),
+    # echoed with the exact wording shared with `contig methods` and the HTML
+    # report; None -> no line (no orphan text). Placed with the provenance
+    # lines, not the verdict line.
+    cache_note = cache_inputs_note(record.parameters)
+    if cache_note is not None:
+        lines.append(cache_note)
     if record.qc_results:
         # Concordance (cross-tool corroboration) is named in its own section so
         # a reader can tell agreement between tools apart from a file's own checks.

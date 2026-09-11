@@ -124,3 +124,27 @@ def test_html_report_escapes_cache_input_values():
     html = render_run_report_html(record)
     assert "cache inputs VEP=/v&lt;x&gt;" in html
     assert "VEP=/v<x>" not in html
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — text report (N1): `contig show` echoes one line when cache inputs
+# exist, nothing otherwise.
+# ---------------------------------------------------------------------------
+
+
+def test_text_report_echoes_user_supplied_cache_inputs():
+    record = _record(parameters={"vep_cache": "/v", "snpeff_cache": "/s"})
+    report = render_run_report(record)
+    assert "cache inputs VEP=/v, SnpEff=/s" in report
+
+
+def test_text_report_echoes_auto_download_cache_input():
+    record = _record(parameters={"download_cache": "true", "outdir_cache": "/c"})
+    report = render_run_report(record)
+    assert "cache download" in report
+
+
+def test_text_report_omits_cache_input_echo_when_parameters_clean():
+    report = render_run_report(_record())
+    assert "cache inputs" not in report
+    assert "cache download" not in report
