@@ -486,17 +486,51 @@ def _inject_default_params(params: dict[str, object], assay: str) -> None:
 def _enable_annotation_cache(
     params: dict[str, object], *,
     assay: str, pipeline: str, revision: str, runs_dir: str, engine: str,
+    vep_cache: str | None = None, snpeff_cache: str | None = None,
 ) -> None:
-    """Wire sarek's annotation-cache download for variant assays (C7).
+    """Wire sarek's annotation-cache wiring for variant assays (C7).
 
     sarek 3.5.1 defaults --vep_cache/--snpeff_cache to s3://annotation-cache/…
     and hard-fails cache initialisation when they are unreachable; with
     --download_cache true it downloads the cache at run time into
     --outdir_cache instead (main.nf takes the DOWNLOAD_CACHE branch and skips
     the validation error). Only sarek variant assays run annotation tools, so
-    only they get the params; setdefault keeps any user-supplied value.
+    only they get the params.
+
+    User-supplied caches win over the auto-download: `vep_cache`/`snpeff_cache`
+    (the CLI flags, or values already in `params` via --opt, which setdefault
+    prefers) are used as-is and suppress `download_cache`/`outdir_cache`
+    entirely when BOTH tools have a cache. An explicit-reference variant run
+    (--fasta/--gtf, no --genome) with neither user cache is refused before any
+    cache dir is created: the auto-download is keyed to sarek's default GRCh38,
+    so proceeding would silently annotate a non-GRCh38 reference against the
+    wrong build (all-or-nothing in explicit mode). iGenomes (--genome) and
+    test-profile runs keep today's auto-download; a single user cache in
+    iGenomes mode leaves the missing tool on auto-download.
     """
     if engine != "nextflow" or assay not in VARIANT_ASSAYS:
+        return
+    if vep_cache:
+        params.setdefault("vep_cache", vep_cache)
+    if snpeff_cache:
+        params.setdefault("snpeff_cache", snpeff_cache)
+    has_vep = params.get("vep_cache") is not None
+    has_snpeff = params.get("snpeff_cache") is not None
+    # Explicit reference mode: post-resolve_reference, params carry fasta/gtf and
+    # no genome key (reference.py:21-41). The auto-download is keyed to sarek's
+    # default GRCh38 genome attrs, so an explicit non-GRCh38 reference would get
+    # a wrong-build cache — refuse unless the user supplies both caches.
+    explicit = "genome" not in params and ("fasta" in params or "gtf" in params)
+    if explicit and not (has_vep and has_snpeff):
+        typer.echo(
+            "Explicit-reference variant runs require both annotation caches: "
+            "pass --vep-cache and --snpeff-cache (or --opt vep_cache=… "
+            "--opt snpeff_cache=…). The auto-download is keyed to the GRCh38 "
+            "default, which would mis-annotate a custom reference.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if has_vep and has_snpeff:
         return
     cache_dir = (
         Path(runs_dir).resolve()
