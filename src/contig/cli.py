@@ -406,6 +406,8 @@ def run(
     genome: str = typer.Option(None, "--genome", help="iGenomes reference key (e.g. GRCh38)."),
     fasta: str = typer.Option(None, "--fasta", help="Reference FASTA (with --gtf)."),
     gtf: str = typer.Option(None, "--gtf", help="Reference GTF annotation (with --fasta)."),
+    vep_cache: str = typer.Option(None, "--vep-cache", help="User-supplied VEP annotation cache path or s3:// URL (variant assays only); overrides the auto-download."),
+    snpeff_cache: str = typer.Option(None, "--snpeff-cache", help="User-supplied SnpEff annotation cache path or s3:// URL (variant assays only); overrides the auto-download."),
     outdir: str = typer.Option(None, "--outdir", help="Pipeline output directory (pipeline --outdir)."),
     max_memory: str = typer.Option(None, "--max-memory", help="Cap per-process memory (e.g. '6.GB'), needed to fit nf-core on a laptop."),
     max_cpus: int = typer.Option(None, "--max-cpus", help="Cap per-process CPUs."),
@@ -445,6 +447,8 @@ def run(
         genome=genome,
         fasta=fasta,
         gtf=gtf,
+        vep_cache=vep_cache,
+        snpeff_cache=snpeff_cache,
         outdir=outdir,
         max_memory=max_memory,
         max_cpus=max_cpus,
@@ -564,6 +568,8 @@ def _dispatch_run(
     genome: str | None,
     fasta: str | None,
     gtf: str | None,
+    vep_cache: str | None = None,
+    snpeff_cache: str | None = None,
     outdir: str | None,
     max_memory: str | None,
     max_cpus: int | None,
@@ -794,6 +800,7 @@ def _dispatch_run(
     _enable_annotation_cache(
         params, assay=resolved_assay, pipeline=effective_pipeline,
         revision=revision, runs_dir=runs_dir, engine=engine,
+        vep_cache=vep_cache, snpeff_cache=snpeff_cache,
     )
     _inject_default_params(params, resolved_assay)
 

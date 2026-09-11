@@ -144,3 +144,78 @@ def test_non_variant_assay_ignores_cache_kwargs(tmp_path):
     params: dict[str, object] = {"genome": "GRCh38"}
     _call_seam(params, assay="rnaseq", runs_dir=str(tmp_path), vep_cache="/v", snpeff_cache="/s")
     assert params == {"genome": "GRCh38"}
+
+
+# Task 2 -- CLI flags threaded through dispatch (M1), typer level --------------
+
+
+def test_run_with_both_flags_passes_caches_and_no_download(tmp_path, monkeypatch):
+    captured: list = []
+    monkeypatch.setattr("contig.cli.self_heal_run", _self_heal_params_spy(captured))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "cf", "--runs-dir", str(tmp_path),
+         "--pipeline", "nf-core/sarek", "--revision", "3.5.1",
+         "--vep-cache", "/v", "--snpeff-cache", "/s"],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured and captured[0] is not None
+    assert captured[0].get("vep_cache") == "/v"
+    assert captured[0].get("snpeff_cache") == "/s"
+    assert "download_cache" not in captured[0]
+    assert "outdir_cache" not in captured[0]
+    assert not (Path(tmp_path) / "caches").exists()
+
+
+def _make_sheet(tmp_path):
+    (tmp_path / "s1_R1.fastq.gz").write_bytes(b"\x1f\x8bR1")
+    (tmp_path / "s1_R2.fastq.gz").write_bytes(b"\x1f\x8bR2")
+    sheet = tmp_path / "samplesheet.csv"
+    sheet.write_text(f"sample,fastq_1,fastq_2,strandedness\nS1,s1_R1.fastq.gz,s1_R2.fastq.gz,auto\n")
+    return sheet
+
+
+def _make_overlapping_reference(tmp_path):
+    fasta = tmp_path / "ref.fa"
+    fasta.write_text(">chr1\nACGT\n>chr2\nTTTT\n")
+    gtf = tmp_path / "ref.gtf"
+    gtf.write_text("chr1\tsource\tgene\t1\t100\t.\t+\t.\tgene_id \"g1\"\n")
+    return fasta, gtf
+
+
+def test_explicit_reference_no_caches_refuses_before_launch(tmp_path, monkeypatch):
+    sheet = _make_sheet(tmp_path)
+    fasta, gtf = _make_overlapping_reference(tmp_path)
+    captured: list = []
+    monkeypatch.setattr("contig.cli.self_heal_run", _self_heal_params_spy(captured))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "exref", "--runs-dir", str(tmp_path / "runs"),
+         "--pipeline", "nf-core/sarek", "--revision", "3.5.1",
+         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf)],
+    )
+    assert result.exit_code == 1
+    assert "--vep-cache" in result.output
+    assert "--snpeff-cache" in result.output
+    assert len(captured) == 0  # nothing launched
+    assert not (tmp_path / "runs" / "caches").exists()
+
+
+def test_explicit_reference_both_caches_proceeds(tmp_path, monkeypatch):
+    sheet = _make_sheet(tmp_path)
+    fasta, gtf = _make_overlapping_reference(tmp_path)
+    captured: list = []
+    monkeypatch.setattr("contig.cli.self_heal_run", _self_heal_params_spy(captured))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "exrefok", "--runs-dir", str(tmp_path / "runs"),
+         "--pipeline", "nf-core/sarek", "--revision", "3.5.1",
+         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf),
+         "--vep-cache", "/v", "--snpeff-cache", "/s"],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured and captured[0] is not None
+    assert captured[0].get("vep_cache") == "/v"
+    assert captured[0].get("snpeff_cache") == "/s"
+    assert "download_cache" not in captured[0]
+    assert "outdir_cache" not in captured[0]
