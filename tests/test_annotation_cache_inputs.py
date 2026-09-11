@@ -219,3 +219,119 @@ def test_explicit_reference_both_caches_proceeds(tmp_path, monkeypatch):
     assert captured[0].get("snpeff_cache") == "/s"
     assert "download_cache" not in captured[0]
     assert "outdir_cache" not in captured[0]
+
+
+# Task 3 -- manifest replay (M4): fields + rerun/resume -----------------------
+
+
+def test_launch_manifest_roundtrips_cache_inputs():
+    manifest = LaunchManifest(
+        run_id="r1", pipeline="nf-core/sarek", revision="3.5.1",
+        profiles=["docker"], backend="local", container_runtime="docker",
+        vep_cache="/v", snpeff_cache="/s", created_at="2026-09-12T00:00:00Z",
+    )
+    restored = LaunchManifest.model_validate_json(manifest.model_dump_json())
+    assert restored.vep_cache == "/v"
+    assert restored.snpeff_cache == "/s"
+
+
+def test_launch_manifest_cache_inputs_default_none():
+    legacy = LaunchManifest(
+        run_id="r1", pipeline="nf-core/sarek", revision="3.5.1",
+        profiles=["docker"], backend="local", container_runtime="docker",
+        created_at="2026-09-12T00:00:00Z",
+    )
+    assert legacy.vep_cache is None
+    assert legacy.snpeff_cache is None
+
+
+def test_run_manifest_persists_cache_inputs(tmp_path, monkeypatch):
+    captured: list = []
+    monkeypatch.setattr("contig.cli.self_heal_run", _self_heal_params_spy(captured))
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "cfm", "--runs-dir", str(tmp_path),
+         "--pipeline", "nf-core/sarek", "--revision", "3.5.1",
+         "--vep-cache", "/v", "--snpeff-cache", "/s"],
+    )
+    assert result.exit_code == 0, result.output
+    manifest = json.loads((Path(tmp_path) / "cfm" / "launch.json").read_text())
+    assert manifest["vep_cache"] == "/v"
+    assert manifest["snpeff_cache"] == "/s"
+
+
+def test_rerun_replays_cache_inputs(tmp_path, monkeypatch):
+    captured: list = []
+    monkeypatch.setattr("contig.cli.self_heal_run", _self_heal_params_spy(captured))
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "cfrr", "--runs-dir", str(runs_dir),
+         "--pipeline", "nf-core/sarek", "--revision", "3.5.1",
+         "--vep-cache", "/v", "--snpeff-cache", "/s"],
+    )
+    assert result.exit_code == 0, result.output
+    result = runner.invoke(
+        app,
+        ["rerun", "cfrr", "--runs-dir", str(runs_dir), "--new-run-id", "cfrr2"],
+    )
+    assert result.exit_code == 0, result.output
+    assert len(captured) == 2
+    assert captured[0].get("vep_cache") == "/v"
+    assert captured[0].get("snpeff_cache") == "/s"
+    assert captured[1].get("vep_cache") == "/v"
+    assert captured[1].get("snpeff_cache") == "/s"
+    assert "download_cache" not in captured[1]
+
+
+def test_resume_replays_cache_inputs(tmp_path, monkeypatch):
+    captured: list = []
+    monkeypatch.setattr("contig.cli.self_heal_run", _self_heal_params_spy(captured))
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "cfrs", "--runs-dir", str(runs_dir),
+         "--pipeline", "nf-core/sarek", "--revision", "3.5.1",
+         "--vep-cache", "/v", "--snpeff-cache", "/s"],
+    )
+    assert result.exit_code == 0, result.output
+    (runs_dir / "cfrs" / "status.json").write_text(
+        json.dumps({"run_id": "cfrs", "state": "cancelled", "pid": 4321,
+                    "started_at": "2026-09-12T00:00:00+00:00",
+                    "finished_at": "2026-09-12T00:01:00+00:00"})
+    )
+    result = runner.invoke(app, ["resume", "cfrs", "--runs-dir", str(runs_dir)])
+    assert result.exit_code == 0, result.output
+    assert len(captured) == 2
+    assert captured[1].get("vep_cache") == "/v"
+    assert captured[1].get("snpeff_cache") == "/s"
+    assert "download_cache" not in captured[1]
+
+
+def test_rerun_legacy_manifest_without_cache_inputs_dispatches_fine(tmp_path, monkeypatch):
+    captured: list = []
+    monkeypatch.setattr("contig.cli.self_heal_run", _self_heal_params_spy(captured))
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "cfleg", "--runs-dir", str(runs_dir),
+         "--pipeline", "nf-core/sarek", "--revision", "3.5.1"],
+    )
+    assert result.exit_code == 0, result.output
+    launch_path = runs_dir / "cfleg" / "launch.json"
+    launch = json.loads(launch_path.read_text())
+    assert launch["vep_cache"] is None  # absent flags serialize as null
+    # Simulate a pre-aspect manifest: strip the cache keys entirely, then a rerun
+    # must still dispatch fine (the new fields default to None on parse).
+    del launch["vep_cache"]
+    del launch["snpeff_cache"]
+    launch_path.write_text(json.dumps(launch))
+    result = runner.invoke(
+        app,
+        ["rerun", "cfleg", "--runs-dir", str(runs_dir), "--new-run-id", "cfleg2"],
+    )
+    assert result.exit_code == 0, result.output
+    assert len(captured) == 2
+    assert captured[1].get("vep_cache") is None
+    assert captured[1].get("snpeff_cache") is None
+    assert captured[1].get("download_cache") == "true"  # status quo auto-download

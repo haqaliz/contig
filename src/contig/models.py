@@ -426,6 +426,11 @@ class LaunchManifest(BaseModel):
     genome: str | None = None
     fasta: str | None = None
     gtf: str | None = None
+    # User-supplied annotation-cache paths (--vep-cache/--snpeff-cache),
+    # replayed by rerun/resume like fasta/gtf. Defaults None so a legacy
+    # launch.json (written before these fields) stays valid.
+    vep_cache: str | None = None
+    snpeff_cache: str | None = None
     max_memory: str | None = None
     max_cpus: int | None = None
     max_attempts: int = 3

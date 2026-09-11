@@ -819,6 +819,8 @@ def _dispatch_run(
         genome=genome,
         fasta=fasta,
         gtf=gtf,  # ORIGINAL path — reproduce re-enters dispatch and re-derives harmonization
+        vep_cache=vep_cache,  # raw CLI args, replayed on rerun/resume
+        snpeff_cache=snpeff_cache,
         max_memory=max_memory,
         max_cpus=max_cpus,
         max_attempts=max_attempts,
@@ -933,6 +935,8 @@ def rerun(
         genome=manifest.genome,
         fasta=manifest.fasta,
         gtf=manifest.gtf,
+        vep_cache=manifest.vep_cache,
+        snpeff_cache=manifest.snpeff_cache,
         outdir=None,  # re-defaulted under the new run dir
         max_memory=manifest.max_memory,
         max_cpus=manifest.max_cpus,
@@ -2602,6 +2606,8 @@ def resume(
         genome=manifest.genome,
         fasta=manifest.fasta,
         gtf=manifest.gtf,
+        vep_cache=manifest.vep_cache,
+        snpeff_cache=manifest.snpeff_cache,
         outdir=None,
         max_memory=manifest.max_memory,
         max_cpus=manifest.max_cpus,
