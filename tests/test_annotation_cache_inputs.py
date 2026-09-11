@@ -22,6 +22,7 @@ from typer.testing import CliRunner
 from contig.cli import _enable_annotation_cache, app
 from contig.models import LaunchManifest, RunRecord
 from contig.runner import build_nextflow_command
+from contig.runner import build_nextflow_command
 
 runner = CliRunner()
 
@@ -335,3 +336,37 @@ def test_rerun_legacy_manifest_without_cache_inputs_dispatches_fine(tmp_path, mo
     assert captured[1].get("vep_cache") is None
     assert captured[1].get("snpeff_cache") is None
     assert captured[1].get("download_cache") == "true"  # status quo auto-download
+
+
+# Task 4 -- argv tokens + refusal e2e ------------------------------------------
+
+
+def test_cache_inputs_become_exact_argv_token_pairs():
+    params = {"outdir": "/out", "vep_cache": "/v", "snpeff_cache": "/s"}
+    cmd = build_nextflow_command(
+        "nf-core/sarek", "3.5.1", ["docker"], "/trace", params=params
+    )
+    assert "--vep_cache" in cmd
+    assert cmd[cmd.index("--vep_cache") + 1] == "/v"
+    assert "--snpeff_cache" in cmd
+    assert cmd[cmd.index("--snpeff_cache") + 1] == "/s"
+
+
+def test_explicit_reference_refusal_launches_nothing(tmp_path, monkeypatch):
+    sheet = _make_sheet(tmp_path)
+    fasta, gtf = _make_overlapping_reference(tmp_path)
+    captured: list = []
+    monkeypatch.setattr("contig.cli.self_heal_run", _self_heal_params_spy(captured))
+    runs_dir = tmp_path / "runs"
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "exref", "--runs-dir", str(runs_dir),
+         "--pipeline", "nf-core/sarek", "--revision", "3.5.1",
+         "--input", str(sheet), "--fasta", str(fasta), "--gtf", str(gtf)],
+    )
+    assert result.exit_code == 1
+    assert "--vep-cache" in result.output
+    assert "--snpeff-cache" in result.output
+    assert len(captured) == 0  # self_heal_run never entered
+    assert not (runs_dir / "exref" / "launch.json").exists()  # no launch artifact
+    assert not (runs_dir / "caches").exists()  # refusal before any cache dir
