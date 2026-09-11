@@ -107,8 +107,18 @@ def _annotation_clause(record: RunRecord) -> str:
         return base
 
     rendered = "; ".join(_one(ai) for ai in provenances)
+    params = record.parameters
+    cache_parts = []
+    for key, label in (("vep_cache", "VEP"), ("snpeff_cache", "SnpEff")):
+        if key in params:
+            cache_parts.append(f"{label}={params[key]}")
+    tool_part = rendered
+    if cache_parts:
+        tool_part += f" (cache inputs {', '.join(cache_parts)})"
+    elif params.get("download_cache") == "true" and "outdir_cache" in params:
+        tool_part += " (cache download)"
     return (
-        f" Variant annotation was performed with {rendered}; annotations are"
+        f" Variant annotation was performed with {tool_part}; annotations are"
         " reported as produced by that tool and its databases (research use)."
     )
 
