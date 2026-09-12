@@ -13,7 +13,7 @@ import os
 
 from contig.models import RunRecord
 from contig.registry import assay_for_pipeline
-from contig.verification.annotation_surface import corroborated_by_line
+from contig.verification.annotation_surface import cache_inputs_note, corroborated_by_line
 
 # Human-readable assay labels for the prose. A pipeline whose assay is not in the
 # curated registry simply renders without an assay clause (see render_methods).
@@ -107,8 +107,14 @@ def _annotation_clause(record: RunRecord) -> str:
         return base
 
     rendered = "; ".join(_one(ai) for ai in provenances)
+    # The input end of the cache chain (which cache was configured) joins the
+    # observed end (db_version's cache/build id) on the same line: "VEP v110
+    # (cache/build 110_GRCh38) (cache inputs VEP=/v)". Shared wording from
+    # cache_inputs_note; None -> no parenthetical (no orphan label).
+    cache_note = cache_inputs_note(record.parameters)
+    tool_part = f"{rendered} ({cache_note})" if cache_note else rendered
     return (
-        f" Variant annotation was performed with {rendered}; annotations are"
+        f" Variant annotation was performed with {tool_part}; annotations are"
         " reported as produced by that tool and its databases (research use)."
     )
 

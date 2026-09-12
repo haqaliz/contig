@@ -6,6 +6,43 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+- **User-supplied VEP/SnpEff annotation-cache paths ship, and an
+  explicit-reference variant run can never silently mis-annotate against the
+  wrong build (`annotation-cache-inputs`).** The `annotation-cache-wiring`
+  slice's named follow-on closes its two accepted gaps. `contig run` gains typed
+  `--vep-cache` / `--snpeff-cache` flags (path or `s3://` URL; variant assays
+  only), threaded through `_dispatch_run` and **replayed by `rerun`/`resume`**
+  via two additive `LaunchManifest` fields (default `None`, legacy `launch.json`
+  loads unchanged; unsigned — signing covers `RunRecord` only). Precedence is
+  the parent's setdefault contract: `--opt vep_cache=…` values already in
+  `params` win over the flags, and a user-supplied cache for **both** tools
+  suppresses the `download_cache`/`outdir_cache` auto-download wiring entirely
+  (a single cache in iGenomes mode leaves the missing tool on auto-download —
+  correct build). **The guard:** the auto-download is keyed to sarek's default
+  `GATK.GRCh38` genome attrs, so an explicit-reference (`--fasta/--gtf`)
+  variant run with neither user cache is **refused at pre-flight** with a
+  message naming both flags (and the `--opt` escape hatch), before any cache
+  dir is created and before `launch.json` is written — all-or-nothing in
+  explicit mode (a single cache is also refused). iGenomes (`--genome`) and
+  test-profile runs keep today's auto-download. **Provenance, both ends, no
+  model change:** the input end (which cache was configured) was already
+  landing in `RunRecord.parameters`; a shared `cache_inputs_note` helper now
+  renders it on the `contig methods` annotation line, the HTML provenance
+  panel, and the text report (`contig show`) — `cache inputs VEP=/v, SnpEff=/s`
+  or `cache download`, never "database version" (the observed build stays
+  `AnnotationProvenance.db_version` from the VCF header). None of the four
+  cache keys → no line (no orphan label), records render byte-identically.
+  - **Read honestly.** Push, not demand-pull; **no real nf-core/sarek/VEP run
+    in CI** (argv/param pins, parent's precedent; real-run smoke stays a manual
+    post-merge gate, and the checklist now carries one `--genome GRCh37`
+    iGenomes run to confirm the per-genome download keys correctly — the
+    iGenomes-mode safety assumption is reasoned from the nf-core igenomes
+    attrs mechanism, not verified against a live run). Refusal posture,
+    all-or-nothing rule, and parameters-only provenance were explicit user
+    decisions at the review gate. No signature break, no `FailureClass`, no
+    guard-baseline change; stdlib only, `uv.lock` untouched; full suite 2924
+    passed / 1 skipped.
+
 ## [0.58.0] - 2026-09-06
 
 - **`--auto-approve` is now persisted, and `contig repair-stats` attendance is derived

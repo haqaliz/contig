@@ -18,7 +18,10 @@ from contig.models import (
     RunSummary,
     overall_verdict,
 )
-from contig.verification.annotation_surface import corroborated_by_line
+from contig.verification.annotation_surface import (
+    cache_inputs_note,
+    corroborated_by_line,
+)
 from contig.verification.reproduce import reduce_reproduction
 
 
@@ -154,6 +157,13 @@ def render_run_report(record: RunRecord) -> str:
         lines.append(f"Contig version: {record.contig_version}")
     if record.nextflow_version is not None:
         lines.append(f"Nextflow version: {record.nextflow_version}")
+    # The input end of the annotation-cache chain (which cache was configured),
+    # echoed with the exact wording shared with `contig methods` and the HTML
+    # report; None -> no line (no orphan text). Placed with the provenance
+    # lines, not the verdict line.
+    cache_note = cache_inputs_note(record.parameters)
+    if cache_note is not None:
+        lines.append(cache_note)
     if record.qc_results:
         # Concordance (cross-tool corroboration) is named in its own section so
         # a reader can tell agreement between tools apart from a file's own checks.
@@ -453,6 +463,12 @@ def render_run_report_html(
             ai.tool: _ann_value(ai) for ai in annotation_identity
         }
         parts.append(f"<table><tbody>{_provenance_rows(ann_rows)}</tbody></table>")
+        # The input end of the cache chain (which cache was configured), echoed
+        # with the exact wording shared with `contig methods`; None -> no line
+        # (no orphan label, mirroring the db_version omission rule).
+        cache_note = cache_inputs_note(record.parameters)
+        if cache_note is not None:
+            parts.append(f'<p class="note">{escape(cache_note)}</p>')
 
     # Sex inference — germline karyotypic-sex provenance (PRD
     # germline-sex-check-plausibility). Research-use inference only, never a
