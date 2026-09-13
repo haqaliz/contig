@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.59.0] - 2026-09-13
+
 - **User-supplied VEP/SnpEff annotation-cache paths ship, and an
   explicit-reference variant run can never silently mis-annotate against the
   wrong build (`annotation-cache-inputs`).** The `annotation-cache-wiring`
@@ -4051,6 +4053,7 @@ compute. Pre-revenue, validation phase.
 [0.12.0]: https://github.com/haqaliz/contig/releases/tag/v0.12.0
 [0.53.0]: https://github.com/haqaliz/contig/releases/tag/v0.53.0
 [0.55.1]: https://github.com/haqaliz/contig/releases/tag/v0.55.1
+[0.59.0]: https://github.com/haqaliz/contig/releases/tag/v0.59.0
 [0.58.0]: https://github.com/haqaliz/contig/releases/tag/v0.58.0
 [0.57.0]: https://github.com/haqaliz/contig/releases/tag/v0.57.0
 [0.56.0]: https://github.com/haqaliz/contig/releases/tag/v0.56.0
