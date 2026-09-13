@@ -6,12 +6,13 @@ resident memory of the failed task and scales it by a safety factor. Pure and
 I/O-free so it is unit-testable without a run; the wiring into the heal loop (and
 the ceiling-clamp / never-shrink math) lives in ``self_heal.apply_patch``.
 
-The ladder is deliberately honest and TWO-tier: (a) the OOM'd task's own observed
-peak, else (c) unavailable, so the caller falls back to the blind multiplier. A
-same-process sibling rescue (borrowing a surviving sibling's peak when the killed
-row's own peak is a dash/0) is a deferred follow-on: it needs a coarse process
-column in the trace parser (today ``process == name`` for every row, so a sibling
-key can never diverge from the own-task key and the tier could never fire).
+The ladder is deliberately honest and FOUR-tier: (a) the OOM'd task's own
+observed peak, else (b) a same-process surviving sibling's peak when the killed
+row's own peak is a dash/0 (shipped: the trace parser now carries a coarse
+process column, so the sibling key can diverge from the own-task key), else
+(c) sibling_dominated when that sibling peak sizes at or below the current
+limit — a retry at that size would be a no-op, so the caller falls back to the
+blind multiplier, else (d) unavailable, also falling back to blind.
 """
 
 from __future__ import annotations
@@ -31,12 +32,15 @@ class PeakSizing(NamedTuple):
 
     `target_gb` is the binary-GB request to retry with (None when unavailable);
     `tier` records which rung of the ladder produced it ("oom_task" |
-    "unavailable"); `observed_peak_mb` is the raw peak the size came from.
+    "sibling_peak" | "sibling_dominated" | "unavailable"); `observed_peak_mb` is
+    the raw peak the size came from; `source_name` names the row that peak came
+    from (None for the own-task tier, whose source is the OOM'd task itself).
     """
 
     target_gb: int | None
     tier: str
     observed_peak_mb: float | None
+    source_name: str | None = None
 
 
 def peak_informed_memory_gb(
@@ -44,15 +48,22 @@ def peak_informed_memory_gb(
     usage: list[TaskResource],
     *,
     factor: float = PEAK_RSS_SAFETY_FACTOR,
+    current_gb: int | None = None,
 ) -> PeakSizing:
     """Size an OOM memory retry from the observed peak RSS in the trace.
 
-    Honest two-tier ladder (a killed task often reports a `-`/0 peak):
+    Four-tier ladder, honest about what it knows (a killed task often reports a
+    `-`/0 peak):
       a. the OOM'd task's own observed peak (join on process+name), else
-      c. unavailable — no usable peak, caller falls back to a blind bump.
-    A peak of 0 (dash in the trace) is treated as unknown. Same-process sibling
-    rescue is a deferred follow-on (needs a coarse process column in the trace
-    parser; today process == name, so a sibling key never diverges).
+      b. the same-`process` sibling's peak, sized raw (guard is the caller's),
+         else
+      c. sibling_dominated — a sibling peak exists but sizes at or below the
+         current limit, so a retry at that size would be a no-op; caller falls
+         back to a blind bump, else
+      d. unavailable — no usable peak anywhere, caller falls back to a blind bump.
+    A peak of 0 (dash in the trace) is treated as unknown. The sibling rung
+    borrows a surviving sibling's peak when the killed row's own peak is a dash;
+    the OOM'd rows have peak 0 by construction, so they cannot leak in.
     """
     oom_keys = {(e.process, e.name) for e in events if e.exit == 137}
     observed = [
@@ -61,7 +72,19 @@ def peak_informed_memory_gb(
         if (r.process, r.name) in oom_keys and r.peak_rss_mb > 0
     ]
     if not observed:
-        return PeakSizing(None, "unavailable", None)
+        oom_processes = {e.process for e in events if e.exit == 137}
+        siblings = [
+            (r.peak_rss_mb, r.name)
+            for r in usage
+            if r.process in oom_processes and r.peak_rss_mb > 0
+        ]
+        if not siblings:
+            return PeakSizing(None, "unavailable", None)
+        peak, src = max(siblings, key=lambda t: t[0])
+        candidate = _sized(peak, factor)
+        if current_gb is not None and candidate <= current_gb:
+            return PeakSizing(None, "sibling_dominated", peak, src)
+        return PeakSizing(candidate, "sibling_peak", peak, src)
     peak = max(observed)
     return PeakSizing(_sized(peak, factor), "oom_task", peak)
 
