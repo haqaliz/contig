@@ -105,7 +105,12 @@ from contig.reproduce_corpus import (
     should_capture_reproduce,
     snapshot_from_reproduce_report as snapshot_from_reproduce_corpus_report,
 )
-from contig.bundle import compute_output_checksums, compute_tree_sha256, write_reproduce_bundle
+from contig.bundle import (
+    compute_input_checksums,
+    compute_output_checksums,
+    compute_tree_sha256,
+    write_reproduce_bundle,
+)
 from contig.cost import cost_report
 from contig.signing import generate_keypair, signing_available, verify_signature
 from contig.estimate import estimate_run
@@ -1746,21 +1751,24 @@ def verify(
     second quantifier's matrix (PRD C1, rnaseq): the same at-most-WARN, never-changes-
     exit contract applies.
 
-    With --concordance-counts-auto (plus --reads and --index), Contig produces that
-    second gene-count matrix itself by running a second quantifier (kallisto) and
-    corroborates the run against it; the same at-most-WARN, never-changes-exit
-    contract applies. --reads and --index are ignored unless --concordance-counts-auto
-    is set.
+    With --concordance-counts-auto (plus --index; --reads is optional and, when
+    omitted, derived from the run record's persisted sample sheet, integrity-gated
+    against its recorded input checksums), Contig produces that second gene-count
+    matrix itself by running a second quantifier (kallisto) and corroborates the run
+    against it; the same at-most-WARN, never-changes-exit contract applies. --reads
+    and --index are ignored unless --concordance-counts-auto is set.
 
     With --concordance-sc-counts, corroborate an scrnaseq run's own count matrix against
     a second single-cell matrix (a matrix.mtx(.gz) triplet or a dense pseudobulk gene
     TSV; PRD C1, scrnaseq): both are collapsed to per-gene pseudobulk totals and fed to
     the same concordance core, under the same at-most-WARN, never-changes-exit contract.
 
-    With --concordance-sc-counts-auto (plus --reads, --index and --whitelist), Contig
-    produces that second single-cell matrix itself by running a second quantifier
-    (STARsolo) and corroborates the run against it; the same at-most-WARN, never-changes-
-    exit contract applies. --index is the STAR genome directory here (a kallisto index
+    With --concordance-sc-counts-auto (plus --index and --whitelist; --reads is
+    optional and, when omitted, derived from the run record's persisted sample sheet,
+    integrity-gated against its recorded input checksums), Contig produces that
+    second single-cell matrix itself by running a second quantifier (STARsolo) and
+    corroborates the run against it; the same at-most-WARN, never-changes-exit
+    contract applies. --index is the STAR genome directory here (a kallisto index
     for --concordance-counts-auto). --reads, --index, --whitelist and --chemistry are
     ignored unless --concordance-sc-counts-auto is set.
 
@@ -2189,6 +2197,58 @@ def _evaluate_run_sc_counts_concordance(
     )
 
 
+def _derive_reads(
+    record: RunRecord, explicit_reads: str | None, run_id: str
+) -> tuple[str | None, str | None]:
+    """Derive --reads from the run record's persisted sample sheet, integrity-gated.
+
+    Returns (reads_path, skip_note). An explicit --reads wins unconditionally (the
+    unchanged contract: no gate). Otherwise the sheet the run persisted as
+    ``parameters["input"]`` is reused only when it and its FASTQs still match the
+    run's recorded ``input_checksums`` — a missing sheet, absent checksums, or any
+    basename/sha256 drift yields a skip note instead (never a crash, never a
+    silently-unverifiable concordance).
+    """
+    if explicit_reads:
+        return explicit_reads, None
+    input_path = record.parameters.get("input")
+    if not input_path:
+        return None, "no persisted sample sheet in the run record; pass --reads explicitly"
+    sheet = Path(str(input_path))
+    if not sheet.is_file():
+        return None, (
+            f"persisted sample sheet no longer exists: {input_path}; pass --reads explicitly"
+        )
+    if not record.input_checksums:
+        return None, f"no recorded input checksums for run {run_id}; pass --reads explicitly"
+    try:
+        inputs = [sheet, *fastq_paths(sheet)]
+    except Exception:
+        return None, (
+            f"could not read the run's persisted sample sheet at {input_path}; "
+            "pass --reads explicitly"
+        )
+    for p in inputs:
+        if not Path(p).is_file():
+            return None, (
+                f"inputs changed since the run (checksum mismatch: {Path(p).name}); "
+                "pass --reads explicitly"
+            )
+    try:
+        current = compute_input_checksums(inputs)
+    except Exception:
+        return None, (
+            f"could not re-read the run's inputs from {input_path}; pass --reads explicitly"
+        )
+    for name in sorted(set(record.input_checksums) | set(current)):
+        if record.input_checksums.get(name) != current.get(name):
+            return None, (
+                f"inputs changed since the run (checksum mismatch: {name}); "
+                "pass --reads explicitly"
+            )
+    return str(sheet), None
+
+
 def _evaluate_run_counts_concordance_auto(
     record: RunRecord,
     runs_dir: str,
@@ -2201,10 +2261,11 @@ def _evaluate_run_counts_concordance_auto(
     """Count-concordance checks for an rnaseq run vs a freshly produced second matrix.
 
     Like `_evaluate_run_counts_concordance`, but Contig produces the second gene-count
-    matrix itself: it gates to rnaseq, resolves the same primary matrix, validates
-    that --reads and --index were given and exist, then runs the second quantifier
-    (kallisto by default; injectable via `quantifier` and monkeypatchable as the
-    module-level `run_kallisto_quantifier`). A missing input or any
+    matrix itself: it gates to rnaseq, resolves the same primary matrix, derives --reads
+    from the run record's persisted sample sheet when not given (integrity-gated against
+    the recorded input checksums), validates that --index was given and exists, then runs
+    the second quantifier (kallisto by default; injectable via `quantifier` and
+    monkeypatchable as the module-level `run_kallisto_quantifier`). A missing input or any
     SecondQuantifierError prints a clear skip note and yields no checks (never a
     crash, never a false pass). Returns the QCResult list so the caller surfaces it
     without changing the exit code.
@@ -2217,7 +2278,13 @@ def _evaluate_run_counts_concordance_auto(
     if primary is None:
         return []
 
-    for label, value in (("--reads", reads), ("--index", index)):
+    if not reads:
+        reads, note = _derive_reads(record, None, run_id)
+        if note:
+            typer.echo(f"Skipping concordance: {note}.")
+            return []
+
+    for label, value in (("--index", index),):
         if not value:
             typer.echo(f"Skipping concordance: {label} is required for --concordance-counts-auto.")
             return []
@@ -2252,8 +2319,10 @@ def _evaluate_run_sc_counts_concordance_auto(
 
     Like `_evaluate_run_sc_counts_concordance`, but Contig produces the second
     single-cell matrix itself: it gates to scrnaseq, resolves the same primary matrix,
-    validates that --reads, --index (STAR genome dir) and --whitelist were given and
-    exist, then runs the second quantifier (STARsolo by default; injectable via
+    derives --reads from the run record's persisted sample sheet when not given
+    (integrity-gated against the recorded input checksums), validates that --index
+    (STAR genome dir) and --whitelist were given and exist, then runs the second
+    quantifier (STARsolo by default; injectable via
     `quantifier` and monkeypatchable as the module-level `run_starsolo_quantifier`). A
     missing primary matrix skips BEFORE any spawn; a missing input or any
     SecondScQuantifierError prints a clear skip note and yields no checks (never a
@@ -2268,7 +2337,13 @@ def _evaluate_run_sc_counts_concordance_auto(
     if primary is None:
         return []
 
-    for label, value in (("--reads", reads), ("--index", index), ("--whitelist", whitelist)):
+    if not reads:
+        reads, note = _derive_reads(record, None, run_id)
+        if note:
+            typer.echo(f"Skipping concordance: {note}.")
+            return []
+
+    for label, value in (("--index", index), ("--whitelist", whitelist)):
         if not value:
             typer.echo(
                 f"Skipping concordance: {label} is required for --concordance-sc-counts-auto."
