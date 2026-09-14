@@ -13,10 +13,14 @@ import pytest
 
 from contig.verification.count_quantifier import (
     SecondQuantifierError,
+    _parse_t2g,
+    build_kallisto_index,
     collapse_to_gene,
     kallisto_command,
     run_kallisto_quantifier,
+    t2g_from_gtf,
     tx2gene_path,
+    write_t2g,
 )
 
 
@@ -150,3 +154,100 @@ def test_malformed_reads_sheet_raises_second_quantifier_error(tmp_path):
 
     with pytest.raises(SecondQuantifierError):
         run_kallisto_quantifier(str(reads), str(index), str(out_dir))
+
+
+def test_t2g_from_gtf_parses_gene_and_transcript_attributes(tmp_path):
+    gtf = tmp_path / "annotation.gtf"
+    gtf.write_text(
+        "# a comment line\n"
+        'chr1\tsrc\tgene\t100\t200\t.\t+\t.\tgene_id "ENSG1";\n'
+        'chr1\tsrc\ttranscript\t100\t200\t.\t+\t.\tgene_id "ENSG1"; '
+        'transcript_id "ENST1"; gene_name "TP53";\n'
+        'chr1\tsrc\texon\t100\t150\t.\t+\t.\tgene_id "ENSG1"; transcript_id "ENST2";\n'
+    )
+
+    mapping, gene_names = t2g_from_gtf(gtf)
+
+    assert mapping == {"ENST1": "ENSG1", "ENST2": "ENSG1"}
+    assert gene_names == {"ENST1": "TP53"}
+
+
+def test_t2g_from_gtf_skips_unmappable_lines(tmp_path):
+    gtf = tmp_path / "annotation.gtf"
+    gtf.write_text(
+        'chr1\tsrc\ttranscript\t100\t200\t.\t+\t.\ttranscript_id "ENST9";\n'
+        "chr1\tsrc\tgene\t100\t200\t.\t+\t.\tID=gene1;Parent=chr1\n"
+    )
+
+    mapping, gene_names = t2g_from_gtf(gtf)
+
+    assert mapping == {}
+    assert gene_names == {}
+
+    empty = tmp_path / "empty.gtf"
+    empty.write_text("")
+
+    assert t2g_from_gtf(empty) == ({}, {})
+
+
+def test_write_t2g_roundtrips_through_parse_t2g(tmp_path):
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    mapping = {"ENST1": "ENSG1", "ENST2": "ENSG1"}
+    gene_names = {"ENST1": "TP53"}
+
+    out = write_t2g(index_dir, mapping, gene_names)
+
+    assert out == index_dir / "t2g.txt"
+    assert _parse_t2g(out) == mapping
+    lines = out.read_text().splitlines()
+    assert lines[0] == "ENST1\tENSG1\tTP53"
+    assert "ENST2\tENSG1" in lines
+
+
+def test_build_kallisto_index_argv_and_returns_dir(tmp_path):
+    transcriptome = tmp_path / "transcripts.fa"
+    transcriptome.write_text(">ENST1\nACGT\n")
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    calls = []
+
+    def fake_builder(argv):
+        calls.append(argv)
+        return 0
+
+    result = build_kallisto_index(str(transcriptome), index_dir, builder=fake_builder)
+
+    assert result == index_dir
+    assert calls == [
+        ["kallisto", "index", "-i", str(index_dir / "index.idx"), str(transcriptome)]
+    ]
+
+
+def test_build_kallisto_index_missing_transcriptome_raises(tmp_path):
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    calls = []
+
+    def fake_builder(argv):
+        calls.append(argv)
+        return 0
+
+    with pytest.raises(SecondQuantifierError) as excinfo:
+        build_kallisto_index(str(tmp_path / "missing.fa"), index_dir, builder=fake_builder)
+
+    assert "transcriptome" in str(excinfo.value).lower()
+    assert calls == []
+
+
+def test_build_kallisto_index_nonzero_exit_raises(tmp_path):
+    transcriptome = tmp_path / "transcripts.fa"
+    transcriptome.write_text(">ENST1\nACGT\n")
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+
+    def fake_builder(argv):
+        return 1
+
+    with pytest.raises(SecondQuantifierError):
+        build_kallisto_index(str(transcriptome), index_dir, builder=fake_builder)

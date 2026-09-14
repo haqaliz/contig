@@ -2,8 +2,10 @@
 
 Cross-tool count concordance (`count_concordance.py`) needs a second, independent
 gene-count matrix on the same FASTQs. This seam lets Contig produce that second
-matrix by running a second quantifier (kallisto by default) against a prebuilt
-index, then collapsing its transcript-level output to gene level.
+matrix by running a second quantifier (kallisto by default) against an index,
+then collapsing its transcript-level output to gene level. A turnkey run needs no
+prebuilt kb-ref directory: `build_kallisto_index` builds the index in-seam, and
+`t2g_from_gtf`/`write_t2g` derive the transcript->gene map from the annotation.
 
 The seam mirrors `VariantCaller`/`run_bcftools_caller` in `second_caller.py`: a
 `CountQuantifier` is an injectable callable so the rest of the engine (and its
@@ -52,6 +54,9 @@ _ABUNDANCE_NAME = "abundance.tsv"
 # the index file).
 _T2G_NAME = "t2g.txt"
 
+# The kallisto index file name, written under the index directory.
+_INDEX_NAME = "index.idx"
+
 
 class SecondQuantifierError(Exception):
     """Raised when the second quantifier cannot run or its inputs are missing.
@@ -80,6 +85,57 @@ def tx2gene_path(index: str) -> Path:
     to produce gene counts is always explicit and never silently dropped.
     """
     return Path(index) / _T2G_NAME
+
+
+def _run_kallisto_index(argv: list[str]) -> int:
+    """Default index builder: run `kallisto index`; return its exit code.
+
+    A nonzero exit carries the tool's stderr detail into a
+    SecondQuantifierError. This subprocess success path is intentionally NEVER
+    exercised in CI (kallisto is not installed there); tests inject a fake
+    builder through `build_kallisto_index`.
+    """
+    result = subprocess.run(argv, capture_output=True)
+    if result.returncode != 0:
+        detail = result.stderr.decode(errors="replace").strip() if result.stderr else ""
+        raise SecondQuantifierError(
+            f"kallisto index exited nonzero ({result.returncode}): {detail}"
+        )
+    return result.returncode
+
+
+def build_kallisto_index(
+    transcriptome: str,
+    index_dir: Path,
+    builder: Callable[[list[str]], int] | None = None,
+) -> Path:
+    """Build a kallisto index for `transcriptome`; return the index dir.
+
+    Validates the transcriptome FASTA exists BEFORE any spawn (a clear error
+    beats a confusing tool failure), then runs
+    `kallisto index -i <index_dir>/index.idx <transcriptome>` through the
+    injectable `builder` (default `_run_kallisto_index`). A missing binary or a
+    nonzero exit is folded into SecondQuantifierError.
+
+    The default builder's subprocess success path is NEVER exercised in CI
+    (kallisto is not installed there); CI injects a fake builder.
+    """
+    if not Path(transcriptome).is_file():
+        raise SecondQuantifierError(f"transcriptome FASTA not found: {transcriptome}")
+
+    index_path = Path(index_dir)
+    argv = [_KALLISTO, "index", "-i", str(index_path / _INDEX_NAME), transcriptome]
+
+    run = builder if builder is not None else _run_kallisto_index
+    try:
+        returncode = run(argv)
+    except FileNotFoundError as exc:
+        raise SecondQuantifierError(
+            f"kallisto not found (is the '{_KALLISTO}' binary on PATH?): {exc}"
+        ) from exc
+    if returncode != 0:
+        raise SecondQuantifierError(f"kallisto index exited nonzero ({returncode})")
+    return index_path
 
 
 def collapse_to_gene(
@@ -134,6 +190,78 @@ def _parse_t2g(path: Path) -> dict[str, str]:
                 continue
             mapping[fields[0]] = fields[1]
     return mapping
+
+
+def _parse_gtf_attributes(field: str) -> dict[str, str]:
+    """Parse a GTF column-9 attribute string into a dict (pure).
+
+    GTF attributes look like `gene_id "ENSG1"; transcript_id "ENST1";` (optionally
+    with a `gene_name`). GFF3-style `ID=...;Parent=...` attributes do not match
+    the `<key> <value>` grammar, so they yield no keys and the caller skips the
+    line.
+    """
+    attrs: dict[str, str] = {}
+    for chunk in field.split(";"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        key, _, value = chunk.partition(" ")
+        if not value:
+            continue
+        attrs[key] = value.strip().strip('"')
+    return attrs
+
+
+def t2g_from_gtf(path: Path) -> tuple[dict[str, str], dict[str, str]]:
+    """Derive a transcript->gene map (plus gene names) from a GTF (pure).
+
+    Returns `(transcript_id -> gene_id, transcript_id -> gene_name)`. Only lines
+    carrying BOTH `gene_id` and `transcript_id` attributes contribute: a `gene`
+    line has no transcript to map, and a transcript line without a `gene_id`
+    cannot be mapped at all, so both are skipped rather than guessed. `gene_name`
+    is captured only when present (no fabricated names).
+    """
+    mapping: dict[str, str] = {}
+    gene_names: dict[str, str] = {}
+    with open(path, newline="") as fh:
+        for line in fh:
+            line = line.rstrip("\n")
+            if not line or line.startswith("#"):
+                continue
+            fields = line.split("\t")
+            if len(fields) < 9:
+                continue
+            attrs = _parse_gtf_attributes(fields[8])
+            transcript_id = attrs.get("transcript_id")
+            gene_id = attrs.get("gene_id")
+            if not transcript_id or not gene_id:
+                continue
+            mapping[transcript_id] = gene_id
+            gene_name = attrs.get("gene_name")
+            if gene_name:
+                gene_names[transcript_id] = gene_name
+    return mapping, gene_names
+
+
+def write_t2g(
+    index_dir: Path, mapping: dict[str, str], gene_names: dict[str, str]
+) -> Path:
+    """Write `<index_dir>/t2g.txt`; return its path.
+
+    Column contract (the shape `_parse_t2g` reads and the kb-ref convention
+    uses): `transcript_id<TAB>gene_id`, with an optional third `gene_name` column
+    only for transcripts that have a name. The directory must already exist (the
+    index build creates it).
+    """
+    out_path = Path(index_dir) / _T2G_NAME
+    with open(out_path, "w", newline="") as fh:
+        for transcript_id, gene_id in mapping.items():
+            gene_name = gene_names.get(transcript_id)
+            if gene_name:
+                fh.write(f"{transcript_id}\t{gene_id}\t{gene_name}\n")
+            else:
+                fh.write(f"{transcript_id}\t{gene_id}\n")
+    return out_path
 
 
 def run_kallisto_quantifier(reads: str, index: str, out_dir: str) -> str:
