@@ -6,6 +6,65 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+- **`contig run` now captures known-sites resources — dbSNP, known indels, known SNPs —
+  into the reference identity, so a variant-calling run's provenance names every
+  reference its callers consumed (`reference-known-sites-capture`).** This is capture
+  and render only, exactly as the PRD scoped it: no mismatch detection, no version
+  resolution, no "which known-sites should I have used" judgement — provenance records
+  what the run actually used, and nothing here decides whether that was right. The
+  field and its user surface are purely additive to the model; the cost is the disclosed
+  signature break at the bottom of this entry.
+  - **The model.** `KnownSiteIdentity` (`models.py:207`) — `role` (`dbsnp` /
+    `known_indels` / `known_snps`), `path`, `sha256`, `source` (`explicit` / `igenomes`)
+    — and `ReferenceIdentity.known_sites: list[KnownSiteIdentity] | None = None`
+    (`models.py:228`). Optional and defaulted, so every pre-slice bundle loads with
+    `None`; nothing validates or re-derives, the `sex_inference` idiom.
+  - **Capture.** `compute_reference_identity` is extended (`bundle.py:206`) with a
+    `_known_sites(params)` helper (`bundle.py:175`). Explicit `--dbsnp`/`--known-indels`/
+    `--known-snps` paths are hashed from disk — a missing or unreadable file is an
+    honest `sha256: None`, never a crash and never a fabricated hash, and only the
+    `.vcf.gz` is hashed, never a `.tbi` sidecar. An iGenomes run (`--genome`) contributes
+    the known nf-core/sarek 3.5.1 `GATK.GRCh38` asset paths from a small map
+    (`bundle.py:153`) with no local checksum — the pipeline downloads them, so there is
+    nothing to hash — while an unknown genome key adds nothing, never guessed. Explicit
+    params win per role over the iGenomes map; role order is deterministic.
+  - **The CLI surface, germline-gated.** `--dbsnp` / `--known-indels` / `--known-snps`
+    on `contig run` (`cli.py:409-411`). A set flag on any non-`variant_calling` assay is
+    **refused before launch** with a clear message (`cli.py:666`), never silently
+    dropped; a missing explicit path is a **warning** (`cli.py:795`), not a refusal —
+    the run proceeds and finalize records the honest `None` checksum. The values ride
+    as pipeline params (`cli.py:789-796`) and forward as `--dbsnp X` / `--known_indels X`
+    / `--known_snps X` in the Nextflow argv.
+  - **Round-trip.** `LaunchManifest.dbsnp` / `known_indels` / `known_snps`
+    (`models.py:443-445`) are written at manifest creation (`cli.py:791`) and re-fed by
+    `rerun` and `resume`, so a re-derived identity is byte-identical to the original; a
+    legacy `launch.json` written before the fields still loads (all `None`).
+  - **Render.** `contig methods` names each role's file basename, with the first-12 sha
+    hex when recorded and "downloaded by the pipeline" for iGenomes assets
+    (`methods.py:56-75`); the HTML report's reference-identity table gains the same
+    rows (`report.py:432`). A run that captured no known-sites renders nothing new.
+  - **The fifth disclosed signature break — and, unlike `patch_applied`, NOT narrow.**
+    `known_sites` lives on the **signed** record (`RunRecord.reference_identity`), and
+    `canonical_record_bytes` is `record.model_dump(mode="json")`, so pydantic now emits
+    a nested `"known_sites": null` inside every `reference_identity` object. A
+    pre-slice **signed** bundle whose record carried a reference identity no longer
+    verifies — **including one that captured no known sites at all**, because the `null`
+    key is emitted regardless; only the empty-`repair_history` narrowing that made the
+    `patch_applied` break defensible is absent here. The blast radius is bounded to
+    records with a non-`None` `reference_identity`: a record without one serializes
+    byte-identically and its old signature still verifies. Both sides are pinned by
+    tests (`test_pre_slice_signed_bundle_loads_but_no_longer_verifies` and
+    `test_pre_slice_signature_over_a_record_with_no_reference_identity_still_verifies`),
+    not asserted.
+  - **What happens to an old signed bundle is honest, not hopeful.** It **loads** (the
+    field defaults `None`, back-compat tested through the real `load_bundle`), and
+    `contig verify` reads its `signature.json` and reports `signed: true,
+    signature_ok: false` — exit non-zero, the same handling as a tampered record. It is
+    never silently re-signed (nothing in the verify path writes a signature; the
+    pre-slice signature is read and judged), and never silently passed. The mismatch is
+    disclosed and accepted: an opt-in `CONTIG_SIGNING_KEY` signer re-signs once, on a
+    fresh run or reproduce, exactly as with the prior four breaks.
+
 ## [0.59.0] - 2026-09-13
 
 - **User-supplied VEP/SnpEff annotation-cache paths ship, and an

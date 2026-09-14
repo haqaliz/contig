@@ -435,6 +435,17 @@ def render_run_report_html(
                 ri_rows["gtf sha256"] = ri.gtf_sha256
             if ri.annotation_version is not None:
                 ri_rows["annotation version"] = ri.annotation_version
+        # Known-sites resources (C5): one row per role, path + full hash when
+        # recorded. iGenomes assets are pipeline-downloaded, so their checksum
+        # cell says so (matching the identity block's own wording above); the
+        # filename is never resolved into a build label.
+        for ks in ri.known_sites or []:
+            value = ks.path or "unknown"
+            if ks.sha256:
+                value = f"{value} · sha256 {ks.sha256}"
+            elif ks.source == "igenomes":
+                value = f"{value} · downloaded by pipeline"
+            ri_rows[f"known-sites {ks.role}"] = value
         parts.append(f"<table><tbody>{_provenance_rows(ri_rows)}</tbody></table>")
 
     # Annotation identity — the annotator(s) (VEP/SnpEff) that produced the

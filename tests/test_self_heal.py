@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from contig.corpus import load_corpus
-from contig.models import ExecutionTarget, Patch, RunSummary
+from contig.models import ExecutionTarget, Patch, RunSummary, sha256_file
 from contig.runner import PipelineExecutionError
 from contig.self_heal import apply_patch, self_heal_run
 
@@ -3084,6 +3084,68 @@ def test_self_heal_finalize_reference_identity_none_when_no_reference_keys(tmp_p
 
     record = _heal(tmp_path, executor, params={"input": "sheet.csv"})
     assert record.reference_identity is None
+
+
+def test_self_heal_finalize_populates_known_sites_from_params(tmp_path):
+    # A successful run whose params carry explicit dbsnp/known_indels/known_snps
+    # paths (real tmp_path files) must finalize with
+    # reference_identity.known_sites populated from those params: source
+    # "explicit", real sha256s, deterministic role order. This drives the real
+    # self_heal -> _finalize path (the CLI only ever populates `params`).
+    dbsnp = tmp_path / "dbsnp.vcf.gz"
+    known_indels = tmp_path / "known_indels.vcf.gz"
+    known_snps = tmp_path / "known_snps.vcf.gz"
+    for path in (dbsnp, known_indels, known_snps):
+        path.write_bytes(b"##fileformat=VCFv4.2\n# synthetic fixture\n")
+    fasta = tmp_path / "ref.fa"
+    fasta.write_bytes(b">chr1\nACGT\n")
+
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(
+        tmp_path,
+        executor,
+        params={
+            "fasta": str(fasta),
+            "dbsnp": str(dbsnp),
+            "known_indels": str(known_indels),
+            "known_snps": str(known_snps),
+        },
+    )
+
+    assert record.reference_identity is not None
+    known = record.reference_identity.known_sites
+    assert known is not None
+    assert [entry.role for entry in known] == ["dbsnp", "known_indels", "known_snps"]
+    expected = {
+        "dbsnp": dbsnp,
+        "known_indels": known_indels,
+        "known_snps": known_snps,
+    }
+    for entry in known:
+        assert entry.source == "explicit"
+        assert entry.path == str(expected[entry.role])
+        assert entry.sha256 == sha256_file(expected[entry.role])
+        assert entry.sha256 is not None and len(entry.sha256) == 64
+
+
+def test_self_heal_finalize_known_sites_absent_without_params(tmp_path):
+    # A successful run with a reference but NO known-sites params must finalize
+    # with known_sites absent (None) -- the honest-absent path through the real
+    # loop, never a fabricated or empty-list placeholder.
+    fasta = tmp_path / "ref.fa"
+    fasta.write_bytes(b">chr1\nACGT\n")
+
+    def executor(cmd, trace_path):
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor, params={"fasta": str(fasta)})
+
+    assert record.reference_identity is not None
+    assert record.reference_identity.known_sites is None
 
 
 # --- Phase 3: peak-RSS-informed OOM retry sizing (C2) -----------------------
