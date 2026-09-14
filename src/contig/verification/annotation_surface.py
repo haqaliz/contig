@@ -21,6 +21,34 @@ import re
 
 from contig.models import QCResult, RunRecord
 
+# The annotation-cache input keys the renderers surface: user-supplied cache
+# paths (vep_cache/snpeff_cache) or the auto-download wiring (download_cache ==
+# "true" + outdir_cache). Key-based, so an --opt-supplied value is
+# indistinguishable from a flag-supplied one -- both are user-supplied inputs.
+_CACHE_INPUT_KEYS = (("vep_cache", "VEP"), ("snpeff_cache", "SnpEff"))
+
+
+def cache_inputs_note(parameters: dict) -> str | None:
+    """The annotation-cache input wording for the renderers, or None.
+
+    Reads ONLY `record.parameters` (the input end of the cache chain -- the
+    observed build lives in AnnotationProvenance.db_version): user-supplied
+    paths render as "cache inputs VEP=/v, SnpEff=/s" (per-tool segments only
+    for the keys actually present); the auto-download wiring renders as "cache
+    download". Neither key set -> None (no orphan label, mirroring the
+    db_version omission rule). Labeled "cache inputs"/"cache download", never
+    "database version" (PRD D1/R2).
+    """
+    parts = []
+    for key, label in _CACHE_INPUT_KEYS:
+        if key in parameters:
+            parts.append(f"{label}={parameters[key]}")
+    if parts:
+        return f"cache inputs {', '.join(parts)}"
+    if parameters.get("download_cache") == "true" and "outdir_cache" in parameters:
+        return "cache download"
+    return None
+
 # The concordance messages both open with "{a}/{b} ..." counts; the FIRST
 # "int/int" token in each is the matches/total pair (see
 # annotation_concordance.evaluate_consequence_concordance /
