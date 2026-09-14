@@ -6,6 +6,40 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+- **The concordance autorun axes are now turnkey on the reads side, and the RNA-seq
+  axis can build its own kallisto index in-seam (`concordance-autorun-inputs`).**
+  `contig verify --concordance-counts-auto` and `--concordance-sc-counts-auto` no
+  longer require `--reads`: when the flag is absent, the sample sheet is derived from
+  the run record's persisted path (`RunRecord.parameters["input"]`), and that
+  derivation is **integrity-gated** against the run's recorded `input_checksums`
+  (basename→sha256 over the sheet + its FASTQs, reusing `compute_input_checksums`).
+  A sheet missing on disk, an empty checksum record (test-profile/legacy runs), or
+  any basename/sha256 drift is an **honest skip** with the quantifier never invoked —
+  comparing the run's matrix against inputs changed since the run would be a
+  dishonest concordance. Explicit `--reads` is unchanged and bypasses the gate (the
+  user's own responsibility). The basename-keyed checksum collision limitation is
+  inherited, not fixed — and a collision can only fail closed.
+  - **RNA-seq `--transcriptome`:** instead of a prebuilt `--index`, the user supplies
+    a transcript FASTA and the engine builds the kallisto index **in-seam**
+    (injectable seam, never executed in CI), deriving the kb-ref `t2g.txt`
+    transcript→gene map from the run's GTF via a pure stdlib parser — explicit-GTF
+    runs only; an iGenomes record with no local GTF gets an honest "pass `--index`"
+    note; a GTF yielding no transcript→gene map skips BEFORE any build spawn.
+    `--index` + `--transcriptome` together is refused, not guessed.
+  - **Deferred, with the blocker named:** the single-cell `--index` auto-build (STAR
+    `genomeGenerate` at verify time) — unmeasured multi-hour/tens-of-GB
+    single-threaded builds, the iGenomes-mode gap (no local fasta/gtf persisted), a
+    fresh build per verify into a wiped tempdir, and the sc PRD's own record that
+    auto-derivation "needs new capture wiring first". Revisit trigger: a design
+    partner running SC autoruns repeatedly, or run-time capture wiring for the
+    pipeline's own STAR index.
+  - **Read honestly.** Push, not demand-pull: the friction removed is reasoned, not
+    observed. The integrity gate adds a re-hash pass over files the second quantifier
+    reads anyway. No real kallisto/STAR in CI (injected seams); no
+    verdict/exit-code/`FailureClass` change; no new dependency (pydantic/typer/
+    cryptography only); eval-guard/heal-guard/verify-guard baselines unmoved
+    (verified). Full suite 2945 passed / 1 skipped.
+
 ## [0.59.0] - 2026-09-13
 
 - **User-supplied VEP/SnpEff annotation-cache paths ship, and an

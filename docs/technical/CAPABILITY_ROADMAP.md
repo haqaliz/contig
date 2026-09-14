@@ -68,10 +68,23 @@ exact follow-on the RNA-seq slice named — it mirrors how the germline autorun
 **never run in CI** (injected seam; the subprocess path is covered by a manual gate only),
 but the transcript→gene collapse is a **pure, CI-tested** function. Same contract: at most
 WARN, never changes the exit code, `unverified` below 10 shared genes; the four concordance
-flags are mutually exclusive; every unrunnable path is an honest skip note. **Still deferred:**
-a persisted-sheet `--reads` fallback, an in-seam index build from a `--transcriptome`,
-single-cell concordance, a dashboard "corroborated by" line, and FAIL-severity on calibrated
-bands.
+flags are mutually exclusive; every unrunnable path is an honest skip note.
+**Shipped (input-derivation slice — Unreleased, `concordance-autorun-inputs`).** The two
+turnkey gaps this paragraph named are closed: `--reads` is now optional on both autorun
+axes and derives from the run record's persisted sample-sheet path
+(`RunRecord.parameters["input"]`), **integrity-gated** against the recorded
+`input_checksums` (basename→sha256 over the sheet + FASTQs) — a missing sheet, an empty
+checksum record (test-profile/legacy), or any basename/sha256 drift is an honest skip with
+the quantifier never invoked, while explicit `--reads` bypasses the gate; and
+`--concordance-counts-auto` gains `--transcriptome`, which builds the kallisto index
+in-seam from a user-supplied transcript FASTA (injectable seam, never executed in CI), the
+kb-ref `t2g.txt` transcript→gene map derived from the run's GTF by a pure stdlib parser
+(explicit-GTF runs only; an iGenomes record with no local GTF gets an honest "pass
+`--index`" note; a GTF yielding no map skips BEFORE any build spawn; `--index` +
+`--transcriptome` is refused, not guessed). Single-cell concordance — user-supplied and
+autorun — shipped in the slices below; the single-cell **index** auto-build is re-filed
+as deferred there. **Still deferred:** a dashboard "corroborated by" line, and FAIL-severity
+on calibrated bands.
 
 **Shipped (somatic slice — Unreleased).** The concordance axis now extends to the somatic
 (tumor–normal) assay, and — uniquely — with **no user-supplied input and no second tool run**:
@@ -126,8 +139,19 @@ gate). Same contract: at most WARN, never changes the exit code, `unverified` be
 genes; the six concordance flags are mutually exclusive; the corroboration line names **STARsolo**
 as the second tool; every unrunnable path (non-`scrnaseq`, missing input, quantifier failure,
 primary matrix absent → no pointless spawn) is an honest skip. The barcode whitelist/chemistry are
-user-supplied because Contig persists no chemistry/whitelist/aligner today. **Still deferred:**
-auto-deriving inputs from the run record; cell-count and cluster-stability agreement; FAIL
+user-supplied because Contig persists no chemistry/whitelist/aligner today.
+**Shipped (input-derivation slice — Unreleased, `concordance-autorun-inputs`).** `--reads`
+is now optional: it derives from the run record's persisted sample-sheet path
+(`RunRecord.parameters["input"]`), integrity-gated against the recorded `input_checksums`
+— a missing sheet, an empty checksum record, or any basename/sha256 drift is an honest
+skip with STARsolo never invoked; explicit `--reads` bypasses the gate. The
+whitelist/chemistry stay user-supplied (persisted nowhere by design). **Still deferred:**
+the STAR `--index` auto-build (`genomeGenerate` at verify time) — unmeasured
+multi-hour/tens-of-GB single-threaded builds, the iGenomes-mode gap (no local
+fasta/gtf persisted), a fresh build per verify into a wiped tempdir, and the sc PRD's own
+record that auto-derivation "needs new capture wiring first"; revisit when a design
+partner runs SC autoruns repeatedly, or run-time capture wiring lands for the pipeline's
+own STAR index. Cell-count and cluster-stability agreement; FAIL
 severity on calibrated bands (the pseudobulk-washout of benign cross-tool cell-calling divergence
 is an unproven assumption — hence WARN-only); a dashboard "corroborated by" line; and
 `.h5ad`/AnnData second-matrix parsing.
@@ -2341,7 +2365,7 @@ raw-data egress — runs on the user's / CI compute; only hashes and claim diffs
 
 | ID | Capability | Window | Leverage |
 |----|-----------|--------|----------|
-| C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) + somatic slice (Unreleased) + single-cell slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap + somatic auto `somatic_site_overlap` PASS-site Jaccard, Mutect2 vs Strelka2, no user input + single-cell `--concordance-sc-counts` pseudobulk gene-level Spearman/fraction-agreeing over a stdlib `.mtx` triplet loader + single-cell **autorun** `--concordance-sc-counts-auto` running STARsolo behind an injectable seam, turnkey; single-cell cluster-stability deferred) |
+| C1 | Cross-tool concordance verification | SHIPPED v0.2.0 + RNA-seq slice (Unreleased) + somatic slice (Unreleased) + single-cell slice (Unreleased) + autorun input-derivation slice (Unreleased) | Verdict trust, novel primitive (germline `--concordance-vcf` + RNA-seq `--concordance-counts` Spearman/fraction-agreeing/overlap + somatic auto `somatic_site_overlap` PASS-site Jaccard, Mutect2 vs Strelka2, no user input + single-cell `--concordance-sc-counts` pseudobulk gene-level Spearman/fraction-agreeing over a stdlib `.mtx` triplet loader + single-cell **autorun** `--concordance-sc-counts-auto` running STARsolo behind an injectable seam, turnkey; autorun input auto-derivation SHIPPED (Unreleased): persisted-sheet `--reads` fallback (both axes, integrity-gated) + in-seam kallisto index build from `--transcriptome` (GTF-derived t2g.txt, explicit-GTF runs only); SC `--index` auto-build stays deferred; single-cell cluster-stability deferred) |
 | C2 | Self-heal breadth plus auto resource-scaling | M2 to M3 (**detector work-dir threading shipped (Unreleased): `read_task_errors` now takes the run's configured `ExecutionTarget.work_dir` as a REQUIRED argument (`run_dir` removed, no dead fallback) instead of globbing `<run_dir>/work`, which is only the default -- so any `--work-dir` had left the detector blind to every `.command.err`, leaving exit-137 OOM as the ONLY classifiable failure, `propose_patches` returning `[]`, and each case filed to the corpus evidence-less, mislabelled, and collapsed into one constant `normalize_signature` cluster; a remote (`s3://`) work dir now yields a self-labelled salient-token note instead of `""`, and both halves of the diagnosis log expression were made raise-safe; closes C2 deferral item (a); honest limits: push not demand-pull, reasoned not observed, and AWS Batch stays structurally undiagnosable -- the limit is made visible, not fixed; resource-aware + single-file missing-index family `.fai`/`.bai`/`.tbi`/`.csi`/`.dict` shipped; chr-prefix GTF harmonization shipped; per-contig alias harmonization (mito `M`↔`MT` + GRCh38 scaffold seed) shipped; directory-shaped STAR index build+redirect shipped, classic BWA + bwa-mem2 detector+corpus-only (v0.11.0); peak-RSS-informed OOM memory scaling shipped (Unreleased, honest two-tier: own-peak → blind fallback; sibling rescue deferred); walltime-informed `time_limit` scaling shipped (Unreleased, floored at blind — censored realtime, tail-only win + field instrument); **input-format-conversion class's first slice shipped (Unreleased): bgzip'd (non-BGZF) reference FASTA self-heal, sarek-scoped (rnaseq immune by construction), stream-decompress to uncompressed `.fa` + retry; CRAM↔BAM conversion is the deferred second half**; **opt-in heartbeat stall watchdog shipped (Unreleased): `--detect-stalls`/`--stall-timeout` (default 3600 s, OFF by default) supervise the child over a composite `trace.txt`/`.nextflow.log`/`run.log` heartbeat, terminate a stalled run's process group, and make `no_progress` reachable by the detector for the first time — honest limits: never observed on a real run, uncalibrated window, no real Nextflow in CI, Nextflow-only, not persisted to the launch manifest (D4)**; **stale-index rebuild slice shipped (Unreleased): an index older than the data it indexes (htslib `hts_idx_load3` family) classifies `missing_index` via a freshness-anchored branch ordered before the generic missing-index branch (confidence 0.85), rebuilt into scratch via a symlinked source + the unchanged `_INDEX_BUILD` table and atomically swapped (same-dir dot-temp fallback on cross-device) — user's file never half-written, build-once, honest give-ups, `built_index_and_retried` with mtime+argv detail; golden `stale-bai` corpus case + `stale-index-heal` heal-guard scenario (21 scenarios, covered_classes 15, baseline refrozen 4afc3513…); honest scope: push not demand-pull, needle reasoned not observed, `.fai` covered defensively (samtools silently rebuilds a stale `.fai` — hard-fail surface is `.bai`/`.csi`/`.tbi`); no signature break**; bwa-mem2/classic-BWA build+redirect, assembly-signature + exhaustive per-assembly alias completeness, stall-window calibration + on-by-default pending) | Unattended-completion rate, corpus fuel |
 | C3 | Biological-plausibility verification | SHIPPED v0.3.0 (germline) + RNA-seq (v0.6.0) + single-cell ingestion (Unreleased) + germline sex-check (Unreleased) + RNA-seq mapping-composition (Unreleased) + germline variant-count (Unreleased) + germline plausibility FAIL-severity (Unreleased) + somatic empty-call-set FAIL floor (Unreleased) + RNA-seq plausibility ingestion fix (Unreleased) | Verdict gets smarter about biology (germline Ti/Tv, het/hom, sex-check, variant-count band — germline Ti/Tv, het/hom, and variant-count now **FAIL** on gross implausibility via WES-safe bands; somatic `variant_count` now **FAILs** on an empty call set; a FAIL verdict reaches the exit code only under the opt-in `--fail-on-verdict`; RNA-seq `duplication_rate` now correctly keyed to MultiQC's `PERCENT_DUPLICATION`/a 0-1 fraction — informational-only, no band by design — after never once firing under its old wrong key/unit; `rRNA` remains a guessed slug, WARN-capped; + exonic/intronic/unassigned read-composition from RSeQC read_distribution; single-cell cell-QC now *fires* via STARsolo/Cell Ranger ingestion — was a dormant no-op; gene-body-coverage/mito/doublet deferred; **somatic-VAF and RNA-seq FAIL severity declined by design, not deferred** — tumor VAF's expectation depends on unobserved purity/clonality, and every RNA-seq extreme is a legitimate protocol; annotation-pack FAIL severity is a separate C7 item, still deferred) |
 | C4 | New assay: somatic variant calling | SHIPPED v0.13.0 (intake→launch→verify) + VAF/count/PON plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased) + Strelka2-native VAF slice (Unreleased) + empty-call-set FAIL floor (Unreleased — `somatic_variant_count fail_below: 1`; **VAF/PON FAIL bands declined by design, not deferred**: tumor VAF depends on unobserved purity/clonality, `strelka_median_vaf` is bounded to [0,1] so a ceiling is dead code, `pon_applied` is a non-numeric 3-state string) + swapped-pair smell-test slice (Unreleased — `normal_median_vaf`, the median VAF over the Mutect2 VCF's NORMAL column via a new never-guessing `##normal_sample=` resolver, WARN-capped at `warn_above: 0.30`, UNVERIFIED-when-unresolvable; a *smell*, not a determination — swap, mislabel, and tumor-in-normal contamination give the same number and the message names all three; the call-set-depleting form of a swap is already covered by the `fail_below: 1` floor); PON reference wiring deferred | Breadth, depth-first, new corpus |
