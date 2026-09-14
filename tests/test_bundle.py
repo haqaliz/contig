@@ -286,6 +286,155 @@ def test_compute_reference_identity_none_params_returns_none():
     assert compute_reference_identity(None) is None
 
 
+# --- compute_reference_identity (provenance capture: known-sites) ---------------
+# The verified nf-core/sarek 3.5.1 iGenomes GATK.GRCh38 asset paths. Hardcoded here
+# (not imported from bundle) so the test pins the real asset names, not the constant.
+
+_IGENOMES_BUNDLE = (
+    "s3://ngi-igenomes/igenomes/Homo_sapiens/GATK/GRCh38/Annotation/GATKBundle/"
+)
+_IGENOMES_KNOWN_SITES = {
+    "dbsnp": _IGENOMES_BUNDLE + "dbsnp_146.hg38.vcf.gz",
+    "known_indels": _IGENOMES_BUNDLE
+    + "{Mills_and_1000G_gold_standard.indels.hg38,Homo_sapiens_assembly38.known_indels}.vcf.gz",
+    "known_snps": _IGENOMES_BUNDLE + "1000G_omni2.5.hg38.vcf.gz",
+}
+_ROLE_ORDER = ["dbsnp", "known_indels", "known_snps"]
+
+
+def _write_known_site(tmp_path, name: str):
+    path = tmp_path / name
+    path.write_bytes(b"##fileformat=VCFv4.2\n# synthetic fixture\n")
+    return path
+
+
+def test_compute_reference_identity_known_sites_explicit(tmp_path):
+    fa = tmp_path / "genome.fa"
+    fa.write_bytes(b"ACGT" * 10)
+    files = {role: _write_known_site(tmp_path, f"{role}.vcf.gz") for role in _ROLE_ORDER}
+    params = {"fasta": str(fa), **{role: str(p) for role, p in files.items()}}
+
+    result = compute_reference_identity(params)
+
+    assert result is not None
+    assert result.known_sites is not None
+    assert [e.role for e in result.known_sites] == _ROLE_ORDER
+    for entry in result.known_sites:
+        assert entry.source == "explicit"
+        assert entry.path == str(files[entry.role])
+        assert entry.sha256 == sha256_file(files[entry.role])
+
+
+def test_compute_reference_identity_known_sites_missing_file_degrades(tmp_path):
+    fa = tmp_path / "genome.fa"
+    fa.write_bytes(b"ACGT" * 10)
+    dbsnp = _write_known_site(tmp_path, "dbsnp.vcf.gz")
+
+    result = compute_reference_identity(
+        {"fasta": str(fa), "dbsnp": str(dbsnp), "known_indels": str(tmp_path / "gone.vcf.gz")}
+    )
+
+    assert result is not None
+    by_role = {e.role: e for e in result.known_sites}
+    assert by_role["dbsnp"].sha256 == sha256_file(dbsnp)
+    assert by_role["known_indels"].path == str(tmp_path / "gone.vcf.gz")
+    assert by_role["known_indels"].sha256 is None
+
+
+def test_compute_reference_identity_known_sites_empty_value_skipped(tmp_path):
+    fa = tmp_path / "genome.fa"
+    fa.write_bytes(b"ACGT" * 10)
+    indels = _write_known_site(tmp_path, "known_indels.vcf.gz")
+
+    result = compute_reference_identity(
+        {"fasta": str(fa), "dbsnp": "", "known_indels": str(indels)}
+    )
+
+    assert result is not None
+    assert [e.role for e in result.known_sites] == ["known_indels"]
+
+
+def test_compute_reference_identity_known_sites_igenomes():
+    result = compute_reference_identity({"genome": "GATK.GRCh38"})
+
+    assert result is not None
+    assert result.mode == "igenomes"
+    assert result.known_sites is not None
+    assert [e.role for e in result.known_sites] == _ROLE_ORDER
+    for entry in result.known_sites:
+        assert entry.source == "igenomes"
+        assert entry.path == _IGENOMES_KNOWN_SITES[entry.role]
+        assert entry.sha256 is None
+
+
+def test_compute_reference_identity_known_sites_igenomes_explicit_override(tmp_path):
+    dbsnp = _write_known_site(tmp_path, "dbsnp.vcf.gz")
+
+    result = compute_reference_identity({"genome": "GATK.GRCh38", "dbsnp": str(dbsnp)})
+
+    assert result is not None
+    assert result.mode == "igenomes"
+    by_role = {e.role: e for e in result.known_sites}
+    assert by_role["dbsnp"].source == "explicit"
+    assert by_role["dbsnp"].path == str(dbsnp)
+    assert by_role["dbsnp"].sha256 == sha256_file(dbsnp)
+    assert by_role["known_indels"].source == "igenomes"
+    assert by_role["known_indels"].path == _IGENOMES_KNOWN_SITES["known_indels"]
+    assert by_role["known_snps"].source == "igenomes"
+    assert by_role["known_snps"].path == _IGENOMES_KNOWN_SITES["known_snps"]
+
+
+def test_compute_reference_identity_known_sites_absent(tmp_path):
+    fa = tmp_path / "genome.fa"
+    fa.write_bytes(b"ACGT" * 10)
+
+    result = compute_reference_identity({"fasta": str(fa)})
+
+    assert result is not None
+    assert result.known_sites is None
+
+
+def test_compute_reference_identity_known_sites_unknown_genome_absent():
+    result = compute_reference_identity({"genome": "GRCh38"})
+
+    assert result is not None
+    assert result.mode == "igenomes"
+    assert result.known_sites is None
+
+
+def test_compute_reference_identity_known_sites_tbi_not_hashed(tmp_path):
+    fa = tmp_path / "genome.fa"
+    fa.write_bytes(b"ACGT" * 10)
+    dbsnp = _write_known_site(tmp_path, "dbsnp.vcf.gz")
+    tbi = tmp_path / "dbsnp.vcf.gz.tbi"
+    tbi.write_bytes(b"tbi index bytes")
+
+    result = compute_reference_identity({"fasta": str(fa), "dbsnp": str(dbsnp)})
+
+    assert result is not None
+    assert len(result.known_sites) == 1
+    entry = result.known_sites[0]
+    assert entry.path == str(dbsnp)
+    assert entry.sha256 == sha256_file(dbsnp)
+    assert entry.sha256 != sha256_file(tbi)
+    assert ".tbi" not in entry.path
+
+
+def test_compute_reference_identity_known_sites_deterministic(tmp_path):
+    fa = tmp_path / "genome.fa"
+    fa.write_bytes(b"ACGT" * 10)
+    files = {role: _write_known_site(tmp_path, f"{role}.vcf.gz") for role in _ROLE_ORDER}
+    params = {"fasta": str(fa), **{role: str(p) for role, p in files.items()}}
+
+    first = compute_reference_identity(params)
+    second = compute_reference_identity(params)
+
+    assert first is not None
+    assert second is not None
+    assert first.known_sites is not None
+    assert first.known_sites == second.known_sites
+
+
 # --- compute_sex_inference (provenance capture: germline karyotypic sex) --------
 # VCF discovery mirrors runner._discover_qc exactly (manifest_for("variant_calling")
 # .required[0] rglob'd under run_dir, vcfs[0]) so provenance and the verdict

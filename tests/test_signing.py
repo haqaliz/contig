@@ -287,3 +287,161 @@ def test_pre_advisory_literal_signature_over_an_env_kind_patch_still_verifies():
     )
 
     assert verify_signature(record, old_signature, public_key) is True
+
+
+# --- ReferenceIdentity.known_sites breaks pre-slice signatures, NOT narrowly --
+#
+# `ReferenceIdentity.known_sites` is back-compatible for LOADING (a pre-slice
+# bundle reads as None) but NOT for a signature made before the field existed:
+# `canonical_record_bytes` is `record.model_dump(mode="json")`, and pydantic emits
+# every field, so a nested `"known_sites": null` now appears inside every
+# `reference_identity` object. Unlike the `patch_applied` break this one is NOT
+# narrow: it does not need a known-sites entry to fire -- any record whose
+# `reference_identity` is non-None serializes differently, even one that captured
+# no known sites at all. The strip below only has to reach one level down, but it
+# applies to every reference-bearing record. The break, its bound (a record with
+# no reference identity is byte-identical and still verifies), and the honest
+# verify-path report (signed, not ok -- never a silent re-sign) are all pinned
+# here as KNOWN, not left as surprises.
+
+
+def _record_with_reference_identity(run_id: str = "r1") -> RunRecord:
+    from contig.models import ReferenceIdentity
+
+    record = _record(run_id)
+    record.reference_identity = ReferenceIdentity(
+        mode="explicit",
+        fasta="/refs/genome.fa",
+        gtf="/refs/genes.gtf",
+    )
+    return record
+
+
+def _pre_known_sites_canonical_bytes(record: RunRecord) -> bytes:
+    """The canonical bytes this record would have produced before the field.
+
+    Drops exactly `known_sites`, from the `reference_identity` object -- the new
+    key is nested one level down, so the strip reaches into that sub-dict. A
+    record with no reference identity has no nested key to drop and serializes
+    unchanged. The rest of the canonicalization (sorted keys, compact separators,
+    UTF-8) is copied from `signing.canonical_record_bytes` so the only difference
+    under test is the added key.
+    """
+    import json as _json
+
+    payload = record.model_dump(mode="json")
+    old = dict(payload)
+    identity = payload["reference_identity"]
+    if identity is not None:
+        old_identity = {k: v for k, v in identity.items() if k != "known_sites"}
+        # The strip must actually have removed something, or the tests below would
+        # pass vacuously over unchanged bytes.
+        assert set(identity) - set(old_identity) == {"known_sites"}
+        old["reference_identity"] = old_identity
+    return _json.dumps(old, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+@requires_signing
+def test_pre_slice_signed_bundle_loads_but_no_longer_verifies():
+    import json as _json
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    private_key, public_key = generate_keypair()
+    record = _record_with_reference_identity()
+    assert record.reference_identity is not None
+    assert record.reference_identity.known_sites is None  # a pre-slice capture
+
+    # Sign the bytes an older Contig would have produced for this same record.
+    old_bytes = _pre_known_sites_canonical_bytes(record)
+    assert old_bytes != canonical_record_bytes(record)
+
+    old_signature = (
+        Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key))
+        .sign(old_bytes)
+        .hex()
+    )
+
+    # Back-compat: the pre-slice JSON (no known_sites key) still LOADS, with the
+    # new field defaulting to None -- old bundles are never rejected.
+    loaded = RunRecord.model_validate(_json.loads(old_bytes))
+    assert loaded.reference_identity is not None
+    assert loaded.reference_identity.known_sites is None
+
+    # The extra nested key changes the canonical payload, so the old signature is
+    # honestly reported as a mismatch -- never a silent pass.
+    assert verify_signature(record, old_signature, public_key) is False
+    assert verify_signature(loaded, old_signature, public_key) is False
+
+    # A fresh signature over today's bytes does verify, and differs: the break is
+    # the payload shape, not the signing machinery.
+    new_signature = sign_record(record, private_key)
+    assert verify_signature(record, new_signature, public_key) is True
+    assert new_signature != old_signature
+
+
+@requires_signing
+def test_pre_slice_signed_bundle_reports_signature_ok_false(tmp_path):
+    # The user-visible fate, through the same bundle load and status helper that
+    # `contig verify` uses: a pre-slice signature sidecar is READ (signed: True)
+    # and reported NOT ok (signature_ok: False) -- the honest mismatch, never a
+    # dropped signature and never a silent re-sign.
+    import json as _json
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    from contig.bundle import load_bundle
+    from contig.cli import _signature_status
+
+    private_key, public_key = generate_keypair()
+    record = _record_with_reference_identity()
+
+    old_bytes = _pre_known_sites_canonical_bytes(record)
+    old_signature = (
+        Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key))
+        .sign(old_bytes)
+        .hex()
+    )
+
+    # A pre-slice bundle as it would sit on disk: run_record.json without the
+    # known_sites key, signature.json over those bytes.
+    run_dir = tmp_path / "r1"
+    run_dir.mkdir()
+    (run_dir / "run_record.json").write_text(old_bytes.decode("utf-8"))
+    (run_dir / "signature.json").write_text(
+        _json.dumps(
+            {"algo": "ed25519", "public_key": public_key, "signature": old_signature}
+        )
+    )
+
+    loaded = load_bundle(run_dir)
+    assert loaded.reference_identity is not None
+    assert loaded.reference_identity.known_sites is None
+
+    assert _signature_status(str(tmp_path), "r1", loaded) == {
+        "signed": True,
+        "signature_ok": False,
+    }
+
+
+@requires_signing
+def test_pre_slice_signature_over_a_record_with_no_reference_identity_still_verifies():
+    # The bound of the non-narrow break: with no reference identity there is no
+    # nested object to carry the new key, so the canonical bytes are byte-identical
+    # to what an older Contig produced and the old signature is still good.
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    private_key, public_key = generate_keypair()
+    record = _record()
+    assert record.reference_identity is None
+
+    old_bytes = _pre_known_sites_canonical_bytes(record)
+    assert old_bytes == canonical_record_bytes(record)
+
+    old_signature = (
+        Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key))
+        .sign(old_bytes)
+        .hex()
+    )
+
+    assert verify_signature(record, old_signature, public_key) is True

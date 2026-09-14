@@ -7,6 +7,7 @@ from contig.models import (
     ClaimResult,
     Diagnosis,
     ExecutionTarget,
+    KnownSiteIdentity,
     Patch,
     QCResult,
     ReferenceIdentity,
@@ -815,6 +816,104 @@ def test_html_report_omits_reference_identity_section_when_none() -> None:
     )
     html = render_run_report_html(record)
     assert "Reference identity" not in html
+
+
+def test_html_report_shows_explicit_known_sites_rows() -> None:
+    dbsnp_sha = "d" * 64
+    record = RunRecord(
+        run_id="r-known-sites-explicit",
+        pipeline="nf-core/sarek",
+        pipeline_revision="3.5.1",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="BASERECALIBRATOR", status="COMPLETED", exit=0)],
+        reference_identity=ReferenceIdentity(
+            mode="explicit",
+            fasta="/data/GRCh38.fa",
+            gtf="/data/genes.gtf",
+            known_sites=[
+                KnownSiteIdentity(
+                    role="dbsnp",
+                    path="/data/dbsnp_146.hg38.vcf.gz",
+                    sha256=dbsnp_sha,
+                    source="explicit",
+                ),
+                KnownSiteIdentity(
+                    role="known_indels",
+                    path="/data/Mills_and_1000G_gold_standard.indels.hg38.vcf.gz",
+                    sha256=None,
+                    source="explicit",
+                ),
+            ],
+        ),
+    )
+    html = render_run_report_html(record)
+    assert "Reference identity" in html
+    # One row per entry, keyed by role.
+    assert "known-sites dbsnp" in html
+    assert "/data/dbsnp_146.hg38.vcf.gz" in html
+    assert dbsnp_sha in html
+    assert "known-sites known_indels" in html
+    assert "/data/Mills_and_1000G_gold_standard.indels.hg38.vcf.gz" in html
+    # No hash for known_indels: no orphan sha256 or literal None cell.
+    assert "sha256 None" not in html
+    assert "<td></td>" not in html
+
+
+def test_html_report_shows_igenomes_known_sites_as_pipeline_downloaded() -> None:
+    record = RunRecord(
+        run_id="r-known-sites-igenomes",
+        pipeline="nf-core/sarek",
+        pipeline_revision="3.5.1",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="BASERECALIBRATOR", status="COMPLETED", exit=0)],
+        reference_identity=ReferenceIdentity(
+            mode="igenomes",
+            genome="GATK.GRCh38",
+            known_sites=[
+                KnownSiteIdentity(
+                    role="dbsnp",
+                    path=(
+                        "s3://ngi-igenomes/igenomes/Homo_sapiens/GATK/GRCh38/"
+                        "Annotation/GATKBundle/dbsnp_146.hg38.vcf.gz"
+                    ),
+                    sha256=None,
+                    source="igenomes",
+                ),
+            ],
+        ),
+    )
+    html = render_run_report_html(record)
+    assert "known-sites dbsnp" in html
+    assert "dbsnp_146.hg38.vcf.gz" in html
+    # iGenomes checksum cell matches the existing identity block wording.
+    assert "downloaded by pipeline" in html
+    # The filename is carried, never resolved into a build label.
+    assert "build 146" not in html
+    assert "GRCh38 dbsnp" not in html
+    assert "<td></td>" not in html
+
+
+def test_html_report_omits_known_sites_rows_when_absent() -> None:
+    record = RunRecord(
+        run_id="r-ref-plain",
+        pipeline="nf-core/rnaseq",
+        pipeline_revision="3.26.0",
+        target=_target(),
+        input_checksums={},
+        events=[TaskEvent(process="STAR", status="COMPLETED", exit=0)],
+        reference_identity=ReferenceIdentity(
+            mode="explicit",
+            fasta="/data/GRCh38.fa",
+            gtf="/data/genes.gtf",
+        ),
+    )
+    html = render_run_report_html(record)
+    assert "Reference identity" in html
+    assert "known-sites dbsnp" not in html
+    assert "known-sites known_indels" not in html
+    assert "known-sites known_snps" not in html
 
 
 def test_html_report_shows_sex_inference_section_when_present() -> None:

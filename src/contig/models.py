@@ -201,7 +201,16 @@ class Plan(BaseModel):
 # --- Reference identity (ARCHITECTURE §7; capability C5 slice 1) ---------------
 # Captures which reference genome a run used so provenance records are fully
 # reproducible. This is capture-only: no mismatch detection, no version
-# resolution, no known-sites — those belong to later slices.
+# resolution — those belong to later slices.
+
+
+class KnownSiteIdentity(BaseModel):
+    """A known-sites resource (dbSNP/indels/snps) a run consumed, for provenance capture."""
+
+    role: Literal["dbsnp", "known_indels", "known_snps"]
+    path: str | None = None
+    sha256: str | None = None
+    source: Literal["explicit", "igenomes"]
 
 
 class ReferenceIdentity(BaseModel):
@@ -216,6 +225,7 @@ class ReferenceIdentity(BaseModel):
     annotation_version: str | None = None  # null this slice (no fabrication)
     harmonized: bool = False
     harmonized_direction: str | None = None
+    known_sites: list[KnownSiteIdentity] | None = None
 
 
 class AnnotationProvenance(BaseModel):
@@ -426,6 +436,13 @@ class LaunchManifest(BaseModel):
     genome: str | None = None
     fasta: str | None = None
     gtf: str | None = None
+    # The explicit germline known-sites VCFs supplied via --dbsnp/--known-indels/
+    # --known-snps. Persisted so `rerun`/`resume` re-feed them and the finalize
+    # reference identity is byte-identical; None (or a legacy launch.json written
+    # before these fields) means no known-sites were supplied.
+    dbsnp: str | None = None
+    known_indels: str | None = None
+    known_snps: str | None = None
     # User-supplied annotation-cache paths (--vep-cache/--snpeff-cache),
     # replayed by rerun/resume like fasta/gtf. Defaults None so a legacy
     # launch.json (written before these fields) stays valid.
