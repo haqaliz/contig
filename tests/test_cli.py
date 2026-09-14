@@ -2512,6 +2512,59 @@ def _write_reads_and_index(tmp_path):
     return reads, index
 
 
+def _recording_quantifier(counts, calls):
+    """A fake kallisto that records the reads path it was invoked with."""
+    writer = _fake_quantifier_writing(counts)
+
+    def fake(reads, index, out_dir):
+        calls.append(reads)
+        return writer(reads, index, out_dir)
+
+    return fake
+
+
+def _write_rnaseq_run_with_persisted_sheet(
+    runs_dir, run_id, counts, sheet, *, input_checksums=None, gtf=None
+):
+    """An rnaseq run whose record persists `sheet` as parameters["input"].
+
+    `input_checksums=None` records the real hashes (basename -> sha256 over the
+    sheet and its FASTQs, exactly the runner's compute_input_checksums call); pass
+    a dict to record something else (e.g. {} for a pre-checksums bundle). A
+    `gtf` path is persisted as parameters["gtf"] (the in-seam index build's
+    transcript->gene source).
+    """
+    from contig.bundle import compute_input_checksums, compute_output_checksums
+    from contig.samplesheet import fastq_paths
+
+    run_dir = Path(runs_dir) / run_id
+    results = run_dir / "results"
+    results.mkdir(parents=True, exist_ok=True)
+    primary = results / "salmon.merged.gene_counts.tsv"
+    primary.write_text(_counts_tsv(counts))
+    sheet_path = Path(sheet).resolve()
+    checksums = (
+        compute_input_checksums([sheet_path, *fastq_paths(sheet_path)])
+        if input_checksums is None
+        else input_checksums
+    )
+    parameters = {"input": str(sheet_path)}
+    if gtf is not None:
+        parameters["gtf"] = str(gtf)
+    record = RunRecord(
+        run_id=run_id,
+        pipeline="nf-core/rnaseq",  # rnaseq assay
+        pipeline_revision="3.26.0",
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_checksums=checksums,
+        parameters=parameters,
+        events=[TaskEvent(process="X", status="COMPLETED", exit=0)],
+        output_checksums=compute_output_checksums(results),
+    )
+    write_bundle(record, run_dir)
+    return run_dir
+
+
 def test_verify_concordance_counts_auto_emits_checks(tmp_path, monkeypatch):
     _write_rnaseq_run_with_counts(tmp_path, "ca1", _COUNTS_PRIMARY)
     reads, index = _write_reads_and_index(tmp_path)
@@ -2723,6 +2776,432 @@ def test_verify_concordance_counts_auto_non_rnaseq_skips(tmp_path, monkeypatch):
     assert "rna-seq" in result.output.lower()
 
 
+def test_counts_auto_derives_reads_from_record(tmp_path, monkeypatch):
+    # No --reads: the persisted sample sheet is reused when it still matches the
+    # run's recorded input checksums, and the derived path reaches the quantifier.
+    sheet = _make_sheet(tmp_path)
+    _write_rnaseq_run_with_persisted_sheet(tmp_path, "cad1", _COUNTS_PRIMARY, sheet)
+    index = tmp_path / "index"
+    index.mkdir(exist_ok=True)
+
+    calls = []
+    monkeypatch.setattr(
+        "contig.cli.run_kallisto_quantifier",
+        _recording_quantifier(_COUNTS_CONCORDANT, calls),
+    )
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "cad1",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-counts-auto",
+            "--index",
+            str(index),
+        ],
+    )
+    assert result.exit_code == 0
+    assert calls == [str(sheet.resolve())]
+    out = result.output.lower()
+    assert "spearman_concordance" in out
+    assert "skipping concordance" not in out
+
+
+def test_counts_auto_derived_sheet_missing_on_disk_skips(tmp_path, monkeypatch):
+    # The record's persisted sheet no longer exists: the integrity gate must note
+    # the skip (not the bare "--reads is required" note) and never reach the quantifier.
+    missing = tmp_path / "gone" / "samplesheet.csv"
+    _write_rnaseq_run_with_persisted_sheet(
+        tmp_path,
+        "cad2",
+        _COUNTS_PRIMARY,
+        missing,
+        input_checksums={"samplesheet.csv": "0" * 64},
+    )
+    index = tmp_path / "index"
+    index.mkdir(exist_ok=True)
+
+    def boom(reads, index, out_dir):  # the quantifier must not be reached
+        raise AssertionError("quantifier invoked despite a missing persisted sheet")
+
+    monkeypatch.setattr("contig.cli.run_kallisto_quantifier", boom)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "cad2",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-counts-auto",
+            "--index",
+            str(index),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "skipping concordance" in result.output.lower()
+    assert "persisted sample sheet no longer exists" in result.output.lower()
+    assert "spearman_concordance" not in result.output.lower()
+
+
+def test_counts_auto_derived_inputs_changed_since_run_skips(tmp_path, monkeypatch):
+    # A sheet edited after the run: the recorded checksum no longer matches, so the
+    # gate must note the mismatch and never reach the quantifier.
+    sheet = _make_sheet(tmp_path)
+    _write_rnaseq_run_with_persisted_sheet(tmp_path, "cad3", _COUNTS_PRIMARY, sheet)
+    index = tmp_path / "index"
+    index.mkdir(exist_ok=True)
+    sheet.write_text(sheet.read_text() + "\n")  # tamper after the run recorded hashes
+
+    def boom(reads, index, out_dir):  # the quantifier must not be reached
+        raise AssertionError("quantifier invoked despite changed inputs")
+
+    monkeypatch.setattr("contig.cli.run_kallisto_quantifier", boom)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "cad3",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-counts-auto",
+            "--index",
+            str(index),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "skipping concordance" in result.output.lower()
+    assert "checksum mismatch" in result.output.lower()
+    assert "spearman_concordance" not in result.output.lower()
+
+
+def test_counts_auto_no_recorded_checksums_skips(tmp_path, monkeypatch):
+    # A record with parameters["input"] but no recorded checksums cannot be gated,
+    # so the CLI must note the skip and never reach the quantifier.
+    sheet = _make_sheet(tmp_path)
+    _write_rnaseq_run_with_persisted_sheet(
+        tmp_path, "cad4", _COUNTS_PRIMARY, sheet, input_checksums={}
+    )
+    index = tmp_path / "index"
+    index.mkdir(exist_ok=True)
+
+    def boom(reads, index, out_dir):  # the quantifier must not be reached
+        raise AssertionError("quantifier invoked without recorded checksums")
+
+    monkeypatch.setattr("contig.cli.run_kallisto_quantifier", boom)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "cad4",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-counts-auto",
+            "--index",
+            str(index),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "skipping concordance" in result.output.lower()
+    assert "no recorded input checksums" in result.output.lower()
+    assert "spearman_concordance" not in result.output.lower()
+
+
+def test_counts_auto_explicit_reads_bypasses_integrity_gate(tmp_path, monkeypatch):
+    # An explicit --reads keeps the old contract: no gate, even when the sheet was
+    # tampered after the run (the caller opted out of derivation by passing a path).
+    sheet = _make_sheet(tmp_path)
+    _write_rnaseq_run_with_persisted_sheet(tmp_path, "cad5", _COUNTS_PRIMARY, sheet)
+    index = tmp_path / "index"
+    index.mkdir(exist_ok=True)
+    sheet.write_text(sheet.read_text() + "\n")  # tampered after the run
+
+    calls = []
+    monkeypatch.setattr(
+        "contig.cli.run_kallisto_quantifier",
+        _recording_quantifier(_COUNTS_CONCORDANT, calls),
+    )
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "cad5",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-counts-auto",
+            "--reads",
+            str(sheet),
+            "--index",
+            str(index),
+        ],
+    )
+    assert result.exit_code == 0
+    assert calls == [str(sheet)]
+    assert "spearman_concordance" in result.output.lower()
+
+
+# --- contig verify --concordance-counts-auto --transcriptome (PRD C1, in-seam) --
+# No prebuilt --index: the CLI builds the kallisto index itself from
+# --transcriptome inside the shared tempdir, with a t2g.txt derived from the run
+# record's parameters["gtf"]. The build seam is bound to the real
+# build_kallisto_index with an injected fake builder (no real kallisto in CI).
+_TX1 = 'chr1\tsrc\texon\t1\t10\t.\t+\t.\tgene_id "geneA"; transcript_id "tx1"; gene_name "geneA_name";'
+_TX2 = 'chr1\tsrc\texon\t20\t30\t.\t+\t.\tgene_id "geneA"; transcript_id "tx2";'
+
+
+def _make_gtf(path, *, with_transcripts=True):
+    path.write_text(
+        "# a comment line\n"
+        + (_TX1 + "\n" + _TX2 + "\n" if with_transcripts else "")
+        + 'chr1\tsrc\tgene\t1\t100\t.\t+\t.\tgene_id "geneA";\n'
+    )
+    return path
+
+
+def test_counts_auto_transcriptome_builds_index_in_seam(tmp_path, monkeypatch):
+    # No --index: the CLI builds the kallisto index in-seam from --transcriptome
+    # (with a t2g.txt derived from the run record's GTF) and hands the built dir
+    # to the quantifier. The builder fake writes index.idx and records its argv;
+    # the quantifier fake asserts it received the built dir and that t2g.txt
+    # round-trips the GTF's transcript->gene map.
+    from functools import partial
+
+    from contig.verification.count_quantifier import build_kallisto_index
+
+    sheet = _make_sheet(tmp_path)
+    gtf = _make_gtf(tmp_path / "annot.gtf")
+    _write_rnaseq_run_with_persisted_sheet(tmp_path, "cat1", _COUNTS_PRIMARY, sheet, gtf=gtf)
+    fa = tmp_path / "transcripts.fa"
+    fa.write_text(">tx1\nACGT\n>tx2\nACGT\n")
+
+    builder_calls = []
+
+    def fake_builder(argv):
+        builder_calls.append(argv)
+        Path(argv[argv.index("-i") + 1]).write_bytes(b"KALLISTO_INDEX")
+        return 0
+
+    monkeypatch.setattr(
+        "contig.cli.build_kallisto_index",
+        partial(build_kallisto_index, builder=fake_builder),
+    )
+
+    built = {}
+
+    def fake_quantifier(reads, index, out_dir):
+        index_dir = Path(index)
+        assert (index_dir / "index.idx").is_file(), "quantifier did not get the built index dir"
+        t2g = index_dir / "t2g.txt"
+        assert t2g.is_file(), "t2g.txt missing from the built index dir"
+        parsed = {}
+        for line in t2g.read_text().splitlines():
+            fields = line.split("\t")
+            parsed[fields[0]] = fields[1]
+        assert parsed == {"tx1": "geneA", "tx2": "geneA"}, parsed
+        built["index"] = str(index_dir)
+        return _fake_quantifier_writing(_COUNTS_CONCORDANT)(reads, index, out_dir)
+
+    monkeypatch.setattr("contig.cli.run_kallisto_quantifier", fake_quantifier)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "cat1",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-counts-auto",
+            "--transcriptome",
+            str(fa),
+        ],
+    )
+    assert result.exit_code == 0
+    out = result.output.lower()
+    assert "spearman_concordance" in out
+    assert "skipping concordance" not in out
+    assert builder_calls == [
+        ["kallisto", "index", "-i", f"{built['index']}/index.idx", str(fa)]
+    ]
+
+
+def test_counts_auto_transcriptome_and_index_refused(tmp_path):
+    # --index and --transcriptome are alternatives: both given is a refusal before
+    # any evaluator work (exit 1), not a silent preference.
+    _write_rnaseq_run_with_counts(tmp_path, "cat2", _COUNTS_PRIMARY)
+    reads, index = _write_reads_and_index(tmp_path)
+    fa = tmp_path / "transcripts.fa"
+    fa.write_text(">tx1\nACGT\n")
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "cat2",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-counts-auto",
+            "--reads",
+            str(reads),
+            "--index",
+            str(index),
+            "--transcriptome",
+            str(fa),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "choose one" in result.output.lower()
+
+
+def test_counts_auto_transcriptome_missing_path_skips(tmp_path, monkeypatch):
+    # A --transcriptome that does not exist on disk: honest skip, builder (boom
+    # fake) never invoked.
+    sheet = _make_sheet(tmp_path)
+    gtf = _make_gtf(tmp_path / "annot.gtf")
+    _write_rnaseq_run_with_persisted_sheet(tmp_path, "cat3", _COUNTS_PRIMARY, sheet, gtf=gtf)
+
+    def boom_builder(transcriptome, index_dir):  # the builder must not be reached
+        raise AssertionError("builder invoked despite a missing --transcriptome")
+
+    monkeypatch.setattr("contig.cli.build_kallisto_index", boom_builder)
+
+    def boom_quantifier(reads, index, out_dir):  # the quantifier must not be reached
+        raise AssertionError("quantifier invoked despite a missing --transcriptome")
+
+    monkeypatch.setattr("contig.cli.run_kallisto_quantifier", boom_quantifier)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "cat3",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-counts-auto",
+            "--transcriptome",
+            str(tmp_path / "missing.fa"),
+        ],
+    )
+    assert result.exit_code == 0
+    out = result.output.lower()
+    assert "skipping concordance" in out
+    assert "--transcriptome path not found" in out
+    assert "spearman_concordance" not in out
+
+
+def test_counts_auto_transcriptome_no_gtf_in_record_skips(tmp_path, monkeypatch):
+    # An iGenomes-style record (no local parameters["gtf"]): the t2g cannot be
+    # derived, so the CLI notes the skip ("pass --index"), builder never invoked.
+    sheet = _make_sheet(tmp_path)
+    _write_rnaseq_run_with_persisted_sheet(tmp_path, "cat4", _COUNTS_PRIMARY, sheet)
+    fa = tmp_path / "transcripts.fa"
+    fa.write_text(">tx1\nACGT\n")
+
+    def boom_builder(transcriptome, index_dir):  # the builder must not be reached
+        raise AssertionError("builder invoked despite no GTF in the run record")
+
+    monkeypatch.setattr("contig.cli.build_kallisto_index", boom_builder)
+
+    def boom_quantifier(reads, index, out_dir):  # the quantifier must not be reached
+        raise AssertionError("quantifier invoked despite no GTF in the run record")
+
+    monkeypatch.setattr("contig.cli.run_kallisto_quantifier", boom_quantifier)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "cat4",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-counts-auto",
+            "--transcriptome",
+            str(fa),
+        ],
+    )
+    assert result.exit_code == 0
+    out = result.output.lower()
+    assert "skipping concordance" in out
+    assert "pass --index" in out
+    assert "spearman_concordance" not in out
+
+
+def test_counts_auto_transcriptome_build_failure_skips(tmp_path, monkeypatch):
+    # The injected builder exits nonzero: SecondQuantifierError from the seam
+    # becomes an honest skip note, quantifier (boom fake) never invoked.
+    from functools import partial
+
+    from contig.verification.count_quantifier import build_kallisto_index
+
+    sheet = _make_sheet(tmp_path)
+    gtf = _make_gtf(tmp_path / "annot.gtf")
+    _write_rnaseq_run_with_persisted_sheet(tmp_path, "cat5", _COUNTS_PRIMARY, sheet, gtf=gtf)
+    fa = tmp_path / "transcripts.fa"
+    fa.write_text(">tx1\nACGT\n")
+
+    def failing_builder(argv):
+        return 1
+
+    monkeypatch.setattr(
+        "contig.cli.build_kallisto_index",
+        partial(build_kallisto_index, builder=failing_builder),
+    )
+
+    def boom_quantifier(reads, index, out_dir):  # the quantifier must not be reached
+        raise AssertionError("quantifier invoked despite a failed index build")
+
+    monkeypatch.setattr("contig.cli.run_kallisto_quantifier", boom_quantifier)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "cat5",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-counts-auto",
+            "--transcriptome",
+            str(fa),
+        ],
+    )
+    assert result.exit_code == 0
+    out = result.output.lower()
+    assert "skipping concordance" in out
+    assert "could not build the kallisto index" in out
+    assert "spearman_concordance" not in out
+
+
+def test_counts_auto_transcriptome_unparseable_gtf_skips(tmp_path, monkeypatch):
+    # A GTF with no transcript lines yields no transcript->gene map: the CLI must
+    # note the skip BEFORE any build spawn (a meaningless t2g must not build).
+    sheet = _make_sheet(tmp_path)
+    gtf = _make_gtf(tmp_path / "annot.gtf", with_transcripts=False)
+    _write_rnaseq_run_with_persisted_sheet(tmp_path, "cat6", _COUNTS_PRIMARY, sheet, gtf=gtf)
+    fa = tmp_path / "transcripts.fa"
+    fa.write_text(">tx1\nACGT\n")
+
+    def boom_builder(transcriptome, index_dir):  # the builder must not be reached
+        raise AssertionError("builder invoked despite an unparseable GTF")
+
+    monkeypatch.setattr("contig.cli.build_kallisto_index", boom_builder)
+
+    def boom_quantifier(reads, index, out_dir):  # the quantifier must not be reached
+        raise AssertionError("quantifier invoked despite an unparseable GTF")
+
+    monkeypatch.setattr("contig.cli.run_kallisto_quantifier", boom_quantifier)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "cat6",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-counts-auto",
+            "--transcriptome",
+            str(fa),
+        ],
+    )
+    assert result.exit_code == 0
+    out = result.output.lower()
+    assert "skipping concordance" in out
+    assert "yielded no transcript->gene map" in out
+    assert "spearman_concordance" not in out
+
+
 # --- contig verify --concordance-sc-counts-auto (PRD C1, STARsolo seam) --------
 # A fake second single-cell quantifier stands in for STARsolo so CI never runs the
 # real binary. It writes a synthetic 10x MatrixMarket triplet under out_dir and
@@ -2748,6 +3227,53 @@ def _write_sc_autorun_inputs(tmp_path):
     whitelist = tmp_path / "whitelist.txt"
     whitelist.write_text("AAACCCAAGAAACCCA\n")
     return reads, index, whitelist
+
+
+def _recording_sc_quantifier(counts, calls):
+    """A fake STARsolo that records the reads path it was invoked with."""
+    writer = _fake_sc_quantifier_writing(counts)
+
+    def fake(reads, index, whitelist, chemistry, out_dir):
+        calls.append(reads)
+        return writer(reads, index, whitelist, chemistry, out_dir)
+
+    return fake
+
+
+def _write_scrnaseq_run_with_persisted_sheet(
+    runs_dir, run_id, counts, sheet, *, input_checksums=None
+):
+    """An scrnaseq run whose record persists `sheet` as parameters["input"].
+
+    `input_checksums=None` records the real hashes (basename -> sha256 over the
+    sheet and its FASTQs, exactly the runner's compute_input_checksums call); pass
+    a dict to record something else (e.g. {} for a pre-checksums bundle).
+    """
+    from contig.bundle import compute_input_checksums, compute_output_checksums
+    from contig.samplesheet import fastq_paths
+
+    run_dir = Path(runs_dir) / run_id
+    results = run_dir / "results"
+    triplet_dir = results / "star" / "S1.Solo.out" / "Gene" / "filtered"
+    _write_triplet(triplet_dir, counts)
+    sheet_path = Path(sheet).resolve()
+    checksums = (
+        compute_input_checksums([sheet_path, *fastq_paths(sheet_path)])
+        if input_checksums is None
+        else input_checksums
+    )
+    record = RunRecord(
+        run_id=run_id,
+        pipeline="nf-core/scrnaseq",  # scrnaseq assay
+        pipeline_revision="4.1.0",
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_checksums=checksums,
+        parameters={"input": str(sheet_path)},
+        events=[TaskEvent(process="X", status="COMPLETED", exit=0)],
+        output_checksums=compute_output_checksums(results),
+    )
+    write_bundle(record, run_dir)
+    return run_dir
 
 
 def _write_scrnaseq_run_no_matrix(runs_dir, run_id):
@@ -3037,6 +3563,151 @@ def test_verify_concordance_sc_counts_auto_quantifier_failure_skips(tmp_path, mo
     )
     assert result.exit_code == 0
     assert "skipping concordance" in result.output.lower()
+    assert "spearman_concordance" not in result.output.lower()
+
+
+def test_sc_counts_auto_derives_reads_from_record(tmp_path, monkeypatch):
+    # No --reads: the persisted sample sheet is reused when it still matches the
+    # run's recorded input checksums, and the derived path reaches STARsolo.
+    sheet = _make_sheet(tmp_path)
+    _write_scrnaseq_run_with_persisted_sheet(tmp_path, "scad1", _SC_PRIMARY, sheet)
+    index = tmp_path / "star_index"
+    index.mkdir(exist_ok=True)
+    whitelist = tmp_path / "whitelist.txt"
+    whitelist.write_text("AAACCCAAGAAACCCA\n")
+
+    calls = []
+    monkeypatch.setattr(
+        "contig.cli.run_starsolo_quantifier",
+        _recording_sc_quantifier(_SC_CONCORDANT, calls),
+    )
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "scad1",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-sc-counts-auto",
+            "--index",
+            str(index),
+            "--whitelist",
+            str(whitelist),
+        ],
+    )
+    assert result.exit_code == 0
+    assert calls == [str(sheet.resolve())]
+    assert "spearman_concordance" in result.output.lower()
+
+
+def test_sc_counts_auto_derived_sheet_missing_on_disk_skips(tmp_path, monkeypatch):
+    # The record's persisted sheet no longer exists: the integrity gate must note
+    # the skip (not the bare "--reads is required" note) and never reach STARsolo.
+    missing = tmp_path / "gone" / "samplesheet.csv"
+    _write_scrnaseq_run_with_persisted_sheet(
+        tmp_path,
+        "scad2",
+        _SC_PRIMARY,
+        missing,
+        input_checksums={"samplesheet.csv": "0" * 64},
+    )
+    index = tmp_path / "star_index"
+    index.mkdir(exist_ok=True)
+    whitelist = tmp_path / "whitelist.txt"
+    whitelist.write_text("AAACCCAAGAAACCCA\n")
+
+    def boom(reads, index, whitelist, chemistry, out_dir):  # must not be reached
+        raise AssertionError("quantifier invoked despite a missing persisted sheet")
+
+    monkeypatch.setattr("contig.cli.run_starsolo_quantifier", boom)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "scad2",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-sc-counts-auto",
+            "--index",
+            str(index),
+            "--whitelist",
+            str(whitelist),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "skipping concordance" in result.output.lower()
+    assert "persisted sample sheet no longer exists" in result.output.lower()
+    assert "spearman_concordance" not in result.output.lower()
+
+
+def test_sc_counts_auto_derived_inputs_changed_since_run_skips(tmp_path, monkeypatch):
+    # A sheet edited after the run: the recorded checksum no longer matches, so the
+    # gate must note the mismatch and never reach STARsolo.
+    sheet = _make_sheet(tmp_path)
+    _write_scrnaseq_run_with_persisted_sheet(tmp_path, "scad3", _SC_PRIMARY, sheet)
+    index = tmp_path / "star_index"
+    index.mkdir(exist_ok=True)
+    whitelist = tmp_path / "whitelist.txt"
+    whitelist.write_text("AAACCCAAGAAACCCA\n")
+    sheet.write_text(sheet.read_text() + "\n")  # tamper after the run recorded hashes
+
+    def boom(reads, index, whitelist, chemistry, out_dir):  # must not be reached
+        raise AssertionError("quantifier invoked despite changed inputs")
+
+    monkeypatch.setattr("contig.cli.run_starsolo_quantifier", boom)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "scad3",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-sc-counts-auto",
+            "--index",
+            str(index),
+            "--whitelist",
+            str(whitelist),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "skipping concordance" in result.output.lower()
+    assert "checksum mismatch" in result.output.lower()
+    assert "spearman_concordance" not in result.output.lower()
+
+
+def test_sc_counts_auto_no_recorded_checksums_skips(tmp_path, monkeypatch):
+    # A record with parameters["input"] but no recorded checksums cannot be gated,
+    # so the CLI must note the skip and never reach STARsolo.
+    sheet = _make_sheet(tmp_path)
+    _write_scrnaseq_run_with_persisted_sheet(
+        tmp_path, "scad4", _SC_PRIMARY, sheet, input_checksums={}
+    )
+    index = tmp_path / "star_index"
+    index.mkdir(exist_ok=True)
+    whitelist = tmp_path / "whitelist.txt"
+    whitelist.write_text("AAACCCAAGAAACCCA\n")
+
+    def boom(reads, index, whitelist, chemistry, out_dir):  # must not be reached
+        raise AssertionError("quantifier invoked without recorded checksums")
+
+    monkeypatch.setattr("contig.cli.run_starsolo_quantifier", boom)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "scad4",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-sc-counts-auto",
+            "--index",
+            str(index),
+            "--whitelist",
+            str(whitelist),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "skipping concordance" in result.output.lower()
+    assert "no recorded input checksums" in result.output.lower()
     assert "spearman_concordance" not in result.output.lower()
 
 
