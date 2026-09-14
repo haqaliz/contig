@@ -1,11 +1,12 @@
 """Tests for the pure peak-RSS memory sizing helper (capability C2).
 
 `peak_informed_memory_gb` sizes an OOM memory retry from the observed peak_rss
-in the run's trace via an honest two-tier ladder (OOM'd task's own observed peak
--> unavailable/blind). Pure: no I/O, no run. The ceiling-clamp and never-shrink
-math live later in apply_patch, so these tests assert the raw sized target the
-helper returns. (Same-process sibling rescue is a deferred follow-on requiring a
-coarse process column in the trace parser.)
+in the run's trace via an honest four-tier ladder (OOM'd task's own observed
+peak -> same-process sibling peak -> sibling_dominated/blind -> unavailable/blind).
+Pure: no I/O, no run. The ceiling-clamp and never-shrink math live later in
+apply_patch, so these tests assert the raw sized target the helper returns.
+(Same-process sibling rescue ships: the trace parser now carries a coarse
+process column, so the sibling key can diverge from the own-task key.)
 """
 
 import math
@@ -62,12 +63,46 @@ def test_multi_task_oom_sizes_off_max_peak():
     assert result.target_gb == math.ceil(9216 / 1024 * 1.5)
 
 
-def test_same_process_sibling_is_not_rescued():
-    # Scoped-out follow-on: rescuing an OOM whose own peak is a dash (0) from a
-    # same-`process` but different-`name` sibling that carries a real peak needs a
-    # coarse process column in the trace parser (today process == name, so the
-    # sibling key can never diverge from the own-task key). Until that lands we
-    # DELIBERATELY do not rescue via a sibling -> the honest answer is unavailable.
+def test_same_process_sibling_rescues_when_strictly_larger():
+    # The OOM'd task's own peak is a dash (0), but a same-`process` sibling that
+    # completed carries a real peak -> rescue from the sibling's peak. The retry
+    # only fires when the sized target strictly exceeds the current limit; here
+    # ceil(6144/1024*1.5)=9 > 8, so the sibling rung ships a sized target.
+    events = [_oom_event("STAR_ALIGN", "STAR_ALIGN (S1)")]
+    usage = [
+        _usage("STAR_ALIGN", "STAR_ALIGN (S1)", 0.0),  # killed, dash -> 0
+        _usage("STAR_ALIGN", "STAR_ALIGN (S2)", 6144.0),  # completed sibling
+    ]
+
+    result = peak_informed_memory_gb(events, usage, factor=1.5, current_gb=8)
+
+    assert result == PeakSizing(
+        target_gb=9, tier="sibling_peak", observed_peak_mb=6144.0, source_name="STAR_ALIGN (S2)"
+    )
+
+
+def test_sibling_dominated_falls_back_when_not_strictly_larger():
+    # Sibling peak 5120 -> ceil(5120/1024*1.5)=8, which is NOT strictly larger
+    # than the current limit 8: sizing at 8 would be a no-op retry with an
+    # unchanged limit, so the helper reports sibling_dominated and the caller
+    # falls back to the blind multiplier.
+    events = [_oom_event("STAR_ALIGN", "STAR_ALIGN (S1)")]
+    usage = [
+        _usage("STAR_ALIGN", "STAR_ALIGN (S1)", 0.0),  # killed, dash -> 0
+        _usage("STAR_ALIGN", "STAR_ALIGN (S2)", 5120.0),  # completed sibling
+    ]
+
+    result = peak_informed_memory_gb(events, usage, factor=1.5, current_gb=8)
+
+    assert result == PeakSizing(
+        target_gb=None, tier="sibling_dominated", observed_peak_mb=5120.0, source_name="STAR_ALIGN (S2)"
+    )
+
+
+def test_sibling_tier_returns_raw_target_without_current_guard():
+    # The current-limit guard is the caller's concern (the blind fallback lives
+    # in apply_patch); without `current_gb` the helper returns the raw sized
+    # target, matching the tier-a "no clamp in the helper" precedent.
     events = [_oom_event("STAR_ALIGN", "STAR_ALIGN (S1)")]
     usage = [
         _usage("STAR_ALIGN", "STAR_ALIGN (S1)", 0.0),  # killed, dash -> 0
@@ -75,6 +110,24 @@ def test_same_process_sibling_is_not_rescued():
     ]
 
     result = peak_informed_memory_gb(events, usage, factor=1.5)
+
+    assert result.tier == "sibling_peak"
+    assert result.target_gb == 9
+    assert result.observed_peak_mb == 6144.0
+    assert result.source_name == "STAR_ALIGN (S2)"
+
+
+def test_sibling_tier_unavailable_when_no_positive_sibling():
+    # No positive peak anywhere: the killed row is a dash (0) and the sibling
+    # row is a dash (0) too -> no evidence at all, so the honest answer is
+    # unavailable (distinct from sibling_dominated, which had a real peak).
+    events = [_oom_event("STAR_ALIGN", "STAR_ALIGN (S1)")]
+    usage = [
+        _usage("STAR_ALIGN", "STAR_ALIGN (S1)", 0.0),  # killed, dash -> 0
+        _usage("STAR_ALIGN", "STAR_ALIGN (S2)", 0.0),  # sibling also dash -> 0
+    ]
+
+    result = peak_informed_memory_gb(events, usage, factor=1.5, current_gb=8)
 
     assert result == PeakSizing(target_gb=None, tier="unavailable", observed_peak_mb=None)
 

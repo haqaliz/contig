@@ -3161,10 +3161,18 @@ _TRACE_HEADER = (
 )
 
 
-def _peak_trace(status, exit_code, peak_rss, name="NFCORE_RNASEQ:STAR_ALIGN (S1)"):
+def _peak_trace(status, exit_code, peak_rss, name="NFCORE_RNASEQ:STAR_ALIGN (S1)", process=None):
     # A trace row carrying the resource columns (incl. peak_rss) the sizer reads.
-    return _TRACE_HEADER + (
-        f"1\tab/cd\t1\t{name}\t{status}\t{exit_code}\t2026-01-01\t"
+    # With `process`, prepend the coarse process column to the header and the row
+    # so the sibling rung can join on it; without, byte-identical to the plain
+    # shape (the parser resolves columns by header name, so position is free).
+    if process is None:
+        return _TRACE_HEADER + (
+            f"1\tab/cd\t1\t{name}\t{status}\t{exit_code}\t2026-01-01\t"
+            f"10m\t9m\t180.0%\t{peak_rss}\n"
+        )
+    return "process\t" + _TRACE_HEADER + (
+        f"{process}\t1\tab/cd\t1\t{name}\t{status}\t{exit_code}\t2026-01-01\t"
         f"10m\t9m\t180.0%\t{peak_rss}\n"
     )
 
@@ -3222,6 +3230,75 @@ def test_self_heal_oom_falls_back_to_blind_bump_without_usable_peak(tmp_path):
     assert step.diagnosis.failure_class == "oom"
     assert step.outcome == "patched_and_retried"
     assert "unavailable" in step.detail
+
+
+def test_self_heal_sizes_oom_retry_from_sibling_peak(tmp_path):
+    # The killed STAR_ALIGN row's own peak is a dash, but a same-process sibling
+    # that completed reports a 20 GB peak -> the retry sizes off the sibling:
+    # ceil(20 GB * 1.5) = 30 GB, NOT the blind x2 (16 GB) -- and the retained
+    # RepairStep.detail must name the sibling tier, the borrowed row, and the
+    # blind alternative it beat.
+    killed = _peak_trace(
+        "FAILED", 137, "-", name="STAR_ALIGN (S1)", process="NFCORE_RNASEQ:STAR_ALIGN"
+    )
+    sibling = _peak_trace(
+        "COMPLETED", 0, "20 GB", name="STAR_ALIGN (S2)", process="NFCORE_RNASEQ:STAR_ALIGN"
+    ).split("\n", 1)[1]
+    ok_trace = _peak_trace("COMPLETED", 0, "20 GB")
+    state = {"n": 0, "retry_cfg": None}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, killed + sibling, "out of memory exit 137")
+            return 1
+        state["retry_cfg"] = (Path(trace_path).parent / "nextflow.config").read_text()
+        _write(trace_path, ok_trace, "done")
+        return 0
+
+    record = _heal(tmp_path, executor)
+    assert RunSummary.from_events(record.events).succeeded is True
+    assert "process.resourceLimits = [ memory: 30.GB ]" in state["retry_cfg"]
+    assert record.target.resource_limits["memory"] == "30.GB"
+    step = record.repair_history[0]
+    assert step.diagnosis.failure_class == "oom"
+    assert step.outcome == "patched_and_retried"
+    assert "sibling_peak" in step.detail
+    assert "borrowed from STAR_ALIGN (S2)" in step.detail
+    assert "vs blind x2" in step.detail
+
+
+def test_self_heal_oom_sibling_dominated_falls_back_to_blind(tmp_path):
+    # The sibling's 4 GB peak sizes to ceil(4 GB * 1.5) = 6 GB, which is NOT
+    # strictly larger than the 8 GB current limit: a retry at that size would be
+    # a no-op, so the loop must fall back to the blind x2 (8 -> 16 GB) and the
+    # detail must name the sibling_dominated tier and the blind fallback.
+    killed = _peak_trace(
+        "FAILED", 137, "-", name="STAR_ALIGN (S1)", process="NFCORE_RNASEQ:STAR_ALIGN"
+    )
+    sibling = _peak_trace(
+        "COMPLETED", 0, "4 GB", name="STAR_ALIGN (S2)", process="NFCORE_RNASEQ:STAR_ALIGN"
+    ).split("\n", 1)[1]
+    state = {"n": 0, "retry_cfg": None}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, killed + sibling, "out of memory exit 137")
+            return 1
+        state["retry_cfg"] = (Path(trace_path).parent / "nextflow.config").read_text()
+        _write(trace_path, TRACE_OK, "done")
+        return 0
+
+    record = _heal(tmp_path, executor)
+    assert RunSummary.from_events(record.events).succeeded is True
+    assert "process.resourceLimits = [ memory: 16.GB ]" in state["retry_cfg"]
+    assert record.target.resource_limits["memory"] == "16.GB"
+    step = record.repair_history[0]
+    assert step.diagnosis.failure_class == "oom"
+    assert step.outcome == "patched_and_retried"
+    assert "sibling_dominated" in step.detail
+    assert "blind x2" in step.detail
 
 
 # --- Phase 3: realtime-informed time_limit retry sizing ---------------------

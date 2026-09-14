@@ -6,6 +6,58 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+- **The same-process sibling-peak rescue ships (`sibling-peak-rescue`).** The
+  peak-RSS memory-scaling slice's cut rung lands: when an OOM'd task's own
+  `peak_rss` is unusable (a signal-killed task reports a `-`/0 peak), the retry
+  is now sized from the **max positive peak among the same-coarse-`process`
+  rows** — but **only when that strictly exceeds the current limit** (the new
+  `current_gb` guard, read tolerantly at the heal site from the
+  `"64.GB"`-style `resourceLimits` string); otherwise the **blind `× 2`
+  fallback fires** — a sibling candidate that sizes at or below `current` would
+  be a no-op retry, a regression vs blind. New `PeakSizing` tiers
+  `sibling_peak` / `sibling_dominated`, with `source_name` naming the row the
+  peak was borrowed from. Stated up front, in the walltime slice's voice: a
+  surviving sibling's peak is bounded by the very limit that killed the failed
+  task, so **the rung can never beat blind `× 2`** — its value is precision (a
+  tighter bump toward the ceiling, less over-allocation) when the sibling ran
+  near the limit, and whether that happens in the field is a **hypothesis, not
+  a finding** — that is exactly what the telemetry measures.
+  - **Prerequisite shipped:** both trace parsers (`parse_trace_text`,
+    `parse_resource_usage_text`) now read the coarse `process` column by header
+    name with a `name or ""` fallback (previously `process == name` for every
+    row, so a sibling key could never diverge from the own-task key). Header-
+    driven resolution unchanged; real `-with-trace` output already carried the
+    column, so no fixture-compat break.
+  - **Telemetry:** `RepairStep.detail` records the tier, the borrowed sibling's
+    value and task name (via `PeakSizing.source_name`), and the fallback reason
+    on `sibling_dominated`; the `oom_task` / `unavailable` detail strings are
+    byte-identical to shipped.
+  - **Disclosed contract change:** the shipped pin
+    `test_same_process_sibling_is_not_rescued` (tests/test_resource_sizing.py)
+    flips to `test_same_process_sibling_rescues_when_strictly_larger` — the
+    deliberate no-rescue stance was the deferral record; it now records the
+    shipped behavior (the `qc_anomaly` `recovered` precedent).
+  - **Roadmap correction:** the walltime sibling-`realtime` rescue does **not**
+    share the memory branch's `process == name` blocker —
+    `realtime_informed_time_h` already takes the max realtime across all usage
+    rows (`resource_sizing.py:114`), so the roadmap's "same `process == name`
+    blocker as memory" claim was inaccurate as written; the time branch is
+    untouched.
+  - **Read honestly.** Push, not demand-pull; the organic frequency of the
+    censored case is **unmeasured** — no real Contig-launched run has ever
+    produced a censored-peak OOM, and the field corpus has only ever diagnosed
+    `oom`/`tool_crash`/`missing_index`/`unknown`. No real Nextflow in CI
+    (injected trace/executor fixtures); heal-guard/eval-guard baselines unmoved
+    (the `oom` heal scenario's trace carries no peak column → stays on the
+    blind path); `apply_patch`, the ceiling clamp, never-shrink, and
+    `gave_up_at_ceiling` untouched; no `FailureClass`/verdict/exit-code change;
+    the `FailureCase` corpus fold-in stays deferred (the telemetry rides in the
+    signed `RepairStep.detail`).
+  - **Revisit trigger:** if the sibling tiers fire in **0 of the next 20 real
+    OOM heals** (counted from `RepairStep.detail` tier tokens, no new
+    instrumentation), the rung is restated as taxonomy-only. Full suite 2930
+    passed / 1 skipped.
+
 - **`contig run` now captures known-sites resources — dbSNP, known indels, known SNPs —
   into the reference identity, so a variant-calling run's provenance names every
   reference its callers consumed (`reference-known-sites-capture`).** This is capture

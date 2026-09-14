@@ -1,6 +1,11 @@
 """Tests for the Nextflow trace-file ingestion module (contig.events)."""
 
-from contig.events import parse_trace_file, parse_trace_text, summarize_trace_text
+from contig.events import (
+    parse_resource_usage_text,
+    parse_trace_file,
+    parse_trace_text,
+    summarize_trace_text,
+)
 
 
 def test_completed_row_yields_one_non_failure_event():
@@ -88,3 +93,19 @@ def test_blank_and_trailing_lines_are_ignored():
     )
     events = parse_trace_text(text)
     assert len(events) == 2
+
+
+def test_process_column_resolved_when_present():
+    text = (
+        "process\thash\tnative_id\tname\tstatus\texit\tsubmit\tduration\trealtime\t%cpu\tpeak_rss\n"
+        "NFCORE_RNASEQ:STAR_ALIGN\tab/cd\t1\tSTAR_ALIGN (S1)\tCOMPLETED\t0\t2026-01-01\t10m\t9m\t180.0%\t\"20 GB\"\n"
+    )
+    events = parse_trace_text(text)
+    assert events[0].process == "NFCORE_RNASEQ:STAR_ALIGN"
+    assert events[0].name == "STAR_ALIGN (S1)"
+    assert events[0].process != events[0].name
+
+    usage = parse_resource_usage_text(text)
+    assert usage[0].process == "NFCORE_RNASEQ:STAR_ALIGN"
+    assert usage[0].name == "STAR_ALIGN (S1)"
+    assert usage[0].process != usage[0].name

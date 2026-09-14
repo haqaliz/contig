@@ -462,22 +462,39 @@ def _resource_ceiling_block(diagnosis, target, ceiling) -> str | None:
     return None
 
 
-def _oom_memory_sizing(diagnosis, run_dir, events) -> tuple[int | None, str | None]:
+def _oom_memory_sizing(diagnosis, run_dir, events, current_memory_gb) -> tuple[int | None, str | None]:
     """Size an OOM memory retry from the run's observed peak RSS.
 
-    For an OOM failure, parse the run's (partial) trace and size the retry to the
-    failed task's observed peak via ``peak_informed_memory_gb`` (own observed peak
-    -> blind fallback), returning the pre-clamp target GB for
-    ``apply_patch`` plus a ``RepairStep.detail`` telemetry line. For any other
-    failure class this is a no-op ``(None, None)`` -- sizing only touches OOM /
-    memory; the blind ``x2`` bump and the ``time_limit`` branch are unchanged.
+    For an OOM failure, parse the run's (partial) trace and size the retry via
+    ``peak_informed_memory_gb``, which climbs a four-tier ladder and returns a
+    ``PeakSizing``: (a) the OOM'd task's own observed peak ("oom_task"), else
+    (b) a same-``process`` sibling's peak ("sibling_peak"; the dominance guard
+    against a no-op retry at the current limit is ``current_memory_gb``), else
+    (c) "sibling_dominated" -- the sibling peak exists but sizes at or below
+    the current limit, so the caller falls back to the blind ``x2``, else
+    (d) "unavailable" -- no usable peak anywhere, blind ``x2`` again. Returns
+    the pre-clamp target GB for ``apply_patch`` plus a ``RepairStep.detail``
+    telemetry line. For any other failure class this is a no-op ``(None, None)``
+    -- sizing only touches OOM / memory; the blind ``x2`` bump and the
+    ``time_limit`` branch are unchanged.
     """
     if diagnosis.failure_class != "oom":
         return None, None
     trace_path = run_dir / "trace.txt"
     usage = parse_resource_usage_file(trace_path) if trace_path.exists() else []
-    sizing = peak_informed_memory_gb(events, usage)
-    if sizing.target_gb is not None:
+    sizing = peak_informed_memory_gb(events, usage, current_gb=current_memory_gb)
+    if sizing.tier == "sibling_peak":
+        detail = (
+            f"scaled memory to ~{sizing.target_gb} GB from same-process sibling peak "
+            f"{sizing.observed_peak_mb:.0f} MB (x{PEAK_RSS_SAFETY_FACTOR}, sibling_peak, "
+            f"borrowed from {sizing.source_name}; vs blind x2)"
+        )
+    elif sizing.tier == "sibling_dominated":
+        detail = (
+            f"sibling peak {sizing.observed_peak_mb:.0f} MB not strictly larger than "
+            f"current; blind x2 fallback (sibling_dominated)"
+        )
+    elif sizing.tier == "oom_task":
         detail = (
             f"scaled memory to ~{sizing.target_gb} GB from observed peak "
             f"{sizing.observed_peak_mb:.0f} MB (x{PEAK_RSS_SAFETY_FACTOR}, {sizing.tier})"
@@ -1613,7 +1630,10 @@ def self_heal_run(
                     runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
                     harmonized_reference_direction=harmonized_reference_direction)
 
-            observed_target_gb, mem_detail = _oom_memory_sizing(diagnosis, run_dir, events)
+            current_mem_gb = int(_lead_number(current_target.resource_limits.get("memory"), _DEFAULT_MEMORY_GB))
+            observed_target_gb, mem_detail = _oom_memory_sizing(
+                diagnosis, run_dir, events, current_mem_gb
+            )
             observed_target_h, time_sizing = _time_limit_sizing(diagnosis, run_dir, events)
             prev_time_h = int(_lead_number(current_target.resource_limits.get("time"), _DEFAULT_TIME_HOURS))
             current_target, current_params = apply_patch(

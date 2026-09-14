@@ -4,7 +4,8 @@ A trace file is the machine-readable, file-based capture of a run, produced by
 `nextflow run ... -with-trace trace.txt`. It is a TSV with a header row whose
 default columns are:
 
-    task_id  hash  native_id  name  status  exit  submit  duration  realtime
+    task_id  hash  native_id  process  name  status  exit  submit  duration
+    realtime  %cpu  peak_rss
 
 This module reduces each data row to a `contig.models.TaskEvent`, the unit the
 failure detector and RunRecord consume.
@@ -88,7 +89,7 @@ def parse_trace_text(text: str) -> list[TaskEvent]:
         exit_raw = field(fields, "exit")
         events.append(
             TaskEvent(
-                process=name or "",
+                process=field(fields, "process") or name or "",
                 status=field(fields, "status") or "",
                 exit=None if exit_raw in (None, "-", "") else int(exit_raw),
                 task_id=field(fields, "task_id"),
@@ -127,7 +128,7 @@ def parse_resource_usage_text(text: str) -> list[TaskResource]:
         name = field(fields, "name")
         usage.append(
             TaskResource(
-                process=name or "",
+                process=field(fields, "process") or name or "",
                 name=name,
                 realtime_sec=parse_duration_sec(field(fields, "realtime")),
                 peak_rss_mb=parse_size_mb(field(fields, "peak_rss")),
