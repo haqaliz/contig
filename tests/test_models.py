@@ -535,6 +535,70 @@ def test_reference_identity_legacy_json_without_harmonization_fields_defaults():
     assert identity.harmonized_direction is None
 
 
+def test_known_site_identity_validates():
+    from contig.models import KnownSiteIdentity
+
+    site = KnownSiteIdentity(role="dbsnp", path="/x.vcf.gz", sha256="abc", source="explicit")
+    assert site.role == "dbsnp"
+    assert site.path == "/x.vcf.gz"
+    assert site.sha256 == "abc"
+    assert site.source == "explicit"
+
+
+def test_known_site_identity_rejects_unknown_role():
+    from contig.models import KnownSiteIdentity
+
+    with pytest.raises(ValidationError):
+        KnownSiteIdentity(role="clinvar", source="explicit")
+
+
+def test_known_site_identity_requires_source():
+    from contig.models import KnownSiteIdentity
+
+    with pytest.raises(ValidationError):
+        KnownSiteIdentity(role="dbsnp")
+
+
+def test_reference_identity_round_trips_with_known_sites():
+    from contig.models import KnownSiteIdentity, ReferenceIdentity
+
+    identity = ReferenceIdentity(
+        mode="explicit",
+        fasta="ref.fa",
+        known_sites=[
+            KnownSiteIdentity(role="dbsnp", path="/x.vcf.gz", sha256="abc", source="explicit"),
+            KnownSiteIdentity(role="known_indels", source="igenomes"),
+        ],
+    )
+    restored = ReferenceIdentity.model_validate(identity.model_dump())
+    assert restored.known_sites is not None
+    assert restored.known_sites[0].role == "dbsnp"
+    assert restored.known_sites[0].path == "/x.vcf.gz"
+    assert restored.known_sites[0].sha256 == "abc"
+    assert restored.known_sites[0].source == "explicit"
+    assert restored.known_sites[1].role == "known_indels"
+    assert restored.known_sites[1].path is None
+    assert restored.known_sites[1].source == "igenomes"
+
+
+def test_reference_identity_known_sites_defaults_to_none():
+    from contig.models import ReferenceIdentity
+
+    identity = ReferenceIdentity(mode="explicit", fasta="ref.fa")
+    assert identity.known_sites is None
+
+
+def test_reference_identity_legacy_dict_without_known_sites_defaults_none():
+    from contig.models import ReferenceIdentity
+
+    identity = ReferenceIdentity.model_validate({
+        "mode": "explicit",
+        "fasta": "ref.fa",
+        "gtf": "genes.gtf",
+    })
+    assert identity.known_sites is None
+
+
 def test_run_record_accepts_and_round_trips_harmonized_reference_direction():
     """harmonized_reference_direction='add_chr' survives a JSON round-trip."""
     from contig.models import RunRecord

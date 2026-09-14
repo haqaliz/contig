@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 
-from contig.models import RunRecord
+from contig.models import ReferenceIdentity, RunRecord
 from contig.registry import assay_for_pipeline
 from contig.verification.annotation_surface import cache_inputs_note, corroborated_by_line
 
@@ -53,17 +53,40 @@ def _provenance_clause(record: RunRecord) -> str:
     return " Execution was pinned to " + " and ".join(parts) + "."
 
 
+def _known_sites_clause(ri: ReferenceIdentity) -> str:
+    """A compact clause naming each known-sites role's file basename, or ''.
+
+    Explicit resources render their first-12 sha256 hex when recorded; iGenomes
+    assets are downloaded by the pipeline, so they say so instead of a checksum.
+    The filename is carried verbatim and never resolved into a build label.
+    """
+    entries = ri.known_sites or []
+    if not entries:
+        return ""
+    parts: list[str] = []
+    for ks in entries:
+        base = os.path.basename(ks.path) if ks.path else "unknown"
+        if ks.sha256:
+            parts.append(f"{ks.role} {base} (sha256 {ks.sha256[:12]}...)")
+        elif ks.source == "igenomes":
+            parts.append(f"{ks.role} {base} (downloaded by the pipeline)")
+        else:
+            parts.append(f"{ks.role} {base}")
+    return " Known-sites resources: " + "; ".join(parts) + "."
+
+
 def _reference_clause(record: RunRecord) -> str:
     """A clause describing the reference genome used, if recorded; empty string otherwise."""
     ri = record.reference_identity
     if ri is None:
         return ""
+    known = _known_sites_clause(ri)
     if ri.mode == "igenomes":
         key = ri.genome or "unknown"
         return (
             f" The analysis was run against the iGenomes {key} reference"
             " (downloaded by the pipeline)."
-        )
+        ) + known
     # explicit mode
     fasta_base = os.path.basename(ri.fasta) if ri.fasta else "unknown"
     gtf_base = os.path.basename(ri.gtf) if ri.gtf else "unknown"
@@ -72,11 +95,11 @@ def _reference_clause(record: RunRecord) -> str:
         return (
             f" The analysis was run against reference FASTA {fasta_base}"
             f" (sha256 {sha_snippet}...) and annotation {gtf_base}."
-        )
+        ) + known
     return (
         f" The analysis was run against reference FASTA {fasta_base}"
         f" and annotation {gtf_base}."
-    )
+    ) + known
 
 
 def _annotation_clause(record: RunRecord) -> str:
