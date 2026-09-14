@@ -157,7 +157,10 @@ from contig.verification.second_caller import (
 )
 from contig.verification.count_quantifier import (
     SecondQuantifierError,
+    build_kallisto_index,
     run_kallisto_quantifier,
+    t2g_from_gtf,
+    write_t2g,
 )
 from contig.verification.sc_count_quantifier import (
     SecondScQuantifierError,
@@ -1700,6 +1703,14 @@ def verify(
             "--concordance-sc-counts-auto."
         ),
     ),
+    transcriptome: str = typer.Option(
+        None,
+        "--transcriptome",
+        help=(
+            "Transcript FASTA to build the kallisto index in-seam for "
+            "--concordance-counts-auto (alternative to --index)."
+        ),
+    ),
     concordance_sc_counts: str = typer.Option(
         None,
         "--concordance-sc-counts",
@@ -1751,12 +1762,13 @@ def verify(
     second quantifier's matrix (PRD C1, rnaseq): the same at-most-WARN, never-changes-
     exit contract applies.
 
-    With --concordance-counts-auto (plus --index; --reads is optional and, when
+    With --concordance-counts-auto (plus --index, or --transcriptome to build the
+    kallisto index in-seam from the run record's GTF; --reads is optional and, when
     omitted, derived from the run record's persisted sample sheet, integrity-gated
     against its recorded input checksums), Contig produces that second gene-count
     matrix itself by running a second quantifier (kallisto) and corroborates the run
-    against it; the same at-most-WARN, never-changes-exit contract applies. --reads
-    and --index are ignored unless --concordance-counts-auto is set.
+    against it; the same at-most-WARN, never-changes-exit contract applies. --reads,
+    --index and --transcriptome are ignored unless --concordance-counts-auto is set.
 
     With --concordance-sc-counts, corroborate an scrnaseq run's own count matrix against
     a second single-cell matrix (a matrix.mtx(.gz) triplet or a dense pseudobulk gene
@@ -1798,6 +1810,12 @@ def verify(
             err=True,
         )
         raise typer.Exit(code=1)
+    if concordance_counts_auto and index and transcriptome:
+        typer.echo(
+            "Choose one of --index or --transcriptome for --concordance-counts-auto, not both.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
     try:
         record = load_run(runs_dir, run_id)
     except RunNotFoundError as exc:
@@ -1836,7 +1854,13 @@ def verify(
         concordance_family = _concordance_family("concordance_counts")
     elif concordance_counts_auto:
         concordance = _evaluate_run_counts_concordance_auto(
-            record, runs_dir, run_id, reads, index, capture_metrics=capture_metrics
+            record,
+            runs_dir,
+            run_id,
+            reads,
+            index,
+            transcriptome,
+            capture_metrics=capture_metrics,
         )
         concordance_family = _concordance_family("concordance_counts_auto")
     elif concordance_sc_counts:
@@ -2255,6 +2279,7 @@ def _evaluate_run_counts_concordance_auto(
     run_id: str,
     reads: str,
     index: str,
+    transcriptome: str | None = None,
     quantifier=None,
     capture_metrics: dict[str, dict[str, float]] | None = None,
 ) -> list:
@@ -2263,12 +2288,16 @@ def _evaluate_run_counts_concordance_auto(
     Like `_evaluate_run_counts_concordance`, but Contig produces the second gene-count
     matrix itself: it gates to rnaseq, resolves the same primary matrix, derives --reads
     from the run record's persisted sample sheet when not given (integrity-gated against
-    the recorded input checksums), validates that --index was given and exists, then runs
-    the second quantifier (kallisto by default; injectable via `quantifier` and
-    monkeypatchable as the module-level `run_kallisto_quantifier`). A missing input or any
-    SecondQuantifierError prints a clear skip note and yields no checks (never a
-    crash, never a false pass). Returns the QCResult list so the caller surfaces it
-    without changing the exit code.
+    the recorded input checksums), then runs the second quantifier (kallisto by default;
+    injectable via `quantifier` and monkeypatchable as the module-level
+    `run_kallisto_quantifier`) against --index, or — when --index is absent but
+    --transcriptome is given — against a kallisto index built in-seam inside the same
+    tempdir: the transcript->gene map is derived from the run record's
+    `parameters["gtf"]` (`t2g_from_gtf`), written as `t2g.txt`, then
+    `build_kallisto_index` (monkeypatchable as the module-level `build_kallisto_index`).
+    A missing input, an absent/unparseable GTF, or any SecondQuantifierError prints a
+    clear skip note and yields no checks (never a crash, never a false pass). Returns
+    the QCResult list so the caller surfaces it without changing the exit code.
 
     `capture_metrics`, when passed, is handed to the evaluator's out-param so the
     caller (the verify-time capture hook) reads the pre-band metrics of a run that
@@ -2284,16 +2313,48 @@ def _evaluate_run_counts_concordance_auto(
             typer.echo(f"Skipping concordance: {note}.")
             return []
 
-    for label, value in (("--index", index),):
-        if not value:
-            typer.echo(f"Skipping concordance: {label} is required for --concordance-counts-auto.")
+    if index:
+        if not Path(index).exists():
+            typer.echo(f"Skipping concordance: --index path not found: {index}.")
             return []
-        if not Path(value).exists():
-            typer.echo(f"Skipping concordance: {label} path not found: {value}.")
+    elif transcriptome:
+        if not Path(transcriptome).exists():
+            typer.echo(
+                f"Skipping concordance: --transcriptome path not found: {transcriptome}."
+            )
             return []
+    else:
+        typer.echo("Skipping concordance: --index is required for --concordance-counts-auto.")
+        return []
 
     run_q = quantifier if quantifier is not None else run_kallisto_quantifier
     with tempfile.TemporaryDirectory() as out_dir:
+        if not index:
+            gtf = record.parameters.get("gtf")
+            if not gtf:
+                typer.echo(
+                    "Skipping concordance: the run record has no local GTF to derive the "
+                    "transcript->gene map; pass --index."
+                )
+                return []
+            mapping, gene_names = t2g_from_gtf(Path(str(gtf)))
+            if not mapping:
+                typer.echo(
+                    "Skipping concordance: the run's GTF yielded no transcript->gene map; "
+                    "pass --index."
+                )
+                return []
+            index_dir = Path(out_dir) / "kallisto_index"
+            index_dir.mkdir()
+            write_t2g(index_dir, mapping, gene_names)
+            try:
+                build_kallisto_index(transcriptome, index_dir)
+            except SecondQuantifierError as exc:
+                typer.echo(
+                    f"Skipping concordance: could not build the kallisto index ({exc})."
+                )
+                return []
+            index = str(index_dir)
         try:
             second = run_q(reads, index, out_dir)
         except SecondQuantifierError as exc:
