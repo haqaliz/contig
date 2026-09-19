@@ -7,6 +7,8 @@ shapes. No size bound (Task 4), no JSON/table enumeration (Tasks 2/3).
 import os
 from pathlib import Path
 
+import pytest
+
 from contig.verification.locator_inference import iter_artifacts
 
 
@@ -21,18 +23,20 @@ def test_iter_artifacts_prunes_git_dir_at_top_level(tmp_path):
     _write(tmp_path, ".git/config.json")
     _write(tmp_path, "kept.json")
 
-    result = iter_artifacts(tmp_path)
+    paths, skips = iter_artifacts(tmp_path)
 
-    assert result == [tmp_path / "kept.json"]
+    assert paths == [tmp_path / "kept.json"]
+    assert skips == []
 
 
 def test_iter_artifacts_prunes_git_dir_nested(tmp_path):
     _write(tmp_path, "a/.git/b.json")
     _write(tmp_path, "a/kept.json")
 
-    result = iter_artifacts(tmp_path)
+    paths, skips = iter_artifacts(tmp_path)
 
-    assert result == [tmp_path / "a" / "kept.json"]
+    assert paths == [tmp_path / "a" / "kept.json"]
+    assert skips == []
 
 
 def test_iter_artifacts_skips_symlinked_file(tmp_path):
@@ -40,9 +44,10 @@ def test_iter_artifacts_skips_symlinked_file(tmp_path):
     link = tmp_path / "link.json"
     link.symlink_to(target)
 
-    result = iter_artifacts(tmp_path)
+    paths, skips = iter_artifacts(tmp_path)
 
-    assert result == [target]
+    assert paths == [target]
+    assert skips == []
 
 
 def test_iter_artifacts_does_not_descend_into_symlinked_dir(tmp_path):
@@ -52,9 +57,10 @@ def test_iter_artifacts_does_not_descend_into_symlinked_dir(tmp_path):
     link_dir = tmp_path / "link_dir"
     link_dir.symlink_to(real_dir)
 
-    result = iter_artifacts(tmp_path)
+    paths, skips = iter_artifacts(tmp_path)
 
-    assert result == [real_dir / "inside.json"]
+    assert paths == [real_dir / "inside.json"]
+    assert skips == []
 
 
 def test_iter_artifacts_yields_only_recognized_extensions(tmp_path):
@@ -67,9 +73,9 @@ def test_iter_artifacts_yields_only_recognized_extensions(tmp_path):
     _write(tmp_path, "skipped.ipynb")
     _write(tmp_path, "skipped.log")
 
-    result = iter_artifacts(tmp_path)
+    paths, skips = iter_artifacts(tmp_path)
 
-    assert result == sorted(
+    assert paths == sorted(
         [
             tmp_path / "kept.json",
             tmp_path / "kept.tsv",
@@ -78,6 +84,7 @@ def test_iter_artifacts_yields_only_recognized_extensions(tmp_path):
             tmp_path / "kept.csv.gz",
         ]
     )
+    assert skips == []
 
 
 def test_iter_artifacts_sorted_by_posix_relative_path(tmp_path):
@@ -85,13 +92,14 @@ def test_iter_artifacts_sorted_by_posix_relative_path(tmp_path):
     _write(tmp_path, "a/two.json")
     _write(tmp_path, "a/one.json")
 
-    result = iter_artifacts(tmp_path)
+    paths, skips = iter_artifacts(tmp_path)
 
-    assert result == [
+    assert paths == [
         tmp_path / "a" / "one.json",
         tmp_path / "a" / "two.json",
         tmp_path / "b" / "one.json",
     ]
+    assert skips == []
 
 
 def test_iter_artifacts_sorts_even_when_walk_order_is_reversed(tmp_path, monkeypatch):
@@ -111,22 +119,45 @@ def test_iter_artifacts_sorts_even_when_walk_order_is_reversed(tmp_path, monkeyp
         "contig.verification.locator_inference.os.walk", _reversed_walk
     )
 
-    result = iter_artifacts(tmp_path)
+    paths, skips = iter_artifacts(tmp_path)
 
-    assert result == [tmp_path / "a" / "one.json", tmp_path / "b" / "two.json"]
+    assert paths == [tmp_path / "a" / "one.json", tmp_path / "b" / "two.json"]
+    assert skips == []
 
 
 def test_iter_artifacts_returns_empty_for_missing_repo(tmp_path):
     missing = tmp_path / "does_not_exist"
 
-    result = iter_artifacts(missing)
+    paths, skips = iter_artifacts(missing)
 
-    assert result == []
+    assert paths == []
+    assert skips == []
 
 
 def test_iter_artifacts_returns_empty_for_non_directory_repo(tmp_path):
     file_path = _write(tmp_path, "not_a_dir.json")
 
-    result = iter_artifacts(file_path)
+    paths, skips = iter_artifacts(file_path)
 
-    assert result == []
+    assert paths == []
+    assert skips == []
+
+
+def test_iter_artifacts_records_skip_for_unreadable_subdir_and_keeps_going(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory permission bits")
+
+    _write(tmp_path, "kept.json")
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    _write(blocked, "unreachable.json")
+    blocked.chmod(0o000)
+    try:
+        paths, skips = iter_artifacts(tmp_path)
+    finally:
+        blocked.chmod(0o755)
+
+    assert paths == [tmp_path / "kept.json"]
+    assert len(skips) == 1
+    assert skips[0].source == "blocked"
+    assert skips[0].reason
