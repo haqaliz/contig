@@ -288,12 +288,16 @@ def test_json_candidates_excludes_bool_null_string_and_nonfinite():
 
 
 def test_json_candidates_skips_key_containing_dot():
+    # One skip PER KEY, not per leaf -- the reason names the key and the
+    # count of numeric leaves rendered unreachable beneath it (here: 1).
     candidates, skips = _json_candidates("m.json", '{"a.b": 5.0}')
 
     assert candidates == []
     assert len(skips) == 1
     assert skips[0].source == "m.json"
-    assert skips[0].reason
+    assert "a.b" in skips[0].reason
+    assert "contains '.'" in skips[0].reason
+    assert "1" in skips[0].reason
 
 
 def test_json_candidates_skips_key_containing_bracket():
@@ -301,16 +305,60 @@ def test_json_candidates_skips_key_containing_bracket():
 
     assert candidates == []
     assert len(skips) == 1
-    assert skips[0].reason
+    assert "x[0]" in skips[0].reason
+    assert "contains '['" in skips[0].reason
+    assert "1" in skips[0].reason
 
 
 def test_json_candidates_skips_numeric_leaf_nested_under_unexpressible_key():
+    # Still ONE skip for the whole rejected subtree, naming the outer key
+    # and the count of numeric leaves lost beneath it -- not one skip per
+    # individual leaf found while descending.
     candidates, skips = _json_candidates("m.json", '{"a.b": {"x": 5.0}}')
 
     assert candidates == []
     assert len(skips) == 1
     assert skips[0].source == "m.json"
-    assert skips[0].reason
+    assert "a.b" in skips[0].reason
+    assert "1" in skips[0].reason
+
+
+def test_json_candidates_skips_one_key_names_count_of_multiple_lost_leaves():
+    candidates, skips = _json_candidates(
+        "m.json", '{"a.b": {"x": 1.0, "y": 2.0, "z": [3.0, 4.0]}}'
+    )
+
+    assert candidates == []
+    assert len(skips) == 1
+    assert "a.b" in skips[0].reason
+    assert "4" in skips[0].reason
+
+
+def test_json_candidates_rejected_key_with_zero_numeric_leaves_emits_no_skip():
+    # A SweepSkip discloses a lost CANDIDATE. A structurally odd key that
+    # costs nothing (nothing numeric underneath it) is not a loss, so it
+    # must not be reported at all.
+    candidates, skips = _json_candidates(
+        "m.json", '{"a.b": {"s": "text", "n": null, "t": true}}'
+    )
+
+    assert candidates == []
+    assert skips == []
+
+
+def test_json_candidates_nested_bad_keys_do_not_double_report():
+    # The OUTERMOST rejection owns the whole subtree's count. The inner
+    # "c.d" key is also unexpressible, but its leaves must be counted once,
+    # under the outer "a.b" skip, not reported a second time.
+    candidates, skips = _json_candidates(
+        "m.json", '{"a.b": {"c.d": {"x": 1.0, "y": 2.0}}}'
+    )
+
+    assert candidates == []
+    assert len(skips) == 1
+    assert "a.b" in skips[0].reason
+    assert "c.d" not in skips[0].reason
+    assert "2" in skips[0].reason
 
 
 def test_json_candidates_skips_first_key_starting_with_dollar():
@@ -322,7 +370,9 @@ def test_json_candidates_skips_first_key_starting_with_dollar():
 
     assert candidates == []
     assert len(skips) == 1
-    assert skips[0].reason
+    assert "$foo" in skips[0].reason
+    assert "starts with '$'" in skips[0].reason
+    assert "1" in skips[0].reason
 
 
 def test_json_candidates_allows_dollar_prefixed_key_when_not_first():

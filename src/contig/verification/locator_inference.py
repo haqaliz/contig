@@ -173,6 +173,42 @@ def _key_expressible(key: str, is_first: bool) -> bool:
     return True
 
 
+def _count_numeric_leaves(value: object) -> int:
+    """Count numeric leaves anywhere beneath `value`, ignoring key
+    expressibility entirely.
+
+    Used to size the ONE `SweepSkip` a rejected dict key gets: that key's
+    subtree is unreachable as a whole, so whatever is further nested inside
+    it -- including another unexpressible key -- is counted here rather
+    than separately reported (the outermost rejection owns the whole
+    subtree's count; see `_json_candidates`).
+    """
+    if isinstance(value, dict):
+        return sum(_count_numeric_leaves(v) for v in value.values())
+    if isinstance(value, list):
+        return sum(_count_numeric_leaves(v) for v in value)
+    return 1 if _is_numeric_leaf(value) else 0
+
+
+def _why_key_unexpressible(key: object, is_first: bool) -> str:
+    """Name the specific reason `_key_expressible` rejected `key`.
+
+    Mirrors `_key_expressible`'s checks, in the same order, so this is
+    reachable only through a branch that already matches one of them.
+    """
+    if not isinstance(key, str):
+        return "key is not a string"  # JSON keys are always str; defensive only
+    if key == "":
+        return "key is empty"
+    if "." in key:
+        return "key contains '.'"
+    if "[" in key:
+        return "key contains '['"
+    if is_first and key.startswith("$"):
+        return "key starts with '$' in the first path position"
+    return "key is not expressible in the locator path grammar"  # unreachable
+
+
 def _build_path(tokens: list[str | int]) -> str:
     """Render `tokens` into the dotted+`[n]` expression `_parse_path` reads.
 
@@ -200,16 +236,28 @@ def _json_candidates(source: str, text: str) -> tuple[list[Candidate], list[Swee
     never guessed, never emitted speculatively.
 
     Never raises (R6): malformed JSON is one `SweepSkip` naming the parse
-    error, not an exception. A numeric leaf that exists but cannot be given
-    an expressible path -- a dict key containing `.`/`[` (D1), an empty key,
-    a first-key starting with `$`, or a bare top-level scalar with no
-    accessor at all -- is likewise recorded as its own `SweepSkip`, one per
-    leaf, rather than silently producing fewer candidates than the numbers
-    actually present (this is the exact failure shape R6 exists to rule
-    out: a claim sitting on an unreachable number must be a disclosed miss,
-    not an indistinguishable one). `bool`, `str` (D5), `None`, and
-    non-finite floats (D4) are simply not numeric leaves at all -- excluded
-    by definition, not skipped.
+    error, not an exception. A bare top-level scalar with no accessor at
+    all is likewise one `SweepSkip` (there is no zero-length path
+    `_parse_path` can accept).
+
+    A dict key that cannot be given an expressible path (D1: contains
+    `.`/`[`, is empty, or is a first-position `$`) makes its entire subtree
+    unreachable as a unit -- we do not descend into it. That is recorded as
+    ONE `SweepSkip` naming the key, why it was rejected, and the count of
+    numeric leaves rendered unreachable beneath it (mirroring the shipped
+    idiom of `resolve_match`/`resolve_cell`, which also name counts in
+    their reasons) -- never one skip per leaf, which would pay the full
+    cost of an *n*-leaf subtree in the skip list without buying anything
+    back (a leaf's reason can only carry its unreachable path, never its
+    value, so per-leaf reporting cannot answer "was value X among the lost
+    ones?" any better than per-key can). A rejected key with ZERO numeric
+    leaves beneath it gets NO skip at all -- nothing was lost, so there is
+    nothing to disclose. A bad key nested inside an already-rejected key's
+    subtree is never separately reported: the OUTERMOST rejection owns the
+    whole subtree's count.
+
+    `bool`, `str` (D5), `None`, and non-finite floats (D4) are simply not
+    numeric leaves at all -- excluded by definition, not skipped.
     """
     candidates: list[Candidate] = []
     skips: list[SweepSkip] = []
@@ -220,18 +268,38 @@ def _json_candidates(source: str, text: str) -> tuple[list[Candidate], list[Swee
         skips.append(SweepSkip(source=source, reason=f"malformed JSON: {err}"))
         return candidates, skips
 
-    def walk(value: object, tokens: list[str | int], expressible: bool) -> None:
+    def walk(value: object, tokens: list[str | int]) -> None:
         if isinstance(value, dict):
             for key, child in value.items():
                 is_first = not tokens
-                key_ok = isinstance(key, str) and _key_expressible(key, is_first)
-                walk(child, [*tokens, key], expressible and key_ok)
+                if isinstance(key, str) and _key_expressible(key, is_first):
+                    walk(child, [*tokens, key])
+                    continue
+                # `child`'s subtree is unreachable as a whole -- do not
+                # recurse into it (that would let a nested bad key
+                # double-report the same lost leaves under two skips).
+                leaf_count = _count_numeric_leaves(child)
+                if leaf_count == 0:
+                    continue
+                key_path = (*tokens, key)
+                skips.append(
+                    SweepSkip(
+                        source=source,
+                        reason=(
+                            f"key {key!r} at {key_path!r} is not expressible "
+                            "in the locator path grammar "
+                            f"({_why_key_unexpressible(key, is_first)}); "
+                            f"{leaf_count} numeric leaf(s) beneath it are "
+                            "unreachable"
+                        ),
+                    )
+                )
             return
         if isinstance(value, list):
             for index, child in enumerate(value):
                 # A list index is always an expressible `[n]` segment --
                 # only dict keys carry D1's coverage hole.
-                walk(child, [*tokens, index], expressible)
+                walk(child, [*tokens, index])
             return
         if not _is_numeric_leaf(value):
             return
@@ -243,22 +311,9 @@ def _json_candidates(source: str, text: str) -> tuple[list[Candidate], list[Swee
                 )
             )
             return
-        if not expressible:
-            skips.append(
-                SweepSkip(
-                    source=source,
-                    reason=(
-                        f"numeric leaf at key path {tokens!r} is unreachable: an "
-                        "ancestor key is not expressible in the locator path "
-                        "grammar (contains '.'/'[', is empty, or is a leading "
-                        "'$')"
-                    ),
-                )
-            )
-            return
         candidates.append(
             Candidate(source=source, kind="json", value=value, path=_build_path(tokens))
         )
 
-    walk(doc, [], True)
+    walk(doc, [])
     return candidates, skips
