@@ -60,9 +60,11 @@ def iter_artifacts(repo: Path) -> tuple[list[Path], list[SweepSkip]]:
 
     A subdirectory `os.walk` cannot list (e.g. permission denied) is
     recorded as a `SweepSkip(source=<repo-relative posix path>, reason=...)`
-    and the walk continues into every other directory -- an unreadable
-    subtree must never silently shrink the candidate set with no signal
-    (spec R6).
+    and the walk continues into every other directory. A single dirname or
+    filename whose `is_symlink()` stat raises (e.g. a delete race) is
+    likewise recorded as its own `SweepSkip` in isolation, without dropping
+    any of its siblings -- an unreadable subtree, or one flaky entry, must
+    never silently shrink the candidate set with no signal (spec R6).
 
     Returns paths sorted by POSIX-relative path so a sweep is reproducible.
     """
@@ -72,38 +74,53 @@ def iter_artifacts(repo: Path) -> tuple[list[Path], list[SweepSkip]]:
     found: list[Path] = []
     skips: list[SweepSkip] = []
 
-    def _record_skip(err: OSError) -> None:
-        # os.walk's default onerror=None would silently skip an unreadable
-        # subdirectory and yield fewer entries -- an undisclosed partial
-        # sweep. Record it as an honest SweepSkip instead and let the walk
-        # continue (never abort the sweep -- R6).
-        bad_dir = Path(getattr(err, "filename", None) or base)
+    def _skip_for(bad_path: Path, err: OSError) -> None:
+        # An unreadable subtree, or a stat() race on one entry, must never
+        # silently shrink the candidate set with no signal -- record it as
+        # an honest SweepSkip and let the walk (or this directory's
+        # remaining entries) continue (never abort the sweep -- R6).
         try:
-            source = bad_dir.relative_to(base).as_posix()
+            source = bad_path.relative_to(base).as_posix()
         except ValueError:
-            source = str(bad_dir)
+            source = str(bad_path)
         skips.append(SweepSkip(source=source, reason=str(err)))
 
+    def _walk_onerror(err: OSError) -> None:
+        _skip_for(Path(getattr(err, "filename", None) or base), err)
+
     for dirpath, dirnames, filenames in os.walk(
-        base, followlinks=False, onerror=_record_skip
+        base, followlinks=False, onerror=_walk_onerror
     ):
-        try:
-            dirnames[:] = [
-                d
-                for d in dirnames
-                if d != ".git" and not Path(dirpath, d).is_symlink()
-            ]
-            for name in filenames:
-                if not name.endswith(_CANDIDATE_EXTENSIONS):
-                    continue
-                p = Path(dirpath, name)
-                if p.is_symlink():
-                    continue
-                found.append(p)
-        except OSError as err:
-            # A stat() race (e.g. an entry deleted between os.walk's listdir
-            # and our is_symlink() check) is the same kind of dishonest
-            # silent shrink onerror= exists to prevent -- record it and keep
-            # walking rather than raising out of the whole sweep.
-            _record_skip(err)
+        kept_dirnames = []
+        for d in dirnames:
+            if d == ".git":
+                continue
+            dpath = Path(dirpath, d)
+            try:
+                is_link = dpath.is_symlink()
+            except OSError as err:
+                # A stat() race on THIS entry only (e.g. it was deleted
+                # between os.walk's listdir and our check) must not drop any
+                # sibling dirname -- record just this one and keep pruning
+                # the rest.
+                _skip_for(dpath, err)
+                continue
+            if not is_link:
+                kept_dirnames.append(d)
+        dirnames[:] = kept_dirnames
+
+        for name in filenames:
+            if not name.endswith(_CANDIDATE_EXTENSIONS):
+                continue
+            p = Path(dirpath, name)
+            try:
+                is_link = p.is_symlink()
+            except OSError as err:
+                # Same isolation for a filename: this entry's failure must
+                # not drop any sibling filename in this directory.
+                _skip_for(p, err)
+                continue
+            if is_link:
+                continue
+            found.append(p)
     return sorted(found, key=lambda p: p.relative_to(base).as_posix()), skips

@@ -161,3 +161,48 @@ def test_iter_artifacts_records_skip_for_unreadable_subdir_and_keeps_going(tmp_p
     assert len(skips) == 1
     assert skips[0].source == "blocked"
     assert skips[0].reason
+
+
+def test_iter_artifacts_isolates_a_stat_failure_to_one_file(tmp_path, monkeypatch):
+    _write(tmp_path, "a.json")
+    _write(tmp_path, "b.json")
+    _write(tmp_path, "c.json")
+
+    real_is_symlink = Path.is_symlink
+
+    def _flaky_is_symlink(self):
+        if self.name == "a.json":
+            raise OSError("stat failure forced for a.json")
+        return real_is_symlink(self)
+
+    monkeypatch.setattr(Path, "is_symlink", _flaky_is_symlink)
+
+    paths, skips = iter_artifacts(tmp_path)
+
+    assert paths == [tmp_path / "b.json", tmp_path / "c.json"]
+    assert len(skips) == 1
+    assert skips[0].source == "a.json"
+
+
+def test_iter_artifacts_isolates_a_stat_failure_to_one_subdirectory(tmp_path, monkeypatch):
+    dir_a = tmp_path / "dir_a"
+    dir_a.mkdir()
+    _write(dir_a, "inside_a.json")
+    dir_b = tmp_path / "dir_b"
+    dir_b.mkdir()
+    _write(dir_b, "inside_b.json")
+
+    real_is_symlink = Path.is_symlink
+
+    def _flaky_is_symlink(self):
+        if self.name == "dir_a":
+            raise OSError("stat failure forced for dir_a")
+        return real_is_symlink(self)
+
+    monkeypatch.setattr(Path, "is_symlink", _flaky_is_symlink)
+
+    paths, skips = iter_artifacts(tmp_path)
+
+    assert paths == [dir_b / "inside_b.json"]
+    assert len(skips) == 1
+    assert skips[0].source == "dir_a"
