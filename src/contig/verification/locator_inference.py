@@ -29,6 +29,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from contig.verification.reproduce import _read_table
+
 _CANDIDATE_EXTENSIONS = (".json", ".tsv", ".csv", ".tsv.gz", ".csv.gz")
 
 
@@ -316,4 +318,207 @@ def _json_candidates(source: str, text: str) -> tuple[list[Candidate], list[Swee
         )
 
     walk(doc, [])
+    return candidates, skips
+
+
+def _table_delimiter(path: Path) -> str | None:
+    """Infer the read-only delimiter for `path` from its extension (D3).
+
+    Mirrors `_resolve_delimiter`'s extension mapping (lower-cased, one
+    trailing `.gz` stripped, then `.tsv` -> tab, `.csv` -> comma) -- the
+    only two families `_CANDIDATE_EXTENSIONS` ever hands this function. The
+    delimiter exists only to drive `_read_table`; it is never attached to
+    an emitted `Candidate` (`Candidate` has no delimiter field at all, so
+    there is nothing to accidentally emit). An unrecognized extension
+    (unreachable via `iter_artifacts`, which already filters to
+    `_CANDIDATE_EXTENSIONS`, but this function is also called directly)
+    returns `None` rather than guessing.
+    """
+    name = path.name.lower()
+    if name.endswith(".gz"):
+        name = name[: -len(".gz")]
+    if name.endswith(".tsv"):
+        return "\t"
+    if name.endswith(".csv"):
+        return ","
+    return None
+
+
+def _cell_parses_as_float(cell: str) -> bool:
+    """True iff `cell` is accepted by `float()` -- D2's header test, for one
+    cell.
+
+    Deliberately the raw `float()` test, including `"nan"`/`"inf"`-spelled
+    strings: D2 is stated as "no cell parses as a float", not "no cell
+    parses as a *finite* float", and this uncalibrated heuristic is
+    implemented exactly as specified, never sharpened. (Finiteness is
+    filtered separately, only once a cell is about to become a candidate's
+    value -- see `_numeric_table_value`.)
+    """
+    try:
+        float(cell)
+    except (ValueError, TypeError):
+        return False
+    return True
+
+
+def _numeric_table_value(cell: str) -> float | None:
+    """Parse `cell` into a candidate value, or `None` if it isn't one.
+
+    D5: a table cell is always a string, and a numeric-*looking* string
+    (e.g. `"5.0"`) IS a candidate here -- the opposite of the JSON rule
+    (`_is_numeric_leaf`), where a numeric string is never a candidate.
+    `nan`/`inf` are excluded even though `float()` accepts them (mirrors
+    D4's JSON exclusion, for the same reason A4 needs it here too: the
+    round-trip pin checks `float(resolved) == cand.value`, which can never
+    hold for NaN, since NaN != NaN).
+    """
+    try:
+        value = float(cell)
+    except (ValueError, TypeError):
+        return None
+    if not math.isfinite(value):
+        return None
+    return value
+
+
+def _table_candidates(source: str, path: Path) -> tuple[list[Candidate], list[SweepSkip]]:
+    """Enumerate every numeric cell in a `.tsv`/`.csv`(`.gz`) table as a
+    `Candidate` (R5).
+
+    `source` is the repo-relative POSIX path this table lives at (becomes
+    `Candidate.source`/`SweepSkip.source` verbatim); `path` is the real
+    filesystem path read via `_read_table` (R7: reused unchanged -- this
+    function never opens a file or a gzip stream itself, and never runs its
+    own CSV parser).
+
+    Header detection (D2): row 0 is a header iff NO cell in it parses as a
+    float; otherwise the table is headerless. This is a **deliberately
+    uncalibrated engineering default**, implemented exactly as specified
+    and never sharpened with per-column or per-file cleverness (see
+    `_cell_parses_as_float`). Misdetection silently shifts every row index
+    in the file, and nothing inside this function can detect that from the
+    data alone -- `header`/`row` are `resolve_cell`'s literal,
+    self-consistent coordinate, not a claim about which row is "really"
+    the header.
+
+    Header mode: `column` is the header name (str); `row` indexes DATA rows
+    only (`rows[1:]`), so the first data row is `row=0`. A column whose
+    header name is not unique never becomes a candidate source --
+    `resolve_cell` calls a duplicate name ambiguous (`reproduce.py:263`),
+    so emitting one would propose a locator that can never resolve. Every
+    numeric cell beneath every column sharing that name is folded into ONE
+    `SweepSkip` naming the name, the duplicate count, and how many numeric
+    candidates are unreachable as a result (mirrors `_json_candidates`'s
+    per-key, not per-leaf, skip). A duplicate name with zero numeric cells
+    beneath it costs nothing and gets no skip at all -- same rule as a
+    rejected JSON key with zero numeric leaves.
+
+    Headerless mode (`header=False`): `column` is a 0-based integer field
+    index; `row` indexes ALL rows.
+
+    D3: the delimiter is derived from `path`'s extension purely to read the
+    file (`_table_delimiter`) and is never attached to a `Candidate` --
+    `Candidate` has no delimiter field to set.
+
+    D5: a numeric-looking string cell IS a candidate -- see
+    `_numeric_table_value`.
+
+    Never raises (R6): an unrecognized extension, or anything `_read_table`
+    can't parse (missing file, non-UTF-8, corrupt gzip, malformed CSV), is
+    one `SweepSkip`, never an exception. An empty table (`_read_table`
+    returns `[]`) yields no candidates and no skip -- nothing was lost. A
+    ragged row (shorter than another row in the same table) contributes
+    only its real cells; a cell past its row's end is simply absent, never
+    an `IndexError` (A9).
+    """
+    candidates: list[Candidate] = []
+    skips: list[SweepSkip] = []
+
+    delimiter = _table_delimiter(path)
+    if delimiter is None:
+        skips.append(
+            SweepSkip(source=source, reason=f"unrecognized table extension: {path.name!r}")
+        )
+        return candidates, skips
+
+    rows = _read_table(path, delimiter)
+    if rows is None:
+        skips.append(
+            SweepSkip(
+                source=source,
+                reason=(
+                    "table could not be read (missing, unreadable, not valid "
+                    "UTF-8, corrupt gzip, or malformed CSV)"
+                ),
+            )
+        )
+        return candidates, skips
+
+    if not rows:
+        return candidates, skips
+
+    header_row = rows[0]
+    header = not any(_cell_parses_as_float(cell) for cell in header_row)
+
+    if not header:
+        for row_idx, data_row in enumerate(rows):
+            for col_idx, cell in enumerate(data_row):
+                value = _numeric_table_value(cell)
+                if value is None:
+                    continue
+                candidates.append(
+                    Candidate(
+                        source=source,
+                        kind="table",
+                        value=value,
+                        column=col_idx,
+                        row=row_idx,
+                        header=False,
+                    )
+                )
+        return candidates, skips
+
+    data_rows = rows[1:]
+    name_counts: dict[str, int] = {}
+    for name in header_row:
+        name_counts[name] = name_counts.get(name, 0) + 1
+    duplicate_lost: dict[str, int] = {}
+
+    # Row-major so candidates come out in the order a reader would scan the
+    # table (top to bottom, left to right) -- the same order the ragged-row
+    # and duplicate-header tests pin.
+    for row_idx, data_row in enumerate(data_rows):
+        for col_idx, name in enumerate(header_row):
+            if col_idx >= len(data_row):
+                continue
+            value = _numeric_table_value(data_row[col_idx])
+            if value is None:
+                continue
+            if name_counts[name] > 1:
+                duplicate_lost[name] = duplicate_lost.get(name, 0) + 1
+                continue
+            candidates.append(
+                Candidate(
+                    source=source, kind="table", value=value, column=name, row=row_idx, header=True
+                )
+            )
+
+    for name, count in name_counts.items():
+        if count <= 1:
+            continue
+        lost = duplicate_lost.get(name, 0)
+        if lost == 0:
+            continue
+        skips.append(
+            SweepSkip(
+                source=source,
+                reason=(
+                    f"column {name!r} is ambiguous: {count} header matches "
+                    "(resolve_cell cannot disambiguate); "
+                    f"{lost} numeric candidate(s) beneath it are unreachable"
+                ),
+            )
+        )
+
     return candidates, skips

@@ -1,11 +1,13 @@
-"""Tests for the safe artifact walk substrate (candidate-sweep aspect, R1/R2)
-and JSON numeric-leaf candidate enumeration (R4, D1, D4, D5).
+"""Tests for the safe artifact walk substrate (candidate-sweep aspect, R1/R2),
+JSON numeric-leaf candidate enumeration (R4, D1, D4, D5), and table numeric-
+cell candidate enumeration (R5, D2, D3, D5).
 
 Task 1 scope: `iter_artifacts` and the `Candidate`/`SweepSkip` data shapes.
-Task 2 scope: `_json_candidates`. No size bound (Task 4), no table
-enumeration (Task 3), no matching/rounding logic (aspect 2).
+Task 2 scope: `_json_candidates`. Task 3 scope: `_table_candidates`. No size
+bound (Task 4), no matching/rounding logic (aspect 2).
 """
 
+import gzip
 import json
 import os
 from pathlib import Path
@@ -16,9 +18,10 @@ from contig.verification.locator_inference import (
     Candidate,
     SweepSkip,
     _json_candidates,
+    _table_candidates,
     iter_artifacts,
 )
-from contig.verification.reproduce import resolve_pointer
+from contig.verification.reproduce import _read_table, resolve_cell, resolve_pointer
 
 
 def _write(tmp_path: Path, name: str, content: str = "{}") -> Path:
@@ -398,3 +401,355 @@ def test_json_candidates_malformed_json_is_a_skip_not_a_raise():
     assert len(skips) == 1
     assert skips[0].source == "m.json"
     assert skips[0].reason
+
+
+# --- Task 3: _table_candidates (R5, D2, D3, D5) ---------------------------
+
+
+def _write_table(tmp_path: Path, name: str, rows: list[list[str]], delimiter: str) -> Path:
+    p = tmp_path / name
+    p.parent.mkdir(parents=True, exist_ok=True)
+    text = "\n".join(delimiter.join(row) for row in rows) + "\n"
+    if name.endswith(".gz"):
+        with gzip.open(p, "wt", encoding="utf-8", newline="") as f:
+            f.write(text)
+    else:
+        p.write_text(text)
+    return p
+
+
+def test_table_candidates_header_ful_basic(tmp_path):
+    p = _write_table(
+        tmp_path,
+        "de.tsv",
+        [["gene_id", "log2FC"], ["ENSG1", "1.5"], ["ENSG2", "2.5"]],
+        "\t",
+    )
+
+    candidates, skips = _table_candidates("de.tsv", p)
+
+    assert candidates == [
+        Candidate(source="de.tsv", kind="table", value=1.5, column="log2FC", row=0, header=True),
+        Candidate(source="de.tsv", kind="table", value=2.5, column="log2FC", row=1, header=True),
+    ]
+    assert skips == []
+
+
+def test_table_candidates_headerless_basic(tmp_path):
+    p = _write_table(tmp_path, "counts.csv", [["10", "20"], ["30", "40"]], ",")
+
+    candidates, skips = _table_candidates("counts.csv", p)
+
+    assert candidates == [
+        Candidate(source="counts.csv", kind="table", value=10.0, column=0, row=0, header=False),
+        Candidate(source="counts.csv", kind="table", value=20.0, column=1, row=0, header=False),
+        Candidate(source="counts.csv", kind="table", value=30.0, column=0, row=1, header=False),
+        Candidate(source="counts.csv", kind="table", value=40.0, column=1, row=1, header=False),
+    ]
+    assert skips == []
+
+
+# A4 round-trip pin -- table-driven over .tsv, .csv, and a .gz variant of
+# each, so gzip-transparent reading is exercised by the same assertions.
+@pytest.mark.parametrize(
+    ("name", "delimiter"),
+    [
+        ("mixed.tsv", "\t"),
+        ("mixed.csv", ","),
+        ("mixed.tsv.gz", "\t"),
+        ("mixed.csv.gz", ","),
+    ],
+)
+def test_table_candidates_round_trip_pin(tmp_path, name, delimiter):
+    rows = [
+        ["gene_id", "log2FC", "padj"],
+        ["ENSG1", "-2.31", "0.001"],
+        ["ENSG2", "0.5", "0.2"],
+    ]
+    p = _write_table(tmp_path, name, rows, delimiter)
+
+    candidates, skips = _table_candidates(name, p)
+
+    assert skips == []
+    assert len(candidates) > 0
+    read_rows = _read_table(p, delimiter)
+    for cand in candidates:
+        resolved, reason = resolve_cell(read_rows, cand.column, cand.row, cand.header)
+        assert reason == ""
+        assert float(resolved) == cand.value
+
+
+def test_table_candidates_ragged_row_contributes_only_real_cells(tmp_path):
+    # Row-major enumeration: row 0 is short a "c" cell (never an IndexError),
+    # row 1 supplies all three -- order below is row-major, matching that.
+    p = _write_table(
+        tmp_path,
+        "ragged.tsv",
+        [["a", "b", "c"], ["1.0", "2.0"], ["3.0", "4.0", "5.0"]],
+        "\t",
+    )
+
+    candidates, skips = _table_candidates("ragged.tsv", p)
+
+    assert candidates == [
+        Candidate(source="ragged.tsv", kind="table", value=1.0, column="a", row=0, header=True),
+        Candidate(source="ragged.tsv", kind="table", value=2.0, column="b", row=0, header=True),
+        Candidate(source="ragged.tsv", kind="table", value=3.0, column="a", row=1, header=True),
+        Candidate(source="ragged.tsv", kind="table", value=4.0, column="b", row=1, header=True),
+        Candidate(source="ragged.tsv", kind="table", value=5.0, column="c", row=1, header=True),
+    ]
+    assert skips == []
+
+
+def test_table_candidates_numeric_string_cell_is_a_candidate(tmp_path):
+    # D5: the opposite of the JSON rule -- a table cell is always a string,
+    # so a numeric-looking one ("5.0") IS a candidate. "NA" is not numeric
+    # and is simply excluded, not skipped (nothing was lost).
+    p = _write_table(tmp_path, "m.csv", [["label", "value"], ["NA", "5.0"]], ",")
+
+    candidates, skips = _table_candidates("m.csv", p)
+
+    assert candidates == [
+        Candidate(source="m.csv", kind="table", value=5.0, column="value", row=0, header=True)
+    ]
+    assert skips == []
+
+
+def test_table_candidates_empty_table(tmp_path):
+    p = tmp_path / "empty.csv"
+    p.write_text("")
+
+    candidates, skips = _table_candidates("empty.csv", p)
+
+    assert candidates == []
+    assert skips == []
+
+
+def test_table_candidates_skips_duplicate_header_name(tmp_path):
+    # resolve_cell calls a duplicate header name ambiguous -- emitting a
+    # locator for it would propose one that can never resolve. ONE skip for
+    # the whole duplicate name, naming the duplicate count and how many
+    # numeric candidates are lost beneath it (here: 2, one per data-row
+    # cell under either "a" column).
+    p = _write_table(tmp_path, "dup.csv", [["a", "a", "b"], ["1.0", "2.0", "3.0"]], ",")
+
+    candidates, skips = _table_candidates("dup.csv", p)
+
+    assert candidates == [
+        Candidate(source="dup.csv", kind="table", value=3.0, column="b", row=0, header=True)
+    ]
+    assert len(skips) == 1
+    assert skips[0].source == "dup.csv"
+    assert "'a'" in skips[0].reason
+    assert "2" in skips[0].reason
+
+
+def test_table_candidates_duplicate_header_with_no_numeric_cells_emits_no_skip(tmp_path):
+    # Mirrors the JSON "rejected key with zero numeric leaves" rule: nothing
+    # numeric lives under the duplicate name, so nothing was lost, so there
+    # is nothing to disclose.
+    p = _write_table(tmp_path, "dup2.csv", [["a", "a", "b"], ["x", "y", "3.0"]], ",")
+
+    candidates, skips = _table_candidates("dup2.csv", p)
+
+    assert candidates == [
+        Candidate(source="dup2.csv", kind="table", value=3.0, column="b", row=0, header=True)
+    ]
+    assert skips == []
+
+
+def test_table_candidates_excludes_non_finite_values(tmp_path):
+    # Mirrors D4's JSON exclusion for a different reason here: the A4
+    # round-trip pin checks float(resolved) == cand.value, which can never
+    # hold for NaN (NaN != NaN), so a non-finite cell must never become a
+    # candidate's value even though float("nan") itself doesn't raise.
+    p = _write_table(tmp_path, "nonfinite.csv", [["a", "b"], ["nan", "5.0"]], ",")
+
+    candidates, skips = _table_candidates("nonfinite.csv", p)
+
+    assert candidates == [
+        Candidate(source="nonfinite.csv", kind="table", value=5.0, column="b", row=0, header=True)
+    ]
+    assert skips == []
+
+
+def test_table_candidates_missing_file_is_a_skip_not_a_raise(tmp_path):
+    p = tmp_path / "does_not_exist.csv"
+
+    candidates, skips = _table_candidates("does_not_exist.csv", p)
+
+    assert candidates == []
+    assert len(skips) == 1
+    assert skips[0].source == "does_not_exist.csv"
+    assert skips[0].reason
+
+
+def test_table_candidates_non_utf8_file_is_a_skip_not_a_raise(tmp_path):
+    p = tmp_path / "bad.csv"
+    p.write_bytes(b"a,b\n\xff\xfe,1.0\n")
+
+    candidates, skips = _table_candidates("bad.csv", p)
+
+    assert candidates == []
+    assert len(skips) == 1
+    assert skips[0].source == "bad.csv"
+    assert skips[0].reason
+
+
+def test_table_candidates_corrupt_gzip_is_a_skip_not_a_raise(tmp_path):
+    p = tmp_path / "bad.tsv.gz"
+    with gzip.open(p, "wt", encoding="utf-8", newline="") as f:
+        f.write("a\tb\n1.0\t2.0\n")
+    full_bytes = p.read_bytes()
+    p.write_bytes(full_bytes[: len(full_bytes) // 2])
+
+    candidates, skips = _table_candidates("bad.tsv.gz", p)
+
+    assert candidates == []
+    assert len(skips) == 1
+    assert skips[0].source == "bad.tsv.gz"
+    assert skips[0].reason
+
+
+def test_table_candidates_unrecognized_extension_is_a_skip_not_a_raise(tmp_path):
+    p = _write_table(tmp_path, "weird.psv", [["a", "b"], ["1.0", "2.0"]], "|")
+
+    candidates, skips = _table_candidates("weird.psv", p)
+
+    assert candidates == []
+    assert len(skips) == 1
+    assert skips[0].source == "weird.psv"
+    assert skips[0].reason
+
+
+# --- D2 header-heuristic boundary cases -----------------------------------
+# The hazard specific to this task: D2 ("row 0 is a header iff no cell in
+# it parses as a float") is an uncalibrated engineering default that can
+# silently shift every row index in a file. These tests pin exactly what
+# the literal rule does at its ambiguous edges -- not what a cleverer
+# heuristic might do.
+
+
+def test_table_candidates_header_heuristic_boundary_genuinely_data_row_consumed_as_header(
+    tmp_path,
+):
+    # Every row here is really a single-column data sample (no header row
+    # exists at all), but row 0 happens to contain no numeric cell, so D2
+    # calls it a header anyway. "control" is consumed as the column name,
+    # and what was really the second data sample becomes row=0 -- the
+    # documented misdetection, pinned exactly, not fixed.
+    p = _write_table(tmp_path, "no_real_header.tsv", [["control"], ["1.5"], ["2.5"]], "\t")
+
+    candidates, skips = _table_candidates("no_real_header.tsv", p)
+
+    assert candidates == [
+        Candidate(
+            source="no_real_header.tsv",
+            kind="table",
+            value=1.5,
+            column="control",
+            row=0,
+            header=True,
+        ),
+        Candidate(
+            source="no_real_header.tsv",
+            kind="table",
+            value=2.5,
+            column="control",
+            row=1,
+            header=True,
+        ),
+    ]
+    assert skips == []
+
+
+def test_table_candidates_header_heuristic_boundary_mixed_first_row_is_headerless(tmp_path):
+    # D2 is a whole-row test: ONE numeric cell anywhere in row 0 ("1") makes
+    # the entire table headerless, even though "sample" alongside it reads
+    # like a header label. No per-column cleverness -- pinned as headerless.
+    p = _write_table(tmp_path, "mixed_first_row.csv", [["sample", "1"], ["a", "2.5"]], ",")
+
+    candidates, skips = _table_candidates("mixed_first_row.csv", p)
+
+    assert candidates == [
+        Candidate(
+            source="mixed_first_row.csv", kind="table", value=1.0, column=1, row=0, header=False
+        ),
+        Candidate(
+            source="mixed_first_row.csv", kind="table", value=2.5, column=1, row=1, header=False
+        ),
+    ]
+    assert skips == []
+
+
+def test_table_candidates_header_heuristic_boundary_single_text_row_yields_no_candidates(
+    tmp_path,
+):
+    # A single-row, all-text table: D2 calls it a header, leaving zero data
+    # rows -- correctly zero candidates, not an IndexError on rows[1:].
+    p = _write_table(tmp_path, "single_header_only.csv", [["a", "b"]], ",")
+
+    candidates, skips = _table_candidates("single_header_only.csv", p)
+
+    assert candidates == []
+    assert skips == []
+
+
+def test_table_candidates_header_heuristic_boundary_single_numeric_row_is_headerless(tmp_path):
+    # A single-row table where that row parses as numbers: D2 calls it
+    # headerless, so the one row is itself data (row=0), not consumed.
+    p = _write_table(tmp_path, "single_numeric_row.csv", [["1.0", "2.0"]], ",")
+
+    candidates, skips = _table_candidates("single_numeric_row.csv", p)
+
+    assert candidates == [
+        Candidate(
+            source="single_numeric_row.csv", kind="table", value=1.0, column=0, row=0, header=False
+        ),
+        Candidate(
+            source="single_numeric_row.csv", kind="table", value=2.0, column=1, row=0, header=False
+        ),
+    ]
+    assert skips == []
+
+
+def test_table_candidates_header_heuristic_boundary_single_column_header_ful(tmp_path):
+    p = _write_table(tmp_path, "single_col.csv", [["value"], ["5.0"], ["6.0"]], ",")
+
+    candidates, skips = _table_candidates("single_col.csv", p)
+
+    assert candidates == [
+        Candidate(
+            source="single_col.csv", kind="table", value=5.0, column="value", row=0, header=True
+        ),
+        Candidate(
+            source="single_col.csv", kind="table", value=6.0, column="value", row=1, header=True
+        ),
+    ]
+    assert skips == []
+
+
+def test_table_candidates_header_heuristic_boundary_single_column_headerless(tmp_path):
+    p = _write_table(tmp_path, "single_col_headerless.csv", [["5.0"], ["6.0"]], ",")
+
+    candidates, skips = _table_candidates("single_col_headerless.csv", p)
+
+    assert candidates == [
+        Candidate(
+            source="single_col_headerless.csv",
+            kind="table",
+            value=5.0,
+            column=0,
+            row=0,
+            header=False,
+        ),
+        Candidate(
+            source="single_col_headerless.csv",
+            kind="table",
+            value=6.0,
+            column=0,
+            row=1,
+            header=False,
+        ),
+    ]
+    assert skips == []
