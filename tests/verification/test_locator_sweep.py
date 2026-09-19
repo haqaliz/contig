@@ -1,15 +1,24 @@
-"""Tests for the safe artifact walk substrate (candidate-sweep aspect, R1/R2).
+"""Tests for the safe artifact walk substrate (candidate-sweep aspect, R1/R2)
+and JSON numeric-leaf candidate enumeration (R4, D1, D4, D5).
 
-Task 1 scope only: `iter_artifacts` and the `Candidate`/`SweepSkip` data
-shapes. No size bound (Task 4), no JSON/table enumeration (Tasks 2/3).
+Task 1 scope: `iter_artifacts` and the `Candidate`/`SweepSkip` data shapes.
+Task 2 scope: `_json_candidates`. No size bound (Task 4), no table
+enumeration (Task 3), no matching/rounding logic (aspect 2).
 """
 
+import json
 import os
 from pathlib import Path
 
 import pytest
 
-from contig.verification.locator_inference import iter_artifacts
+from contig.verification.locator_inference import (
+    Candidate,
+    SweepSkip,
+    _json_candidates,
+    iter_artifacts,
+)
+from contig.verification.reproduce import resolve_pointer
 
 
 def _write(tmp_path: Path, name: str, content: str = "{}") -> Path:
@@ -206,3 +215,136 @@ def test_iter_artifacts_isolates_a_stat_failure_to_one_subdirectory(tmp_path, mo
     assert paths == [dir_b / "inside_b.json"]
     assert len(skips) == 1
     assert skips[0].source == "dir_a"
+
+
+# --- Task 2: _json_candidates (R4, D1, D4, D5) ---------------------------
+
+
+def test_json_candidates_flat_number():
+    candidates, skips = _json_candidates("m.json", '{"auc": 0.91}')
+
+    assert candidates == [Candidate(source="m.json", kind="json", value=0.91, path="auc")]
+    assert skips == []
+
+
+def test_json_candidates_nested_dict():
+    candidates, skips = _json_candidates("m.json", '{"m": {"auc": 0.91}}')
+
+    assert candidates == [Candidate(source="m.json", kind="json", value=0.91, path="m.auc")]
+    assert skips == []
+
+
+def test_json_candidates_list():
+    candidates, skips = _json_candidates("m.json", '{"xs": [1.5, 2.5]}')
+
+    assert candidates == [
+        Candidate(source="m.json", kind="json", value=1.5, path="xs[0]"),
+        Candidate(source="m.json", kind="json", value=2.5, path="xs[1]"),
+    ]
+    assert skips == []
+
+
+def test_json_candidates_list_of_dicts():
+    candidates, skips = _json_candidates("m.json", '{"rows": [{"v": 3.0}]}')
+
+    assert candidates == [Candidate(source="m.json", kind="json", value=3.0, path="rows[0].v")]
+    assert skips == []
+
+
+# A3 round-trip pin -- table-driven over flat/nested/list/list-of-dicts, the
+# exact shapes above plus a couple more, in one document.
+_ROUND_TRIP_DOC = {
+    "auc": 0.91,
+    "count": 7,
+    "m": {"auc": 0.91, "nested": {"deep": 42}},
+    "xs": [1.5, 2.5, -3.0],
+    "rows": [{"v": 3.0}, {"v": 4.0, "w": {"z": 5.0}}],
+    "matrix": [[1, 2], [3, 4]],
+}
+
+
+def test_json_candidates_round_trip_pin():
+    text = json.dumps(_ROUND_TRIP_DOC)
+    doc = json.loads(text)
+
+    candidates, skips = _json_candidates("m.json", text)
+
+    assert skips == []
+    assert len(candidates) > 0
+    for cand in candidates:
+        assert resolve_pointer(doc, cand.path) == cand.value
+
+
+def test_json_candidates_excludes_bool_null_string_and_nonfinite():
+    text = (
+        '{"t": true, "f": false, "n": null, "s": "0.91", '
+        '"nan": NaN, "inf": Infinity, "ninf": -Infinity}'
+    )
+
+    candidates, skips = _json_candidates("m.json", text)
+
+    assert candidates == []
+    assert skips == []
+
+
+def test_json_candidates_skips_key_containing_dot():
+    candidates, skips = _json_candidates("m.json", '{"a.b": 5.0}')
+
+    assert candidates == []
+    assert len(skips) == 1
+    assert skips[0].source == "m.json"
+    assert skips[0].reason
+
+
+def test_json_candidates_skips_key_containing_bracket():
+    candidates, skips = _json_candidates("m.json", '{"x[0]": 5.0}')
+
+    assert candidates == []
+    assert len(skips) == 1
+    assert skips[0].reason
+
+
+def test_json_candidates_skips_numeric_leaf_nested_under_unexpressible_key():
+    candidates, skips = _json_candidates("m.json", '{"a.b": {"x": 5.0}}')
+
+    assert candidates == []
+    assert len(skips) == 1
+    assert skips[0].source == "m.json"
+    assert skips[0].reason
+
+
+def test_json_candidates_skips_first_key_starting_with_dollar():
+    # Only the FIRST token is subject to _parse_path's one-time leading '$'
+    # strip -- a first-position key starting with '$' would silently
+    # resolve as a different key. A later '$'-prefixed key is fine (see the
+    # next test), since a literal '.' always precedes it there.
+    candidates, skips = _json_candidates("m.json", '{"$foo": 5.0}')
+
+    assert candidates == []
+    assert len(skips) == 1
+    assert skips[0].reason
+
+
+def test_json_candidates_allows_dollar_prefixed_key_when_not_first():
+    candidates, skips = _json_candidates("m.json", '{"m": {"$foo": 5.0}}')
+
+    assert candidates == [Candidate(source="m.json", kind="json", value=5.0, path="m.$foo")]
+    assert skips == []
+
+
+def test_json_candidates_skips_root_scalar_with_no_expressible_path():
+    candidates, skips = _json_candidates("m.json", "5.0")
+
+    assert candidates == []
+    assert len(skips) == 1
+    assert skips[0].source == "m.json"
+    assert skips[0].reason
+
+
+def test_json_candidates_malformed_json_is_a_skip_not_a_raise():
+    candidates, skips = _json_candidates("m.json", "{not valid json")
+
+    assert candidates == []
+    assert len(skips) == 1
+    assert skips[0].source == "m.json"
+    assert skips[0].reason

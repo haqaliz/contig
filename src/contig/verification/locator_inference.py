@@ -23,6 +23,8 @@ later slices of the same aspect.
 
 from __future__ import annotations
 
+import json
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -124,3 +126,139 @@ def iter_artifacts(repo: Path) -> tuple[list[Path], list[SweepSkip]]:
                 continue
             found.append(p)
     return sorted(found, key=lambda p: p.relative_to(base).as_posix()), skips
+
+
+def _is_numeric_leaf(value: object) -> bool:
+    """True iff `value` is a JSON leaf `resolve_pointer` should be pointed at.
+
+    `bool` is `int` in Python -- rejected first (D4) so `true`/`false` are
+    never candidates. `str` (including a numeric-looking string like
+    `"0.91"`) is never a candidate (D5): it is strictly UNVERIFIED at
+    reproduce time, so proposing a locator for it would propose one that can
+    never verify. Non-finite floats (`nan`/`inf`, which `json.loads` accepts
+    by default) are likewise never candidates.
+    """
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return True
+    if isinstance(value, float):
+        return math.isfinite(value)
+    return False
+
+
+def _key_expressible(key: str, is_first: bool) -> bool:
+    """True iff `key` can appear as one dotted-path segment (D1).
+
+    Mirrors `_parse_path`'s grammar (`reproduce.py:78`) exactly, since that
+    is the shipped, unchanged parser every emitted `path` must round-trip
+    through:
+
+    - A bare/dotted key is read up to the next `.` or `[`, so a key
+      containing either character would silently truncate or merge with an
+      adjacent segment -- never expressible, at any position.
+    - An empty key can't be written as a segment at all: as the first token
+      it fails `_parse_path`'s leading `if not s: return None`; after a `.`
+      it fails the `s[i] in ".["` look-ahead. Never expressible.
+    - Only the *first* token is subject to `_parse_path`'s one-time leading
+      `$` strip. A key that itself starts with `$` would have that `$`
+      silently eaten when it's the first segment (resolving a different key
+      than intended), but is fine as a later segment, where the leading `.`
+      protects it.
+    """
+    if key == "" or "." in key or "[" in key:
+        return False
+    if is_first and key.startswith("$"):
+        return False
+    return True
+
+
+def _build_path(tokens: list[str | int]) -> str:
+    """Render `tokens` into the dotted+`[n]` expression `_parse_path` reads.
+
+    An int token is always `[n]`, with no preceding `.` (matching the
+    grammar, where `[` may follow a key directly, e.g. `xs[0]`). A str token
+    is bare only in the first position; every later str token is
+    `.`-prefixed.
+    """
+    parts: list[str] = []
+    for i, tok in enumerate(tokens):
+        if isinstance(tok, int):
+            parts.append(f"[{tok}]")
+        else:
+            parts.append(tok if i == 0 else f".{tok}")
+    return "".join(parts)
+
+
+def _json_candidates(source: str, text: str) -> tuple[list[Candidate], list[SweepSkip]]:
+    """Enumerate every numeric leaf in a JSON document as a `Candidate`.
+
+    `source` is the repo-relative POSIX path this text was read from (it
+    becomes `Candidate.source`/`SweepSkip.source` verbatim); `text` is the
+    file's already-read content (R4). Every emitted `path` is built to
+    round-trip through the shipped, unchanged `resolve_pointer` (D1) --
+    never guessed, never emitted speculatively.
+
+    Never raises (R6): malformed JSON is one `SweepSkip` naming the parse
+    error, not an exception. A numeric leaf that exists but cannot be given
+    an expressible path -- a dict key containing `.`/`[` (D1), an empty key,
+    a first-key starting with `$`, or a bare top-level scalar with no
+    accessor at all -- is likewise recorded as its own `SweepSkip`, one per
+    leaf, rather than silently producing fewer candidates than the numbers
+    actually present (this is the exact failure shape R6 exists to rule
+    out: a claim sitting on an unreachable number must be a disclosed miss,
+    not an indistinguishable one). `bool`, `str` (D5), `None`, and
+    non-finite floats (D4) are simply not numeric leaves at all -- excluded
+    by definition, not skipped.
+    """
+    candidates: list[Candidate] = []
+    skips: list[SweepSkip] = []
+
+    try:
+        doc = json.loads(text)
+    except json.JSONDecodeError as err:
+        skips.append(SweepSkip(source=source, reason=f"malformed JSON: {err}"))
+        return candidates, skips
+
+    def walk(value: object, tokens: list[str | int], expressible: bool) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                is_first = not tokens
+                key_ok = isinstance(key, str) and _key_expressible(key, is_first)
+                walk(child, [*tokens, key], expressible and key_ok)
+            return
+        if isinstance(value, list):
+            for index, child in enumerate(value):
+                # A list index is always an expressible `[n]` segment --
+                # only dict keys carry D1's coverage hole.
+                walk(child, [*tokens, index], expressible)
+            return
+        if not _is_numeric_leaf(value):
+            return
+        if not tokens:
+            skips.append(
+                SweepSkip(
+                    source=source,
+                    reason="numeric root value has no expressible path (empty path)",
+                )
+            )
+            return
+        if not expressible:
+            skips.append(
+                SweepSkip(
+                    source=source,
+                    reason=(
+                        f"numeric leaf at key path {tokens!r} is unreachable: an "
+                        "ancestor key is not expressible in the locator path "
+                        "grammar (contains '.'/'[', is empty, or is a leading "
+                        "'$')"
+                    ),
+                )
+            )
+            return
+        candidates.append(
+            Candidate(source=source, kind="json", value=value, path=_build_path(tokens))
+        )
+
+    walk(doc, [], True)
+    return candidates, skips
