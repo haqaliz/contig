@@ -81,6 +81,8 @@ def test_iter_artifacts_yields_only_recognized_extensions(tmp_path):
     _write(tmp_path, "kept.csv", "a,b\n")
     _write(tmp_path, "kept.tsv.gz", "")
     _write(tmp_path, "kept.csv.gz", "")
+    _write(tmp_path, "kept.tab", "a\tb\n")
+    _write(tmp_path, "kept.tab.gz", "")
     _write(tmp_path, "skipped.txt")
     _write(tmp_path, "skipped.ipynb")
     _write(tmp_path, "skipped.log")
@@ -94,8 +96,44 @@ def test_iter_artifacts_yields_only_recognized_extensions(tmp_path):
             tmp_path / "kept.csv",
             tmp_path / "kept.tsv.gz",
             tmp_path / "kept.csv.gz",
+            tmp_path / "kept.tab",
+            tmp_path / "kept.tab.gz",
         ]
     )
+    assert skips == []
+
+
+def test_iter_artifacts_matches_extensions_case_insensitively(tmp_path):
+    # RULING 9: the sweep walks OTHER PEOPLE'S repos, where filename casing
+    # is not ours to control -- a case-sensitive filter would silently
+    # under-report candidates for reasons that have nothing to do with
+    # whether inference works.
+    _write(tmp_path, "RESULTS.JSON")
+    _write(tmp_path, "DATA.CSV", "a,b\n")
+    _write(tmp_path, "counts.TSV", "a\tb\n")
+    _write(tmp_path, "skipped.TXT")
+
+    paths, skips = iter_artifacts(tmp_path)
+
+    assert paths == sorted(
+        [
+            tmp_path / "RESULTS.JSON",
+            tmp_path / "DATA.CSV",
+            tmp_path / "counts.TSV",
+        ]
+    )
+    assert skips == []
+
+
+def test_iter_artifacts_preserves_on_disk_casing_in_the_returned_path(tmp_path):
+    # A lower-cased source would not resolve on a case-sensitive filesystem
+    # -- only the MATCH is case-insensitive, the emitted path is verbatim.
+    p = _write(tmp_path, "Results.JSON")
+
+    paths, skips = iter_artifacts(tmp_path)
+
+    assert paths == [p]
+    assert paths[0].name == "Results.JSON"
     assert skips == []
 
 
@@ -458,6 +496,8 @@ def test_table_candidates_headerless_basic(tmp_path):
         ("mixed.csv", ","),
         ("mixed.tsv.gz", "\t"),
         ("mixed.csv.gz", ","),
+        ("mixed.tab", "\t"),
+        ("mixed.tab.gz", "\t"),
     ],
 )
 def test_table_candidates_round_trip_pin(tmp_path, name, delimiter):

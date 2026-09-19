@@ -4,9 +4,12 @@ Before a claim's value can be matched to a coordinate in a repo's output
 artifacts, we need to know what candidate files exist. `iter_artifacts`
 mirrors `bundle.compute_tree_sha256`'s published WALK discipline: prune
 `.git` (at any depth) and symlinked directories in place, skip symlinked
-files, `os.walk(followlinks=False)`. Only `.json`/`.tsv`/`.csv`/`.tsv.gz`/
-`.csv.gz` files are candidates; the result is sorted by POSIX-relative path
-for a reproducible sweep.
+files, `os.walk(followlinks=False)`. Only `.json`/`.tsv`/`.csv`/`.tab`/
+`.tsv.gz`/`.csv.gz`/`.tab.gz` files are candidates, matched
+case-insensitively (a sweep walks other people's repos, where filename
+casing is not ours to control) while the emitted path keeps its real
+on-disk casing; the result is sorted by POSIX-relative path for a
+reproducible sweep.
 
 It deliberately DIVERGES from `compute_tree_sha256` on error handling:
 `compute_tree_sha256` produces a single digest, where a partial walk would be
@@ -29,9 +32,17 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from contig.verification.reproduce import _read_table
+from contig.verification.reproduce import _read_table, _resolve_delimiter
 
-_CANDIDATE_EXTENSIONS = (".json", ".tsv", ".csv", ".tsv.gz", ".csv.gz")
+_CANDIDATE_EXTENSIONS = (
+    ".json",
+    ".tsv",
+    ".csv",
+    ".tab",
+    ".tsv.gz",
+    ".csv.gz",
+    ".tab.gz",
+)
 
 
 @dataclass(frozen=True)
@@ -114,7 +125,12 @@ def iter_artifacts(repo: Path) -> tuple[list[Path], list[SweepSkip]]:
         dirnames[:] = kept_dirnames
 
         for name in filenames:
-            if not name.endswith(_CANDIDATE_EXTENSIONS):
+            # Matched case-insensitively (RESULTS.JSON, DATA.CSV, a .TSV --
+            # a sweep walks other people's repos, whose filename casing is
+            # not ours to control) but `name` itself, used below to build
+            # the emitted path, is never lower-cased: the on-disk casing is
+            # what a locator must resolve against.
+            if not name.lower().endswith(_CANDIDATE_EXTENSIONS):
                 continue
             p = Path(dirpath, name)
             try:
@@ -324,24 +340,23 @@ def _json_candidates(source: str, text: str) -> tuple[list[Candidate], list[Swee
 def _table_delimiter(path: Path) -> str | None:
     """Infer the read-only delimiter for `path` from its extension (D3).
 
-    Mirrors `_resolve_delimiter`'s extension mapping (lower-cased, one
-    trailing `.gz` stripped, then `.tsv` -> tab, `.csv` -> comma) -- the
-    only two families `_CANDIDATE_EXTENSIONS` ever hands this function. The
-    delimiter exists only to drive `_read_table`; it is never attached to
-    an emitted `Candidate` (`Candidate` has no delimiter field at all, so
-    there is nothing to accidentally emit). An unrecognized extension
-    (unreachable via `iter_artifacts`, which already filters to
-    `_CANDIDATE_EXTENSIONS`, but this function is also called directly)
-    returns `None` rather than guessing.
+    A thin named wrapper over the shipped `_resolve_delimiter(path.name,
+    None)` -- never a second, independently-maintained extension mapping.
+    D3 means we never emit a delimiter (`Candidate` has no delimiter field
+    at all); it is used only to drive `_read_table` here. Because we never
+    emit one, `load_claims` re-derives the delimiter from the same
+    extension at reproduce time -- if our mapping and the engine's ever
+    diverged, we would read a file one way and the engine another, and our
+    coordinates would silently point at different cells. Sharing the one
+    function (rather than mirroring its logic) makes that impossible
+    rather than merely unlikely. It already lower-cases and strips one
+    trailing `.gz`, so `.tab`/`.tab.gz` and any casing `iter_artifacts`
+    admits are covered for free. An unrecognized extension (unreachable via
+    `iter_artifacts`, which already filters to `_CANDIDATE_EXTENSIONS`, but
+    this function is also called directly) returns `None` rather than
+    guessing.
     """
-    name = path.name.lower()
-    if name.endswith(".gz"):
-        name = name[: -len(".gz")]
-    if name.endswith(".tsv"):
-        return "\t"
-    if name.endswith(".csv"):
-        return ","
-    return None
+    return _resolve_delimiter(path.name, None)
 
 
 def _cell_parses_as_float(cell: str) -> bool:
