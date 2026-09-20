@@ -651,6 +651,31 @@ def test_table_candidates_corrupt_gzip_is_a_skip_not_a_raise(tmp_path):
     assert skips[0].reason
 
 
+def test_table_candidates_uppercase_gz_suffix_is_a_named_case_sensitivity_skip(tmp_path):
+    # `iter_artifacts` matches ".gz"-family extensions case-insensitively
+    # (fix round 1), so a file literally named "DATA.CSV.GZ" is reachable.
+    # But the shipped `_read_table` detects gzip via a case-SENSITIVE
+    # `endswith(".gz")`, so it would open this file as plain text and fail
+    # to decode/parse it -- landing on the generic "could not be read"
+    # skip, which would misdiagnose a simple casing mismatch as corruption.
+    # `_table_candidates` must instead name the real cause up front.
+    p = tmp_path / "DATA.CSV.GZ"
+    with gzip.open(p, "wt", encoding="utf-8", newline="") as f:
+        f.write("a,b\n1.0,2.0\n")
+
+    candidates, skips = _table_candidates("DATA.CSV.GZ", p)
+
+    assert candidates == []
+    assert len(skips) == 1
+    assert skips[0].source == "DATA.CSV.GZ"
+    # Assert on the distinguishing substance of the message, not the whole
+    # string: it must name the file and the case-sensitivity cause, not
+    # the generic "could not be read" reason used for genuine corruption.
+    assert "DATA.CSV.GZ" in skips[0].reason
+    assert "case-sensitive" in skips[0].reason
+    assert "could not be read" not in skips[0].reason
+
+
 def test_table_candidates_unrecognized_extension_is_a_skip_not_a_raise(tmp_path):
     p = _write_table(tmp_path, "weird.psv", [["a", "b"], ["1.0", "2.0"]], "|")
 

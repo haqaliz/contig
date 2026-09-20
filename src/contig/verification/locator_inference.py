@@ -67,11 +67,14 @@ def iter_artifacts(repo: Path) -> tuple[list[Path], list[SweepSkip]]:
 
     `os.walk(followlinks=False)` with `.git` and symlinked directories
     pruned in place (dirnames mutated) at any depth, and symlinked files
-    skipped. Only files ending in `.json`, `.tsv`, `.csv`, `.tsv.gz`, or
-    `.csv.gz` are candidates. A missing or non-directory `repo` returns
-    `([], [])` rather than raising -- that's an invalid call, not a sweep
-    that hit an unreadable directory, so no `SweepSkip` is manufactured for
-    it.
+    skipped. Only files ending in `.json`, `.tsv`, `.csv`, `.tab`,
+    `.tsv.gz`, `.csv.gz`, or `.tab.gz` are candidates, matched
+    case-insensitively (`RESULTS.JSON`/`DATA.CSV`/`counts.TSV` all match) --
+    the returned `Path` always keeps the file's real on-disk casing, since
+    only the match is case-insensitive, never the emitted name. A missing
+    or non-directory `repo` returns `([], [])` rather than raising --
+    that's an invalid call, not a sweep that hit an unreadable directory,
+    so no `SweepSkip` is manufactured for it.
 
     A subdirectory `os.walk` cannot list (e.g. permission denied) is
     recorded as a `SweepSkip(source=<repo-relative posix path>, reason=...)`
@@ -398,8 +401,10 @@ def _numeric_table_value(cell: str) -> float | None:
 
 
 def _table_candidates(source: str, path: Path) -> tuple[list[Candidate], list[SweepSkip]]:
-    """Enumerate every numeric cell in a `.tsv`/`.csv`(`.gz`) table as a
-    `Candidate` (R5).
+    """Enumerate every numeric cell in a `.tsv`/`.csv`/`.tab`(`.gz`) table
+    as a `Candidate` (R5). `iter_artifacts` matches these extensions
+    case-insensitively; this function is handed the file's real,
+    on-disk-cased `path` regardless.
 
     `source` is the repo-relative POSIX path this table lives at (becomes
     `Candidate.source`/`SweepSkip.source` verbatim); `path` is the real
@@ -446,6 +451,18 @@ def _table_candidates(source: str, path: Path) -> tuple[list[Candidate], list[Sw
     ragged row (shorter than another row in the same table) contributes
     only its real cells; a cell past its row's end is simply absent, never
     an `IndexError` (A9).
+
+    One reachability the case-insensitive extension match in
+    `iter_artifacts` creates: the shipped `_read_table` detects gzip via a
+    CASE-SENSITIVE `path.name.endswith(".gz")`, so a `*.GZ`-suffixed file
+    (any casing other than exactly lower-case `.gz`) is opened as plain
+    text, not decompressed, and `_read_table` degrades it to `None` same as
+    a genuinely corrupt/unreadable file. Reusing that generic reason here
+    would be a confidently WRONG diagnosis -- no corrupt gzip, no malformed
+    CSV, just a case mismatch -- so that specific case is detected and
+    named BEFORE calling `_read_table`, with its own accurate `SweepSkip`
+    naming the file and the case-sensitivity cause, rather than folded into
+    the generic "could not be read" reason.
     """
     candidates: list[Candidate] = []
     skips: list[SweepSkip] = []
@@ -454,6 +471,27 @@ def _table_candidates(source: str, path: Path) -> tuple[list[Candidate], list[Sw
     if delimiter is None:
         skips.append(
             SweepSkip(source=source, reason=f"unrecognized table extension: {path.name!r}")
+        )
+        return candidates, skips
+
+    if path.name.lower().endswith(".gz") and not path.name.endswith(".gz"):
+        # `iter_artifacts`'s match is case-insensitive, but the shipped
+        # `_read_table` only decompresses a lower-case ".gz" suffix
+        # (`path.name.endswith(".gz")`). This file WOULD reach
+        # `_read_table` and fail there too, but with the generic "could not
+        # be read" reason -- which would misdiagnose a case mismatch as a
+        # corrupt gzip or malformed CSV. Name the real cause instead of
+        # letting the generic path swallow it.
+        skips.append(
+            SweepSkip(
+                source=source,
+                reason=(
+                    f"{path.name!r} cannot be decompressed: the shipped table "
+                    "reader's gzip detection is case-sensitive and only "
+                    "recognizes a lower-case '.gz' suffix -- rename the file "
+                    "to end in a lower-case '.gz' to have it read"
+                ),
+            )
         )
         return candidates, skips
 
