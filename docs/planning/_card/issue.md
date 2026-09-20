@@ -1,51 +1,78 @@
-# Card: feat/sibling-peak-rescue/aliz
+# Card — reproduce-locator-inference (feat)
 
-**Source:** inline brief (no GitHub issue — `id` is a slug). Selected by
-`contig-next` as the highest-leverage next feature; the worktree was started
-from its handoff prompt.
-
-**Owner:** aliz · **Branch:** `feat/sibling-peak-rescue/aliz`
-(worktree `.claude/worktrees/feat-sibling-peak-rescue`, branched from
-`origin/master` @ 7a8c0e3)
+Type: `feat` · id/slug: `reproduce-locator-inference` · owner: `aliz`
+Branch: `feat/reproduce-locator-inference/aliz`
+Worktree: `.claude/worktrees/feat-reproduce-locator-inference`
+Source: **inline brief** (no GitHub issue — slug-scoped work, selected by `/contig-next`)
 
 ---
 
 ## Brief
 
-Extend the shipped peak-RSS/walltime self-heal (CAPABILITY_ROADMAP C2) with the
-**same-process sibling-peak rescue**: when the OOM'd/walltime-killed task's own
-peak/realtime is censored (signal-killed, `-`/0, absent trace row) and the blind
-`×2` fallback would fire, size the retry from the **max observed sibling value**
-in the same coarse `process` (resourceLimits is process-global).
+Ship locator inference as the next C8 slice: given a repo path and a locator-less
+draft from `contig extract-claims`, propose a locator per claim by searching the
+repo's candidate output artifacts (JSON, TSV/CSV, `.ipynb`, text/log) for the claim's
+stated value, reusing the shipped `resolve_pointer` / `resolve_cell` /
+`resolve_match` / notebook resolvers **in reverse** rather than writing new parsers.
 
-Prerequisite: fix the trace parser, which today sets `process == name` for every
-row, to expose the real coarse `process` column — this has a `progress.py`
-blast radius, so land that carefully.
+Be strict on ambiguity exactly as slice 4's pattern locator is: 0 or >1 candidate
+sites means emit **NO** locator and leave the claim locator-less with the count named
+in the review sidecar — never an arbitrary pick.
 
-Same two-tier honesty contract as the shipped slices: ceiling clamp,
-never-shrink, `gave_up_at_ceiling`, observed values + tier recorded in
-`RepairStep.detail`.
+Two things to get right up front:
 
-Optionally fold the observed peak into the `FailureCase` corpus schema
-(currently rides in `detail` only).
+1. Inference deliberately reads pre-run, **mtime-stale** artifacts (that is where the
+   numbers are), which does not weaken the freshness guard because an inferred
+   locator is a *binding site*, not evidence, and only becomes a verdict when a fresh
+   run rebinds it under the unchanged guard — state that honestly rather than
+   papering over the apparent tension.
+2. Keep the existing `load_claims` round-trip invariant so we never emit a draft our
+   own reproduce path rejects.
 
-Test-first with injected trace fixtures; Nextflow-only; no
-verdict/exit-code/FailureClass change.
+Constraints: stdlib-only, no `models.py` change, no signature break, real fixture
+repos in CI.
 
-## Honest limits to carry into the writeup
+---
 
-- Push, not demand-pull: no design partner asked; organic frequency of the
-  censored-peak case is unmeasured (no real Contig-launched run has produced it).
-- No real Nextflow in CI — injected trace/executor fixtures only, per the
-  parent slices' precedent.
-- The `process == name` parser defect is a mechanism blocker the dig must
-  verify against the actual parser code, not the roadmap prose.
-- OOM/walltime heals are Nextflow-only today; Snakemake is out of scope.
-- Blast radius: `progress.py` consumes the trace parser — the dig must
-  enumerate the consumers before the plan.
+## Why this was picked (from `/contig-next`)
 
-## Guardrail check
+- It is the **last manual step** in the C8 paper → verdict chain. Everything on either
+  side has shipped: paper-claim extraction + DOI/PDF intake
+  (`docs/technical/CAPABILITY_ROADMAP.md:1762`) and all five locator families plus the
+  freshness guard (`CAPABILITY_ROADMAP.md:2397`). Today a user runs `extract-claims`
+  on a paper and must then hand-write a locator per claim before `contig reproduce`
+  does anything.
+- It is a **scope deferral, not a blocker**:
+  `docs/planning/reproduce-paper-claims/prd.md:120` files it under "Nice-to-have
+  (explicitly deferred, not this slice) — Locator **inference** … a separate, harder
+  slice; v1 emits locator-less drafts by design", and `CHANGELOG.md:1635` confirms the
+  shipped command emits "**No locator inference**".
+- **Pure reuse of shipped primitives** — deep, not broad. Fully CI-observable with real
+  fixture repos on disk (the slice-8 precedent, `CAPABILITY_ROADMAP.md:2250`), not
+  injected-seam reasoning.
+- Feeds the `reproduce-case-promote` corpus channel (`CAPABILITY_ROADMAP.md:2295`):
+  claims that are currently *never attempted* start earning real verdicts.
 
-Layer 2 (self-heal breadth for the shipped C2 resource-scaling ladder). No
-Layer 1, no wet-lab/clinical dependency, no raw-read egress, no
-verdict/exit-code/FailureClass change.
+## Known caveats carried in from the pick
+
+- **Freshness-guard tension (apparent, not real).** The guard
+  (`CAPABILITY_ROADMAP.md:2397`) makes any file whose mtime predates the run start
+  UNVERIFIED and never parses it. Inference is a *pre-run search* over exactly those
+  committed outputs. Resolution to state explicitly in the PRD: inference proposes a
+  binding site, never evidence; the locator becomes a verdict only when a fresh run
+  rebinds it under the **unchanged** guard.
+- **False locators.** A value like `0.05` appears in dozens of places. Inherit slice
+  4's ambiguity rule: 0 or >1 candidates → no locator, count named, never an
+  arbitrary pick.
+
+## Ranked against (for the record)
+
+Beat: local `source_commit`/dirty-state capture (`CAPABILITY_ROADMAP.md:2270`),
+RO-Crate reference-identity export (`:1245`), and the unmerged C9 Jev triage
+capability (`origin/feat/jev-triage`, recommended for demotion — solves scale the
+product does not have yet).
+
+Rejected as **blocked**: bwa-mem2 index build+redirect —
+`docs/planning/self-heal-bwa-mem2-index/understanding.md:18-30` (sarek auto-builds it;
+iGenomes stages a classic `BWAIndex/`; no CLI flag can supply a broken one → no
+reachable trigger).
