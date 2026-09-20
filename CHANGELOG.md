@@ -6,6 +6,74 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+- **The candidate sweep ships — the pure substrate for C8 locator inference
+  (`reproduce-locator-inference`, aspect 1 of 3).** A new
+  `verification/locator_inference.py` walks a repo and enumerates every numeric value in
+  its JSON/TSV/CSV/`.tab` artifacts as a **coordinate the shipped resolvers can
+  re-resolve** — `sweep_repo(repo) -> (candidates, skips)`, built from `iter_artifacts`
+  (safe walk), `_json_candidates` (numeric leaves → a `resolve_pointer` path) and
+  `_table_candidates` (numeric cells → a `resolve_cell` column/row/header). A later
+  aspect matches those candidates against a paper's claimed values to **propose** a
+  locator; **this aspect does no matching, has no CLI, and changes no verdict, exit
+  code, bundle, or signed field.** `models.py` is untouched — all five locator types are
+  frozen dataclasses local to `reproduce.py`. Stdlib only; `_read_table`,
+  `_resolve_delimiter`, `_parse_path`, `resolve_pointer`, `resolve_cell` and
+  `_MAX_MATCH_BYTES` are **imported, never edited or promoted**.
+  - **The one guarantee, and it is the whole point.** The sweep must never silently
+    produce fewer candidates than numbers present: a claim that fails to bind because we
+    quietly skipped the file its number sat in is, to the user, **indistinguishable from
+    an honest miss**. Every unreadable directory, stat race, oversized artifact,
+    malformed document, unexpressible key, duplicate header name, uppercase `.GZ`, and
+    symlink is a **recorded `SweepSkip` naming what was lost and how much**. That
+    invariant cost **six fix rounds across four tasks**, in six disguises — a missing
+    `os.walk(onerror=)` dropping whole subtrees; an over-broad `except` dropping sibling
+    files *and* leaving a containment guard silently not guarding; a case-sensitive
+    extension filter hiding `RESULTS.JSON`; a misleading skip reason naming five causes
+    none of which occurred; over-wide table rows vanishing entirely; and a bare
+    `ValueError` aborting the sweep.
+  - **The worst of those, named because it is ordinary.** `_table_candidates` bounded its
+    scan by the *header's* width, so a data row **longer** than the header was silently
+    truncated. A leading `# Program:featureCounts v2.0.1` line makes the header detector
+    declare a one-column header and **every number in the file falls off the right
+    edge — 0 candidates, 0 skips.** featureCounts is ordinary RNA-seq output and RNA-seq
+    is the assay exercised end-to-end in CI. Fixed as **skip-only, never emit**: an
+    over-wide cell is genuinely unaddressable because `resolve_cell` bounds an integer
+    column by the header row's width, so emitting one would trade silent loss for a
+    coordinate that can never bind. **Headerless mode is deliberately exempt** — there
+    `resolve_cell` bounds by the *target row*, so over-wide cells are addressable and
+    remain candidates; the "fix it everywhere" generalisation would have cut legitimate
+    recall and is pinned against by a test.
+  - **Coordinates are validated against the shipped parser, not against our reading of
+    it.** Every emitted JSON path passes a **token-equality backstop**
+    (`_parse_path(built) == tokens`) before emission — not "is it parseable", because the
+    paths that failed *were* parseable and merely parsed to **different tokens**:
+    `_parse_path` strips whitespace, so `{" x": 0.91, "x": 0.42}` previously emitted a
+    path resolving to **the wrong key's value**. The grammar had been hand-re-derived in
+    three places, which is exactly how that hole survived. Zero recall cost, verified
+    across the 21 paths the module emits.
+  - **Header detection is an uncalibrated default whose worst case is bounded.** A first
+    row is a header iff no cell parses as a float. A misdetection **cannot** produce a
+    wrong bind: the row it consumes contains no numeric candidate *by construction*, and
+    `header=True,row=N` addresses the same physical cell as `header=False,row=N+1`. The
+    residual is a column *name* that is really a data value, which fails to resolve on a
+    fresh run — an honest `UNVERIFIED`, never a false `REPRODUCED`.
+  - **Read honestly.** **Push, not demand-pull** — no design partner asked for this; the
+    friction removed is reasoned from the shipped `extract-claims` surface, not observed.
+    It **recovers nothing for a user yet**: without the matcher it proposes no locator
+    and changes no verdict. Its correctness is **self-graded** — we authored every
+    fixture — and the honest remedy is the PRD's **evidence gate**: point the sweep and
+    the matcher at one real published repo, count how many claims actually bind, and only
+    then decide whether the CLI aspect ships. The featureCounts case is the live example
+    of the gap between disclosed and solved: those numbers are now *reported* as
+    unreachable rather than silently absent, but they are still unreachable.
+  - **Deferred, with reasons:** `pattern`/notebook inference (they need a *synthesized*
+    regex, which collides with `resolve_match`'s strict exactly-one rule — a blocker, not
+    a preference); addressing duplicate-header columns by integer index (possible, but
+    brittle to column reordering — revisit at the evidence gate with data); the new
+    round-trip backstop reporting per-leaf rather than per-key; nine `sweep_repo` tests
+    outside the universal round-trip assertion. PRD/spec/plan under
+    `docs/planning/reproduce-locator-inference/`.
+
 ## [0.60.0] - 2026-09-14
 
 - **The concordance autorun axes are now turnkey on the reads side, and the RNA-seq
