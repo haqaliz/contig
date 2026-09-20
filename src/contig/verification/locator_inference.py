@@ -39,8 +39,12 @@ walk would be a dishonest result, so any `OSError` aborts it entirely
 (`onerror=_raise`, `bundle.py:383-410`). A sweep's contract is the opposite
 (spec R6): every unreadable artifact or directory produces a `SweepSkip` and
 the sweep keeps going. **Nothing here raises** -- not on a malformed
-document, an unreadable subtree, a mid-walk delete race, or a document
-nested deeper than Python's recursion limit.
+document, an unreadable subtree, a mid-walk delete race, a document nested
+deeper than Python's recursion limit, or a numeric literal the JSON parser
+itself refuses. That guarantee is unconditional and load-bearing (PRD M7):
+a reader must never get a stronger promise here than the code delivers, so
+if a new escape is found the fix belongs in the code, not a hedge in this
+paragraph.
 
 Both returned lists are sorted by the artifact's POSIX-relative path, so two
 sweeps of the same tree return byte-identical results.
@@ -359,6 +363,16 @@ def _json_candidates(source: str, text: str) -> tuple[list[Candidate], list[Swee
     all is likewise one `SweepSkip` (there is no zero-length path
     `_parse_path` can accept).
 
+    `json.loads` fails in three distinct ways and each gets its own reason,
+    in this order, because `json.JSONDecodeError` is a `ValueError`
+    SUBCLASS and a single broad handler would flatten all three into one
+    confidently wrong message: a syntax error (`JSONDecodeError`), a
+    document too deeply nested for the parser's own recursion
+    (`RecursionError`), and a literal the scanner rejects outright -- a
+    BARE `ValueError`, raised by `int()` inside the scanner for an integer
+    literal over CPython's 4300-digit int-string conversion limit, and
+    emphatically not a syntax error.
+
     A dict key that cannot be given an expressible path (D1: contains
     `.`/`[`, is empty, or is a first-position `$`) makes its entire subtree
     unreachable as a unit -- we do not descend into it. That is recorded as
@@ -415,6 +429,30 @@ def _json_candidates(source: str, text: str) -> tuple[list[Candidate], list[Swee
                     "JSON nests too deeply to parse (it exceeds Python's "
                     "recursion limit); no numeric value in it could be "
                     "enumerated"
+                ),
+            )
+        )
+        return candidates, skips
+    except ValueError as err:
+        # MUST stay after the `json.JSONDecodeError` branch above, which is a
+        # ValueError SUBCLASS -- ordering is what keeps that branch's specific
+        # "malformed JSON" message. This branch is the rest of the class, and
+        # it is not empty: an integer literal longer than CPython's
+        # 4300-digit int-string conversion limit is rejected by `int()` inside
+        # the scanner, so it arrives as a BARE ValueError and is not a syntax
+        # error at all. Catching only `JSONDecodeError` let that one file
+        # abort the whole sweep (the RecursionError failure mode again, with
+        # a different exception type), so the reason names the real cause
+        # rather than confidently misreporting malformed JSON.
+        skips.append(
+            SweepSkip(
+                source=source,
+                reason=(
+                    "JSON holds a literal the parser rejected (e.g. an "
+                    "integer literal longer than CPython's 4300-digit "
+                    "int-string conversion limit) -- this is not a syntax "
+                    "error; no numeric value in it could be enumerated: "
+                    f"{err}"
                 ),
             )
         )

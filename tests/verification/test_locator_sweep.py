@@ -665,6 +665,65 @@ def test_json_candidates_nesting_too_deep_for_the_parser_is_a_skip_not_a_raise()
     assert "nest" in skips[0].reason
 
 
+# --- N1: a bare ValueError out of the parser is a skip, never a raise -----
+# `json.JSONDecodeError` IS a `ValueError` subclass, which makes it easy to
+# assume catching the former covers the latter. It does not: an integer
+# literal longer than CPython's 4300-digit int-string conversion limit is
+# rejected by `int()` INSIDE the scanner, so it surfaces as a bare
+# `ValueError` and escapes a `JSONDecodeError`-only guard entirely. Same
+# failure mode as the RecursionError finding -- one pathological file taking
+# down every other artifact's sweep -- with a different exception type.
+
+
+def test_json_candidates_over_long_integer_literal_is_a_named_skip_not_a_raise():
+    text = '{"n": ' + "9" * 5000 + "}"
+    with pytest.raises(ValueError) as caught:
+        json.loads(text)
+    # Precisely the trap: a ValueError that is NOT a JSONDecodeError.
+    assert not isinstance(caught.value, json.JSONDecodeError)
+
+    candidates, skips = _json_candidates("huge_int.json", text)
+
+    assert candidates == []
+    assert len(skips) == 1
+    assert skips[0].source == "huge_int.json"
+    # It is not a syntax error, so the reason must not claim malformed JSON.
+    assert "malformed JSON" not in skips[0].reason
+    assert "literal" in skips[0].reason
+    assert "4300" in skips[0].reason
+
+
+def test_json_candidates_large_but_legal_integer_is_still_a_candidate():
+    # The anti-over-reach pin. Widening the guard must not start swallowing
+    # documents that parse perfectly well: an integer just under the limit is
+    # an ordinary numeric leaf and must still be enumerated, not skipped.
+    text = '{"n": ' + "9" * 4200 + "}"
+
+    candidates, skips = _json_candidates("big_int.json", text)
+
+    assert len(candidates) == 1
+    assert candidates[0].path == "n"
+    assert skips == []
+    _assert_json_round_trip(candidates, text)
+
+
+def test_json_candidates_does_not_swallow_an_unrelated_exception(monkeypatch):
+    # The other half of "do not widen beyond what you can justify". The
+    # never-raises contract is about what an ARTIFACT can contain, not a
+    # blanket promise to bury every exception: a `TypeError` out of the
+    # parser would be a bug in this repo, and recording it as an honest
+    # "the data was bad" skip would disguise our fault as the user's. It
+    # must still propagate. Without this, widening the guard to a bare
+    # `except Exception` would break no test at all.
+    def _boom(*args, **kwargs):
+        raise TypeError("not a data problem")
+
+    monkeypatch.setattr(json, "loads", _boom)
+
+    with pytest.raises(TypeError):
+        _json_candidates("m.json", '{"auc": 0.91}')
+
+
 def test_json_candidates_deep_nesting_does_not_discard_what_was_already_enumerated():
     # Honesty cuts both ways: a bounded failure must not silently throw away
     # the candidates already found beside it. The shallow leaf survives AND
@@ -1381,6 +1440,21 @@ def test_sweep_repo_empty_repo_yields_nothing(tmp_path):
 
     assert candidates == []
     assert skips == []
+
+
+def test_sweep_repo_over_long_integer_literal_does_not_take_down_the_sweep(tmp_path):
+    # THE assertion that matters for N1: one pathological artifact must not
+    # cost every other artifact in the repo its candidates. Before the fix
+    # the bare ValueError propagated out of `sweep_repo` and the healthy
+    # sibling's 0.91 was lost with the exception.
+    _write(tmp_path, "huge_int.json", '{"n": ' + "9" * 5000 + "}")
+    _write(tmp_path, "ok.json", '{"ok": 0.91}')
+
+    candidates, skips = sweep_repo(tmp_path)  # must never raise
+
+    assert candidates == [Candidate(source="ok.json", kind="json", value=0.91, path="ok")]
+    assert [s.source for s in skips] == ["huge_int.json"]
+    assert "malformed JSON" not in skips[0].reason
 
 
 def test_sweep_repo_skips_are_ordered_by_source_path(tmp_path):
