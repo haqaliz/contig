@@ -1,10 +1,12 @@
 """Tests for the safe artifact walk substrate (candidate-sweep aspect, R1/R2),
-JSON numeric-leaf candidate enumeration (R4, D1, D4, D5), and table numeric-
-cell candidate enumeration (R5, D2, D3, D5).
+JSON numeric-leaf candidate enumeration (R4, D1, D4, D5), table numeric-cell
+candidate enumeration (R5, D2, D3, D5), and the repo-wide sweep composition
+(R3, R6, R7).
 
 Task 1 scope: `iter_artifacts` and the `Candidate`/`SweepSkip` data shapes.
-Task 2 scope: `_json_candidates`. Task 3 scope: `_table_candidates`. No size
-bound (Task 4), no matching/rounding logic (aspect 2).
+Task 2 scope: `_json_candidates`. Task 3 scope: `_table_candidates`. Task 4
+scope: `sweep_repo` and the size bound. No matching/rounding logic anywhere
+here (aspect 2).
 """
 
 import gzip
@@ -20,6 +22,7 @@ from contig.verification.locator_inference import (
     _json_candidates,
     _table_candidates,
     iter_artifacts,
+    sweep_repo,
 )
 from contig.verification.reproduce import _read_table, resolve_cell, resolve_pointer
 
@@ -818,3 +821,232 @@ def test_table_candidates_header_heuristic_boundary_single_column_headerless(tmp
         ),
     ]
     assert skips == []
+
+
+# --- Task 4: sweep_repo (R3, R6, R7, A2, A9, A10) -------------------------
+
+
+def test_sweep_repo_mixed_fixture_returns_right_candidates_and_skips(tmp_path, monkeypatch):
+    # A mixed repo: a plain JSON, a TSV, a gzipped CSV, a malformed JSON, and
+    # (with the cap shrunk rather than writing a real 8 MiB fixture -- see
+    # test_reproduce.py's own "cap is shrunk" idiom) an oversized JSON.
+    monkeypatch.setattr("contig.verification.locator_inference._MAX_MATCH_BYTES", 100)
+
+    _write(tmp_path, "metrics.json", '{"auc": 0.91}')
+    _write_table(tmp_path, "de.tsv", [["gene_id", "log2FC"], ["ENSG1", "1.5"]], "\t")
+    _write_table(tmp_path, "counts.csv.gz", [["a", "b"], ["1.0", "2.0"]], ",")
+    _write(tmp_path, "broken.json", "{not valid json")
+    oversized = _write(tmp_path, "oversized.json", '{"padding": "' + "x" * 200 + '"}')
+    assert oversized.stat().st_size > 100
+
+    candidates, skips = sweep_repo(tmp_path)
+
+    by_source: dict[str, list[Candidate]] = {}
+    for cand in candidates:
+        by_source.setdefault(cand.source, []).append(cand)
+
+    assert by_source["metrics.json"] == [
+        Candidate(source="metrics.json", kind="json", value=0.91, path="auc")
+    ]
+    assert by_source["de.tsv"] == [
+        Candidate(source="de.tsv", kind="table", value=1.5, column="log2FC", row=0, header=True)
+    ]
+    assert by_source["counts.csv.gz"] == [
+        Candidate(source="counts.csv.gz", kind="table", value=1.0, column="a", row=0, header=True),
+        Candidate(source="counts.csv.gz", kind="table", value=2.0, column="b", row=0, header=True),
+    ]
+    assert "oversized.json" not in by_source
+
+    skip_sources = {s.source for s in skips}
+    assert skip_sources == {"broken.json", "oversized.json"}
+
+
+def test_sweep_repo_oversized_json_artifact_is_a_named_skip_with_zero_candidates(
+    tmp_path, monkeypatch
+):
+    # A2, for the JSON branch.
+    monkeypatch.setattr("contig.verification.locator_inference._MAX_MATCH_BYTES", 10)
+    p = _write(tmp_path, "huge.json", '{"auc": 0.91}')
+    size = p.stat().st_size
+    assert size > 10
+
+    candidates, skips = sweep_repo(tmp_path)
+
+    assert candidates == []
+    assert len(skips) == 1
+    assert skips[0].source == "huge.json"
+    assert str(size) in skips[0].reason
+
+
+def test_sweep_repo_oversized_table_artifact_is_a_named_skip_with_zero_candidates(
+    tmp_path, monkeypatch
+):
+    # A2, for the table branch -- the size bound is checked BEFORE dispatch,
+    # regardless of which enumerator would otherwise have handled the file.
+    monkeypatch.setattr("contig.verification.locator_inference._MAX_MATCH_BYTES", 10)
+    p = _write_table(tmp_path, "big.csv", [["a", "b"], ["1.0", "2.0"]], ",")
+    size = p.stat().st_size
+    assert size > 10
+
+    candidates, skips = sweep_repo(tmp_path)
+
+    assert candidates == []
+    assert len(skips) == 1
+    assert skips[0].source == "big.csv"
+    assert str(size) in skips[0].reason
+
+
+def test_sweep_repo_propagates_the_walks_own_skips(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory permission bits")
+
+    _write(tmp_path, "kept.json", '{"auc": 0.91}')
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    _write(blocked, "unreachable.json", '{"x": 1}')
+    blocked.chmod(0o000)
+    try:
+        candidates, skips = sweep_repo(tmp_path)
+    finally:
+        blocked.chmod(0o755)
+
+    assert [c.source for c in candidates] == ["kept.json"]
+    assert len(skips) == 1
+    assert skips[0].source == "blocked"
+    assert skips[0].reason
+
+
+def test_sweep_repo_dispatches_uppercase_extensions_to_the_right_enumerator(tmp_path):
+    # RESULTS.JSON and DATA.CSV are reachable via iter_artifacts's
+    # case-insensitive match -- a case-SENSITIVE dispatch check here would
+    # let them fall through and vanish with no skip at all.
+    _write(tmp_path, "RESULTS.JSON", '{"auc": 0.91}')
+    _write_table(tmp_path, "DATA.CSV", [["a", "b"], ["1.0", "2.0"]], ",")
+
+    candidates, skips = sweep_repo(tmp_path)
+
+    by_source: dict[str, list[Candidate]] = {}
+    for cand in candidates:
+        by_source.setdefault(cand.source, []).append(cand)
+
+    assert by_source["RESULTS.JSON"] == [
+        Candidate(source="RESULTS.JSON", kind="json", value=0.91, path="auc")
+    ]
+    assert by_source["DATA.CSV"] == [
+        Candidate(source="DATA.CSV", kind="table", value=1.0, column="a", row=0, header=True),
+        Candidate(source="DATA.CSV", kind="table", value=2.0, column="b", row=0, header=True),
+    ]
+    assert skips == []
+
+
+def test_sweep_repo_isolates_a_read_failure_to_one_artifact(tmp_path, monkeypatch):
+    _write(tmp_path, "a.json", '{"auc": 0.91}')
+    _write(tmp_path, "b.json", '{"acc": 0.5}')
+
+    real_read_text = Path.read_text
+
+    def _flaky_read_text(self, *args, **kwargs):
+        if self.name == "a.json":
+            raise OSError("read failure forced for a.json")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _flaky_read_text)
+
+    candidates, skips = sweep_repo(tmp_path)
+
+    assert [c.source for c in candidates] == ["b.json"]
+    assert len(skips) == 1
+    assert skips[0].source == "a.json"
+    assert skips[0].reason
+
+
+def test_sweep_repo_isolates_a_stat_failure_to_one_artifact(tmp_path, monkeypatch):
+    _write(tmp_path, "a.json", '{"auc": 0.91}')
+    _write(tmp_path, "b.json", '{"acc": 0.5}')
+
+    real_stat = Path.stat
+
+    def _flaky_stat(self, *args, follow_symlinks=True, **kwargs):
+        # `Path.lstat()` (which `iter_artifacts`'s own `is_symlink()` check
+        # goes through) is implemented as `self.stat(follow_symlinks=False)`
+        # -- a mock that fired unconditionally on "a.json" would actually be
+        # caught by iter_artifacts's OWN try/except (already pinned in
+        # Task 1), never reaching sweep_repo's own stat() call at all, and
+        # this test would pass for the wrong reason. Firing only on the
+        # default `follow_symlinks=True` call isolates it to sweep_repo's
+        # own size-check stat(), simulating a delete race between the walk
+        # finding the file and sweep_repo statting it.
+        if self.name == "a.json" and follow_symlinks:
+            raise OSError("stat failure forced for a.json")
+        return real_stat(self, *args, follow_symlinks=follow_symlinks, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", _flaky_stat)
+
+    candidates, skips = sweep_repo(tmp_path)
+
+    assert [c.source for c in candidates] == ["b.json"]
+    assert len(skips) == 1
+    assert skips[0].source == "a.json"
+    assert skips[0].reason
+
+
+def test_sweep_repo_candidates_are_ordered_by_source_path(tmp_path):
+    _write(tmp_path, "b/two.json", '{"x": 2.0}')
+    _write(tmp_path, "a/one.json", '{"x": 1.0}')
+
+    candidates, skips = sweep_repo(tmp_path)
+
+    assert [c.source for c in candidates] == ["a/one.json", "b/two.json"]
+    assert skips == []
+
+
+def test_sweep_repo_empty_repo_yields_nothing(tmp_path):
+    candidates, skips = sweep_repo(tmp_path)
+
+    assert candidates == []
+    assert skips == []
+
+
+# --- A10 wild-input sweep: never an exception, always a skip or nothing ---
+
+
+def test_sweep_repo_wild_json_inputs_never_raise(tmp_path):
+    _write(tmp_path, "empty.json", "")
+    (tmp_path / "binary.json").write_bytes(b"\x00\x01\x02\xff\xfe")
+    _write(tmp_path, "scalar.json", "5.0")
+    (tmp_path / "bom.json").write_bytes(b"\xef\xbb\xbf" + b'{"auc": 0.91}')
+    _write(
+        tmp_path,
+        "deep.json",
+        json.dumps({"a": {"b": {"c": {"d": {"e": 1.5}}}}}),
+    )
+
+    candidates, skips = sweep_repo(tmp_path)  # must never raise
+
+    by_source: dict[str, list[Candidate]] = {}
+    for cand in candidates:
+        by_source.setdefault(cand.source, []).append(cand)
+    skip_sources = {s.source for s in skips}
+
+    # Every wild file either produced a skip or, for the ones with a real
+    # numeric leaf, a candidate -- never silently neither, never a raise.
+    assert "empty.json" in skip_sources
+    assert "binary.json" in skip_sources
+    assert "scalar.json" in skip_sources
+    assert "bom.json" in skip_sources
+    assert by_source["deep.json"] == [
+        Candidate(source="deep.json", kind="json", value=1.5, path="a.b.c.d.e")
+    ]
+
+
+def test_sweep_repo_wild_table_inputs_never_raise(tmp_path):
+    (tmp_path / "binary.csv").write_bytes(b"\x00\x01\x02\xff\xfe")
+    _write(tmp_path, "empty.tsv", "")
+
+    candidates, skips = sweep_repo(tmp_path)  # must never raise
+
+    assert candidates == []
+    skip_sources = {s.source for s in skips}
+    assert "binary.csv" in skip_sources
+    # An empty table yields no candidates and no skip -- nothing was lost.
+    assert "empty.tsv" not in skip_sources

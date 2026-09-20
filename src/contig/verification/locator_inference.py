@@ -32,7 +32,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from contig.verification.reproduce import _read_table, _resolve_delimiter
+from contig.verification.reproduce import _MAX_MATCH_BYTES, _read_table, _resolve_delimiter
 
 _CANDIDATE_EXTENSIONS = (
     ".json",
@@ -573,5 +573,96 @@ def _table_candidates(source: str, path: Path) -> tuple[list[Candidate], list[Sw
                 ),
             )
         )
+
+    return candidates, skips
+
+
+def sweep_repo(repo: Path) -> tuple[list[Candidate], list[SweepSkip]]:
+    """Compose the repo-wide candidate sweep (R3, R6, R7): walk `repo`
+    (`iter_artifacts`), apply the size bound, and dispatch each surviving
+    artifact to `_json_candidates` or `_table_candidates`.
+
+    This function does no enumeration of its own -- it only decides, per
+    artifact, whether it is too big to read, and if not, which of the two
+    shipped enumerators reads it. All matching/rounding/locator-construction
+    logic is out of scope (aspect 2).
+
+    The walk's own `SweepSkip`s (an unreadable subdirectory, a per-entry stat
+    race -- see `iter_artifacts`) are carried through into the returned
+    skips verbatim; discarding them here would silently undo the walk's own
+    never-aborts contract one layer up.
+
+    R3/A2: an artifact whose `stat().st_size` exceeds `_MAX_MATCH_BYTES` is
+    one `SweepSkip` naming the size, and neither enumerator is ever called
+    on it -- checked before dispatch, never a truncated read.
+
+    Dispatch is by extension, matched case-insensitively (mirroring
+    `iter_artifacts`'s own `.lower().endswith(...)` match): a case-sensitive
+    check here would let an uppercase-suffixed file that `iter_artifacts`
+    already admitted (e.g. `RESULTS.JSON`) fall through dispatch and vanish
+    from the candidate set with no skip at all -- silently, one layer above
+    where `iter_artifacts` and `_table_candidates` already fixed the same
+    class of bug. `iter_artifacts` only ever hands back a path ending in one
+    of `_CANDIDATE_EXTENSIONS`, so "not JSON" always means "table" here;
+    there is no third case to misroute into.
+
+    Reading a JSON file's text is this function's job (`_json_candidates`
+    takes already-read text, by design -- see the module docstring); an
+    `OSError` (missing file, permission race) or `UnicodeDecodeError`
+    (non-UTF-8 bytes) on that read is one `SweepSkip` naming the failure,
+    scoped to that single `read_text()` call so it can never swallow an
+    unrelated sibling artifact's outcome (A9). A malformed-but-readable JSON
+    document is `_json_candidates`'s own concern, not this function's --
+    that skip is produced inside `_json_candidates`, not caught here.
+    `_table_candidates` reads its own file (it must own gzip handling) and
+    already never raises (R6, pinned in Task 3), so no `try/except` wraps
+    that call.
+
+    Returns `(candidates, skips)` in the same POSIX-relative-path order
+    `iter_artifacts` already sorted its paths into, so a sweep is
+    reproducible (R2).
+    """
+    base = Path(repo)
+    paths, skips = iter_artifacts(base)
+    candidates: list[Candidate] = []
+
+    for path in paths:
+        source = path.relative_to(base).as_posix()
+
+        try:
+            size = path.stat().st_size
+        except OSError as err:
+            # A stat() race (e.g. deleted between the walk and here) must
+            # not drop any sibling artifact's outcome -- isolated to this
+            # one artifact, same discipline as iter_artifacts's own races.
+            skips.append(SweepSkip(source=source, reason=f"could not stat artifact: {err}"))
+            continue
+
+        if size > _MAX_MATCH_BYTES:
+            skips.append(
+                SweepSkip(
+                    source=source,
+                    reason=(
+                        f"artifact is {size} bytes, over the "
+                        f"{_MAX_MATCH_BYTES}-byte match limit"
+                    ),
+                )
+            )
+            continue
+
+        if path.name.lower().endswith(".json"):
+            try:
+                text = path.read_text()
+            except (OSError, UnicodeDecodeError) as err:
+                skips.append(
+                    SweepSkip(source=source, reason=f"could not read artifact: {err}")
+                )
+                continue
+            new_candidates, new_skips = _json_candidates(source, text)
+        else:
+            new_candidates, new_skips = _table_candidates(source, path)
+
+        candidates.extend(new_candidates)
+        skips.extend(new_skips)
 
     return candidates, skips
