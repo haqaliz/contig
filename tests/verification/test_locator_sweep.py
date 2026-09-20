@@ -24,14 +24,57 @@ from contig.verification.locator_inference import (
     iter_artifacts,
     sweep_repo,
 )
-from contig.verification.reproduce import _read_table, resolve_cell, resolve_pointer
+from contig.verification.reproduce import (
+    _read_table,
+    _resolve_delimiter,
+    resolve_cell,
+    resolve_pointer,
+)
 
 
 def _write(tmp_path: Path, name: str, content: str = "{}") -> Path:
     p = tmp_path / name
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(content)
+    p.write_text(content, encoding="utf-8")
     return p
+
+
+# --- Universal round-trip helpers (A3/A4) ---------------------------------
+# A3/A4 used to be pinned only on two dedicated, well-behaved fixtures, while
+# every HARD fixture (ragged, duplicate-header, misdetected-header,
+# headerless, over-wide) asserted `candidates == [...]` and never re-resolved
+# -- exactly where coordinate arithmetic is most likely to be wrong. These
+# helpers make the pin UNIVERSAL: every test that enumerates candidates
+# re-resolves all of them through the SHIPPED, unchanged resolvers. A
+# candidate this repo emits but cannot re-resolve is a lie, wherever it came
+# from.
+
+
+def _assert_json_round_trip(candidates: list[Candidate], text: str) -> None:
+    doc = json.loads(text)
+    for cand in candidates:
+        assert cand.kind == "json"
+        resolved = resolve_pointer(doc, cand.path)
+        assert resolved == cand.value, (
+            f"{cand.path!r} re-resolves to {resolved!r}, not {cand.value!r}"
+        )
+
+
+def _assert_table_round_trip(candidates: list[Candidate], path: Path) -> None:
+    if not candidates:
+        return
+    # Derive the delimiter the way `load_claims` will at reproduce time (D3:
+    # we never emit one), through the shipped `_resolve_delimiter`.
+    delimiter = _resolve_delimiter(path.name, None)
+    assert delimiter is not None
+    rows = _read_table(path, delimiter)
+    for cand in candidates:
+        assert cand.kind == "table"
+        resolved, reason = resolve_cell(rows, cand.column, cand.row, cand.header)
+        assert reason == "", f"{cand!r} did not resolve: {reason}"
+        assert float(resolved) == cand.value, (
+            f"{cand!r} re-resolves to {resolved!r}, not {cand.value!r}"
+        )
 
 
 def test_iter_artifacts_prunes_git_dir_at_top_level(tmp_path):
@@ -54,7 +97,11 @@ def test_iter_artifacts_prunes_git_dir_nested(tmp_path):
     assert skips == []
 
 
-def test_iter_artifacts_skips_symlinked_file(tmp_path):
+def test_iter_artifacts_skips_symlinked_file_and_discloses_it(tmp_path):
+    # Containment discipline stands -- the sweep never follows a symlink. But
+    # a symlinked `results.json` pointing at a legitimate in-repo target is
+    # real numbers gone, and dropping it with no word is the same defect class
+    # as silently truncating an over-wide table row. Not followed, but named.
     target = _write(tmp_path, "real.json")
     link = tmp_path / "link.json"
     link.symlink_to(target)
@@ -62,10 +109,28 @@ def test_iter_artifacts_skips_symlinked_file(tmp_path):
     paths, skips = iter_artifacts(tmp_path)
 
     assert paths == [target]
+    assert len(skips) == 1
+    assert skips[0].source == "link.json"
+    assert "symlink" in skips[0].reason
+    assert "not followed" in skips[0].reason
+
+
+def test_iter_artifacts_symlinked_file_with_uninteresting_extension_is_not_disclosed(
+    tmp_path,
+):
+    # The extension filter runs FIRST, so a symlinked `.txt` was never a
+    # candidate in the first place -- excluded by definition, nothing lost,
+    # nothing to disclose. Only symlinks that WOULD have been swept are named.
+    target = _write(tmp_path, "real.txt", "hi")
+    (tmp_path / "link.txt").symlink_to(target)
+
+    paths, skips = iter_artifacts(tmp_path)
+
+    assert paths == []
     assert skips == []
 
 
-def test_iter_artifacts_does_not_descend_into_symlinked_dir(tmp_path):
+def test_iter_artifacts_does_not_descend_into_symlinked_dir_but_discloses_it(tmp_path):
     real_dir = tmp_path / "real_dir"
     real_dir.mkdir()
     _write(real_dir, "inside.json")
@@ -75,6 +140,25 @@ def test_iter_artifacts_does_not_descend_into_symlinked_dir(tmp_path):
     paths, skips = iter_artifacts(tmp_path)
 
     assert paths == [real_dir / "inside.json"]
+    assert len(skips) == 1
+    assert skips[0].source == "link_dir"
+    assert "symlink" in skips[0].reason
+    assert "not followed" in skips[0].reason
+
+
+def test_iter_artifacts_symlinked_git_dir_is_excluded_by_definition_not_disclosed(tmp_path):
+    # `.git` is pruned by name before the symlink check ever runs: it is
+    # excluded by definition at any depth, so it never becomes a skip no
+    # matter how it is spelled on disk.
+    real_dir = tmp_path / "elsewhere"
+    real_dir.mkdir()
+    _write(real_dir, "inside.json")
+    (tmp_path / ".git").symlink_to(real_dir)
+    _write(tmp_path, "kept.json")
+
+    paths, skips = iter_artifacts(tmp_path)
+
+    assert paths == [real_dir / "inside.json", tmp_path / "kept.json"]
     assert skips == []
 
 
@@ -213,7 +297,14 @@ def test_iter_artifacts_records_skip_for_unreadable_subdir_and_keeps_going(tmp_p
     assert paths == [tmp_path / "kept.json"]
     assert len(skips) == 1
     assert skips[0].source == "blocked"
-    assert skips[0].reason
+    # This is the skip class most likely to be READ (a permission-denied
+    # subdirectory is the commonest real skip when sweeping someone else's
+    # repo) and was the only one with no prose at all -- a bare
+    # "[Errno 13] Permission denied: '/repo/blocked'" never says that A
+    # SUBTREE OF ARTIFACTS WENT UNSEARCHED. The errno stays, as the tail.
+    assert "could not be listed" in skips[0].reason
+    assert "unsearched" in skips[0].reason
+    assert "Permission denied" in skips[0].reason
 
 
 def test_iter_artifacts_isolates_a_stat_failure_to_one_file(tmp_path, monkeypatch):
@@ -235,6 +326,11 @@ def test_iter_artifacts_isolates_a_stat_failure_to_one_file(tmp_path, monkeypatc
     assert paths == [tmp_path / "b.json", tmp_path / "c.json"]
     assert len(skips) == 1
     assert skips[0].source == "a.json"
+    # A raced entry must not read as an unlistable directory: distinct
+    # situations, distinct prose, same errno tail.
+    assert "could not be listed" not in skips[0].reason
+    assert "stat" in skips[0].reason
+    assert "stat failure forced for a.json" in skips[0].reason
 
 
 def test_iter_artifacts_isolates_a_stat_failure_to_one_subdirectory(tmp_path, monkeypatch):
@@ -259,6 +355,33 @@ def test_iter_artifacts_isolates_a_stat_failure_to_one_subdirectory(tmp_path, mo
     assert paths == [dir_b / "inside_b.json"]
     assert len(skips) == 1
     assert skips[0].source == "dir_a"
+    # A raced DIRECTORY entry loses a whole subtree, and must say so -- while
+    # still not claiming the directory was unlistable (it was never listed).
+    assert "unsearched" in skips[0].reason
+    assert "could not be listed" not in skips[0].reason
+    assert "stat failure forced for dir_a" in skips[0].reason
+
+
+def test_iter_artifacts_returns_skips_sorted_by_source(tmp_path, monkeypatch):
+    # `found` was sorted but `skips` came back in WALK order, so the skip list
+    # was non-deterministic across runs and filesystems -- in a tool whose
+    # whole point is reproducibility. Force a reversed walk so the sort step
+    # itself is what makes this pass.
+    for d in ("b", "a"):
+        (tmp_path / d).mkdir()
+        target = _write(tmp_path / d, "real.json")
+        (tmp_path / d / "link.json").symlink_to(target)
+
+    real_walk = os.walk
+
+    def _reversed_walk(*args, **kwargs):
+        return reversed(list(real_walk(*args, **kwargs)))
+
+    monkeypatch.setattr("contig.verification.locator_inference.os.walk", _reversed_walk)
+
+    _, skips = iter_artifacts(tmp_path)
+
+    assert [s.source for s in skips] == ["a/link.json", "b/link.json"]
 
 
 # --- Task 2: _json_candidates (R4, D1, D4, D5) ---------------------------
@@ -269,6 +392,7 @@ def test_json_candidates_flat_number():
 
     assert candidates == [Candidate(source="m.json", kind="json", value=0.91, path="auc")]
     assert skips == []
+    _assert_json_round_trip(candidates, '{"auc": 0.91}')
 
 
 def test_json_candidates_nested_dict():
@@ -276,6 +400,7 @@ def test_json_candidates_nested_dict():
 
     assert candidates == [Candidate(source="m.json", kind="json", value=0.91, path="m.auc")]
     assert skips == []
+    _assert_json_round_trip(candidates, '{"m": {"auc": 0.91}}')
 
 
 def test_json_candidates_list():
@@ -286,6 +411,7 @@ def test_json_candidates_list():
         Candidate(source="m.json", kind="json", value=2.5, path="xs[1]"),
     ]
     assert skips == []
+    _assert_json_round_trip(candidates, '{"xs": [1.5, 2.5]}')
 
 
 def test_json_candidates_list_of_dicts():
@@ -293,6 +419,7 @@ def test_json_candidates_list_of_dicts():
 
     assert candidates == [Candidate(source="m.json", kind="json", value=3.0, path="rows[0].v")]
     assert skips == []
+    _assert_json_round_trip(candidates, '{"rows": [{"v": 3.0}]}')
 
 
 # A3 round-trip pin -- table-driven over flat/nested/list/list-of-dicts, the
@@ -315,8 +442,8 @@ def test_json_candidates_round_trip_pin():
 
     assert skips == []
     assert len(candidates) > 0
-    for cand in candidates:
-        assert resolve_pointer(doc, cand.path) == cand.value
+    assert doc == _ROUND_TRIP_DOC
+    _assert_json_round_trip(candidates, text)
 
 
 def test_json_candidates_excludes_bool_null_string_and_nonfinite():
@@ -424,6 +551,7 @@ def test_json_candidates_allows_dollar_prefixed_key_when_not_first():
 
     assert candidates == [Candidate(source="m.json", kind="json", value=5.0, path="m.$foo")]
     assert skips == []
+    _assert_json_round_trip(candidates, '{"m": {"$foo": 5.0}}')
 
 
 def test_json_candidates_skips_root_scalar_with_no_expressible_path():
@@ -444,6 +572,116 @@ def test_json_candidates_malformed_json_is_a_skip_not_a_raise():
     assert skips[0].reason
 
 
+# --- The round-trip backstop: token equality, not "is it parseable" -------
+# `_key_expressible` hand-re-derives `_parse_path`'s grammar, and the grammar
+# was hand-re-derived in THREE places, which is exactly how `expr.strip()`
+# (`reproduce.py:79`) was missed. Every path below IS parseable -- it just
+# parses to DIFFERENT tokens than the ones that built it, which is worse than
+# unparseable: an unparseable path resolves to None, a mis-parsed one can
+# resolve to ANOTHER KEY'S VALUE.
+
+
+@pytest.mark.parametrize(
+    ("text", "bad_key"),
+    [
+        ('{" x": 0.91}', " x"),
+        ('{"x ": 0.91}', "x "),
+        ('{"a": {"b ": 1.0}}', "b "),
+        ('{"\\t x": 0.91}', "\t x"),
+    ],
+)
+def test_json_candidates_whitespace_key_is_skipped_not_emitted(text, bad_key):
+    candidates, skips = _json_candidates("m.json", text)
+
+    assert candidates == []
+    assert len(skips) == 1
+    assert skips[0].source == "m.json"
+    assert skips[0].reason
+
+
+def test_json_candidates_never_emits_a_path_that_resolves_to_another_keys_value():
+    # THE severe case. `" x"` and `"x"` are distinct JSON keys, but
+    # `_parse_path` strips the expression before tokenizing, so the path `" x"`
+    # resolves to `"x"` -- returning 0.42 for a candidate that claims 0.91.
+    # A locator built on that would bind a claim to a number it never named.
+    text = '{" x": 0.91, "x": 0.42}'
+
+    candidates, skips = _json_candidates("m.json", text)
+
+    assert [c.value for c in candidates] == [0.42]
+    assert [c.path for c in candidates] == ["x"]
+    assert len(skips) == 1
+    _assert_json_round_trip(candidates, text)
+
+
+def test_json_candidates_inner_leading_space_key_still_round_trips():
+    # The guard is TOKEN EQUALITY, not a blanket whitespace ban: a leading
+    # space on a NON-first segment survives `_parse_path`'s one-time
+    # `expr.strip()` intact, so `a. b` really does resolve to `{" b": ...}`.
+    # Pinning it proves the backstop costs zero recall rather than papering
+    # over the class with a coarser rule.
+    text = '{"a": {" b": 1.0}}'
+
+    candidates, skips = _json_candidates("m.json", text)
+
+    assert candidates == [Candidate(source="m.json", kind="json", value=1.0, path="a. b")]
+    assert skips == []
+    _assert_json_round_trip(candidates, text)
+
+
+# --- A10: deep nesting is a skip, never a RecursionError ------------------
+# "Never raises" is stated unqualified in three places, but only
+# `json.JSONDecodeError` was caught. One pathological `.json` aborted every
+# other artifact's sweep. The two depths below trip DIFFERENT recursions --
+# the walk's, and the parser's own -- and both must be honest skips.
+
+
+def test_json_candidates_nesting_too_deep_for_the_walk_is_a_skip_not_a_raise():
+    # `json.loads` handles this depth fine; the module's own recursive `walk`
+    # (and `_count_numeric_leaves`) is what blows the stack.
+    depth = 1000
+    text = "[" * depth + "1.5" + "]" * depth
+    assert json.loads(text) is not None  # the parser itself copes at this depth
+
+    candidates, skips = _json_candidates("deep.json", text)
+
+    assert candidates == []
+    assert len(skips) == 1
+    assert skips[0].source == "deep.json"
+    assert "nest" in skips[0].reason
+
+
+def test_json_candidates_nesting_too_deep_for_the_parser_is_a_skip_not_a_raise():
+    depth = 20_000
+    text = "[" * depth + "1.5" + "]" * depth
+    with pytest.raises(RecursionError):
+        json.loads(text)  # the parser itself gives up at this depth
+
+    candidates, skips = _json_candidates("deeper.json", text)
+
+    assert candidates == []
+    assert len(skips) == 1
+    assert skips[0].source == "deeper.json"
+    assert "nest" in skips[0].reason
+
+
+def test_json_candidates_deep_nesting_does_not_discard_what_was_already_enumerated():
+    # Honesty cuts both ways: a bounded failure must not silently throw away
+    # the candidates already found beside it. The shallow leaf survives AND
+    # the abandoned subtree is disclosed.
+    depth = 1000
+    text = '{"shallow": 1.5, "deep": ' + "[" * depth + "2.5" + "]" * depth + "}"
+
+    candidates, skips = _json_candidates("mixed.json", text)
+
+    assert candidates == [
+        Candidate(source="mixed.json", kind="json", value=1.5, path="shallow")
+    ]
+    assert len(skips) == 1
+    assert "nest" in skips[0].reason
+    _assert_json_round_trip(candidates, text)
+
+
 # --- Task 3: _table_candidates (R5, D2, D3, D5) ---------------------------
 
 
@@ -455,7 +693,7 @@ def _write_table(tmp_path: Path, name: str, rows: list[list[str]], delimiter: st
         with gzip.open(p, "wt", encoding="utf-8", newline="") as f:
             f.write(text)
     else:
-        p.write_text(text)
+        p.write_text(text, encoding="utf-8")
     return p
 
 
@@ -474,6 +712,7 @@ def test_table_candidates_header_ful_basic(tmp_path):
         Candidate(source="de.tsv", kind="table", value=2.5, column="log2FC", row=1, header=True),
     ]
     assert skips == []
+    _assert_table_round_trip(candidates, p)
 
 
 def test_table_candidates_headerless_basic(tmp_path):
@@ -488,6 +727,7 @@ def test_table_candidates_headerless_basic(tmp_path):
         Candidate(source="counts.csv", kind="table", value=40.0, column=1, row=1, header=False),
     ]
     assert skips == []
+    _assert_table_round_trip(candidates, p)
 
 
 # A4 round-trip pin -- table-driven over .tsv, .csv, and a .gz variant of
@@ -515,11 +755,7 @@ def test_table_candidates_round_trip_pin(tmp_path, name, delimiter):
 
     assert skips == []
     assert len(candidates) > 0
-    read_rows = _read_table(p, delimiter)
-    for cand in candidates:
-        resolved, reason = resolve_cell(read_rows, cand.column, cand.row, cand.header)
-        assert reason == ""
-        assert float(resolved) == cand.value
+    _assert_table_round_trip(candidates, p)
 
 
 def test_table_candidates_ragged_row_contributes_only_real_cells(tmp_path):
@@ -542,6 +778,135 @@ def test_table_candidates_ragged_row_contributes_only_real_cells(tmp_path):
         Candidate(source="ragged.tsv", kind="table", value=5.0, column="c", row=1, header=True),
     ]
     assert skips == []
+    _assert_table_round_trip(candidates, p)
+
+
+# --- Over-wide data rows: the OTHER ragged direction ----------------------
+# Ragged handling was ONE-DIRECTIONAL. A data row SHORTER than the header is
+# handled (`continue`); a data row LONGER than the header was enumerated by
+# NOTHING and disclosed by NOTHING, because the scan is bounded by
+# `enumerate(header_row)`. Those cells are genuinely NOT ADDRESSABLE --
+# `resolve_cell` bounds an int column by the HEADER row's width, not the data
+# row's -- so the fix is to SKIP, loudly, never to emit a coordinate that can
+# never bind.
+
+
+def test_resolve_cell_cannot_address_a_cell_past_the_header_width(tmp_path):
+    # The premise of the skip-don't-emit choice, pinned against the SHIPPED
+    # resolver rather than asserted in a comment. If this ever stops being
+    # true, emitting these cells becomes the better fix.
+    rows = [["gene", "log2FC"], ["ENSG1", "1.5", "0.001"]]
+
+    resolved, reason = resolve_cell(rows, 2, 0, True)
+
+    assert resolved is None
+    assert "out of range" in reason
+
+
+def test_table_candidates_over_wide_data_rows_are_disclosed_not_silently_dropped(tmp_path):
+    # 'gene,log2FC' with three-cell data rows: 0.001 and 0.002 used to vanish
+    # with ZERO skips. A claim that fails to bind because we silently dropped
+    # its file is indistinguishable, to the user, from an honest miss.
+    p = _write_table(
+        tmp_path,
+        "wide.csv",
+        [["gene", "log2FC"], ["ENSG1", "1.5", "0.001"], ["ENSG2", "2.5", "0.002"]],
+        ",",
+    )
+
+    candidates, skips = _table_candidates("wide.csv", p)
+
+    assert candidates == [
+        Candidate(source="wide.csv", kind="table", value=1.5, column="log2FC", row=0, header=True),
+        Candidate(source="wide.csv", kind="table", value=2.5, column="log2FC", row=1, header=True),
+    ]
+    _assert_table_round_trip(candidates, p)
+    assert len(skips) == 1
+    assert skips[0].source == "wide.csv"
+    assert "2" in skips[0].reason  # column index 2
+    assert "numeric value(s)" in skips[0].reason
+
+
+def test_table_candidates_leading_comment_line_discloses_the_whole_file(tmp_path):
+    # THE severe case, and an ordinary bioinformatics table shape: a
+    # `# Program:featureCounts v2.0.1` first line makes D2 see ONE non-numeric
+    # cell in row 0, declare a ONE-COLUMN header, and drop every number off
+    # the right edge. Before the fix: 0 candidates and 0 SKIPS -- a whole file
+    # silently empty.
+    p = _write_table(
+        tmp_path,
+        "counts.tsv",
+        [
+            ["# Program:featureCounts v2.0.1"],
+            ["Geneid", "Length", "sample1"],
+            ["ENSG1", "1500", "42"],
+            ["ENSG2", "900", "7"],
+        ],
+        "\t",
+    )
+
+    candidates, skips = _table_candidates("counts.tsv", p)
+
+    assert candidates == []
+    # One skip per over-wide column that held at least one number: col 1
+    # (1500, 900) and col 2 (42, 7). "Geneid"/"Length"/"sample1" are not
+    # numeric and cost nothing.
+    assert len(skips) == 2
+    assert {s.source for s in skips} == {"counts.tsv"}
+    assert all("numeric value(s)" in s.reason for s in skips)
+
+
+def test_table_candidates_leading_blank_line_discloses_the_whole_file(tmp_path):
+    # A leading blank line gives a ZERO-column header row, so literally every
+    # cell in the file is past the right edge. Before the fix: 0 candidates,
+    # 0 skips.
+    p = tmp_path / "blank_first.csv"
+    p.write_text("\ngene,log2FC\nENSG1,1.5\n", encoding="utf-8")
+
+    candidates, skips = _table_candidates("blank_first.csv", p)
+
+    assert candidates == []
+    assert len(skips) == 1
+    assert skips[0].source == "blank_first.csv"
+    assert "numeric value(s)" in skips[0].reason
+
+
+def test_table_candidates_over_wide_column_with_no_numeric_cells_emits_no_skip(tmp_path):
+    # The module's existing "zero lost => no skip" rule, applied to this new
+    # class: an over-wide column holding only text costs nothing.
+    p = _write_table(
+        tmp_path,
+        "wide_text.csv",
+        [["gene", "log2FC"], ["ENSG1", "1.5", "note"], ["ENSG2", "2.5", "other"]],
+        ",",
+    )
+
+    candidates, skips = _table_candidates("wide_text.csv", p)
+
+    assert candidates == [
+        Candidate(
+            source="wide_text.csv", kind="table", value=1.5, column="log2FC", row=0, header=True
+        ),
+        Candidate(
+            source="wide_text.csv", kind="table", value=2.5, column="log2FC", row=1, header=True
+        ),
+    ]
+    _assert_table_round_trip(candidates, p)
+    assert skips == []
+
+
+def test_table_candidates_headerless_over_wide_rows_are_emitted_not_skipped(tmp_path):
+    # The over-wide problem is HEADER-MODE ONLY. Headerless, `resolve_cell`
+    # bounds the column by the TARGET ROW's width, so an over-wide cell IS
+    # addressable and must be a candidate, not a skip -- the round-trip
+    # helper is what proves the distinction is real rather than assumed.
+    p = _write_table(tmp_path, "wide_headerless.csv", [["1.0", "2.0"], ["3.0", "4.0", "5.0"]], ",")
+
+    candidates, skips = _table_candidates("wide_headerless.csv", p)
+
+    assert [c.value for c in candidates] == [1.0, 2.0, 3.0, 4.0, 5.0]
+    _assert_table_round_trip(candidates, p)
+    assert skips == []
 
 
 def test_table_candidates_numeric_string_cell_is_a_candidate(tmp_path):
@@ -556,6 +921,7 @@ def test_table_candidates_numeric_string_cell_is_a_candidate(tmp_path):
         Candidate(source="m.csv", kind="table", value=5.0, column="value", row=0, header=True)
     ]
     assert skips == []
+    _assert_table_round_trip(candidates, p)
 
 
 def test_table_candidates_empty_table(tmp_path):
@@ -581,10 +947,13 @@ def test_table_candidates_skips_duplicate_header_name(tmp_path):
     assert candidates == [
         Candidate(source="dup.csv", kind="table", value=3.0, column="b", row=0, header=True)
     ]
+    _assert_table_round_trip(candidates, p)
     assert len(skips) == 1
     assert skips[0].source == "dup.csv"
     assert "'a'" in skips[0].reason
     assert "2" in skips[0].reason
+    assert "numeric value(s)" in skips[0].reason
+    assert "numeric candidate(s)" not in skips[0].reason
 
 
 def test_table_candidates_duplicate_header_with_no_numeric_cells_emits_no_skip(tmp_path):
@@ -599,6 +968,7 @@ def test_table_candidates_duplicate_header_with_no_numeric_cells_emits_no_skip(t
         Candidate(source="dup2.csv", kind="table", value=3.0, column="b", row=0, header=True)
     ]
     assert skips == []
+    _assert_table_round_trip(candidates, p)
 
 
 def test_table_candidates_excludes_non_finite_values(tmp_path):
@@ -614,6 +984,7 @@ def test_table_candidates_excludes_non_finite_values(tmp_path):
         Candidate(source="nonfinite.csv", kind="table", value=5.0, column="b", row=0, header=True)
     ]
     assert skips == []
+    _assert_table_round_trip(candidates, p)
 
 
 def test_table_candidates_missing_file_is_a_skip_not_a_raise(tmp_path):
@@ -729,6 +1100,7 @@ def test_table_candidates_header_heuristic_boundary_genuinely_data_row_consumed_
         ),
     ]
     assert skips == []
+    _assert_table_round_trip(candidates, p)
 
 
 def test_table_candidates_header_heuristic_boundary_mixed_first_row_is_headerless(tmp_path):
@@ -748,6 +1120,7 @@ def test_table_candidates_header_heuristic_boundary_mixed_first_row_is_headerles
         ),
     ]
     assert skips == []
+    _assert_table_round_trip(candidates, p)
 
 
 def test_table_candidates_header_heuristic_boundary_single_text_row_yields_no_candidates(
@@ -779,6 +1152,7 @@ def test_table_candidates_header_heuristic_boundary_single_numeric_row_is_header
         ),
     ]
     assert skips == []
+    _assert_table_round_trip(candidates, p)
 
 
 def test_table_candidates_header_heuristic_boundary_single_column_header_ful(tmp_path):
@@ -795,6 +1169,7 @@ def test_table_candidates_header_heuristic_boundary_single_column_header_ful(tmp
         ),
     ]
     assert skips == []
+    _assert_table_round_trip(candidates, p)
 
 
 def test_table_candidates_header_heuristic_boundary_single_column_headerless(tmp_path):
@@ -821,6 +1196,7 @@ def test_table_candidates_header_heuristic_boundary_single_column_headerless(tmp
         ),
     ]
     assert skips == []
+    _assert_table_round_trip(candidates, p)
 
 
 # --- Task 4: sweep_repo (R3, R6, R7, A2, A9, A10) -------------------------
@@ -1007,6 +1383,66 @@ def test_sweep_repo_empty_repo_yields_nothing(tmp_path):
     assert skips == []
 
 
+def test_sweep_repo_skips_are_ordered_by_source_path(tmp_path):
+    # `sweep_repo`'s docstring promised POSIX-relative-path order for the
+    # WHOLE return, but only `candidates` was ordered: the walk's own skips
+    # came back in walk order and were then followed by per-artifact skips.
+    # A reproducibility tool cannot ship a non-deterministic disclosure list.
+    _write(tmp_path, "z/broken.json", "{not valid json")
+    _write(tmp_path, "a/broken.json", "{not valid json")
+    _write(tmp_path, "m/broken.json", "{not valid json")
+    real = _write(tmp_path, "a/real.json", '{"x": 1.0}')
+    (tmp_path / "b").mkdir()
+    (tmp_path / "b" / "link.json").symlink_to(real)
+
+    _, skips = sweep_repo(tmp_path)
+
+    assert [s.source for s in skips] == sorted(s.source for s in skips)
+    assert [s.source for s in skips] == [
+        "a/broken.json",
+        "b/link.json",
+        "m/broken.json",
+        "z/broken.json",
+    ]
+
+
+def test_sweep_repo_reads_json_as_utf8_not_the_platform_locale(tmp_path, monkeypatch):
+    # A bare `read_text()` uses the PLATFORM LOCALE encoding while
+    # `_read_table` passes an explicit `encoding="utf-8"`. Under a non-UTF-8
+    # locale a perfectly valid JSON artifact degrades to a misleading "could
+    # not read artifact" skip and the sweep becomes MACHINE-DEPENDENT --
+    # unacceptable for a reproducibility tool. The encoding is not
+    # observable from the result on a UTF-8 host, so pin the call itself.
+    seen: list[object] = []
+    real_read_text = Path.read_text
+
+    def _spy_read_text(self, encoding=None, **kwargs):
+        seen.append(encoding)
+        return real_read_text(self, encoding=encoding, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _spy_read_text)
+    _write(tmp_path, "metrics.json", '{"auc": 0.91, "label": "échantillon"}')
+
+    candidates, skips = sweep_repo(tmp_path)
+
+    assert [c.value for c in candidates] == [0.91]
+    assert skips == []
+    assert seen == ["utf-8"]
+
+
+def test_skip_reasons_use_one_vocabulary_for_lost_numbers():
+    # Two skips, adjacent lines in one sidecar, described the same concept
+    # as "numeric leaf(s)" (JSON) and "numeric candidate(s)" (table). A
+    # sidecar a human reads to decide whether a miss was honest should not
+    # make them wonder whether two names mean two things.
+    _, json_skips = _json_candidates("m.json", '{"a.b": {"x": 1.0}}')
+
+    assert len(json_skips) == 1
+    assert "numeric value(s)" in json_skips[0].reason
+    assert "numeric leaf(s)" not in json_skips[0].reason
+    assert "numeric candidate(s)" not in json_skips[0].reason
+
+
 # --- A10 wild-input sweep: never an exception, always a skip or nothing ---
 
 
@@ -1020,6 +1456,9 @@ def test_sweep_repo_wild_json_inputs_never_raise(tmp_path):
         "deep.json",
         json.dumps({"a": {"b": {"c": {"d": {"e": 1.5}}}}}),
     )
+    # Pathologically deep: one such file used to abort EVERY other
+    # artifact's sweep with an uncaught RecursionError.
+    _write(tmp_path, "abyss.json", "[" * 1000 + "1.5" + "]" * 1000)
 
     candidates, skips = sweep_repo(tmp_path)  # must never raise
 
@@ -1037,6 +1476,7 @@ def test_sweep_repo_wild_json_inputs_never_raise(tmp_path):
     assert by_source["deep.json"] == [
         Candidate(source="deep.json", kind="json", value=1.5, path="a.b.c.d.e")
     ]
+    assert "abyss.json" in skip_sources
 
 
 def test_sweep_repo_wild_table_inputs_never_raise(tmp_path):

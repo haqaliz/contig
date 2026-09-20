@@ -1,27 +1,53 @@
-"""Safe artifact walk for locator inference (candidate-sweep aspect, R1/R2).
+"""The candidate sweep for locator inference (candidate-sweep aspect).
 
-Before a claim's value can be matched to a coordinate in a repo's output
-artifacts, we need to know what candidate files exist. `iter_artifacts`
-mirrors `bundle.compute_tree_sha256`'s published WALK discipline: prune
-`.git` (at any depth) and symlinked directories in place, skip symlinked
-files, `os.walk(followlinks=False)`. Only `.json`/`.tsv`/`.csv`/`.tab`/
-`.tsv.gz`/`.csv.gz`/`.tab.gz` files are candidates, matched
-case-insensitively (a sweep walks other people's repos, where filename
-casing is not ours to control) while the emitted path keeps its real
-on-disk casing; the result is sorted by POSIX-relative path for a
-reproducible sweep.
+`sweep_repo` walks a repo and enumerates EVERY numeric value in EVERY
+candidate artifact as a coordinate the SHIPPED resolvers (`resolve_pointer`,
+`resolve_cell` in `verification/reproduce.py`) can re-resolve to that same
+value. Aspect 2 then matches those candidates against a paper's claimed
+values; nothing here matches, rounds, or constructs a locator.
 
-It deliberately DIVERGES from `compute_tree_sha256` on error handling:
-`compute_tree_sha256` produces a single digest, where a partial walk would be
-a dishonest result, so any `OSError` aborts it entirely (`onerror=_raise`,
-`bundle.py:383-410`). A sweep's contract is the opposite (spec R6): every
-unreadable artifact/directory must produce a `SweepSkip` and the sweep must
-keep going, never abort. So an unreadable subdirectory here is recorded as a
-`SweepSkip` naming it, and the walk continues into the rest of the tree.
+The whole module is four pieces:
 
-This module is the pure substrate only (R1/R2). Enumerating numeric leaves
-inside each artifact (R4/R5), the size bound (R3), and the sweep driver are
-later slices of the same aspect.
+- `iter_artifacts` (R1/R2) -- the safe walk, mirroring
+  `bundle.compute_tree_sha256`'s published discipline: prune `.git` (at any
+  depth) and symlinked directories in place, never follow a symlinked file,
+  `os.walk(followlinks=False)`. Only `.json`/`.tsv`/`.csv`/`.tab`/`.tsv.gz`/
+  `.csv.gz`/`.tab.gz` files are candidates, matched case-insensitively (a
+  sweep walks other people's repos, where filename casing is not ours to
+  control) while the emitted path keeps its real on-disk casing.
+- `_json_candidates` (R4, D1/D4/D5) -- one `Candidate` per numeric JSON leaf,
+  with a dotted+`[n]` `path` that round-trips through `_parse_path`.
+- `_table_candidates` (R5, D2/D3/D5) -- one `Candidate` per numeric table
+  cell, with `column`/`row`/`header` that `resolve_cell` re-resolves.
+- `sweep_repo` (R3/R6/R7) -- the driver: the per-artifact size bound and
+  dispatch to one of the two enumerators.
+
+**The central guarantee is that the sweep never silently produces fewer
+candidates than there are numbers present.** A claim that fails to bind
+because we quietly skipped its file is indistinguishable, to the user, from
+an honest miss -- so every number this module cannot address must come back
+as a `SweepSkip` naming what was lost and why. Two vocabularies matter here
+and are kept distinct: something *excluded by definition* (a `.txt` file, a
+JSON `true`/`null`/string, a non-numeric table cell) is not a loss and gets
+no skip; something that IS a number but has no expressible coordinate is a
+loss and always gets one. A rejection with zero numeric values beneath it
+gets no skip, because nothing was lost.
+
+This module deliberately DIVERGES from `compute_tree_sha256` on error
+handling: `compute_tree_sha256` produces a single digest, where a partial
+walk would be a dishonest result, so any `OSError` aborts it entirely
+(`onerror=_raise`, `bundle.py:383-410`). A sweep's contract is the opposite
+(spec R6): every unreadable artifact or directory produces a `SweepSkip` and
+the sweep keeps going. **Nothing here raises** -- not on a malformed
+document, an unreadable subtree, a mid-walk delete race, or a document
+nested deeper than Python's recursion limit.
+
+Both returned lists are sorted by the artifact's POSIX-relative path, so two
+sweeps of the same tree return byte-identical results.
+
+Stdlib only, no I/O beyond reading the artifacts, and no shipped file is
+modified or re-implemented: `_parse_path`, `_read_table`, `_resolve_delimiter`
+and `_MAX_MATCH_BYTES` are imported from `reproduce.py` and used as-is (R7).
 """
 
 from __future__ import annotations
@@ -32,7 +58,12 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from contig.verification.reproduce import _MAX_MATCH_BYTES, _read_table, _resolve_delimiter
+from contig.verification.reproduce import (
+    _MAX_MATCH_BYTES,
+    _parse_path,
+    _read_table,
+    _resolve_delimiter,
+)
 
 _CANDIDATE_EXTENSIONS = (
     ".json",
@@ -76,15 +107,27 @@ def iter_artifacts(repo: Path) -> tuple[list[Path], list[SweepSkip]]:
     that's an invalid call, not a sweep that hit an unreadable directory,
     so no `SweepSkip` is manufactured for it.
 
-    A subdirectory `os.walk` cannot list (e.g. permission denied) is
-    recorded as a `SweepSkip(source=<repo-relative posix path>, reason=...)`
-    and the walk continues into every other directory. A single dirname or
-    filename whose `is_symlink()` stat raises (e.g. a delete race) is
-    likewise recorded as its own `SweepSkip` in isolation, without dropping
-    any of its siblings -- an unreadable subtree, or one flaky entry, must
-    never silently shrink the candidate set with no signal (spec R6).
+    Three things this walk cannot look at become honest `SweepSkip`s rather
+    than silent omissions, each with its own prose (they are genuinely
+    different situations and a reader must be able to tell them apart):
 
-    Returns paths sorted by POSIX-relative path so a sweep is reproducible.
+    - A subdirectory `os.walk` cannot list (e.g. permission denied): a whole
+      SUBTREE of artifacts went unsearched. This is the commonest real skip
+      when sweeping someone else's repo, so it says so in words, keeping the
+      raw errno as the tail rather than as the entire message.
+    - A single dirname or filename whose `is_symlink()` stat raises (e.g. a
+      delete race): recorded in isolation, without dropping any of its
+      siblings.
+    - A SYMLINK we deliberately did not follow. Containment discipline stands
+      -- the sweep never reads through a symlink -- but a symlinked
+      `results.json` pointing at a legitimate in-repo target is real numbers
+      gone, so it is named. Only symlinks that would otherwise have been
+      swept are disclosed: a symlinked `.txt`, or a symlinked `.git`, was
+      excluded by definition before the symlink check ran and is not a loss.
+
+    Both lists are sorted by POSIX-relative path so a sweep is reproducible
+    -- the skips as well as the paths, since a non-deterministic disclosure
+    list is as unreproducible as a non-deterministic candidate list.
     """
     base = Path(repo)
     if not base.is_dir():
@@ -92,19 +135,24 @@ def iter_artifacts(repo: Path) -> tuple[list[Path], list[SweepSkip]]:
     found: list[Path] = []
     skips: list[SweepSkip] = []
 
-    def _skip_for(bad_path: Path, err: OSError) -> None:
-        # An unreadable subtree, or a stat() race on one entry, must never
-        # silently shrink the candidate set with no signal -- record it as
-        # an honest SweepSkip and let the walk (or this directory's
-        # remaining entries) continue (never abort the sweep -- R6).
+    def _skip_for(bad_path: Path, reason: str) -> None:
+        # An unreadable subtree, a stat() race on one entry, or an
+        # unfollowed symlink must never silently shrink the candidate set
+        # with no signal -- record it as an honest SweepSkip and let the walk
+        # (or this directory's remaining entries) continue (never abort the
+        # sweep -- R6).
         try:
             source = bad_path.relative_to(base).as_posix()
         except ValueError:
             source = str(bad_path)
-        skips.append(SweepSkip(source=source, reason=str(err)))
+        skips.append(SweepSkip(source=source, reason=reason))
 
     def _walk_onerror(err: OSError) -> None:
-        _skip_for(Path(getattr(err, "filename", None) or base), err)
+        _skip_for(
+            Path(getattr(err, "filename", None) or base),
+            "directory could not be listed, so every artifact in it and "
+            f"beneath it went unsearched: {err}",
+        )
 
     for dirpath, dirnames, filenames in os.walk(
         base, followlinks=False, onerror=_walk_onerror
@@ -121,10 +169,22 @@ def iter_artifacts(repo: Path) -> tuple[list[Path], list[SweepSkip]]:
                 # between os.walk's listdir and our check) must not drop any
                 # sibling dirname -- record just this one and keep pruning
                 # the rest.
-                _skip_for(dpath, err)
+                _skip_for(
+                    dpath,
+                    "directory entry could not be stat()ed while pruning "
+                    "symlinks, so it and everything beneath it went "
+                    f"unsearched: {err}",
+                )
                 continue
-            if not is_link:
-                kept_dirnames.append(d)
+            if is_link:
+                _skip_for(
+                    dpath,
+                    "symlinked directory, not followed (the sweep never "
+                    "reads through a symlink), so every artifact beneath it "
+                    "went unsearched",
+                )
+                continue
+            kept_dirnames.append(d)
         dirnames[:] = kept_dirnames
 
         for name in filenames:
@@ -141,12 +201,29 @@ def iter_artifacts(repo: Path) -> tuple[list[Path], list[SweepSkip]]:
             except OSError as err:
                 # Same isolation for a filename: this entry's failure must
                 # not drop any sibling filename in this directory.
-                _skip_for(p, err)
+                _skip_for(
+                    p,
+                    "artifact could not be stat()ed while checking for a "
+                    f"symlink, so it was not swept: {err}",
+                )
                 continue
             if is_link:
+                # NOT followed -- but named. This is the one exclusion the
+                # module's "excluded by definition" vocabulary must not
+                # cover: the file has a candidate extension, so its numbers
+                # were in scope and are now missing.
+                _skip_for(
+                    p,
+                    "symlinked artifact, not followed (the sweep never reads "
+                    "through a symlink), so its numeric value(s) were not "
+                    "swept",
+                )
                 continue
             found.append(p)
-    return sorted(found, key=lambda p: p.relative_to(base).as_posix()), skips
+    return (
+        sorted(found, key=lambda p: p.relative_to(base).as_posix()),
+        sorted(skips, key=lambda s: s.source),
+    )
 
 
 def _is_numeric_leaf(value: object) -> bool:
@@ -171,9 +248,22 @@ def _is_numeric_leaf(value: object) -> bool:
 def _key_expressible(key: str, is_first: bool) -> bool:
     """True iff `key` can appear as one dotted-path segment (D1).
 
-    Mirrors `_parse_path`'s grammar (`reproduce.py:78`) exactly, since that
-    is the shipped, unchanged parser every emitted `path` must round-trip
-    through:
+    A NECESSARY-CONDITIONS filter over `_parse_path`'s grammar
+    (`reproduce.py:78`), not a complete one, and deliberately not the thing
+    that guarantees correctness. It exists to give each rejected key a
+    specific, useful reason (see `_why_key_unexpressible`); the actual
+    guarantee that an emitted path resolves to the value it claims is the
+    token-equality round-trip in `_json_candidates`, which re-parses the
+    rendered path through the shipped parser itself.
+
+    That division matters: this function once claimed to mirror the grammar
+    "exactly" and did not -- it missed `_parse_path`'s leading `expr.strip()`
+    (`reproduce.py:79`), so a key like `" x"` or `"x "` passed every check
+    here and then resolved to a DIFFERENT key. Hand-re-deriving a parser is
+    how that happens; the backstop is why it cannot happen again. Add rules
+    here for better messages, never for safety.
+
+    The conditions checked:
 
     - A bare/dotted key is read up to the next `.` or `[`, so a key
       containing either character would silently truncate or merge with an
@@ -198,6 +288,10 @@ def _count_numeric_leaves(value: object) -> int:
     """Count numeric leaves anywhere beneath `value`, ignoring key
     expressibility entirely.
 
+    (The function name keeps "leaves" because that is the JSON structural
+    term; every user-facing skip reason says "numeric value(s)", one
+    vocabulary across the JSON and table paths.)
+
     Used to size the ONE `SweepSkip` a rejected dict key gets: that key's
     subtree is unreachable as a whole, so whatever is further nested inside
     it -- including another unexpressible key -- is counted here rather
@@ -215,7 +309,11 @@ def _why_key_unexpressible(key: object, is_first: bool) -> str:
     """Name the specific reason `_key_expressible` rejected `key`.
 
     Mirrors `_key_expressible`'s checks, in the same order, so this is
-    reachable only through a branch that already matches one of them.
+    reachable only through a branch that already matches one of them. Like
+    that function it is a MESSAGE-QUALITY helper, not a safety boundary: a
+    key that slips past both is still caught by `_json_candidates`'s
+    token-equality round-trip, which reports it generically rather than
+    specifically. The trailing fallback is that generic case.
     """
     if not isinstance(key, str):
         return "key is not a string"  # JSON keys are always str; defensive only
@@ -265,17 +363,34 @@ def _json_candidates(source: str, text: str) -> tuple[list[Candidate], list[Swee
     `.`/`[`, is empty, or is a first-position `$`) makes its entire subtree
     unreachable as a unit -- we do not descend into it. That is recorded as
     ONE `SweepSkip` naming the key, why it was rejected, and the count of
-    numeric leaves rendered unreachable beneath it (mirroring the shipped
+    numeric values rendered unreachable beneath it (mirroring the shipped
     idiom of `resolve_match`/`resolve_cell`, which also name counts in
     their reasons) -- never one skip per leaf, which would pay the full
     cost of an *n*-leaf subtree in the skip list without buying anything
     back (a leaf's reason can only carry its unreachable path, never its
     value, so per-leaf reporting cannot answer "was value X among the lost
     ones?" any better than per-key can). A rejected key with ZERO numeric
-    leaves beneath it gets NO skip at all -- nothing was lost, so there is
+    values beneath it gets NO skip at all -- nothing was lost, so there is
     nothing to disclose. A bad key nested inside an already-rejected key's
     subtree is never separately reported: the OUTERMOST rejection owns the
     whole subtree's count.
+
+    Before ANY candidate is emitted, its rendered `path` is re-parsed through
+    the shipped `_parse_path` and the result compared to the tokens that
+    built it -- TOKEN EQUALITY, not "is it parseable". This is the
+    authoritative guard, and it is deliberately a backstop rather than a
+    fourth place to hand-re-derive the grammar: `_key_expressible`,
+    `_why_key_unexpressible` and `_build_path` each encode their own reading
+    of `_parse_path`, and three hand-derivations is exactly how
+    `_parse_path`'s leading `expr.strip()` (`reproduce.py:79`) came to be
+    missed by all of them. The paths that miss ARE parseable -- they simply
+    parse to DIFFERENT tokens, so `{" x": 0.91, "x": 0.42}` would emit the
+    path `" x"` carrying the value 0.91 while `resolve_pointer` returns
+    0.42: ANOTHER KEY'S VALUE, the worst outcome this aspect can produce.
+    `_key_expressible` is kept because it gives specific, useful reasons;
+    this closes the class behind it, at zero recall cost (every path the
+    module legitimately emits satisfies token equality, including keys with
+    inner whitespace in a non-first position).
 
     `bool`, `str` (D5), `None`, and non-finite floats (D4) are simply not
     numeric leaves at all -- excluded by definition, not skipped.
@@ -287,6 +402,22 @@ def _json_candidates(source: str, text: str) -> tuple[list[Candidate], list[Swee
         doc = json.loads(text)
     except json.JSONDecodeError as err:
         skips.append(SweepSkip(source=source, reason=f"malformed JSON: {err}"))
+        return candidates, skips
+    except RecursionError:
+        # `json.loads` recurses per nesting level, so a deeply enough nested
+        # document exhausts the stack inside the PARSER. "Never raises" (R6)
+        # is unconditional: one pathological artifact must not abort the
+        # sweep of every other artifact in the repo.
+        skips.append(
+            SweepSkip(
+                source=source,
+                reason=(
+                    "JSON nests too deeply to parse (it exceeds Python's "
+                    "recursion limit); no numeric value in it could be "
+                    "enumerated"
+                ),
+            )
+        )
         return candidates, skips
 
     def walk(value: object, tokens: list[str | int]) -> None:
@@ -310,7 +441,7 @@ def _json_candidates(source: str, text: str) -> tuple[list[Candidate], list[Swee
                             f"key {key!r} at {key_path!r} is not expressible "
                             "in the locator path grammar "
                             f"({_why_key_unexpressible(key, is_first)}); "
-                            f"{leaf_count} numeric leaf(s) beneath it are "
+                            f"{leaf_count} numeric value(s) beneath it are "
                             "unreachable"
                         ),
                     )
@@ -332,11 +463,45 @@ def _json_candidates(source: str, text: str) -> tuple[list[Candidate], list[Swee
                 )
             )
             return
-        candidates.append(
-            Candidate(source=source, kind="json", value=value, path=_build_path(tokens))
-        )
+        path = _build_path(tokens)
+        if _parse_path(path) != tokens:
+            # The authoritative round-trip guard (see the docstring). Token
+            # equality, never "is it parseable" -- a path that parses to
+            # DIFFERENT tokens resolves to a different value, silently.
+            skips.append(
+                SweepSkip(
+                    source=source,
+                    reason=(
+                        f"path {path!r} for key path {tuple(tokens)!r} does not "
+                        "round-trip through the shipped locator path grammar "
+                        f"(it re-parses to {_parse_path(path)!r}); 1 numeric "
+                        "value(s) beneath it are unreachable"
+                    ),
+                )
+            )
+            return
+        candidates.append(Candidate(source=source, kind="json", value=value, path=path))
 
-    walk(doc, [])
+    try:
+        walk(doc, [])
+    except RecursionError:
+        # `walk` (and `_count_numeric_leaves`) recurse per nesting level, so
+        # a document `json.loads` accepted can still exhaust the stack here.
+        # Candidates already enumerated are KEPT -- honesty cuts both ways,
+        # and discarding good coordinates would shrink the candidate set for
+        # a reason unrelated to them -- but the abandoned remainder is
+        # disclosed, since we cannot say how many numeric values it held.
+        skips.append(
+            SweepSkip(
+                source=source,
+                reason=(
+                    "JSON nests too deeply to enumerate (it exceeds Python's "
+                    "recursion limit); enumeration stopped after "
+                    f"{len(candidates)} numeric value(s) and an unknown "
+                    "number beyond that point are unreachable"
+                ),
+            )
+        )
     return candidates, skips
 
 
@@ -444,13 +609,40 @@ def _table_candidates(source: str, path: Path) -> tuple[list[Candidate], list[Sw
     D5: a numeric-looking string cell IS a candidate -- see
     `_numeric_table_value`.
 
+    A non-numeric cell (`"NA"`, a gene id, a free-text note) is simply not a
+    candidate at all -- excluded by definition, not skipped, exactly as
+    `bool`/`str`/`None`/non-finite are on the JSON side.
+
     Never raises (R6): an unrecognized extension, or anything `_read_table`
     can't parse (missing file, non-UTF-8, corrupt gzip, malformed CSV), is
     one `SweepSkip`, never an exception. An empty table (`_read_table`
-    returns `[]`) yields no candidates and no skip -- nothing was lost. A
-    ragged row (shorter than another row in the same table) contributes
-    only its real cells; a cell past its row's end is simply absent, never
-    an `IndexError` (A9).
+    returns `[]`) yields no candidates and no skip -- nothing was lost.
+
+    RAGGED ROWS CUT BOTH WAYS, and the two directions get opposite
+    treatment because `resolve_cell` treats them differently:
+
+    - A data row SHORTER than the header contributes only its real cells; a
+      cell past its row's end is simply absent, never an `IndexError` (A9),
+      and nothing was lost because nothing was there.
+    - A data row LONGER than the header holds real numbers at column indices
+      the header never names. In header mode those cells are NOT ADDRESSABLE:
+      `resolve_cell` bounds an integer column by the HEADER row's width, not
+      the target row's (`reproduce.py:301-305`), so `resolve_cell(rows, 2, 0,
+      True)` on a 2-column header is "column index 2 out of range (2 header
+      columns)" no matter how wide the data row is. Emitting them would trade
+      a silent loss for a coordinate that can never bind, so each over-wide
+      column that held at least one numeric cell is ONE `SweepSkip` naming
+      the column index and the count (same shape as the duplicate-name skip);
+      an over-wide column with zero numeric cells gets no skip, same
+      zero-lost-means-no-skip rule as everywhere else.
+
+    This is not an exotic shape. D2 sees a leading `# Program:featureCounts
+    v2.0.1` line as a ONE-COLUMN header and pushes the entire table off the
+    right edge, and a leading blank line yields a ZERO-column header;
+    `#`/`##` preamble lines are ordinary in bioinformatics table output. In
+    headerless mode none of this applies -- `resolve_cell` bounds the column
+    by the target row itself -- so over-wide cells there are ordinary
+    candidates, not skips.
 
     One reachability the case-insensitive extension match in
     `iter_artifacts` creates: the shipped `_read_table` detects gzip via a
@@ -537,6 +729,7 @@ def _table_candidates(source: str, path: Path) -> tuple[list[Candidate], list[Sw
     for name in header_row:
         name_counts[name] = name_counts.get(name, 0) + 1
     duplicate_lost: dict[str, int] = {}
+    over_wide_lost: dict[int, int] = {}
 
     # Row-major so candidates come out in the order a reader would scan the
     # table (top to bottom, left to right) -- the same order the ragged-row
@@ -556,6 +749,15 @@ def _table_candidates(source: str, path: Path) -> tuple[list[Candidate], list[Sw
                     source=source, kind="table", value=value, column=name, row=row_idx, header=True
                 )
             )
+        # The other ragged direction: cells past the HEADER's right edge are
+        # enumerated by the loop above only up to `len(header_row)`, so
+        # without this they would be lost with no signal at all. They are not
+        # addressable (see the docstring), so they are counted, never
+        # emitted.
+        for col_idx in range(len(header_row), len(data_row)):
+            if _numeric_table_value(data_row[col_idx]) is None:
+                continue
+            over_wide_lost[col_idx] = over_wide_lost.get(col_idx, 0) + 1
 
     for name, count in name_counts.items():
         if count <= 1:
@@ -569,7 +771,24 @@ def _table_candidates(source: str, path: Path) -> tuple[list[Candidate], list[Sw
                 reason=(
                     f"column {name!r} is ambiguous: {count} header matches "
                     "(resolve_cell cannot disambiguate); "
-                    f"{lost} numeric candidate(s) beneath it are unreachable"
+                    f"{lost} numeric value(s) beneath it are unreachable"
+                ),
+            )
+        )
+
+    # Sorted by column index so the disclosure list is deterministic
+    # regardless of which row first ran over the header's width.
+    for col_idx in sorted(over_wide_lost):
+        skips.append(
+            SweepSkip(
+                source=source,
+                reason=(
+                    f"column index {col_idx} is past the header row's "
+                    f"{len(header_row)} column(s): resolve_cell bounds an "
+                    "integer column by the header row's width, so no cell "
+                    "there is addressable; "
+                    f"{over_wide_lost[col_idx]} numeric value(s) beneath it "
+                    "are unreachable"
                 ),
             )
         )
@@ -618,9 +837,14 @@ def sweep_repo(repo: Path) -> tuple[list[Candidate], list[SweepSkip]]:
     already never raises (R6, pinned in Task 3), so no `try/except` wraps
     that call.
 
-    Returns `(candidates, skips)` in the same POSIX-relative-path order
-    `iter_artifacts` already sorted its paths into, so a sweep is
-    reproducible (R2).
+    Returns `(candidates, skips)` with BOTH lists in POSIX-relative-path
+    order, so a sweep is reproducible (R2). Candidates inherit that order
+    from `iter_artifacts`'s sorted paths; skips are re-sorted by `source`
+    here, because the walk's own skips and the per-artifact skips are
+    produced in two different passes and concatenating them would otherwise
+    hand back a disclosure list whose order depended on how the failures
+    happened to interleave. The sort is stable, so several skips about the
+    SAME artifact keep the order the enumerator emitted them in.
     """
     base = Path(repo)
     paths, skips = iter_artifacts(base)
@@ -652,7 +876,14 @@ def sweep_repo(repo: Path) -> tuple[list[Candidate], list[SweepSkip]]:
 
         if path.name.lower().endswith(".json"):
             try:
-                text = path.read_text()
+                # `encoding="utf-8"` EXPLICITLY: a bare `read_text()` uses
+                # the platform locale's encoding, so under a non-UTF-8 locale
+                # a perfectly valid artifact would degrade to a misleading
+                # "could not read artifact" skip and the sweep's result would
+                # depend on the machine it ran on -- unacceptable in a
+                # reproducibility tool. This matches `_read_table`, which
+                # already passes utf-8 explicitly on both its branches.
+                text = path.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError) as err:
                 skips.append(
                     SweepSkip(source=source, reason=f"could not read artifact: {err}")
@@ -665,4 +896,5 @@ def sweep_repo(repo: Path) -> tuple[list[Candidate], list[SweepSkip]]:
         candidates.extend(new_candidates)
         skips.extend(new_skips)
 
+    skips.sort(key=lambda s: s.source)
     return candidates, skips
