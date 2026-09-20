@@ -12,6 +12,7 @@ here (aspect 2).
 import gzip
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -75,6 +76,27 @@ def _assert_table_round_trip(candidates: list[Candidate], path: Path) -> None:
         assert float(resolved) == cand.value, (
             f"{cand!r} re-resolves to {resolved!r}, not {cand.value!r}"
         )
+
+
+def _over_wide_skip_numbers(skips: list[SweepSkip]) -> list[tuple[int, int, int]]:
+    """Pull `(column index, header width, values lost)` out of each over-wide skip.
+
+    C1 -- an over-wide data row silently wiping a whole featureCounts file --
+    was the worst defect on this branch, and these skips are its only guard.
+    Asserting just `len(skips)` would still pass if the column-index
+    arithmetic were wrong, so the three numbers the arithmetic actually
+    produces are parsed back out and pinned by value.
+    """
+    pattern = re.compile(
+        r"^column index (\d+) is past the header row's (\d+) column\(s\): "
+        r".*; (\d+) numeric value\(s\) beneath it are unreachable$"
+    )
+    out: list[tuple[int, int, int]] = []
+    for skip in skips:
+        match = pattern.match(skip.reason)
+        assert match is not None, f"not an over-wide skip: {skip.reason!r}"
+        out.append((int(match.group(1)), int(match.group(2)), int(match.group(3))))
+    return out
 
 
 def test_iter_artifacts_prunes_git_dir_at_top_level(tmp_path):
@@ -596,7 +618,8 @@ def test_json_candidates_whitespace_key_is_skipped_not_emitted(text, bad_key):
     assert candidates == []
     assert len(skips) == 1
     assert skips[0].source == "m.json"
-    assert skips[0].reason
+    assert "does not round-trip" in skips[0].reason
+    assert repr(bad_key) in skips[0].reason
 
 
 def test_json_candidates_never_emits_a_path_that_resolves_to_another_keys_value():
@@ -880,10 +903,10 @@ def test_table_candidates_over_wide_data_rows_are_disclosed_not_silently_dropped
         Candidate(source="wide.csv", kind="table", value=2.5, column="log2FC", row=1, header=True),
     ]
     _assert_table_round_trip(candidates, p)
-    assert len(skips) == 1
-    assert skips[0].source == "wide.csv"
-    assert "2" in skips[0].reason  # column index 2
-    assert "numeric value(s)" in skips[0].reason
+    assert [s.source for s in skips] == ["wide.csv"]
+    # Column index 2, past a 2-column header, 2 values lost (0.001, 0.002).
+    # A bare `"2" in reason` could not tell those three numbers apart.
+    assert _over_wide_skip_numbers(skips) == [(2, 2, 2)]
 
 
 def test_table_candidates_leading_comment_line_discloses_the_whole_file(tmp_path):
@@ -907,12 +930,12 @@ def test_table_candidates_leading_comment_line_discloses_the_whole_file(tmp_path
     candidates, skips = _table_candidates("counts.tsv", p)
 
     assert candidates == []
-    # One skip per over-wide column that held at least one number: col 1
-    # (1500, 900) and col 2 (42, 7). "Geneid"/"Length"/"sample1" are not
-    # numeric and cost nothing.
-    assert len(skips) == 2
+    # One skip per over-wide column that held at least one number, ordered by
+    # column index: col 1 (1500, 900) and col 2 (42, 7), both past a
+    # ONE-column header. "Geneid"/"Length"/"sample1" are not numeric and cost
+    # nothing, so no column-0 skip.
     assert {s.source for s in skips} == {"counts.tsv"}
-    assert all("numeric value(s)" in s.reason for s in skips)
+    assert _over_wide_skip_numbers(skips) == [(1, 1, 2), (2, 1, 2)]
 
 
 def test_table_candidates_leading_blank_line_discloses_the_whole_file(tmp_path):
@@ -925,9 +948,9 @@ def test_table_candidates_leading_blank_line_discloses_the_whole_file(tmp_path):
     candidates, skips = _table_candidates("blank_first.csv", p)
 
     assert candidates == []
-    assert len(skips) == 1
-    assert skips[0].source == "blank_first.csv"
-    assert "numeric value(s)" in skips[0].reason
+    assert [s.source for s in skips] == ["blank_first.csv"]
+    # A ZERO-column header: only the 1.5 is numeric, at column index 1.
+    assert _over_wide_skip_numbers(skips) == [(1, 0, 1)]
 
 
 def test_table_candidates_over_wide_column_with_no_numeric_cells_emits_no_skip(tmp_path):
