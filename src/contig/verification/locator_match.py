@@ -23,9 +23,11 @@ via the `_EXACT_COMPARE` sentinel; and the pct scale applies the same rules to
 `claim_value / 100` with two extra decimal places of precision.
 
 **Nothing here raises** (M7): a non-finite candidate or claim value is simply
-not a match, whatever the scale. The full matching rule (`match_claims`) and
-the sidecar builder (`sidecar_text`) are pinned as callable stubs in Phase 1
-and implemented in Phases 2 and 3.
+not a match, whatever the scale; shape-malformed candidates are skipped.
+`match_claims` applies the full matching rule (M4 site grouping, M5 dual-scale
+exactly-one, M9 refusal, in claims order, never raising) and the sidecar
+builder (`sidecar_text`) is pinned as a callable stub in Phase 1 and
+implemented in Phase 3.
 
 Stdlib only; dataclasses imported from the shipped modules and never edited.
 """
@@ -44,6 +46,19 @@ from contig.verification.reproduce import Claim, Locator, TableLocator
 #: count, so comparison is EXACT -- no rounding at any scale. Documented
 #: default, pinned by tests; never a real decimal-place count (hence negative).
 _EXACT_COMPARE = -1
+
+#: M9's low-information deny-list (frozenset of floats): `0`, `1`, `0.5`,
+#: `0.05`, `100` in every float form (`0` and `0.0` are the same float).
+#: Small/round values appear all over a real repo, so a claim carrying one is
+#: refused outright, never bound. A conservative, deliberately uncalibrated
+#: engineering default, named as such in the PRD.
+_LOW_INFORMATION_DENY = frozenset({0.0, 1.0, 0.5, 0.05, 100.0})
+
+#: M9's significant-digit cap for integer-valued claims: an integer with at
+#: most this many significant digits (trailing zeros ignored: `87` and `870`
+#: both count 2) is too low-information to bind. Conservative uncalibrated
+#: default; `876` (3) and `1234` (4) pass.
+_INT_SIG_DIGIT_CAP = 2
 
 
 @dataclass(frozen=True)
@@ -88,6 +103,33 @@ def _printed_precision(value: float) -> int:
     if fractional == "0":
         return 0
     return min(len(fractional), 12)
+
+
+def _significant_digits(value: float) -> int:
+    """Count the significant digits of the integer-valued claim `value`:
+    the number of digits in its magnitude with trailing zeros ignored --
+    `87` -> 2, `870` -> 2, `876` -> 3, `1234` -> 4, `1000000` -> 1. The
+    exact rule: `len(str(abs(int(value))).rstrip("0"))`. Only ever called
+    with an integer-valued (and finite) value, so the `int()` conversion
+    cannot raise (M7); a value of `0` would count 0, but `0` is denied by
+    `_LOW_INFORMATION_DENY` before this ever runs.
+    """
+    return len(str(abs(int(value))).rstrip("0"))
+
+
+def _is_low_information(value: float) -> bool:
+    """True iff claim `value` is M9-refused: on the deny-list, or an
+    integer-valued value with at most `_INT_SIG_DIGIT_CAP` significant
+    digits. Non-integer floats like `0.75` are only ever refused by the
+    deny-list -- the significant-digit rule never touches them. Never
+    raises: non-finite values are caught by the caller before this runs,
+    and `float.is_integer()` is False for them regardless (M7).
+    """
+    if value in _LOW_INFORMATION_DENY:
+        return True
+    if not value.is_integer():
+        return False
+    return _significant_digits(value) <= _INT_SIG_DIGIT_CAP
 
 
 def _value_matches(
@@ -136,11 +178,116 @@ def _value_matches(
     return round(candidate, precision) == round(claim, precision)
 
 
+def _site_key(candidate: Candidate) -> tuple:
+    """A site is a distinct (source, coordinate) pair (M4): `(source,
+    path)` for a JSON leaf, `(source, column, row)` for a table cell. Two
+    candidates with the same key (e.g. duplicated table rows) are ONE site,
+    never ambiguity. Only called on shape-valid candidates (kind "json"
+    with `path` set, or "table" with `column`/`row`/`header` set -- the
+    defensive skips in `_match_one_claim` guarantee it).
+    """
+    if candidate.kind == "json":
+        return (candidate.source, candidate.path)
+    return (candidate.source, candidate.column, candidate.row)
+
+
+def _locator_for(candidate: Candidate) -> Locator | TableLocator:
+    """Build the proposed binding site for a matched `candidate`, fields
+    carried VERBATIM from the `Candidate` -- `source` is the repo-relative
+    POSIX path, `path` is the sweep's dotted+`[n]` expression (never
+    synthesized), `column`/`row`/`header` come 1:1. `TableLocator.delimiter`
+    is never set (the empty-string sentinel): `load_claims` re-derives it
+    from the source extension, and setting a delimiter here would be a trap
+    that silently drifts from what load time resolves.
+    """
+    if candidate.kind == "json":
+        return Locator(source=candidate.source, path=candidate.path)
+    return TableLocator(
+        source=candidate.source,
+        column=candidate.column,
+        row=candidate.row,
+        delimiter="",
+        header=candidate.header,
+    )
+
+
+def _match_one_claim(candidates: Sequence[Candidate], claim: Claim) -> MatchOutcome:
+    """Match one claim against the candidate sweep, never raising (M7).
+
+    Order of judgment, per claim: a non-finite value (a `nan`/`inf` claim,
+    loadable by `load_claims`) records `no_candidates` -- it can never be
+    evidence; M9 refuses a low-information value BEFORE any matching runs
+    (the refusal short-circuits, `site_count=0` -- even a candidate that
+    would match must not bind); then both scales are attempted
+    independently (`"raw"` and `"pct"`), collecting the DISTINCT sites
+    (M4) where any candidate matches at the claim's own printed precision.
+    Exactly one scale with exactly one site binds; both scales with one
+    site each, or either scale with more than one site, is ambiguous with
+    the total distinct-site count; zero sites is `no_candidates`.
+
+    Candidates are iterated in the given order (already sorted by source
+    from `sweep_repo` -- never re-sorted), and the first candidate seen at
+    a site is the site's representative, so outcomes are reproducible.
+    Shape-malformed candidates (unknown `kind`, `kind="json"` without
+    `path`, `kind="table"` without `column`/`row`/`header`) are skipped,
+    never raised on, never counted as sites.
+    """
+    value = float(claim.value)
+    if not math.isfinite(value):
+        return MatchOutcome(claim.id, value, None, None, 0, "no_candidates")
+    if _is_low_information(value):
+        return MatchOutcome(claim.id, value, None, None, 0, "refused_low_information")
+
+    precision = _printed_precision(value)
+    raw_sites: dict[tuple, Candidate] = {}
+    pct_sites: dict[tuple, Candidate] = {}
+    for candidate in candidates:
+        if candidate.kind == "json":
+            if candidate.path is None:
+                continue
+        elif candidate.kind == "table":
+            if (
+                candidate.column is None
+                or candidate.row is None
+                or candidate.header is None
+            ):
+                continue
+        else:
+            continue
+        if _value_matches(candidate.value, value, "raw", precision):
+            raw_sites.setdefault(_site_key(candidate), candidate)
+        if _value_matches(candidate.value, value, "pct", precision):
+            pct_sites.setdefault(_site_key(candidate), candidate)
+
+    if len(raw_sites) == 1 and not pct_sites:
+        return MatchOutcome(
+            claim.id, value, "raw", _locator_for(next(iter(raw_sites.values()))), 1, "bound"
+        )
+    if len(pct_sites) == 1 and not raw_sites:
+        return MatchOutcome(
+            claim.id, value, "pct", _locator_for(next(iter(pct_sites.values()))), 1, "bound"
+        )
+    if not raw_sites and not pct_sites:
+        return MatchOutcome(claim.id, value, None, None, 0, "no_candidates")
+    total_sites = len(set(raw_sites) | set(pct_sites))
+    return MatchOutcome(claim.id, value, None, None, total_sites, "ambiguous")
+
+
 def match_claims(
     candidates: Sequence[Candidate], claims: Sequence[Claim]
 ) -> list[MatchOutcome]:
-    """Match sweep candidates against claims (Phase 2 -- stub for now)."""
-    return []
+    """Match sweep candidates against claims, one outcome per claim in
+    claims order, pure and never raising (M7).
+
+    A `bound` outcome carries the complete locator and the scale at which
+    the repo held the value (`"raw"` = `v`, `"pct"` = `v/100`); every other
+    reason carries `locator=None`/`scale=None` and the evidence count in
+    `site_count` (distinct (source, coordinate) sites holding a matching
+    value, across both scales where the outcome is ambiguous). Empty
+    `claims` yields `[]`; empty `candidates` yields one `no_candidates`
+    outcome per claim.
+    """
+    return [_match_one_claim(candidates, claim) for claim in claims]
 
 
 def sidecar_text(
