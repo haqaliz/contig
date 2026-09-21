@@ -468,13 +468,29 @@ def _sidecar_line(outcome: MatchOutcome) -> str:
     artifact (repo-relative `source`), the coordinate, the scale (`raw` /
     `÷100`), and the R6 disclosure -- the exact repo-relative path whose
     rewriting the locator depends on (the same `source`, stated as a fact,
-    never a guarantee). A non-bound line names the claim id, the reason
-    (`ambiguous` / `refused_low_information` / `no_candidates`) and the
-    candidate-site count. Never raises: a `bound` outcome without a locator
-    (impossible from `match_claims`, defensive against hand-built input)
-    degrades to a named line rather than an AttributeError (M7).
+    never a guarantee). When the outcome's pool was narrowed by the M10
+    semantic filter (`semantic_match` set), the bound line names it too --
+    "via column <key>" for a table bind, "via key <key>" for a JSON leaf
+    bind -- and the ambiguous / no_candidates lines name the semantic path
+    ("semantic subset, N candidate sites" / "semantic column <key>"). A
+    value-only outcome renders byte-identical to the shipped wording. Never
+    raises: a `bound` outcome without a locator (impossible from
+    `match_claims`, defensive against hand-built input) degrades to a named
+    line rather than an AttributeError (M7).
     """
     if outcome.reason != "bound":
+        if outcome.semantic_match is not None:
+            if outcome.reason == "ambiguous":
+                return (
+                    f"claim {outcome.claim_id}: ambiguous "
+                    f"(semantic subset, {outcome.site_count} candidate sites)"
+                )
+            if outcome.reason == "no_candidates":
+                return (
+                    f"claim {outcome.claim_id}: no_candidates "
+                    f"(semantic column {outcome.semantic_match}, "
+                    f"{outcome.site_count} candidate sites)"
+                )
         return (
             f"claim {outcome.claim_id}: {outcome.reason} "
             f"({outcome.site_count} candidate sites)"
@@ -483,9 +499,13 @@ def _sidecar_line(outcome: MatchOutcome) -> str:
     if locator is None:
         return f"claim {outcome.claim_id}: bound (locator unavailable)"
     scale = "raw" if outcome.scale == "raw" else "÷100"
+    semantic = ""
+    if outcome.semantic_match is not None:
+        kind = "column" if isinstance(locator, TableLocator) else "key"
+        semantic = f" via {kind} {outcome.semantic_match}"
     return (
         f"claim {outcome.claim_id}: bound at {locator.source} "
-        f"({_sidecar_coordinate(locator)}) at {scale}; depends on "
+        f"({_sidecar_coordinate(locator)}){semantic} at {scale}; depends on "
         f"{locator.source} being rewritten by the run"
     )
 
@@ -502,9 +522,13 @@ def sidecar_text(
     outcomes yield the framing line alone. A bound line names the artifact
     (repo-relative path), the coordinate, the scale (`raw` / `÷100`), and
     the R6 disclosure (the exact path whose rewriting the locator depends
-    on, stated as a fact); a non-bound line names the reason and the
-    candidate-site count. The same inputs always render the identical
-    string: no I/O, no wall clock, no iteration order outside the caller's.
+    on, stated as a fact); when `semantic_match` is set it names the M10
+    narrowed path too ("via column <key>" / "via key <key>"). A non-bound
+    line names the reason and the candidate-site count, naming the semantic
+    subset ("semantic subset, N candidate sites") or column ("semantic
+    column <key>") for semantic outcomes; value-only lines keep the shipped
+    wording. The same inputs always render the identical string: no I/O, no
+    wall clock, no iteration order outside the caller's.
     """
     lines = [_SIDECAR_HEADER]
     lines.extend(

@@ -13,6 +13,7 @@ the R6 path disclosure and the once-only R1 review framing.
 """
 
 import json
+import math
 import os
 from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
@@ -26,10 +27,12 @@ from contig.verification.locator_match import (
     MatchOutcome,
     _EXACT_COMPARE,
     _header_matches,
+    _is_low_information,
     _leaf_key,
     _norm_header,
     _printed_precision,
     _significant_digits,
+    _site_key,
     _value_matches,
     match_claims,
     sidecar_text,
@@ -1111,3 +1114,281 @@ def test_semantic_m9_refusal_wins_regardless_of_metrics():
     assert outcome.reason == "refused_low_information"
     assert outcome.site_count == 0
     assert outcome.semantic_match is None
+
+
+# --- Phase B: narrowing pins + sidecar amendment over the semantic filter -----
+
+
+def _semantic_corpus(
+    tmp_path: Path,
+) -> list[tuple[list[Candidate], list[Claim], dict[str, list[str]], Path]]:
+    """The Phase-B fixture corpus: the dense recovery table (a semantic bind
+    the value-only matcher cannot make) and the swept JSON+TSV repo (semantic
+    binds over both locator shapes). Each fixture carries a metrics map whose
+    words come from the fixture's OWN headers/leaf keys, plus the repo dir
+    that backs re-resolution for the G4 parity pins.
+    """
+    dense_dir = tmp_path / "dense"
+    _write_table(
+        dense_dir,
+        "de.tsv",
+        [
+            ["recovery", "precision", "recall", "f1"],
+            ["0.91", "0.91", "0.91", "0.91"],
+        ],
+    )
+    dense_claims = [Claim(id="r", value=0.91, tolerance=0.05)]
+
+    corpus_dir = tmp_path / "corpus"
+    _write(corpus_dir, "results.json", '{"auc": 0.9134}')
+    _write_table(
+        corpus_dir,
+        "de.tsv",
+        [
+            ["gene_id", "log2FoldChange", "padj"],
+            ["ENSG1", "2.1", "0.001"],
+        ],
+    )
+    corpus_candidates, corpus_skips = sweep_repo(corpus_dir)
+    assert corpus_skips == []
+    corpus_claims = [
+        Claim(id="auc", value=0.91, tolerance=0.05),
+        Claim(id="lfc", value=2.1, tolerance=0.05),
+    ]
+
+    return [
+        (_dense_recovery_fixture(), dense_claims, {"r": ["recovery"]}, dense_dir),
+        (
+            corpus_candidates,
+            corpus_claims,
+            {"auc": ["auc"], "lfc": ["log2FoldChange"]},
+            corpus_dir,
+        ),
+    ]
+
+
+def _value_only_site_count(candidates: list[Candidate], claim: Claim) -> int:
+    """Recompute the value-only site count for `claim` over `candidates`,
+    independently of `match_claims`: the same printed-precision rules
+    (`_printed_precision`, `_value_matches`) over the FULL candidate pool,
+    sites grouped by (source, coordinate) with `_site_key` (M4), counting
+    the union of raw and pct sites (M5). A non-finite or M9-refused value
+    short-circuits to 0, mirroring the shipped order of judgment.
+    """
+    value = float(claim.value)
+    if not math.isfinite(value) or _is_low_information(value):
+        return 0
+    precision = _printed_precision(value)
+    sites = set()
+    for candidate in candidates:
+        if candidate.kind == "json":
+            if candidate.path is None:
+                continue
+        elif candidate.kind == "table":
+            if (
+                candidate.column is None
+                or candidate.row is None
+                or candidate.header is None
+            ):
+                continue
+        else:
+            continue
+        if _value_matches(candidate.value, value, "raw", precision) or _value_matches(
+            candidate.value, value, "pct", precision
+        ):
+            sites.add(_site_key(candidate))
+    return len(sites)
+
+
+def _fixture_header_words(candidates: list[Candidate], claim_id: str) -> list[str]:
+    """Plausible metric words for one claim, derived from the fixture's OWN
+    semantic names (table headers / JSON leaf keys): the claim id when it is
+    itself a name, else the first name available -- so the semantic variant
+    always has at least one header on the same fixture to narrow by
+    (acceptance 15). No names at all yields `[]`, the value-only fallback.
+    """
+    names: set[str] = set()
+    for candidate in candidates:
+        if candidate.kind == "json" and candidate.path is not None:
+            key = _leaf_key(candidate.path)
+        elif candidate.kind == "table" and isinstance(candidate.column, str):
+            key = candidate.column
+        else:
+            key = None
+        if key is not None:
+            names.add(key)
+    ordered = sorted(names)
+    if claim_id in ordered:
+        return [claim_id]
+    if ordered:
+        return [ordered[0]]
+    return []
+
+
+def test_semantic_narrowing_never_widens_over_existing_fixture_corpus(tmp_path):
+    for candidates, claims, _metrics, _repo in _semantic_corpus(tmp_path):
+        metrics = {
+            claim.id: _fixture_header_words(candidates, claim.id)
+            for claim in claims
+        }
+        value_only = match_claims(candidates, claims)
+        semantic = match_claims(candidates, claims, metrics=metrics)
+        assert [o.claim_id for o in value_only] == [c.id for c in claims]
+        assert [o.claim_id for o in semantic] == [c.id for c in claims]
+        for vo, so, claim in zip(value_only, semantic, claims):
+            independent = _value_only_site_count(candidates, claim)
+            assert independent == vo.site_count
+            assert so.site_count <= independent
+
+
+def test_m6_round_trip_semantic_bounds_pass_unchanged_load_claims(tmp_path):
+    for candidates, claims, metrics, _repo in _semantic_corpus(tmp_path):
+        outcomes = match_claims(candidates, claims, metrics=metrics)
+        for outcome, _claim in zip(outcomes, claims):
+            assert outcome.reason == "bound"
+            assert outcome.semantic_match is not None
+            claims_path = tmp_path / f"sem_roundtrip_{outcome.claim_id}.json"
+            claims_path.write_text(json.dumps([_claim_dict_for(outcome, tolerance=0.1)]))
+            loaded = load_claims(claims_path)  # any ClaimsError fails this test
+            assert len(loaded) == 1
+            assert loaded[0].id == outcome.claim_id
+            assert loaded[0].value == outcome.value
+            assert loaded[0].tolerance == 0.1
+            locator = loaded[0].locator
+            if isinstance(outcome.locator, TableLocator):
+                assert locator.source == outcome.locator.source
+                assert locator.column == outcome.locator.column
+                assert locator.row == outcome.locator.row
+                assert locator.header == outcome.locator.header
+                assert locator.delimiter == "\t"  # re-derived, never the empty sentinel
+            else:
+                assert locator == outcome.locator
+
+
+def test_g4_classify_parity_semantic_bounds_reproduce_at_the_claim_precision(
+    tmp_path,
+):
+    for candidates, claims, metrics, repo in _semantic_corpus(tmp_path):
+        outcomes = match_claims(candidates, claims, metrics=metrics)
+        for outcome, claim in zip(outcomes, claims):
+            assert outcome.reason == "bound"
+            assert outcome.semantic_match is not None
+            observed = _re_resolve(outcome.locator, repo)
+            if outcome.scale == "pct":
+                observed = observed * 100  # back to the claim's own scale
+            observed = round(observed, _printed_precision(claim.value))
+            status, delta, message = classify(
+                claimed=claim.value, observed=observed, tolerance=0.1
+            )
+            assert status == "reproduced"
+
+
+def test_g4_claim_family_dispatches_semantic_binds_without_raising(tmp_path):
+    families = {}
+    for candidates, claims, metrics, _repo in _semantic_corpus(tmp_path):
+        outcomes = match_claims(candidates, claims, metrics=metrics)
+        for outcome, _claim in zip(outcomes, claims):
+            assert outcome.reason == "bound"
+            assert outcome.semantic_match is not None
+            claims_path = tmp_path / f"sem_family_{outcome.claim_id}.json"
+            claims_path.write_text(json.dumps([_claim_dict_for(outcome, tolerance=0.1)]))
+            (loaded,) = load_claims(claims_path)
+            families[outcome.claim_id] = claim_family(loaded)
+    assert families == {"r": "table", "auc": "json", "lfc": "table"}
+
+
+def _semantic_sidecar_outcomes_and_claims() -> tuple[list[MatchOutcome], list[Claim]]:
+    outcomes = [
+        MatchOutcome(
+            claim_id="rec",
+            value=0.91,
+            scale="raw",
+            locator=TableLocator(
+                source="de.tsv",
+                column="recovery",
+                row=0,
+                delimiter="",
+                header=True,
+            ),
+            site_count=1,
+            reason="bound",
+            semantic_match="recovery",
+        ),
+        MatchOutcome(
+            claim_id="auc",
+            value=0.91,
+            scale="raw",
+            locator=Locator(source="results.json", path="m.auc"),
+            site_count=1,
+            reason="bound",
+            semantic_match="auc",
+        ),
+        MatchOutcome(
+            claim_id="samb", value=0.75, scale=None, locator=None, site_count=2,
+            reason="ambiguous", semantic_match="recovery",
+        ),
+        MatchOutcome(
+            claim_id="snone", value=0.42, scale=None, locator=None, site_count=0,
+            reason="no_candidates", semantic_match="recovery",
+        ),
+    ]
+    claims = [Claim(id=o.claim_id, value=o.value, tolerance=0.05) for o in outcomes]
+    return outcomes, claims
+
+
+def test_sidecar_semantic_bound_table_line_names_the_column():
+    outcomes, claims = _semantic_sidecar_outcomes_and_claims()
+    text = sidecar_text(outcomes, claims)
+    line = next(l for l in text.splitlines() if l.startswith("claim rec:"))
+    assert "via column recovery" in line
+    assert "at raw" in line
+    assert "depends on de.tsv being rewritten by the run" in line
+
+
+def test_sidecar_semantic_bound_json_line_names_the_key():
+    outcomes, claims = _semantic_sidecar_outcomes_and_claims()
+    text = sidecar_text(outcomes, claims)
+    line = next(l for l in text.splitlines() if l.startswith("claim auc:"))
+    assert "via key auc" in line
+    assert "path=m.auc" in line
+    assert "at raw" in line
+    assert "depends on results.json being rewritten by the run" in line
+
+
+def test_sidecar_semantic_ambiguous_line_names_the_semantic_subset_and_count():
+    outcomes, claims = _semantic_sidecar_outcomes_and_claims()
+    text = sidecar_text(outcomes, claims)
+    line = next(l for l in text.splitlines() if l.startswith("claim samb:"))
+    assert "semantic subset" in line
+    assert "2 candidate sites" in line
+
+
+def test_sidecar_semantic_no_candidates_line_names_the_column():
+    outcomes, claims = _semantic_sidecar_outcomes_and_claims()
+    text = sidecar_text(outcomes, claims)
+    line = next(l for l in text.splitlines() if l.startswith("claim snone:"))
+    assert "no_candidates" in line
+    assert "semantic column recovery" in line
+    assert "0 candidate sites" in line
+
+
+def test_sidecar_semantic_outcomes_render_deterministically():
+    outcomes, claims = _semantic_sidecar_outcomes_and_claims()
+    assert sidecar_text(outcomes, claims) == sidecar_text(outcomes, claims)
+
+
+def test_sidecar_value_only_bound_line_byte_identical_to_shipped_wording():
+    outcomes, claims = _sidecar_outcomes_and_claims()
+    text = sidecar_text(outcomes, claims)
+    line = next(l for l in text.splitlines() if l.startswith("claim auc:"))
+    assert line == (
+        "claim auc: bound at results.json (path=auc) at raw; depends on "
+        "results.json being rewritten by the run"
+    )
+
+
+def test_sidecar_value_only_ambiguous_line_byte_identical_to_shipped_wording():
+    outcomes, claims = _sidecar_outcomes_and_claims()
+    text = sidecar_text(outcomes, claims)
+    line = next(l for l in text.splitlines() if l.startswith("claim amb:"))
+    assert line == "claim amb: ambiguous (2 candidate sites)"
