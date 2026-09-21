@@ -1,31 +1,34 @@
-# Unit of work: reproduce-locator-matcher (C8 locator inference, aspect 2)
+# Unit of work: reproduce-locator-cli (C8 locator inference, aspect 3 of 3)
 
-Branch: `feat/reproduce-locator-matcher/aliz`. Source: contig-next handoff brief
-(confirmed by user, 2026-09-21). No GitHub issue exists for this work.
+Branch: `feat/reproduce-locator-cli/aliz`. Source: inline brief (confirmed by
+user, 2026-09-21). No GitHub issue exists for this work.
 
 ## Brief
 
-Build C8 locator-inference aspect 2 (match-and-propose) per
-`docs/planning/reproduce-locator-inference/prd.md`: a pure stdlib matcher that
-consumes the shipped `sweep_repo` candidate enumeration and the `extract-claims`
-draft, applying rounding-aware equality at the claim's printed precision, the
-dual-scale `v`/`v/100` attempt with sidecar disclosure, the strict exactly-one
-rule (0 or >1 → emit nothing, count named), complete-or-nothing table locators,
-and the M9 low-information-value refusal — with G1 (exactly 0 wrong locators on
-the fixture corpus) as the hard gate and a round-trip through the unchanged
-`load_claims`. No CLI, no `models.py` change, no verdict/bundle/signature change;
-`pattern`/notebook inference stays out (synthesized-regex blocker).
+Build C8 locator-inference aspect 3 (cli-command) per
+`docs/planning/reproduce-locator-inference/prd.md` (M1, S1-S4) and the amended
+spec: a new `contig infer-locators <repo> <claims.json>` command that runs the
+shipped matcher (`sweep_repo` + `match_claims` with the M10 `metrics` mapping)
+over a local repo and an existing claims draft, writing an updated claims file
+(locators added where evidence-gated binds exist) plus a review sidecar, with
+the `load_claims` round-trip invariant before any write (ClaimsError → exit
+non-zero, nothing written), `--force`/refuse-to-overwrite parity with
+`extract-claims`, `--dry-run`, Click-param introspection tests. Metric words
+come from the extractor's metric field/sidecar and human review — the CLI
+threads them, never invents them. No `models.py`/verdict/bundle/signature
+change; stdlib only.
 
-Caveat to respect: R6 stale-coordinate/fresh-path mismatch is
-accepted-and-disclosed, not solved — record it in the sidecar wording and in the
-evidence-gate plan; after the matcher, the PRD's evidence gate (one real
-published repo, count binds/ambiguities/refusals) must be run and recorded before
-any CLI aspect is started.
+Caveat: the matcher module is unmerged (PR #41); this worktree's base is
+`origin/master`, so implementation depends on the PR merging (or rebasing this
+branch onto it) — planning docs proceed regardless.
 
 ## Source references
 
-- PRD: `docs/planning/reproduce-locator-inference/prd.md` (aspect decomposition at
-  lines 274-293; aspect 2 = `match-and-propose`, no I/O, evidence gate after it)
-- Shipped substrate: `CHANGELOG.md` [Unreleased] candidate-sweep entry;
-  `src/contig/verification/locator_inference.py`
-- Capability home: `docs/technical/CAPABILITY_ROADMAP.md` C8
+- PRD: `docs/planning/reproduce-locator-inference/prd.md` (M1 = the command;
+  S1 = `--force` parity; S4 = `--dry-run`; aspect 3 = `cli-command`, gated on
+  the evidence gate — passed and recorded)
+- Spec amendment (M10 + sidecar): `docs/planning/reproduce-locator-inference/match-and-propose/spec.md`
+- Gate records: `docs/planning/reproduce-locator-inference/match-and-propose/evidence-gate-semantic-20260921.md`
+  (verdict: "Aspect 3 is unblocked to ship narrowed")
+- Matcher module (on PR #41, not yet in this base):
+  `src/contig/verification/locator_match.py`
