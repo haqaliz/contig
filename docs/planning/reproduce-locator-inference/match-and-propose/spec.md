@@ -6,6 +6,103 @@ risks R1-R6; this spec scopes aspect 2 only). Interview decisions (2026-09-21):
 R3 = float-repr precision; fixtures = inline `tmp_path` repos (sweep precedent);
 S2 = pure sidecar-text builder ships in this aspect.
 
+> ## Amendment 2026-09-21 (post-evidence-gate) — semantic disambiguation (M10)
+>
+> The evidence gate (`evidence-gate-20260921.md`) measured the value-only
+> exactly-one matcher at **0/20 binds** on a canonical real repo: every
+> plausible value appears at scale in full result tables, so value equality
+> alone can never name a site. The disambiguating signal — which *column* a
+> claim's metric names — is present in the repo's headers and absent from the
+> matcher. This amendment adds a **semantic filter** (M10): match the claim's
+> metric words against table column headers / JSON leaf keys, then apply the
+> unchanged value-matching rules *within that subset*. A manual simulation on
+> the gate repo grounds it: **7/20 binds (0 wrong)**, all binding to the exact
+> correct cell; the rest degrade honestly (ambiguous/no_candidates), and one
+> sensitivity case (`n_recovered` vs "called by both") documents the
+> metric-vocabulary ↔ header-vocabulary mismatch as a real, measured limit.
+> Pre-amendment design text is kept below for the record; where this amendment
+> conflicts, the amendment wins.
+
+## Amendment in-scope requirements (replaces M2-M4's value-only reading)
+
+- **M10 — Semantic filter (the narrowed design).** `match_claims` gains an
+  optional `metrics: Mapping[str, Sequence[str]] | None = None` parameter
+  (claim id → metric words; in the real flow these come from the extractor's
+  `ExtractedClaim.metric` and/or human review — never invented by the
+  matcher). When the claim has metric words AND at least one candidate's
+  header/leaf key normalized-matches a word, the candidate pool is **filtered
+  to the semantic subset** before any value matching. Normalization: lowercase
+  + strip non-alphanumerics; match = normalized equality OR containment in
+  either direction (so "recovered" ⊂ "n_recovered" matches; conservative
+  uncalibrated engineering default, named as such). The unchanged exactly-one
+  / dual-scale / site-granularity rules then run over the subset.
+- **Fallback (no regression).** `metrics is None`, an unknown claim id, or
+  zero header matches → the pre-amendment value-only behavior, byte-identical
+  to the shipped module. All shipped pins (G1 fallback fixtures, M6, G4, M7,
+  M9) stay green unchanged.
+- **Honest misses stay honest.** A claim whose value is absent from its
+  semantic column is `no_candidates`/`ambiguous` exactly as before; a metric
+  word that matches nothing falls back to value-only ambiguity. The semantic
+  filter can only *narrow* a pool, never widen it.
+- **API amendment (pinned).**
+  - `match_claims(candidates, claims, *, metrics=None) -> list[MatchOutcome]`
+    (additive keyword-only parameter; claims order preserved; still
+    never-raises; `metrics` must be a plain dict — a non-dict raises
+    `TypeError` at call time, pinned).
+  - `MatchOutcome` gains `semantic_match: str | None = None` (additive field
+    with default; the normalized header/leaf key that produced the semantic
+    subset; `None` when the value-only path ran, including the zero-header-
+    match fallback). Frozenness, field order of the existing five fields, and
+    construction with positional args for the original fields are unchanged;
+    the Phase-1 field-pin test is updated to the seven-field shape.
+- **S2 sidecar amendment.** A `bound` line names the semantic match when
+  present ("via column recovery"); an `ambiguous` line whose pool was
+  semantic names it too ("semantic subset, N candidate sites").
+- **M6/G4 extend to semantic binds.** The universal `load_claims` round-trip
+  and the `classify`/`claim_family` parity pins cover semantic binds as well.
+
+## Amendment acceptance criteria (testable)
+
+11. Semantic filter: a claim with metric words ["recovery"] against a repo
+    whose `recovery` column holds the value once → `bound`, `semantic_match`
+    == "recovery"; the same claim WITHOUT metrics → the value-only outcome
+    (ambiguous on a dense table) — pinning both sides.
+12. Normalization pins: "Recovery %" header vs word "recovery" matches;
+    "log2FoldChange" vs "fold change" does NOT match either-way containment
+    (no alphanumeric token boundary is defined — documented, pinned).
+13. Containment pins: "n_recovered" vs "recovered" matches (word ⊂ header);
+    "recovery" vs "recovery_rate" matches (header ⊂ word).
+14. Fallback pins: `metrics=None` → byte-identical to the shipped value-only
+    outcomes (reuse the existing fixture corpus); unknown claim id → fallback;
+    a metric word matching no header → fallback.
+15. Semantic narrowing never widens: for every fixture, the semantic pool's
+    site count ≤ the value-only site count (universal assertion).
+16. Honest miss: claim value absent from its semantic column →
+    `no_candidates`, `semantic_match` set.
+17. API pins: `metrics` non-dict raises `TypeError`; `MatchOutcome` frozen with
+    the seven pinned fields; `semantic_match` defaults to `None`.
+18. Sidecar: bound-via-column line names the header; semantic ambiguous line
+    names the subset.
+19. **Second evidence gate (mandatory, recorded).** Re-run the gate on
+    `ritvikK05/rnaseq-reanalysis-htt` with the reviewed 20-claim draft +
+    metric map against the SHIPPED module. Expectation from the manual
+    simulation: ≈7 binds (2252, 998→n_recovered requires the word
+    "recovered", 68.2, 2326, 2226, 68.0, 2826, 62.6), 0 wrong, the rest
+    ambiguous/refused/no_candidates — the actual numbers, not the
+    expectation, are recorded. The gate report's decision rule then applies:
+    if semantic binds are correct and meaningful, aspect 3 ships narrowed.
+
+## Out-of-scope (unchanged by the amendment)
+
+- No CLI (aspect 3, gated). No `models.py`/verdict/bundle/signature change.
+  No edit to `reproduce.py`/`locator_inference.py`/`claim_extraction.py`
+  (import-only). No new dependency. `pattern`/notebook inference still blocked;
+  figure/plot claims still hard-blocked. The metric-word source (extractor's
+  `metric` field → draft sidecar) is an aspect-3 wiring concern, NOT this
+  aspect — the matcher only consumes the `metrics` mapping it is given.
+
+---
+
 ## Problem slice and user outcome
 
 A user today runs `extract-claims` on a paper, gets a locator-less draft, and must
