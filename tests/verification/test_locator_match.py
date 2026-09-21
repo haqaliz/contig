@@ -4,16 +4,24 @@ printed-precision equality core (`MatchOutcome`'s frozen shape,
 `match_claims` -- site grouping at (source, coordinate) granularity (M4), the
 dual-scale exactly-one rule (M5), the M9 low-information refusal (deny-list +
 integer significant-digit rule, short-circuiting before matching), and the
-never-raises contract (M7). `sidecar_text` remains pinned only as a callable
-public name (Phase 3).
+never-raises contract (M7). Phase 3 pins the real consumption path (sweep ->
+match over inline `tmp_path` fixture repos), the M6 round-trip and G4
+verdict-contract pins over the bound fixture corpus, the structural stale-
+artifact honesty guarantee (an inferred locator cannot weaken the freshness
+guard), and `sidecar_text`'s per-claim provenance rendering (S2), including
+the R6 path disclosure and the once-only R1 review framing.
 """
 
+import json
+import os
 from dataclasses import FrozenInstanceError, fields
+from pathlib import Path
 from typing import Literal, get_type_hints
 
 import pytest
 
-from contig.verification.locator_inference import Candidate
+from contig.reproduce_guard import claim_family
+from contig.verification.locator_inference import Candidate, sweep_repo
 from contig.verification.locator_match import (
     MatchOutcome,
     _EXACT_COMPARE,
@@ -23,7 +31,18 @@ from contig.verification.locator_match import (
     match_claims,
     sidecar_text,
 )
-from contig.verification.reproduce import Claim, Locator, TableLocator
+from contig.verification.reproduce import (
+    Claim,
+    Locator,
+    TableLocator,
+    _read_table,
+    _resolve_delimiter,
+    classify,
+    load_claims,
+    resolve_cell,
+    resolve_pointer,
+    run_reproduction,
+)
 
 
 def test_module_exposes_pinned_public_surface():
@@ -501,3 +520,352 @@ def test_claims_order_preserved_across_mixed_outcomes():
         "refused_low_information",
         "no_candidates",
     ]
+
+
+# --- Phase 3: sweep -> match integration (real sweep_repo over inline repos) --
+
+# A fixed synthetic run-start so freshness is decided purely by the mtimes we
+# set with os.utime, never by wall-clock time (test_reproduce.py idiom).
+_RUN_START = 1_000_000.0
+
+
+def _write(tmp_path: Path, name: str, content: str) -> Path:
+    p = tmp_path / name
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content, encoding="utf-8")
+    return p
+
+
+def _write_table(tmp_path: Path, name: str, rows: list[list[str]]) -> Path:
+    p = tmp_path / name
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("\n".join("\t".join(row) for row in rows) + "\n", encoding="utf-8")
+    return p
+
+
+def test_sweep_to_match_json_repo_binds_claim_to_json_leaf(tmp_path):
+    _write(tmp_path, "results.json", '{"auc": 0.9134}')
+
+    candidates, skips = sweep_repo(tmp_path)
+    assert skips == []
+    claim = Claim(id="auc", value=0.91, tolerance=0.05)
+    (outcome,) = match_claims(candidates, [claim])
+
+    assert outcome.reason == "bound"
+    assert outcome.scale == "raw"
+    assert outcome.site_count == 1
+    assert outcome.locator == Locator(source="results.json", path="auc")
+
+
+def test_sweep_to_match_deseq_table_repo_binds_complete_header_mode_table_locator(
+    tmp_path,
+):
+    _write_table(
+        tmp_path,
+        "de.tsv",
+        [
+            ["gene_id", "log2FoldChange", "padj"],
+            ["ENSG1", "2.1", "0.001"],
+        ],
+    )
+
+    candidates, skips = sweep_repo(tmp_path)
+    assert skips == []
+    claim = Claim(id="lfc", value=2.1, tolerance=0.05)
+    (outcome,) = match_claims(candidates, [claim])
+
+    assert outcome.reason == "bound"
+    assert outcome.scale == "raw"
+    assert outcome.site_count == 1
+    assert outcome.locator == TableLocator(
+        source="de.tsv",
+        column="log2FoldChange",
+        row=0,
+        delimiter="",
+        header=True,
+    )
+
+
+# --- M6 round-trip + G4 verdict-contract pins over the bound fixture corpus --
+
+
+def _bound_corpus(tmp_path: Path) -> tuple[list[tuple[MatchOutcome, Claim]], Path]:
+    """The integration fixture corpus: one repo holding both fixtures (a JSON
+    metrics leaf and a DESeq-like TSV), swept and matched against both claims.
+    Returns the `(outcome, claim)` pairs plus the repo dir, for the universal
+    M6/G4 pins.
+    """
+    _write(tmp_path, "results.json", '{"auc": 0.9134}')
+    _write_table(
+        tmp_path,
+        "de.tsv",
+        [
+            ["gene_id", "log2FoldChange", "padj"],
+            ["ENSG1", "2.1", "0.001"],
+        ],
+    )
+    candidates, skips = sweep_repo(tmp_path)
+    assert skips == []
+    claims = [
+        Claim(id="auc", value=0.91, tolerance=0.05),
+        Claim(id="lfc", value=2.1, tolerance=0.05),
+    ]
+    outcomes = match_claims(candidates, claims)
+    assert [o.reason for o in outcomes] == ["bound", "bound"]
+    return list(zip(outcomes, claims)), tmp_path
+
+
+def _claim_dict_for(outcome: MatchOutcome, tolerance: float = 0.1) -> dict:
+    """Assemble the claim dict a human would write from a bound outcome:
+    `from` + `path`, or `from` + `column`+`row`+`header`. `delimiter` is
+    deliberately absent -- the matcher never sets it (M3) and `load_claims`
+    re-derives it at load time.
+    """
+    assert outcome.reason == "bound"
+    assert tolerance > 0
+    locator = outcome.locator
+    d = {
+        "id": outcome.claim_id,
+        "value": outcome.value,
+        "tolerance": tolerance,
+        "from": locator.source,
+    }
+    if isinstance(locator, TableLocator):
+        d["column"] = locator.column
+        d["row"] = locator.row
+        d["header"] = locator.header
+    else:
+        d["path"] = locator.path
+    return d
+
+
+def test_m6_round_trip_every_bound_outcome_passes_unchanged_load_claims(tmp_path):
+    corpus, repo = _bound_corpus(tmp_path)
+    for outcome, claim in corpus:
+        claims_path = tmp_path / f"roundtrip_{outcome.claim_id}.json"
+        claims_path.write_text(json.dumps([_claim_dict_for(outcome, tolerance=0.1)]))
+        loaded = load_claims(claims_path)  # any ClaimsError fails this test
+        assert len(loaded) == 1
+        assert loaded[0].id == outcome.claim_id
+        assert loaded[0].value == outcome.value
+        assert loaded[0].tolerance == 0.1
+        locator = loaded[0].locator
+        if isinstance(outcome.locator, TableLocator):
+            assert locator.source == outcome.locator.source
+            assert locator.column == outcome.locator.column
+            assert locator.row == outcome.locator.row
+            assert locator.header == outcome.locator.header
+            assert locator.delimiter == "\t"  # re-derived, never the empty sentinel
+        else:
+            assert locator == outcome.locator
+
+
+def _re_resolve(locator: Locator | TableLocator, repo: Path) -> float:
+    """Re-resolve a bound locator against the fixture artifact through the
+    SHIPPED resolvers (`resolve_pointer`/`resolve_cell`) -- the same
+    consumption path a reproduce run uses.
+    """
+    if isinstance(locator, TableLocator):
+        path = repo / locator.source
+        delimiter = _resolve_delimiter(path.name, None)
+        assert delimiter is not None
+        rows = _read_table(path, delimiter)
+        cell, reason = resolve_cell(rows, locator.column, locator.row, locator.header)
+        assert reason == ""
+        return float(cell)
+    doc = json.loads((repo / locator.source).read_text(encoding="utf-8"))
+    target = resolve_pointer(doc, locator.path)
+    assert isinstance(target, (int, float)) and not isinstance(target, bool)
+    return float(target)
+
+
+def test_g4_classify_parity_bound_outcomes_reproduce_at_the_claim_precision(
+    tmp_path,
+):
+    corpus, repo = _bound_corpus(tmp_path)
+    for outcome, claim in corpus:
+        observed = _re_resolve(outcome.locator, repo)
+        if outcome.scale == "pct":
+            observed = observed * 100  # back to the claim's own scale
+        observed = round(observed, _printed_precision(claim.value))
+        status, delta, message = classify(
+            claimed=claim.value, observed=observed, tolerance=0.1
+        )
+        assert status == "reproduced"
+
+
+def test_g4_claim_family_dispatches_inferred_locators_without_raising(tmp_path):
+    corpus, repo = _bound_corpus(tmp_path)
+    families = {}
+    for outcome, claim in corpus:
+        claims_path = tmp_path / f"family_{outcome.claim_id}.json"
+        claims_path.write_text(json.dumps([_claim_dict_for(outcome, tolerance=0.1)]))
+        (loaded,) = load_claims(claims_path)
+        families[outcome.claim_id] = claim_family(loaded)
+    assert families == {"auc": "json", "lfc": "table"}
+
+
+# --- stale-artifact honesty: inference cannot weaken the freshness guard -----
+
+
+def test_inferred_json_locator_over_stale_artifact_is_unverified_never_reproduced(
+    tmp_path,
+):
+    p = _write(tmp_path, "out/metrics.json", '{"auc": 0.9134}')
+    os.utime(p, (_RUN_START - 10, _RUN_START - 10))
+    candidates, skips = sweep_repo(tmp_path)
+    assert skips == []
+    claim = Claim(id="auc", value=0.91, tolerance=0.1)
+    (outcome,) = match_claims(candidates, [claim])
+    assert outcome.reason == "bound"
+    located = Claim(
+        id=claim.id, value=claim.value, tolerance=claim.tolerance, locator=outcome.locator
+    )
+
+    def noop_executor(argv: list[str], cwd: Path) -> tuple[int, str]:
+        return 0, ""
+
+    record = run_reproduction(
+        repo=str(tmp_path),
+        run_command="echo run",
+        claims=[located],
+        executor=noop_executor,
+        claims_sha256="a" * 64,
+        created_at="2026-07-18T00:00:00Z",
+        reproduce_id="rp_1",
+        run_started_at=_RUN_START,
+    )
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "rewritten" in result.message
+    assert "run start" in result.message
+
+
+# --- sidecar_text (S2): per-claim provenance, R6 disclosure, R1 framing -------
+
+
+def _sidecar_outcomes_and_claims() -> tuple[list[MatchOutcome], list[Claim]]:
+    outcomes = [
+        MatchOutcome(
+            claim_id="auc",
+            value=0.91,
+            scale="raw",
+            locator=Locator(source="results.json", path="auc"),
+            site_count=1,
+            reason="bound",
+        ),
+        MatchOutcome(
+            claim_id="lfc",
+            value=2.1,
+            scale="pct",
+            locator=TableLocator(
+                source="de.tsv",
+                column="log2FoldChange",
+                row=0,
+                delimiter="",
+                header=True,
+            ),
+            site_count=1,
+            reason="bound",
+        ),
+        MatchOutcome(
+            claim_id="amb", value=0.75, scale=None, locator=None, site_count=2,
+            reason="ambiguous",
+        ),
+        MatchOutcome(
+            claim_id="ref", value=0.5, scale=None, locator=None, site_count=0,
+            reason="refused_low_information",
+        ),
+        MatchOutcome(
+            claim_id="none", value=0.42, scale=None, locator=None, site_count=0,
+            reason="no_candidates",
+        ),
+    ]
+    claims = [Claim(id=o.claim_id, value=o.value, tolerance=0.05) for o in outcomes]
+    return outcomes, claims
+
+
+def test_sidecar_bound_json_line_names_artifact_coordinate_scale_and_r6_disclosure():
+    outcomes, claims = _sidecar_outcomes_and_claims()
+    text = sidecar_text(outcomes, claims)
+    line = next(l for l in text.splitlines() if l.startswith("claim auc:"))
+    assert "results.json" in line
+    assert "path=auc" in line
+    assert "raw" in line
+    assert "depends on results.json being rewritten by the run" in line
+
+
+def test_sidecar_bound_table_pct_line_names_coordinate_and_divide_by_100_scale():
+    outcomes, claims = _sidecar_outcomes_and_claims()
+    text = sidecar_text(outcomes, claims)
+    line = next(l for l in text.splitlines() if l.startswith("claim lfc:"))
+    assert "de.tsv" in line
+    assert "column=log2FoldChange" in line
+    assert "row=0" in line
+    assert "header=True" in line
+    assert "÷100" in line
+    assert "depends on de.tsv being rewritten by the run" in line
+
+
+def test_sidecar_ambiguous_line_names_reason_and_site_count():
+    outcomes, claims = _sidecar_outcomes_and_claims()
+    text = sidecar_text(outcomes, claims)
+    line = next(l for l in text.splitlines() if l.startswith("claim amb:"))
+    assert "ambiguous" in line
+    assert "2" in line
+
+
+def test_sidecar_refused_line_names_reason_and_zero_count():
+    outcomes, claims = _sidecar_outcomes_and_claims()
+    text = sidecar_text(outcomes, claims)
+    line = next(l for l in text.splitlines() if l.startswith("claim ref:"))
+    assert "refused_low_information" in line
+    assert "0 candidate sites" in line
+
+
+def test_sidecar_no_candidates_line_names_reason_and_zero_count():
+    outcomes, claims = _sidecar_outcomes_and_claims()
+    text = sidecar_text(outcomes, claims)
+    line = next(l for l in text.splitlines() if l.startswith("claim none:"))
+    assert "no_candidates" in line
+    assert "0 candidate sites" in line
+
+
+def test_sidecar_review_framing_appears_exactly_once():
+    outcomes, claims = _sidecar_outcomes_and_claims()
+    text = sidecar_text(outcomes, claims)
+    assert text.count("proposed, pending human review") == 1
+
+
+def test_sidecar_empty_outcomes_returns_only_the_framing_line():
+    text = sidecar_text([], [])
+    assert "proposed, pending human review" in text
+    assert "claim " not in text
+
+
+def test_sidecar_is_deterministic_for_identical_inputs():
+    outcomes, claims = _sidecar_outcomes_and_claims()
+    assert sidecar_text(outcomes, claims) == sidecar_text(outcomes, claims)
+
+
+def test_sidecar_renders_lines_in_claims_order():
+    outcomes, claims = _sidecar_outcomes_and_claims()
+    text = sidecar_text(outcomes, claims)
+    positions = [text.index(f"claim {o.claim_id}:") for o in outcomes]
+    assert positions == sorted(positions)
+
+
+def test_sidecar_never_raises_on_length_mismatch():
+    outcomes, claims = _sidecar_outcomes_and_claims()
+    text = sidecar_text(outcomes[:2], claims)
+    assert "proposed, pending human review" in text
+
+
+def test_sidecar_never_raises_on_bound_outcome_with_missing_locator():
+    outcome = MatchOutcome(
+        claim_id="x", value=0.91, scale="raw", locator=None, site_count=1,
+        reason="bound",
+    )
+    text = sidecar_text([outcome], [Claim(id="x", value=0.91, tolerance=0.05)])
+    assert "claim x:" in text

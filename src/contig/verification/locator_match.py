@@ -26,8 +26,11 @@ via the `_EXACT_COMPARE` sentinel; and the pct scale applies the same rules to
 not a match, whatever the scale; shape-malformed candidates are skipped.
 `match_claims` applies the full matching rule (M4 site grouping, M5 dual-scale
 exactly-one, M9 refusal, in claims order, never raising) and the sidecar
-builder (`sidecar_text`) is pinned as a callable stub in Phase 1 and
-implemented in Phase 3.
+builder (`sidecar_text`) renders the per-claim provenance (S2) -- the artifact,
+coordinate, and scale a bound claim proposes, with the R6 disclosure (the exact
+repo-relative path whose rewriting the locator depends on) stated as a fact,
+and the reason + candidate count for every non-bound claim, under the R1
+"proposed, pending human review" framing that appears exactly once.
 
 Stdlib only; dataclasses imported from the shipped modules and never edited.
 """
@@ -290,8 +293,75 @@ def match_claims(
     return [_match_one_claim(candidates, claim) for claim in claims]
 
 
+#: The sidecar's once-only R1 framing line (S2): the matcher's proposals are
+#: evidence-gated but self-graded, so the rendered text must carry the
+#: "proposed, pending human review" framing exactly once, before any per-claim
+#: line. Pinned by a substring test.
+_SIDECAR_HEADER = (
+    "# The locator proposals below are proposed, pending human review; a "
+    "fresh run decides every verdict."
+)
+
+
+def _sidecar_coordinate(locator: Locator | TableLocator) -> str:
+    """The coordinate of a bound locator as sidecar text: the JSON dotted
+    `path`, or the table `column`/`row`/`header` triplet (M3 -- fields come
+    1:1 from the locator, `delimiter` never shown because the matcher never
+    sets it).
+    """
+    if isinstance(locator, TableLocator):
+        return (
+            f"column={locator.column}, row={locator.row}, "
+            f"header={locator.header}"
+        )
+    return f"path={locator.path}"
+
+
+def _sidecar_line(outcome: MatchOutcome) -> str:
+    """One claim's sidecar line (S2). A bound line names the claim id, the
+    artifact (repo-relative `source`), the coordinate, the scale (`raw` /
+    `÷100`), and the R6 disclosure -- the exact repo-relative path whose
+    rewriting the locator depends on (the same `source`, stated as a fact,
+    never a guarantee). A non-bound line names the claim id, the reason
+    (`ambiguous` / `refused_low_information` / `no_candidates`) and the
+    candidate-site count. Never raises: a `bound` outcome without a locator
+    (impossible from `match_claims`, defensive against hand-built input)
+    degrades to a named line rather than an AttributeError (M7).
+    """
+    if outcome.reason != "bound":
+        return (
+            f"claim {outcome.claim_id}: {outcome.reason} "
+            f"({outcome.site_count} candidate sites)"
+        )
+    locator = outcome.locator
+    if locator is None:
+        return f"claim {outcome.claim_id}: bound (locator unavailable)"
+    scale = "raw" if outcome.scale == "raw" else "÷100"
+    return (
+        f"claim {outcome.claim_id}: bound at {locator.source} "
+        f"({_sidecar_coordinate(locator)}) at {scale}; depends on "
+        f"{locator.source} being rewritten by the run"
+    )
+
+
 def sidecar_text(
     outcomes: Sequence[MatchOutcome], claims: Sequence[Claim]
 ) -> str:
-    """Render per-claim provenance text (Phase 3 -- stub for now)."""
-    return ""
+    """Render per-claim provenance text (S2), pure and deterministic.
+
+    One line per claim, in claims order (pairs are zipped, so a mismatch
+    between the sequences degrades to the shorter length -- never raises,
+    M7). The first line is the R1 framing -- "proposed, pending human
+    review" -- rendered exactly once, before every per-claim line; empty
+    outcomes yield the framing line alone. A bound line names the artifact
+    (repo-relative path), the coordinate, the scale (`raw` / `÷100`), and
+    the R6 disclosure (the exact path whose rewriting the locator depends
+    on, stated as a fact); a non-bound line names the reason and the
+    candidate-site count. The same inputs always render the identical
+    string: no I/O, no wall clock, no iteration order outside the caller's.
+    """
+    lines = [_SIDECAR_HEADER]
+    lines.extend(
+        _sidecar_line(outcome) for outcome, _claim in zip(outcomes, claims)
+    )
+    return "\n".join(lines) + "\n"
