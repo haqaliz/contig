@@ -6,6 +6,58 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+- **The gate measured and the design narrowed — M10 semantic filter, follow-on
+  to the value-only matcher (C8 locator inference, aspect 2 of 3).** The
+  PRD's evidence gate ran the value-only, exactly-one matcher against a
+  canonical real repo (`ritvikK05/rnaseq-reanalysis-htt`, an independent
+  reproduction of a published DESeq2 analysis with full result tables
+  committed): **0/20 binds** — every plausible value appears at scale (the
+  HTT l2fc 1.44 lives in 143 cells, "recovery" 68.2 in 218), so value
+  equality alone can never name a site. The R2 worst case became **measured,
+  not assumed**, and the gate did its job before any CLI work: the dead end
+  cost two pure modules, not the CLI slice. The narrowed design ships:
+  `match_claims` gains an optional keyword-only `metrics` mapping (claim id →
+  metric words, taken from the extractor's metric field and human review —
+  **never invented by the matcher**); when a claim's words match a table
+  column header or JSON leaf key (normalized equality or containment either
+  way — raw-lowercase substring, a conservative documented default), the
+  candidate pool narrows to the semantic subset and the **unchanged**
+  exactly-one / dual-scale / M9 rules run inside it. Zero header matches →
+  byte-identical value-only fallback; all shipped pins unchanged.
+  `MatchOutcome` gains `semantic_match: str | None = None` (additive; the
+  matched header/key, sorted comma-joined when several; `None` only on the
+  value-only path). `sidecar_text` names the semantic path — "via column
+  recovery" / "via key auc" on a bind, "semantic subset, N candidate sites"
+  on an ambiguous line, "semantic column X" on a miss. Universal pins:
+  semantic narrowing **never widens** (site count ≤ value-only), semantic
+  binds round-trip the unchanged `load_claims` and classify identically
+  (G4), M9 still wins before any matching.
+  - **The second gate — shipped module, same repo, same reviewed 20-claim
+    draft: 6/20 bound, 0 wrong.** Every bind re-resolved through the real
+    resolvers to exactly the claim value (2252, 68.2, 2326, 2226, 2826, 62.6
+    — each in its named column of the sensitivity summary); 7 ambiguous (4
+    of them semantic: per-gene l2fc columns stay dense and honestly
+    ambiguous), 3 M9-refused (100.0, 68.0, 72), 4 no_candidates. Expectation
+    vs actual disclosed: the manual simulation predicted ≈7 binds; the
+    module refuses 68.0 (integer-valued, 2 significant digits — M9 by
+    design; the simulation omitted M9).
+  - **Vocabulary sensitivity, measured twice, both human-review-shaped.**
+    "called by both" matches no header (its value lives in `n_recovered`;
+    the word "recovered" would bind it) and "padj" misses `p.adjust` (the
+    dot breaks the substring) — the sidecar names counts and columns either
+    way, and the review step is the documented fix.
+  - **Read honestly.** Push, not demand-pull; one gate repo, a shallow clone
+    at a moving `main`; the reviewed draft and metric map are the
+    author-of-record's reading; no real analysis run (R6 still read from the
+    scripts); self-graded fixtures remain the module's test corpus; no
+    `models.py`/verdict/bundle/signature change; no new dependency; guard
+    baselines unmoved (eval/heal/verify/reproduce-guard). Aspect 3 (the CLI)
+    is now **unblocked to ship narrowed**: extract-claims → review (metric
+    words) → infer-locators → reproduce, with the sidecar as the review
+    surface. Full suite green (see the gate below). Spec amendment and both
+    gate records under
+    `docs/planning/reproduce-locator-inference/match-and-propose/`.
+
 - **The locator matcher ships — aspect 2 of 3 of C8 locator inference
   (`reproduce-locator-inference`, match-and-propose).** A new
   `verification/locator_match.py` matches the shipped candidate sweep's
