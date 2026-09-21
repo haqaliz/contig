@@ -25,6 +25,9 @@ from contig.verification.locator_inference import Candidate, sweep_repo
 from contig.verification.locator_match import (
     MatchOutcome,
     _EXACT_COMPARE,
+    _header_matches,
+    _leaf_key,
+    _norm_header,
     _printed_precision,
     _significant_digits,
     _value_matches,
@@ -120,6 +123,38 @@ def test_value_matches_non_finite_claim_never_matches_and_never_raises():
     assert _value_matches(0.91, float("inf"), "raw", 2) is False
 
 
+def test_norm_header_lowercases_and_keeps_alphanumerics_only():
+    assert _norm_header("Recovery %") == "recovery"
+    assert _norm_header("log2FoldChange") == "log2foldchange"
+    assert _norm_header("n_recovered") == "nrecovered"
+    assert _norm_header("recovery_rate") == "recoveryrate"
+
+
+def test_header_matches_normalized_equality():
+    assert _header_matches("Recovery %", ["recovery"]) is True
+
+
+def test_header_matches_does_not_match_fold_change_against_log2foldchange():
+    assert _header_matches("log2FoldChange", ["fold change"]) is False
+
+
+def test_header_matches_word_contained_in_header():
+    assert _header_matches("n_recovered", ["recovered"]) is True
+
+
+def test_header_matches_header_contained_in_word():
+    assert _header_matches("recovery_rate", ["recovery"]) is True
+
+
+def test_leaf_key_is_last_string_token_of_path():
+    assert _leaf_key("m.auc") == "auc"
+    assert _leaf_key("rows[0].v") == "v"
+
+
+def test_leaf_key_int_tail_has_no_key():
+    assert _leaf_key("xs[0]") is None
+
+
 def test_match_outcome_is_frozen_with_pinned_fields():
     hints = get_type_hints(MatchOutcome)
     assert hints["claim_id"] is str
@@ -130,6 +165,7 @@ def test_match_outcome_is_frozen_with_pinned_fields():
     assert hints["reason"] == Literal[
         "bound", "ambiguous", "refused_low_information", "no_candidates"
     ]
+    assert hints["semantic_match"] == str | None
 
     outcome = MatchOutcome(
         claim_id="auc",
@@ -146,7 +182,9 @@ def test_match_outcome_is_frozen_with_pinned_fields():
         "locator",
         "site_count",
         "reason",
+        "semantic_match",
     ]
+    assert outcome.semantic_match is None  # additive field, defaults None
     assert (outcome.claim_id, outcome.value, outcome.scale, outcome.site_count) == (
         "auc",
         0.91,
@@ -869,3 +907,207 @@ def test_sidecar_never_raises_on_bound_outcome_with_missing_locator():
     )
     text = sidecar_text([outcome], [Claim(id="x", value=0.91, tolerance=0.05)])
     assert "claim x:" in text
+
+
+# --- M10 semantic filter (metric words vs headers / JSON leaf keys) -----------
+
+
+def _dense_recovery_fixture() -> list[Candidate]:
+    """The gate-finding fixture: one value at the same scale in four
+    columns, so the value-only matcher can never name a site.
+    """
+    return [
+        Candidate(
+            source="de.tsv", kind="table", value=0.91,
+            column="recovery", row=0, header=True,
+        ),
+        Candidate(
+            source="de.tsv", kind="table", value=0.91,
+            column="precision", row=0, header=True,
+        ),
+        Candidate(
+            source="de.tsv", kind="table", value=0.91,
+            column="recall", row=0, header=True,
+        ),
+        Candidate(
+            source="de.tsv", kind="table", value=0.91,
+            column="f1", row=0, header=True,
+        ),
+    ]
+
+
+def test_semantic_bind_narrows_dense_fixture_that_value_only_cannot_bind():
+    candidates = _dense_recovery_fixture()
+    claim = Claim(id="r", value=0.91, tolerance=0.05)
+    (outcome,) = match_claims(
+        candidates, [claim], metrics={"r": ["recovery"]}
+    )
+    assert outcome.reason == "bound"
+    assert outcome.scale == "raw"
+    assert outcome.site_count == 1
+    assert outcome.semantic_match == "recovery"
+    assert outcome.locator == TableLocator(
+        source="de.tsv", column="recovery", row=0, delimiter="", header=True
+    )
+
+
+def test_semantic_value_only_path_on_same_dense_fixture_is_ambiguous():
+    candidates = _dense_recovery_fixture()
+    claim = Claim(id="r", value=0.91, tolerance=0.05)
+    (outcome,) = match_claims(candidates, [claim])
+    assert outcome.reason == "ambiguous"
+    assert outcome.site_count == 4
+    assert outcome.locator is None
+    assert outcome.semantic_match is None
+
+
+def test_semantic_several_matching_headers_join_sorted_distinct_keys():
+    candidates = [
+        Candidate(
+            source="de.tsv", kind="table", value=0.91,
+            column="recovery", row=0, header=True,
+        ),
+        Candidate(
+            source="de.tsv", kind="table", value=0.91,
+            column="recovery_rate", row=0, header=True,
+        ),
+    ]
+    claim = Claim(id="r", value=0.91, tolerance=0.05)
+    (outcome,) = match_claims(
+        candidates, [claim], metrics={"r": ["recovery"]}
+    )
+    assert outcome.reason == "ambiguous"
+    assert outcome.site_count == 2
+    assert outcome.semantic_match == "recovery, recovery_rate"
+
+
+def test_semantic_no_candidates_miss_sets_semantic_match():
+    candidates = [
+        Candidate(
+            source="de.tsv", kind="table", value=0.91,
+            column="recovery", row=0, header=True,
+        ),
+        Candidate(
+            source="de.tsv", kind="table", value=0.42,
+            column="precision", row=0, header=True,
+        ),
+    ]
+    claim = Claim(id="r", value=0.75, tolerance=0.05)
+    (outcome,) = match_claims(
+        candidates, [claim], metrics={"r": ["recovery"]}
+    )
+    assert outcome.reason == "no_candidates"
+    assert outcome.site_count == 0
+    assert outcome.semantic_match == "recovery"
+
+
+def test_semantic_unknown_claim_id_falls_back_byte_identical():
+    candidates = [
+        Candidate(source="results.json", kind="json", value=0.9134, path="auc")
+    ]
+    claim = Claim(id="auc", value=0.91, tolerance=0.05)
+    value_only = match_claims(candidates, [claim])
+    semantic = match_claims(
+        candidates, [claim], metrics={"other_id": ["auc"]}
+    )
+    assert semantic == value_only
+    assert semantic[0].semantic_match is None
+
+
+def test_semantic_word_matching_no_header_falls_back_byte_identical():
+    candidates = [
+        Candidate(source="results.json", kind="json", value=0.9134, path="auc")
+    ]
+    claim = Claim(id="auc", value=0.91, tolerance=0.05)
+    value_only = match_claims(candidates, [claim])
+    semantic = match_claims(
+        candidates, [claim], metrics={"auc": ["recovery"]}
+    )
+    assert semantic == value_only
+    assert semantic[0].semantic_match is None
+
+
+def test_semantic_empty_or_foreign_metrics_falls_back_byte_identical():
+    candidates = [
+        Candidate(source="results.json", kind="json", value=0.9134, path="auc")
+    ]
+    claim = Claim(id="auc", value=0.91, tolerance=0.05)
+    value_only = match_claims(candidates, [claim])
+    assert match_claims(candidates, [claim], metrics=None) == value_only
+    assert match_claims(candidates, [claim], metrics={}) == value_only
+    assert (
+        match_claims(candidates, [claim], metrics={"other_id": ["x"]})
+        == value_only
+    )
+
+
+def test_semantic_non_dict_metrics_raises_type_error():
+    candidates = [
+        Candidate(source="results.json", kind="json", value=0.9134, path="auc")
+    ]
+    claim = Claim(id="auc", value=0.91, tolerance=0.05)
+    with pytest.raises(TypeError):
+        match_claims(candidates, [claim], metrics="not-a-dict")
+
+
+def test_semantic_json_leaf_key_matches_word_and_binds():
+    candidates = [
+        Candidate(source="results.json", kind="json", value=0.9134, path="m.auc")
+    ]
+    claim = Claim(id="auc", value=0.91, tolerance=0.05)
+    (outcome,) = match_claims(
+        candidates, [claim], metrics={"auc": ["auc"]}
+    )
+    assert outcome.reason == "bound"
+    assert outcome.semantic_match == "auc"
+    assert outcome.locator == Locator(source="results.json", path="m.auc")
+
+
+def test_semantic_list_index_leaf_has_no_key_takes_value_only_path():
+    candidates = [
+        Candidate(source="results.json", kind="json", value=0.9134, path="xs[0]")
+    ]
+    claim = Claim(id="auc", value=0.91, tolerance=0.05)
+    (outcome,) = match_claims(
+        candidates, [claim], metrics={"auc": ["auc"]}
+    )
+    assert outcome.reason == "bound"
+    assert outcome.semantic_match is None
+    assert outcome.locator == Locator(source="results.json", path="xs[0]")
+
+
+@pytest.mark.parametrize(
+    "metrics",
+    [
+        {"auc": None},
+        {"auc": []},
+        {"auc": [3]},
+        {"auc": [None]},
+        {"auc": [""]},
+    ],
+)
+def test_semantic_garbage_metrics_values_degrade_to_fallback_never_raise(
+    metrics,
+):
+    candidates = [
+        Candidate(source="results.json", kind="json", value=0.9134, path="auc")
+    ]
+    claim = Claim(id="auc", value=0.91, tolerance=0.05)
+    value_only = match_claims(candidates, [claim])
+    assert match_claims(candidates, [claim], metrics=metrics) == value_only
+
+
+def test_semantic_m9_refusal_wins_regardless_of_metrics():
+    candidates = [
+        Candidate(
+            source="de.tsv", kind="table", value=0.5,
+            column="recovery", row=0, header=True,
+        )
+    ]
+    claim = Claim(id="r", value=0.5, tolerance=0.05)
+    (outcome,) = match_claims(
+        candidates, [claim], metrics={"r": ["recovery"]}
+    )
+    assert outcome.reason == "refused_low_information"
+    assert outcome.site_count == 0
+    assert outcome.semantic_match is None

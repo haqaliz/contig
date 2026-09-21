@@ -32,6 +32,17 @@ repo-relative path whose rewriting the locator depends on) stated as a fact,
 and the reason + candidate count for every non-bound claim, under the R1
 "proposed, pending human review" framing that appears exactly once.
 
+M10 (semantic filter): `match_claims` takes an optional
+`metrics: Mapping[str, Sequence[str]] | None` (claim id -> metric words, from
+the extractor -- never invented here). When the claim has words AND at least
+one candidate's table header (str column, header mode) or JSON leaf key
+normalized-matches a word, the pool is FILTERED to that semantic subset before
+any value matching, and the outcome's `semantic_match` names the matched
+key(s). The filter can only narrow a pool; no words, unknown claim id, or zero
+header matches fall back to the byte-identical value-only behavior. The
+value-only rules (printed precision, exactly-one, dual-scale, site grouping,
+M9) run unchanged inside the subset.
+
 Stdlib only; dataclasses imported from the shipped modules and never edited.
 """
 
@@ -39,10 +50,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Literal, Sequence
+from typing import Literal, Mapping, Sequence
 
 from contig.verification.locator_inference import Candidate, SweepSkip
-from contig.verification.reproduce import Claim, Locator, TableLocator
+from contig.verification.reproduce import Claim, Locator, TableLocator, _parse_path
 
 #: Sentinel `_printed_precision` returns for a scientific-notation repr
 #: (`1e-05`, `1.5e-07`): the claim's printed digits are not a decimal-place
@@ -74,6 +85,10 @@ class MatchOutcome:
     re-derives it), `site_count` is the number of distinct (source,
     coordinate) sites holding a matching value, and `reason` says what
     happened. `scale`/`locator` are `None` unless `reason == "bound"`.
+    `semantic_match` (M10) is the header/leaf key -- or sorted comma-joined
+    keys when several distinct ones matched -- that narrowed the candidate
+    pool; `None` when the value-only path ran (no metrics, unknown claim
+    id, or zero header matches).
     """
 
     claim_id: str
@@ -82,6 +97,7 @@ class MatchOutcome:
     locator: Locator | TableLocator | None
     site_count: int
     reason: Literal["bound", "ambiguous", "refused_low_information", "no_candidates"]
+    semantic_match: str | None = None  # M10: header/leaf key(s) that narrowed the pool
 
 
 def _printed_precision(value: float) -> int:
@@ -181,6 +197,84 @@ def _value_matches(
     return round(candidate, precision) == round(claim, precision)
 
 
+def _norm_header(s: str) -> str:
+    """Normalize a header or metric word for semantic comparison (M10):
+    lowercase and keep alphanumerics only. `"Recovery %"` -> `"recovery"`,
+    `"log2FoldChange"` -> `"log2foldchange"`, `"n_recovered"` ->
+    `"nrecovered"`. The separators are gone, so the result is one
+    contiguous alnum run; equality is judged on this form. Deliberately
+    conservative: no token-boundary rule is defined -- containment (below)
+    is judged on the UN-normalized lowercased forms precisely so that a
+    multi-word metric phrase like `"fold change"` does not silently match
+    inside `"log2FoldChange"` (the space is a real character there, and
+    `"fold change"` is not a substring). Documented default, pinned.
+    """
+    return "".join(ch for ch in s.lower() if ch.isalnum())
+
+
+def _header_matches(header: str, words: Sequence[str]) -> bool:
+    """True iff `header` semantic-matches any metric `word` (M10):
+    normalized equality, OR containment in either direction -- word in
+    header (`"recovered"` in `"n_recovered"`) or header in word
+    (`"recovery"` in `"recovery_rate"`). Containment is judged on the
+    lowercased UN-normalized forms (separators kept), so `"Recovery %"`
+    matches `"recovery"` by equality, while `"log2FoldChange"` does NOT
+    match `"fold change"` -- the space in the phrase breaks the substring
+    and no token-boundary rule is defined (documented default, pinned).
+    Non-str and empty words are skipped, never raised on (M7): garbage
+    metric values degrade to no-match, which the caller treats as the
+    value-only fallback.
+    """
+    header_norm = _norm_header(header)
+    header_lower = header.lower()
+    for word in words:
+        if not isinstance(word, str):
+            continue
+        word_norm = _norm_header(word)
+        if not word_norm:
+            continue
+        if word_norm == header_norm:
+            return True
+        word_lower = word.lower()
+        if word_lower in header_lower or header_lower in word_lower:
+            return True
+    return False
+
+
+def _leaf_key(path: str) -> str | None:
+    """The semantic name of a JSON leaf candidate: the last STRING token of
+    its dotted+`[n]` path, via the shipped `_parse_path` (the same grammar
+    the sweep round-trips). `"m.auc"` -> `"auc"`, `"rows[0].v"` -> `"v"`; a
+    list-index tail (`"xs[0]"`) ends in an int token, which is no key --
+    None, so that candidate has no semantic name and can never enter the
+    semantic subset (documented; a future key-inference is out of scope).
+    """
+    tokens = _parse_path(path)
+    if tokens is None:
+        return None
+    tail = tokens[-1]
+    if isinstance(tail, int):
+        return None
+    return tail
+
+
+def _candidate_semantic_name(candidate: Candidate) -> str | None:
+    """The semantic name a `candidate` can be narrowed by (M10): the table
+    `column` when it is a str (header mode -- headerless int columns have
+    no semantic name), or the JSON leaf key; None means the candidate has
+    no semantic name and can never join a semantic subset.
+    """
+    if candidate.kind == "json":
+        if candidate.path is None:
+            return None
+        return _leaf_key(candidate.path)
+    if candidate.kind == "table":
+        if isinstance(candidate.column, str):
+            return candidate.column
+        return None
+    return None
+
+
 def _site_key(candidate: Candidate) -> tuple:
     """A site is a distinct (source, coordinate) pair (M4): `(source,
     path)` for a JSON leaf, `(source, column, row)` for a table cell. Two
@@ -214,19 +308,33 @@ def _locator_for(candidate: Candidate) -> Locator | TableLocator:
     )
 
 
-def _match_one_claim(candidates: Sequence[Candidate], claim: Claim) -> MatchOutcome:
+def _match_one_claim(
+    candidates: Sequence[Candidate],
+    claim: Claim,
+    metrics: Mapping[str, Sequence[str]] | None = None,
+) -> MatchOutcome:
     """Match one claim against the candidate sweep, never raising (M7).
 
     Order of judgment, per claim: a non-finite value (a `nan`/`inf` claim,
     loadable by `load_claims`) records `no_candidates` -- it can never be
     evidence; M9 refuses a low-information value BEFORE any matching runs
     (the refusal short-circuits, `site_count=0` -- even a candidate that
-    would match must not bind); then both scales are attempted
-    independently (`"raw"` and `"pct"`), collecting the DISTINCT sites
-    (M4) where any candidate matches at the claim's own printed precision.
+    would match must not bind); the M10 semantic filter (when `metrics`
+    gives this claim words AND at least one candidate's header/leaf key
+    normalized-matches a word) narrows the pool to the semantic subset and
+    records `semantic_match`; then both scales are attempted independently
+    (`"raw"` and `"pct"`), collecting the DISTINCT sites (M4) where any
+    candidate in the pool matches at the claim's own printed precision.
     Exactly one scale with exactly one site binds; both scales with one
     site each, or either scale with more than one site, is ambiguous with
     the total distinct-site count; zero sites is `no_candidates`.
+
+    The semantic filter can only narrow a pool, never widen it: no metric
+    words (`None`/empty/garbage), an unknown claim id, or zero header
+    matches all fall back to the full value-only pool, byte-identical to
+    the shipped behavior. `semantic_match` is set whenever the filter ran
+    for the claim -- including a semantic `no_candidates` miss -- and is
+    `None` only on the value-only path.
 
     Candidates are iterated in the given order (already sorted by source
     from `sweep_repo` -- never re-sorted), and the first candidate seen at
@@ -242,9 +350,27 @@ def _match_one_claim(candidates: Sequence[Candidate], claim: Claim) -> MatchOutc
         return MatchOutcome(claim.id, value, None, None, 0, "refused_low_information")
 
     precision = _printed_precision(value)
+    semantic_match = None
+    pool = candidates
+    if metrics is not None:
+        words = metrics.get(claim.id)
+        if isinstance(words, str):
+            words = (words,)
+        if isinstance(words, (list, tuple)) and words:
+            semantic_pool: list[Candidate] = []
+            matched_keys: set[str] = set()
+            for candidate in candidates:
+                name = _candidate_semantic_name(candidate)
+                if name is not None and _header_matches(name, words):
+                    semantic_pool.append(candidate)
+                    matched_keys.add(name)
+            if semantic_pool:
+                pool = semantic_pool
+                semantic_match = ", ".join(sorted(matched_keys))
+
     raw_sites: dict[tuple, Candidate] = {}
     pct_sites: dict[tuple, Candidate] = {}
-    for candidate in candidates:
+    for candidate in pool:
         if candidate.kind == "json":
             if candidate.path is None:
                 continue
@@ -264,23 +390,41 @@ def _match_one_claim(candidates: Sequence[Candidate], claim: Claim) -> MatchOutc
 
     if len(raw_sites) == 1 and not pct_sites:
         return MatchOutcome(
-            claim.id, value, "raw", _locator_for(next(iter(raw_sites.values()))), 1, "bound"
+            claim.id, value, "raw", _locator_for(next(iter(raw_sites.values()))), 1,
+            "bound", semantic_match,
         )
     if len(pct_sites) == 1 and not raw_sites:
         return MatchOutcome(
-            claim.id, value, "pct", _locator_for(next(iter(pct_sites.values()))), 1, "bound"
+            claim.id, value, "pct", _locator_for(next(iter(pct_sites.values()))), 1,
+            "bound", semantic_match,
         )
     if not raw_sites and not pct_sites:
-        return MatchOutcome(claim.id, value, None, None, 0, "no_candidates")
+        return MatchOutcome(
+            claim.id, value, None, None, 0, "no_candidates", semantic_match
+        )
     total_sites = len(set(raw_sites) | set(pct_sites))
-    return MatchOutcome(claim.id, value, None, None, total_sites, "ambiguous")
+    return MatchOutcome(
+        claim.id, value, None, None, total_sites, "ambiguous", semantic_match
+    )
 
 
 def match_claims(
-    candidates: Sequence[Candidate], claims: Sequence[Claim]
+    candidates: Sequence[Candidate],
+    claims: Sequence[Claim],
+    *,
+    metrics: Mapping[str, Sequence[str]] | None = None,
 ) -> list[MatchOutcome]:
     """Match sweep candidates against claims, one outcome per claim in
     claims order, pure and never raising (M7).
+
+    `metrics` (M10) maps a claim id to its metric words; when the claim has
+    words AND at least one candidate's header/leaf key normalized-matches a
+    word, the candidate pool is filtered to the semantic subset before any
+    value matching, and the outcome's `semantic_match` names the matched
+    key(s). No words, an unknown claim id, or zero header matches fall back
+    to the value-only behavior, byte-identical to the shipped module. A
+    non-dict `metrics` raises `TypeError` at call time (pinned); garbage
+    metric values degrade to fallback, never raising.
 
     A `bound` outcome carries the complete locator and the scale at which
     the repo held the value (`"raw"` = `v`, `"pct"` = `v/100`); every other
@@ -290,7 +434,9 @@ def match_claims(
     `claims` yields `[]`; empty `candidates` yields one `no_candidates`
     outcome per claim.
     """
-    return [_match_one_claim(candidates, claim) for claim in claims]
+    if metrics is not None and not isinstance(metrics, dict):
+        raise TypeError("metrics must be a dict or None")
+    return [_match_one_claim(candidates, claim, metrics) for claim in claims]
 
 
 #: The sidecar's once-only R1 framing line (S2): the matcher's proposals are
