@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.61.0] - 2026-09-22
+
 - **Multi-key `row` match for table claims ships — `table-locator-predicates`
   (`multi-key-rows`).** A `contig reproduce` claim's TSV/CSV locator `row` object now
   carries **one or more** key-value predicates, all of which must hold on the same data
@@ -4472,6 +4474,7 @@ compute. Pre-revenue, validation phase.
 [0.53.0]: https://github.com/haqaliz/contig/releases/tag/v0.53.0
 [0.55.1]: https://github.com/haqaliz/contig/releases/tag/v0.55.1
 [0.60.0]: https://github.com/haqaliz/contig/releases/tag/v0.60.0
+[0.61.0]: https://github.com/haqaliz/contig/releases/tag/v0.61.0
 [0.59.0]: https://github.com/haqaliz/contig/releases/tag/v0.59.0
 [0.58.0]: https://github.com/haqaliz/contig/releases/tag/v0.58.0
 [0.57.0]: https://github.com/haqaliz/contig/releases/tag/v0.57.0
