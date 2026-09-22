@@ -1686,6 +1686,11 @@ def _locator_review_sidecar(
         lines.append("")
         lines.extend(f"- {skip.source}: {skip.reason}" for skip in skips)
     lines.extend(["", f"Matching mode: {mode}"])
+    if semantic:
+        # The metrics-source note: the words that narrowed a pool came from
+        # the extractor and are proposals themselves -- same framing as the
+        # matcher's sidecar header.
+        lines.extend(["", "Metric words are proposals, pending human review."])
     return "\n".join(lines) + "\n"
 
 
@@ -1855,6 +1860,18 @@ def infer_locators(
         f"no_candidates={sum(o.reason == 'no_candidates' for o in outcomes)}; "
         f"skipped {len(skips)} artifact(s)"
     )
+    # Metrics staleness visibility (spec acceptance 14): an id in the map
+    # with no claim in the draft falls back to value-only in the matcher by
+    # design, and that silent degradation is surfaced here -- the echo names
+    # how many ids had metric words and how many went unmatched.
+    if metrics_map is not None:
+        draft_ids = {c.id for c in claims_list}
+        matched_ids = len(set(metrics_map) & draft_ids)
+        unmatched_ids = len(set(metrics_map) - draft_ids)
+        summary += (
+            f"; metrics: matched {matched_ids} claim id(s), "
+            f"unmatched {unmatched_ids} claim id(s)"
+        )
 
     if dry_run:
         # The full read+sweep+match already happened; nothing is written --
