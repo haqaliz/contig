@@ -6,6 +6,135 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+- **The gate measured and the design narrowed — M10 semantic filter, follow-on
+  to the value-only matcher (C8 locator inference, aspect 2 of 3).** The
+  PRD's evidence gate ran the value-only, exactly-one matcher against a
+  canonical real repo (`ritvikK05/rnaseq-reanalysis-htt`, an independent
+  reproduction of a published DESeq2 analysis with full result tables
+  committed): **0/20 binds** — every plausible value appears at scale (the
+  HTT l2fc 1.44 lives in 143 cells, "recovery" 68.2 in 218), so value
+  equality alone can never name a site. The R2 worst case became **measured,
+  not assumed**, and the gate did its job before any CLI work: the dead end
+  cost two pure modules, not the CLI slice. The narrowed design ships:
+  `match_claims` gains an optional keyword-only `metrics` mapping (claim id →
+  metric words, taken from the extractor's metric field and human review —
+  **never invented by the matcher**); when a claim's words match a table
+  column header or JSON leaf key (normalized equality or containment either
+  way — raw-lowercase substring, a conservative documented default), the
+  candidate pool narrows to the semantic subset and the **unchanged**
+  exactly-one / dual-scale / M9 rules run inside it. Zero header matches →
+  byte-identical value-only fallback; all shipped pins unchanged.
+  `MatchOutcome` gains `semantic_match: str | None = None` (additive; the
+  matched header/key, sorted comma-joined when several; `None` only on the
+  value-only path). `sidecar_text` names the semantic path — "via column
+  recovery" / "via key auc" on a bind, "semantic subset, N candidate sites"
+  on an ambiguous line, "semantic column X" on a miss. Universal pins:
+  semantic narrowing **never widens** (site count ≤ value-only), semantic
+  binds round-trip the unchanged `load_claims` and classify identically
+  (G4), M9 still wins before any matching.
+  - **The second gate — shipped module, same repo, same reviewed 20-claim
+    draft: 6/20 bound, 0 wrong.** Every bind re-resolved through the real
+    resolvers to exactly the claim value (2252, 68.2, 2326, 2226, 2826, 62.6
+    — each in its named column of the sensitivity summary); 7 ambiguous (4
+    of them semantic: per-gene l2fc columns stay dense and honestly
+    ambiguous), 3 M9-refused (100.0, 68.0, 72), 4 no_candidates. Expectation
+    vs actual disclosed: the manual simulation predicted ≈7 binds; the
+    module refuses 68.0 (integer-valued, 2 significant digits — M9 by
+    design; the simulation omitted M9).
+  - **Vocabulary sensitivity, measured twice, both human-review-shaped.**
+    "called by both" matches no header (its value lives in `n_recovered`;
+    the word "recovered" would bind it) and "padj" misses `p.adjust` (the
+    dot breaks the substring) — the sidecar names counts and columns either
+    way, and the review step is the documented fix.
+  - **Read honestly.** Push, not demand-pull; one gate repo, a shallow clone
+    at a moving `main`; the reviewed draft and metric map are the
+    author-of-record's reading; no real analysis run (R6 still read from the
+    scripts); self-graded fixtures remain the module's test corpus; no
+    `models.py`/verdict/bundle/signature change; no new dependency; guard
+    baselines unmoved (eval/heal/verify/reproduce-guard). Aspect 3 (the CLI)
+    is now **unblocked to ship narrowed**: extract-claims → review (metric
+    words) → infer-locators → reproduce, with the sidecar as the review
+    surface. Full suite green (see the gate below). Spec amendment and both
+    gate records under
+    `docs/planning/reproduce-locator-inference/match-and-propose/`.
+
+- **The locator matcher ships — aspect 2 of 3 of C8 locator inference
+  (`reproduce-locator-inference`, match-and-propose).** A new
+  `verification/locator_match.py` matches the shipped candidate sweep's
+  coordinates against a paper's extracted claim values and — only on
+  unambiguous evidence — **proposes** a binding site per claim:
+  `match_claims(candidates, claims) -> list[MatchOutcome]` plus the pure
+  `sidecar_text(outcomes, claims)` builder, consuming `sweep_repo`'s
+  `Candidate`s and the unchanged `Claim`/`Locator`/`TableLocator` dataclasses
+  (import-only, mirroring `locator_inference.py`'s discipline). A claim's
+  value is evidence, a candidate is evidence; the only judgment is whether
+  two printed numbers agree at the claim's own repr-derived precision
+  (`0.9134` matches a claim printed `0.91`; an integer-valued claim compares
+  EXACTLY, so `875.6` never matches `876`). Matching is **evidence-gated and
+  exactly-one**: both the `raw` (`v`) and `÷100` (`v/100`) scales are
+  attempted independently, and only exactly one scale with exactly one
+  **site** — a distinct (source, coordinate) pair, so duplicated table rows
+  are one site, never ambiguity — binds; both scales at different sites, or
+  either scale with more than one site, is `ambiguous` and emits nothing.
+  **M9 refuses low-information values before any matching runs**: the
+  deny-list `0`/`1`/`0.5`/`0.05`/`100` in every float form, plus any integer
+  with ≤ 2 significant digits (`87`, `870`; `876` and `1234` pass) —
+  conservative, uncalibrated engineering defaults, named as such. An
+  emitted `Locator`/`TableLocator` is carried **verbatim from the
+  candidate** — the sweep's dotted+`[n]` path is never synthesized, and a
+  complete table locator never sets `delimiter` (`load_claims` re-derives
+  it; setting it would be a trap). Nothing raises (M7): non-finite claims
+  record `no_candidates`, shape-malformed candidates are skipped, empty
+  claims yield `[]`. **No CLI, no `models.py`, verdict, bundle, or
+  signed-field change; stdlib only; no new dependency.**
+  - **The guarantees, and how they are pinned.** G1 is the self-graded hard
+    gate: **0 wrong locators on the fixture corpus** (a wrong locator = a
+    proposed binding whose re-resolved value differs from the claim at the
+    claimed precision, or points at a different site than the matched
+    candidate) — every fixture authored by us, stated as such. M6's
+    universal round-trip: every `bound` outcome's claim dict passes the
+    **unchanged** `load_claims` — the same guarantee the aspect-3 CLI
+    round-trip will enforce. G4 verdict contract: inferred locators
+    `classify` identically to hand-written identical ones and dispatch
+    through `reproduce_guard.claim_family` without raising. The
+    **stale-artifact honesty pin** proves inference cannot weaken the
+    freshness guard: an inferred locator over a stale artifact still yields
+    `UNVERIFIED` under the unchanged `_require_fresh` closure inside
+    `run_reproduction` (structural — the guard was never touched) — the
+    matcher proposes binding sites only, and a fresh run decides every
+    verdict, under the sidecar's once-only "proposed, pending human review"
+    framing (R1).
+  - **The sidecar discloses, per claim, what was and was not proposed (S2,
+    R6).** A bound line names the artifact (repo-relative path), the
+    coordinate (JSON `path`, or table `column`/`row`/`header`), the scale
+    (`raw` / `÷100`), and the R6 disclosure stated as a fact, never a
+    guarantee: the exact repo-relative path **whose rewriting by the run**
+    the locator depends on. A non-bound line names the reason (`ambiguous` /
+    `refused_low_information` / `no_candidates`) and the candidate-site
+    count. Deterministic: same inputs, identical string.
+  - **Plan corrections from review, recorded.** (1) M5's "both scales, same
+    site" branch is arithmetically unreachable — `v == v/100` only at
+    `v == 0`, which M9 refuses — and is **collapsed by design**, not
+    missing. (2) The plan's Phase-2 test list self-contradicted on M9 (a
+    `87 → pct-bound` example vs the M9 `87 → refused` pin); resolved in
+    M9's favor — `87` is always refused, and the integer pct-bound pin uses
+    `876 → 8.76`. (3) Pct-scale scientific-notation pins use `1e-04`, not
+    `1e-05` (IEEE754: `1e-05/100 != 1e-07`; the exact-compare pins must stay
+    arithmetically consistent with the ÷100 shift).
+  - **Read honestly.** **Push, not demand-pull** — the friction removed is
+    reasoned from the shipped `extract-claims` surface, not observed. Its
+    correctness is **self-graded**: we authored every fixture, and G1's zero
+    rests on that corpus. **No real repo in CI** — no published repository
+    was swept, and nothing binds against real data. It **recovers nothing
+    for a user yet**: there is no CLI, so no proposal reaches disk, and the
+    CLI is aspect 3, gated on the PRD's **evidence gate** — point the sweep
+    and the matcher at one real published repo, count how many claims
+    actually bind, how many are ambiguous or refused, and whether any bind
+    is wrong. That gate remains **manual and post-merge**, before aspect 3.
+    Guard baselines unmoved (eval/heal/verify/reproduce-guard). Full suite
+    green (see the gate below). Spec/plan/understanding under
+    `docs/planning/reproduce-locator-inference/match-and-propose/`.
+
 - **The candidate sweep ships — the pure substrate for C8 locator inference
   (`reproduce-locator-inference`, aspect 1 of 3).** A new
   `verification/locator_inference.py` walks a repo and enumerates every numeric value in
