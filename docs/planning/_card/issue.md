@@ -1,34 +1,24 @@
-# Unit of work: reproduce-locator-cli (C8 locator inference, aspect 3 of 3)
-
-Branch: `feat/reproduce-locator-cli/aliz`. Source: inline brief (confirmed by
-user, 2026-09-21). No GitHub issue exists for this work.
+# feat table-locator-predicates — multi-key / predicate row match for the table locator
 
 ## Brief
 
-Build C8 locator-inference aspect 3 (cli-command) per
-`docs/planning/reproduce-locator-inference/prd.md` (M1, S1-S4) and the amended
-spec: a new `contig infer-locators <repo> <claims.json>` command that runs the
-shipped matcher (`sweep_repo` + `match_claims` with the M10 `metrics` mapping)
-over a local repo and an existing claims draft, writing an updated claims file
-(locators added where evidence-gated binds exist) plus a review sidecar, with
-the `load_claims` round-trip invariant before any write (ClaimsError → exit
-non-zero, nothing written), `--force`/refuse-to-overwrite parity with
-`extract-claims`, `--dry-run`, Click-param introspection tests. Metric words
-come from the extractor's metric field/sidecar and human review — the CLI
-threads them, never invents them. No `models.py`/verdict/bundle/signature
-change; stdlib only.
+Widen the TSV/CSV table locator's row addressing from single key-column equality
+to multi-key / predicate rows: accept `"row": {colA: x, colB: y}` as a
+first-class match (currently refused at `load_claims`), plus plain
+numeric/equality predicates where the contract allows, resolving exactly-one row
+else UNVERIFIED, with the freshness guard, never-raises, and
+UNVERIFIED-never-DIVERGED contracts intact. Caveat: preserve the shipped
+matcher's strict exactly-one site rule and the M10 semantic filter's scope —
+locator inference stays single-key, and a multi-key predicate that binds 0 or >1
+rows degrades to UNVERIFIED, never an arbitrary pick. Strict TDD on real fixture
+tables, stdlib only, no new deps, no real repo/network in CI.
 
-Caveat: the matcher module is unmerged (PR #41); this worktree's base is
-`origin/master`, so implementation depends on the PR merging (or rebasing this
-branch onto it) — planning docs proceed regardless.
+## Source
 
-## Source references
-
-- PRD: `docs/planning/reproduce-locator-inference/prd.md` (M1 = the command;
-  S1 = `--force` parity; S4 = `--dry-run`; aspect 3 = `cli-command`, gated on
-  the evidence gate — passed and recorded)
-- Spec amendment (M10 + sidecar): `docs/planning/reproduce-locator-inference/match-and-propose/spec.md`
-- Gate records: `docs/planning/reproduce-locator-inference/match-and-propose/evidence-gate-semantic-20260921.md`
-  (verdict: "Aspect 3 is unblocked to ship narrowed")
-- Matcher module (on PR #41, not yet in this base):
-  `src/contig/verification/locator_match.py`
+Selected by `contig-next` re-pick (2026-09-22) after the bwa-mem2 pick was
+abandoned at the review gate (blocker: no live trigger, recorded in the
+abandoned worktree's `docs/planning/_card/understanding.md`). Grounded in
+`docs/planning/reproduce-tsv-csv-locator/prd.md:172,254` (single key-column
+equality only; multi-key/predicate rows, column ranges, regex out of scope),
+`spec.md:26`, `docs/technical/CAPABILITY_ROADMAP.md:1874`. No GitHub issue
+exists for this work.
