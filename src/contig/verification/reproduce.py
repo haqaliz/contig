@@ -278,10 +278,11 @@ def resolve_cell(
     rows. `column` is either a header-name string (a duplicate or absent
     name -> unresolved) or a 0-based field index (out of range ->
     unresolved). `row` is either a 0-based index over the DATA rows (out of
-    range -> unresolved, naming the data-row count) or a single-key
-    `{col: val}` object selecting the data row whose `col` cell equals
-    `val` after `.strip()` (an exact compare, no case-fold/quote-strip) --
-    0 or >1 matches -> unresolved, naming the match count.
+    range -> unresolved, naming the data-row count) or a one-or-more-key
+    `{col: val}` object selecting the data row whose cells ALL equal the
+    keyed values after `.strip()` (an exact compare per key, no
+    case-fold/quote-strip; an empty object is unresolved) -- 0 or >1
+    matches -> unresolved, naming the match count.
 
     Headerless mode (`header=False`): `column` and `row` must both be
     ints, `row` indexing over ALL rows.
@@ -316,23 +317,27 @@ def resolve_cell(
             return None, f"invalid column address: {column!r}"
 
         if isinstance(row, dict):
-            if len(row) != 1:
+            if not row:
                 return None, f"invalid row key-match: {row!r}"
-            ((key_col, key_val),) = row.items()
-            if not isinstance(key_col, str) or not isinstance(key_val, str):
-                return None, f"invalid row key-match: {row!r}"
-            key_matches = [i for i, name in enumerate(header_row) if name == key_col]
-            if not key_matches:
-                return None, f"row key column {key_col!r} not found in header"
-            if len(key_matches) > 1:
-                return None, (
-                    f"row key column {key_col!r} is ambiguous: "
-                    f"{len(key_matches)} header matches"
-                )
-            key_idx = key_matches[0]
-            wanted = key_val.strip()
+            predicates = []
+            for key_col, key_val in row.items():
+                if not isinstance(key_col, str) or not isinstance(key_val, str):
+                    return None, f"invalid row key-match: {row!r}"
+                key_matches = [i for i, name in enumerate(header_row) if name == key_col]
+                if not key_matches:
+                    return None, f"row key column {key_col!r} not found in header"
+                if len(key_matches) > 1:
+                    return None, (
+                        f"row key column {key_col!r} is ambiguous: "
+                        f"{len(key_matches)} header matches"
+                    )
+                predicates.append((key_matches[0], key_val.strip()))
             matched = [
-                r for r in data_rows if key_idx < len(r) and r[key_idx].strip() == wanted
+                r
+                for r in data_rows
+                if all(
+                    idx < len(r) and r[idx].strip() == wanted for idx, wanted in predicates
+                )
             ]
             if not matched:
                 return None, f"row {row!r} matched 0 rows"
