@@ -1093,6 +1093,10 @@ def reproduce(
     into a JSON file) or a TSV/CSV cell (`from` + `column` + `row`, optionally
     `header`/`delimiter`) -- e.g. `{"id": "log2fc", "value": -2.31, "from":
     "out/de.tsv", "column": "log2FoldChange", "row": {"gene_id": "ENSG1"}}`.
+    A table `row` object may carry multiple keys, all of which must match the
+    same data row (exact, stripped string equality per key) -- e.g. `"row":
+    {"gene": "TP53", "condition": "treated"}` binds a gene x condition cell;
+    a key matching 0 or more than 1 rows stays UNVERIFIED, never a pick.
 
     A locator may instead be a regex `pattern`: on its own it is matched
     against the run's own stdout/stderr, and with `from` it is matched against

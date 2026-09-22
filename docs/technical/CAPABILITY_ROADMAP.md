@@ -1871,7 +1871,14 @@ through the same `.source` field the CLI containment loop and the engine's defen
 already check — **no new code was needed there**; `classify`/`ClaimResult`/`ReproduceRecord`/
 bundle/signing/`--fail-on-diverged` all reused as-is, **no `models.py` change**, `claims_sha256`
 already covers the new claim fields. Stdlib-only (`csv`+`gzip`, both already stdlib) — no new
-dependency. **Deferred:** multi-key/predicate row match, column ranges, regex; notebook
+dependency. **Shipped (multi-key row match — `table-locator-predicates`,
+Unreleased):** a table claim's `row` object now carries **one or more** key-value
+predicates, matched as an AND of exact, `.strip()`ed string equalities on one data row
+(unique-key 2-D tables: DESeq2-style gene×condition, VCF-like chr×pos); 0 or >1
+matched rows stay UNVERIFIED naming the count — never a pick, never DIVERGED. Single-key
+rows unchanged; locator **inference stays single-key**; the frozen `table-locator`
+scenario and the reproduce-guard baseline (16/17) unmoved. **Deferred:** regex/numeric
+row predicates, column ranges; notebook
 (`.ipynb`) numeric extraction; paper-parsing; figure/plot & table-image claims
 (still hard-blocked — no plot-hash, stdlib-only); remote `<doi|url>`; dashboard card.
 Test-first (pure reader → engine dispatch → CLI containment/e2e); deterministic; **no
