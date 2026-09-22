@@ -172,6 +172,8 @@ from contig.verification.claim_extraction import (
     extract_with_llm,
     merge_claims,
 )
+from contig.verification.locator_inference import SweepSkip, sweep_repo
+from contig.verification.locator_match import MatchOutcome, match_claims, sidecar_text
 from contig.verification.paper_intake import (
     MAX_PDF_BYTES,
     classify_paper_argument,
@@ -179,7 +181,10 @@ from contig.verification.paper_intake import (
     default_pdf_text_extractor,
 )
 from contig.verification.reproduce import (
+    Claim,
     ClaimsError,
+    Locator,
+    TableLocator,
     _MAX_MATCH_BYTES,
     load_claims,
     run_reproduction,
@@ -1625,6 +1630,289 @@ def extract_claims(
         f"Extracted {len(claims)} candidate claim(s) to {out_path}.\n"
         f"Review sidecar: {sidecar_path}\n"
         "Review each claim and add a locator before running `contig reproduce`."
+    )
+
+
+def _claim_with_locator(claim: Claim, outcome: MatchOutcome) -> dict:
+    """Assemble one updated claim dict for the infer-locators write path.
+
+    A bound outcome's locator keys are added to the claim's own
+    `id`/`value`/`tolerance` (carried verbatim from the parsed `Claim`): a
+    `Locator` contributes `from`+`path`, a `TableLocator` contributes
+    `from`+`column`+`row`+`header` -- never `delimiter`, which `load_claims`
+    re-derives from the file extension. A non-bound outcome (or a defensive
+    bound-without-locator) keeps exactly the draft's three keys, so the
+    written file's non-bound claims are semantically identical to the input.
+    """
+    entry: dict = {"id": claim.id, "value": claim.value, "tolerance": claim.tolerance}
+    locator = outcome.locator
+    if outcome.reason != "bound" or locator is None:
+        return entry
+    if isinstance(locator, TableLocator):
+        entry.update(
+            {
+                "from": locator.source,
+                "column": locator.column,
+                "row": locator.row,
+                "header": locator.header,
+            }
+        )
+    else:
+        entry.update({"from": locator.source, "path": locator.path})
+    return entry
+
+
+def _locator_review_sidecar(
+    outcomes: list[MatchOutcome],
+    claims: list[Claim],
+    skips: list[SweepSkip],
+    *,
+    semantic: bool,
+) -> str:
+    """Render the infer-locators review sidecar text.
+
+    The matcher's own `sidecar_text` lines verbatim, then the sweep's
+    never-silent-loss disclosure -- a `Sweep skips (N)` section naming each
+    skipped artifact and its reason -- and the matching-mode note (semantic
+    vs value-only). Deterministic: no I/O, no wall clock.
+    """
+    mode = (
+        "semantic (metric words narrow the candidate pool)"
+        if semantic
+        else "value-only (semantic filter off)"
+    )
+    lines = [sidecar_text(outcomes, claims), "", f"Sweep skips ({len(skips)})"]
+    if skips:
+        lines.append("")
+        lines.extend(f"- {skip.source}: {skip.reason}" for skip in skips)
+    lines.extend(["", f"Matching mode: {mode}"])
+    if semantic:
+        # The metrics-source note: the words that narrowed a pool came from
+        # the extractor and are proposals themselves -- same framing as the
+        # matcher's sidecar header.
+        lines.extend(["", "Metric words are proposals, pending human review."])
+    return "\n".join(lines) + "\n"
+
+
+@app.command()
+def infer_locators(
+    repo: str = typer.Argument(
+        ..., help="Path to a local repo directory to sweep for candidate values."
+    ),
+    claims: str = typer.Argument(
+        ..., help="Path to the draft claims JSON (id/value/tolerance only)."
+    ),
+    out: str = typer.Option(
+        ..., "--out", help="Path to write the updated claims JSON."
+    ),
+    metrics: str = typer.Option(
+        None,
+        "--metrics",
+        help="Optional JSON map of claim id to metric words (semantic filter).",
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Overwrite an existing --out (else refuse)."
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Read, sweep and match, print the summary and review sidecar, write nothing.",
+    ),
+) -> None:
+    """Propose evidence-gated locators for a draft claims file.
+
+    Sweeps a local repo directory for candidate numeric artifacts, matches
+    the draft claims against them, and writes two files: an **updated
+    claims file** at `--out` (bound claims gain locator keys -- `from`+
+    `path`, or `from`+`column`+`row`+`header` -- while every other claim
+    keeps exactly its `id`/`value`/`tolerance`), and a `<out>.review.md`
+    sidecar carrying the matcher's per-claim proposal lines, the sweep's
+    skipped artifacts, and the matching mode. The updated file is validated
+    by a round-trip through the unchanged `load_claims` before it is
+    committed, so this command never emits a claims file the reproduce
+    loader would reject.
+
+    The `repo` argument is a **local directory only**: a URL, DOI, or
+    option-shaped argument is refused (this command fetches nothing and
+    reaches no network). Without `--metrics`, matching is value-only
+    (semantic filter off); `--metrics` maps claim ids to metric words so
+    the semantic filter can narrow a candidate pool before value matching.
+
+    Nothing is written on any input failure (a refused repo argument, a
+    missing/invalid claims file, a clobbering or existing `--out` without
+    `--force`, a missing `--out` parent, or an invalid `--metrics` map).
+    `--dry-run` performs the full read+sweep+match and prints the summary
+    and review sidecar without writing anything.
+    """
+    repo_argument = classify_repo_argument(repo)
+    if repo_argument.refusal is not None:
+        typer.echo(repo_argument.refusal, err=True)
+        raise typer.Exit(code=1)
+    if repo_argument.kind != "local":
+        typer.echo(
+            f"{repo} is a remote URL; infer-locators sweeps a local repo "
+            "directory only (it never fetches)",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    repo_path = Path(repo)
+    if not repo_path.is_dir():
+        typer.echo(f"No such repo directory: {repo}", err=True)
+        raise typer.Exit(code=1)
+
+    claims_path = Path(claims)
+    out_path = Path(out)
+
+    try:
+        claims_list = load_claims(claims_path)
+    except (ClaimsError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+    # Refuse --out == the input path: we would clobber the draft we are
+    # enriching (the extract-claims clobber precedent, skipped only when the
+    # paths cannot both resolve).
+    try:
+        clobbers_input = claims_path.resolve() == out_path.resolve()
+    except OSError:
+        clobbers_input = False
+    if clobbers_input:
+        typer.echo(
+            "--out must not be the claims input path (it would overwrite the draft)",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # Overwrite guard: refuse an existing --out unless --force. Nothing written.
+    if out_path.exists() and not force:
+        typer.echo(
+            f"--out already exists: {out}; pass --force to overwrite it", err=True
+        )
+        raise typer.Exit(code=1)
+
+    out_dir = out_path.parent if str(out_path.parent) else Path(".")
+    if not out_dir.is_dir():
+        typer.echo(f"--out directory does not exist: {out_dir}", err=True)
+        raise typer.Exit(code=1)
+
+    # --metrics: a JSON object mapping claim id -> list of non-empty words.
+    # An empty word list or an unknown claim id is fine (that claim falls
+    # back to value-only in the matcher); garbage -- unparseable JSON, a
+    # non-dict root, non-string ids/words, an empty-string word -- is
+    # refused by name, nothing written.
+    metrics_map: dict[str, list[str]] | None = None
+    if metrics is not None:
+        try:
+            raw_metrics = _json.loads(Path(metrics).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            typer.echo(f"cannot load --metrics: {exc}", err=True)
+            raise typer.Exit(code=1)
+        if not isinstance(raw_metrics, dict):
+            typer.echo(
+                "--metrics must be a JSON object mapping claim ids to word lists",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        for claim_id, words in raw_metrics.items():
+            if not isinstance(claim_id, str):
+                typer.echo(
+                    f"--metrics keys must be claim id strings; got {claim_id!r}",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            if not isinstance(words, list):
+                typer.echo(
+                    f"--metrics value for claim {claim_id!r} must be a list of words",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            for word in words:
+                if not isinstance(word, str) or not word.strip():
+                    typer.echo(
+                        f"--metrics word for claim {claim_id!r} must be a "
+                        f"non-empty string; got {word!r}",
+                        err=True,
+                    )
+                    raise typer.Exit(code=1)
+        metrics_map = raw_metrics
+    else:
+        typer.echo("no --metrics given; running value-only (semantic filter off)")
+
+    # The real modules, not stubs: the sweep and the matcher run exactly as
+    # they do in the shipped library, so a Phase-1 happy path is real.
+    candidates, skips = sweep_repo(repo_path)
+    outcomes = match_claims(candidates, claims_list, metrics=metrics_map)
+
+    updated = [
+        _claim_with_locator(claim, outcome)
+        for claim, outcome in zip(claims_list, outcomes)
+    ]
+    sidecar = _locator_review_sidecar(
+        outcomes, claims_list, skips, semantic=metrics_map is not None
+    )
+
+    summary = (
+        f"bound={sum(o.reason == 'bound' for o in outcomes)}; "
+        f"ambiguous={sum(o.reason == 'ambiguous' for o in outcomes)}; "
+        f"refused_low_information="
+        f"{sum(o.reason == 'refused_low_information' for o in outcomes)}; "
+        f"no_candidates={sum(o.reason == 'no_candidates' for o in outcomes)}; "
+        f"skipped {len(skips)} artifact(s)"
+    )
+    # Metrics staleness visibility (spec acceptance 14): an id in the map
+    # with no claim in the draft falls back to value-only in the matcher by
+    # design, and that silent degradation is surfaced here -- the echo names
+    # how many ids had metric words and how many went unmatched.
+    if metrics_map is not None:
+        draft_ids = {c.id for c in claims_list}
+        matched_ids = len(set(metrics_map) & draft_ids)
+        unmatched_ids = len(set(metrics_map) - draft_ids)
+        summary += (
+            f"; metrics: matched {matched_ids} claim id(s), "
+            f"unmatched {unmatched_ids} claim id(s)"
+        )
+
+    if dry_run:
+        # The full read+sweep+match already happened; nothing is written --
+        # not even the mkstemp temp file, which lives on the write path only.
+        typer.echo(f"{summary}\n--dry-run: nothing written.\n{sidecar}")
+        return
+
+    serialized = _json.dumps(updated, indent=2) + "\n"
+
+    # THE LOAD-BEARING INVARIANT (extract-claims pattern): write to a temp
+    # file in the destination directory, validate it through the unchanged
+    # `load_claims`, and only `os.replace` it into place on success. A
+    # ClaimsError here is an internal bug -- the emitted shape is always
+    # loadable -- so the temp is removed and the run fails loudly.
+    fd, tmp_name = tempfile.mkstemp(dir=str(out_dir), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(serialized)
+        try:
+            load_claims(tmp_name)
+        except ClaimsError as exc:
+            typer.echo(
+                f"internal error: generated claims failed load_claims: {exc}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        os.replace(tmp_name, out_path)
+    finally:
+        if os.path.exists(tmp_name):
+            os.remove(tmp_name)
+
+    if out_path.suffix == ".json":
+        sidecar_path = out_path.with_suffix(".review.md")
+    else:
+        sidecar_path = Path(str(out_path) + ".review.md")
+    sidecar_path.write_text(sidecar, encoding="utf-8")
+
+    typer.echo(
+        f"{summary}\n"
+        f"Wrote updated claims to {out_path}.\n"
+        f"Review sidecar: {sidecar_path}"
     )
 
 
