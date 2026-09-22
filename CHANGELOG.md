@@ -6,6 +6,25 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Multi-key `row` match for table claims ships — `table-locator-predicates`
+  (`multi-key-rows`).** A `contig reproduce` claim's TSV/CSV locator `row` object now
+  carries **one or more** key-value predicates, all of which must hold on the same data
+  row (AND of exact, `.strip()`ed string equalities per key — no case-fold, no numeric
+  coercion, `"5"` ≠ `"5.0"`): `{"from": "de.tsv", "column": "log2FoldChange", "row":
+  {"gene": "TP53", "condition": "treated"}}` binds a gene × condition cell. Enforced at
+  the two existing sites only: `load_claims` widens "expected exactly one key" →
+  "expected one or more keys" (empty object still refused; the per-key type guards are
+  unchanged), and `resolve_cell` matches all predicates with the same duplicate-column,
+  absent-column, ragged-row, and 0-or->1-match count-naming semantics as single-key
+  rows — never a pick, never DIVERGED, never raises. **Honest scope:** roadmap-pull
+  (the recorded deferral, deliberately superseded), not demand-pull; the targeted shape
+  is unique-key 2-D tables (DESeq2-style gene×condition, VCF-like chr×pos) — repeated-key
+  tables degrade to UNVERIFIED naming the count, recoverable by reshaping the table;
+  locator **inference stays single-key** (the sweep/matcher still emit only int rows,
+  no proposal change); no real repo or network in CI (pure `tmp_path` fixtures, stdlib
+  only, no new dependency); the frozen `table-locator` scenario
+  (`{"gene": "TP53"}` → `within_tolerance`) and the reproduce-guard baseline (16/17)
+  are unmoved. Plan/PRD under `docs/planning/table-locator-predicates/`.
 - **`contig infer-locators <repo> <claims.json> --out <out.json> [--metrics
   <json>] [--force] [--dry-run]` ships — aspect 3 of 3 of C8 locator inference
   (`reproduce-locator-inference`).** The command surface for the gate-verified

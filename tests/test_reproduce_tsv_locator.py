@@ -178,6 +178,93 @@ def test_resolve_cell_key_match_different_string_does_not_match():
 
 
 # ---------------------------------------------------------------------------
+# resolve_cell -- multi-key AND row matching [table-locator-predicates]
+# ---------------------------------------------------------------------------
+
+_MULTI_KEY_ROWS = [
+    ["gene", "condition", "log2FoldChange"],
+    ["TP53", "treated", "-2.31"],
+    ["TP53", "control", "0.5"],
+    ["BRCA1", "treated", "1.2"],
+]
+
+
+def test_resolve_cell_multi_key_row_matches_when_all_predicates_hold():
+    cell, reason = resolve_cell(
+        _MULTI_KEY_ROWS, "log2FoldChange", {"gene": "TP53", "condition": "treated"}, True
+    )
+    assert cell == "-2.31"
+    assert reason == ""
+
+
+def test_resolve_cell_multi_key_row_zero_matches_returns_none_with_count():
+    cell, reason = resolve_cell(
+        _MULTI_KEY_ROWS, "log2FoldChange", {"gene": "TP53", "condition": "nope"}, True
+    )
+    assert cell is None
+    assert "0 rows" in reason
+
+
+def test_resolve_cell_multi_key_row_two_matches_returns_none_with_count():
+    rows = [
+        ["gene", "condition", "log2FoldChange"],
+        ["TP53", "treated", "-2.31"],
+        ["TP53", "treated", "0.5"],
+    ]
+    cell, reason = resolve_cell(
+        rows, "log2FoldChange", {"gene": "TP53", "condition": "treated"}, True
+    )
+    assert cell is None
+    assert "2 rows" in reason
+
+
+def test_resolve_cell_multi_key_absent_key_column_returns_none_naming_column():
+    cell, reason = resolve_cell(
+        _MULTI_KEY_ROWS, "log2FoldChange", {"gene": "TP53", "sample": "S1"}, True
+    )
+    assert cell is None
+    assert "sample" in reason
+    assert "not found in header" in reason
+
+
+def test_resolve_cell_multi_key_duplicate_header_among_key_columns_returns_none():
+    rows = [
+        ["gene", "gene", "log2FoldChange"],
+        ["TP53", "BRCA1", "-2.31"],
+    ]
+    cell, reason = resolve_cell(
+        rows, "log2FoldChange", {"gene": "TP53", "condition": "treated"}, True
+    )
+    assert cell is None
+    assert "gene" in reason
+    assert "ambiguous" in reason
+
+
+def test_resolve_cell_multi_key_ragged_row_short_of_key_column_is_unresolved():
+    rows = [
+        ["gene", "condition", "log2FoldChange"],
+        ["TP53"],  # ragged: shorter than the header
+    ]
+    cell, reason = resolve_cell(
+        rows, "log2FoldChange", {"gene": "TP53", "condition": "treated"}, True
+    )
+    assert cell is None
+    assert "0 rows" in reason
+
+
+def test_resolve_cell_multi_key_strips_key_cells_and_values():
+    rows = [
+        ["gene", "condition", "log2FoldChange"],
+        [" TP53 ", "  treated", "-2.31"],
+    ]
+    cell, reason = resolve_cell(
+        rows, "log2FoldChange", {"gene": "TP53", "condition": "treated"}, True
+    )
+    assert cell == "-2.31"
+    assert reason == ""
+
+
+# ---------------------------------------------------------------------------
 # resolve_cell -- never raises, wild/adversarial inputs
 # ---------------------------------------------------------------------------
 
@@ -197,7 +284,6 @@ def test_resolve_cell_never_raises_on_wild_inputs():
         {"gene_id": "ENSG1"},
         {"missing": "x"},
         {},
-        {"a": "1", "b": "2"},
         {"gene_id": 5},
         {5: "x"},
         None,
@@ -213,6 +299,17 @@ def test_resolve_cell_never_raises_on_wild_inputs():
                 cell, reason = result
                 assert cell is None or isinstance(cell, str)
                 assert isinstance(reason, str)
+
+    # A well-formed multi-key row object is a VALID shape -- never raises,
+    # returns a (str | None, str) tuple whether its keys resolve or not (the
+    # fixture lacks the "a"/"b" columns, so that one lands on a named reason).
+    for row in ({"a": "1", "b": "2"}, {"gene_id": "ENSG1", "log2FoldChange": "-2.31"}):
+        result = resolve_cell(rows, "log2FoldChange", row, True)
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        cell, reason = result
+        assert cell is None or isinstance(cell, str)
+        assert isinstance(reason, str)
 
     degenerate_shapes = [[], [[]], [["a"]], [["a", "b"], []]]
     for shape in degenerate_shapes:

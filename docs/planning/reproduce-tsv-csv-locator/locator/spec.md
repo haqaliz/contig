@@ -21,6 +21,15 @@ A `contig reproduce` claim can bind its observed value from a cell in a repo's o
   with a per-file table cache.
 - CLI containment loop learns table locators (reuse `.source`); help/docs note.
 
+## Supersession note (2026-09-22)
+
+**Superseded:** the multi-key/predicate-row deferral recorded in "Out of scope" below is
+deliberately superseded by `docs/planning/table-locator-predicates/` (aspect
+`multi-key-rows`). A table claim's `row` object may now carry **one or more** key-value
+predicates, matched as an AND of exact, `.strip()`ed string equalities on one data row
+(unique-key 2-D tables); 0 or >1 matched rows stay UNVERIFIED naming the count.
+Regex/numeric row predicates and column ranges remain deferred.
+
 ## Out of scope
 
 Everything in the PRD's "Out of Scope": multi-key/predicate rows, prose/plot/notebook,
