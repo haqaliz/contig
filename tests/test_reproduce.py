@@ -1908,6 +1908,103 @@ def test_run_reproduction_table_claim_row_key_many_matches_is_unverified(tmp_pat
     assert "2 rows" in result.message
 
 
+def test_run_reproduction_table_claim_multi_key_matching_is_reproduced(tmp_path):
+    _write_tsv(
+        tmp_path,
+        "out/de.tsv",
+        [
+            ["gene", "condition", "log2FoldChange"],
+            ["TP53", "treated", "-2.31"],
+            ["TP53", "control", "0.5"],
+        ],
+    )
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator(
+                "out/de.tsv",
+                "log2FoldChange",
+                {"gene": "TP53", "condition": "treated"},
+                "\t",
+                True,
+            ),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == -2.31
+
+
+def test_run_reproduction_table_claim_multi_key_ambiguous_is_unverified(tmp_path):
+    _write_tsv(
+        tmp_path,
+        "out/de.tsv",
+        [
+            ["gene", "condition", "log2FoldChange"],
+            ["TP53", "treated", "-2.31"],
+            ["TP53", "treated", "0.5"],
+        ],
+    )
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator(
+                "out/de.tsv",
+                "log2FoldChange",
+                {"gene": "TP53", "condition": "treated"},
+                "\t",
+                True,
+            ),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "2 rows" in result.message
+
+
+def test_run_reproduction_table_claim_multi_key_stale_is_unverified(tmp_path):
+    # The widened multi-key shape must never bypass the freshness guard: a
+    # table the run did NOT rewrite stays UNVERIFIED even when its multi-key
+    # row matches the claim value exactly. Twin of the single-key stale pin.
+    p = tmp_path / "out/de.tsv"
+    _write_tsv(
+        tmp_path,
+        "out/de.tsv",
+        [
+            ["gene", "condition", "log2FoldChange"],
+            ["TP53", "treated", "-2.31"],
+        ],
+    )
+    os.utime(p, (_RUN_START - 10, _RUN_START - 10))
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator(
+                "out/de.tsv",
+                "log2FoldChange",
+                {"gene": "TP53", "condition": "treated"},
+                "\t",
+                True,
+            ),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor(), run_started_at=_RUN_START)
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "rewritten" in result.message
+    assert "run start" in result.message
+
+
 def test_run_reproduction_table_claim_ragged_row_is_unverified(tmp_path):
     p = tmp_path / "out" / "de.tsv"
     p.parent.mkdir(parents=True, exist_ok=True)
