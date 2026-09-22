@@ -745,20 +745,20 @@ def load_claims(path: str | Path) -> list[Claim]:
                             f"claim {claim_id!r} 'row' is a key-match object but "
                             "'header' is false"
                         )
-                    if len(raw_row) != 1:
+                    if len(raw_row) < 1:
                         raise ClaimsError(
                             f"claim {claim_id!r} has an invalid 'row' object (expected "
-                            f"exactly one key): {raw_row!r}"
+                            f"one or more keys): {raw_row!r}"
                         )
-                    ((row_key, row_val),) = raw_row.items()
-                    if not isinstance(row_key, str) or not row_key.strip():
-                        raise ClaimsError(
-                            f"claim {claim_id!r} has an invalid 'row' key: {row_key!r}"
-                        )
-                    if isinstance(row_val, bool) or not isinstance(row_val, str):
-                        raise ClaimsError(
-                            f"claim {claim_id!r} has an invalid 'row' value: {row_val!r}"
-                        )
+                    for row_key, row_val in raw_row.items():
+                        if not isinstance(row_key, str) or not row_key.strip():
+                            raise ClaimsError(
+                                f"claim {claim_id!r} has an invalid 'row' key: {row_key!r}"
+                            )
+                        if isinstance(row_val, bool) or not isinstance(row_val, str):
+                            raise ClaimsError(
+                                f"claim {claim_id!r} has an invalid 'row' value: {row_val!r}"
+                            )
                     row = raw_row
                 else:
                     if raw_row < 0:

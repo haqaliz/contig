@@ -484,7 +484,7 @@ def test_load_claims_rejects_row_empty_object(tmp_path):
         load_claims(path)
 
 
-def test_load_claims_rejects_row_multi_key_object(tmp_path):
+def test_load_claims_accepts_row_multi_key_object(tmp_path):
     path = _write(
         tmp_path,
         "claims.json",
@@ -500,8 +500,30 @@ def test_load_claims_rejects_row_multi_key_object(tmp_path):
             ]
         ),
     )
-    with pytest.raises(ClaimsError):
-        load_claims(path)
+    claims = load_claims(path)
+    assert claims[0].locator == TableLocator("out/x.tsv", "gene_id", {"a": "1", "b": "2"}, "\t", True)
+
+
+def test_load_claims_accepts_row_three_key_object(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "out/x.tsv",
+                        "column": "gene_id",
+                        "row": {"a": "1", "b": "2", "c": "3"},
+                    }
+                )
+            ]
+        ),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == TableLocator(
+        "out/x.tsv", "gene_id", {"a": "1", "b": "2", "c": "3"}, "\t", True
+    )
 
 
 def test_load_claims_rejects_row_object_empty_key(tmp_path):
