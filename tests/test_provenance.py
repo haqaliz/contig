@@ -6,7 +6,10 @@ outputs as File entities carrying their checksums, and the verdict and QC as
 properties. Deterministic and offline; nothing is fetched or hashed here.
 """
 
+import json
+
 from contig.models import (
+    AnnotationProvenance,
     ExecutionTarget,
     KnownSiteIdentity,
     QCResult,
@@ -41,6 +44,15 @@ def _ref(**overrides) -> ReferenceIdentity:
     base = dict(mode="igenomes", genome="GRCh38")
     base.update(overrides)
     return ReferenceIdentity(**base)
+
+
+def _annotation(**overrides) -> AnnotationProvenance:
+    """Local factory for an AnnotationProvenance, defaulting to a minimal VEP
+    entry. Not a shared fixture -- lives only in this test module.
+    """
+    base = dict(tool="VEP", version=None, db_version=None, raw_header=None)
+    base.update(overrides)
+    return AnnotationProvenance(**base)
 
 
 def _by_id(crate: dict, entity_id: str) -> dict:
@@ -563,3 +575,166 @@ def test_none_known_sites_gives_no_known_site_nodes():
     crate = to_rocrate(_record(reference_identity=ref))
     ids = {n["@id"] for n in crate["@graph"]}
     assert not any(str(i).startswith("#known-sites") for i in ids)
+
+
+# --- Annotation provenance ---------------------------------------------------
+
+
+def test_two_annotations_are_software_applications_mentioned_in_order():
+    entries = [
+        _annotation(tool="VEP", version="110", db_version="110_GRCh38"),
+        _annotation(tool="SnpEff", version="5.1", db_version="GRCh38.105"),
+    ]
+    record = _record(reference_identity=_ref(), annotation_identity=entries)
+    crate = to_rocrate(record)
+    first = _by_id(crate, "#annotation-0")
+    second = _by_id(crate, "#annotation-1")
+    assert first["@type"] == "SoftwareApplication"
+    assert first["name"] == "VEP"
+    assert first["version"] == "110"
+    assert second["name"] == "SnpEff"
+    assert second["version"] == "5.1"
+    root = _by_id(crate, "./")
+    assert root["mentions"] == [
+        {"@id": "#reference"},
+        {"@id": "#annotation-0"},
+        {"@id": "#annotation-1"},
+    ]
+
+
+def test_annotation_none_version_and_db_version_omit_keys():
+    entry = _annotation(tool="VEP", version=None, db_version=None)
+    record = _record(annotation_identity=[entry])
+    crate = to_rocrate(record)
+    node = _by_id(crate, "#annotation-0")
+    assert "version" not in node
+    assert "description" not in node
+    assert node["name"] == "VEP"
+
+
+def test_annotation_description_reads_cache_build():
+    entry = _annotation(tool="VEP", db_version="110_GRCh38")
+    record = _record(annotation_identity=[entry])
+    crate = to_rocrate(record)
+    node = _by_id(crate, "#annotation-0")
+    assert node["description"] == "cache/build 110_GRCh38"
+
+
+def test_raw_header_never_appears_in_the_crate():
+    entry = _annotation(
+        tool="VEP", version="110", db_version="110_GRCh38", raw_header="##VEP=raw stuff"
+    )
+    record = _record(annotation_identity=[entry])
+    crate = to_rocrate(record)
+    assert "raw_header" not in json.dumps(crate)
+    assert "raw stuff" not in json.dumps(crate)
+
+
+def test_annotations_without_reference_give_mentions_of_annotations_only():
+    entries = [_annotation(tool="VEP"), _annotation(tool="SnpEff")]
+    record = _record(annotation_identity=entries)
+    crate = to_rocrate(record)
+    root = _by_id(crate, "./")
+    assert root["mentions"] == [{"@id": "#annotation-0"}, {"@id": "#annotation-1"}]
+
+
+def test_graph_order():
+    """The `@id` sequence of the graph, for a record with every branch
+    populated (explicit reference, both hashes, harmonized, two known sites,
+    two annotations), matches the documented order: descriptor, root,
+    pipeline, inputs, outputs, reference and its parts, known sites, then
+    annotations.
+    """
+    sites = [
+        _site(role="dbsnp", path="/data/dbsnp.vcf.gz"),
+        _site(role="known_indels", path="/data/indels.vcf.gz"),
+    ]
+    ref = _ref(
+        mode="explicit",
+        genome=None,
+        fasta="/data/genome.fa",
+        gtf="/data/genes.gtf",
+        fasta_sha256="f" * 64,
+        gtf_sha256="g" * 64,
+        harmonized=True,
+        harmonized_direction="add_chr",
+        known_sites=sites,
+    )
+    annotations = [
+        _annotation(tool="VEP", version="110", db_version="110_GRCh38"),
+        _annotation(tool="SnpEff", version="5.1", db_version="GRCh38.105"),
+    ]
+    record = _record(reference_identity=ref, annotation_identity=annotations)
+    crate = to_rocrate(record)
+    ids = [n["@id"] for n in crate["@graph"]]
+    assert ids == [
+        "ro-crate-metadata.json",
+        "./",
+        "nf-core/rnaseq",
+        "s1_R1.fastq.gz",
+        "samplesheet.csv",
+        "multiqc/multiqc_report.html",
+        "#reference",
+        "#reference-fasta",
+        "#reference-gtf",
+        "#reference-harmonization",
+        "#known-sites-dbsnp",
+        "#known-sites-known_indels",
+        "#annotation-0",
+        "#annotation-1",
+    ]
+
+
+def test_serialization_is_byte_stable():
+    record = _record(
+        reference_identity=_ref(known_sites=[_site()]),
+        annotation_identity=[_annotation(tool="VEP", version="110", db_version="110_GRCh38")],
+    )
+    first = json.dumps(to_rocrate(record), indent=2)
+    second = json.dumps(to_rocrate(record), indent=2)
+    assert first == second
+
+
+def test_no_none_values_in_new_entities():
+    """Walks only the entities this feature adds -- every `#reference*`,
+    `#known-sites*` and `#annotation*` node, plus the root `mentions` list --
+    for a None value anywhere. It deliberately does not walk the whole crate:
+    the pre-existing `qcResults[].expected_range` field can be None (frozen by
+    test_graph_unmoved_without_reference_or_annotation) and is out of scope
+    for this sweep.
+    """
+
+    def _assert_no_none(value, path):
+        if isinstance(value, dict):
+            for key, sub in value.items():
+                _assert_no_none(sub, f"{path}.{key}")
+        elif isinstance(value, list):
+            for i, sub in enumerate(value):
+                _assert_no_none(sub, f"{path}[{i}]")
+        else:
+            assert value is not None, f"None at {path}"
+
+    sites = [_site(role="dbsnp", path="/data/dbsnp.vcf.gz", sha256=None)]
+    ref = _ref(
+        mode="explicit",
+        genome=None,
+        fasta="/data/genome.fa",
+        gtf=None,
+        fasta_sha256=None,
+        harmonized=True,
+        harmonized_direction=None,
+        known_sites=sites,
+    )
+    annotations = [_annotation(tool="VEP", version=None, db_version=None)]
+    record = _record(reference_identity=ref, annotation_identity=annotations)
+    crate = to_rocrate(record)
+    root = _by_id(crate, "./")
+    _assert_no_none(root["mentions"], "mentions")
+    for node in crate["@graph"]:
+        node_id = str(node.get("@id", ""))
+        if (
+            node_id.startswith("#reference")
+            or node_id.startswith("#known-sites")
+            or node_id.startswith("#annotation")
+        ):
+            _assert_no_none(node, node_id)

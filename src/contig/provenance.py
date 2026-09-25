@@ -6,6 +6,20 @@ for the run, the pipeline as a SoftwareApplication, every input and output as a
 File entity with its recorded checksum, and the verdict plus QC as properties on
 the run. Deterministic and offline: it reads only the record already on disk and
 never fetches or re-hashes anything.
+
+Beyond that core, the crate names the reference genome and the variant-annotation
+tool the run used, in a small vocabulary this module builds on top of RO-Crate and
+schema.org (no standard reference-genome type exists):
+- the `@context` adds a term map for `sha256` (a schema.org checksum property) and
+  `localPath` (an RO-Crate term for a recorded filesystem path), since the base
+  1.1 context leaves both unmapped;
+- the root's `mentions` list points at every such entity, and each one that the
+  crate itself doesn't ship (the reference, its parts, known sites, annotation
+  tools) gets a `#`-prefixed id rather than a File path;
+- formats and the genome build are typed with EDAM (bioontology.org/EDAM) IRIs;
+- a checksum or version this module can't verify from the record is left off the
+  node entirely, never fabricated -- `_drop_none` enforces that everywhere a node
+  is assembled.
 """
 
 from __future__ import annotations
@@ -13,7 +27,12 @@ from __future__ import annotations
 import copy
 from pathlib import Path, PurePosixPath
 
-from contig.models import KnownSiteIdentity, ReferenceIdentity, RunRecord
+from contig.models import (
+    AnnotationProvenance,
+    KnownSiteIdentity,
+    ReferenceIdentity,
+    RunRecord,
+)
 
 _RO_CRATE_CONTEXT = "https://w3id.org/ro/crate/1.1/context"
 # The 1.1 context plus a term map for the two properties this module emits that
@@ -104,22 +123,18 @@ def _known_site_entities(sites: list[KnownSiteIdentity]) -> list[dict]:
         if site.path is not None:
             if "{" in site.path:
                 node["name"] = _known_site_pattern_name(site.path)
-            elif site.source == "explicit":
-                node["name"] = PurePosixPath(site.path).name
-            else:
-                node["name"] = site.path.rsplit("/", 1)[-1]
-        node["encodingFormat"] = _EDAM_VCF
-        if site.path is not None:
-            if "{" in site.path:
                 node["description"] = (
                     f"Path pattern as recorded: {site.path}. Expands to more "
                     "than one file; not itself a single downloadable file."
                 )
             elif site.source == "explicit":
+                node["name"] = PurePosixPath(site.path).name
                 node["localPath"] = site.path
             else:
+                node["name"] = site.path.rsplit("/", 1)[-1]
                 node["contentUrl"] = site.path
             node["sha256"] = site.sha256
+        node["encodingFormat"] = _EDAM_VCF
         nodes.append(_drop_none(node))
     return nodes
 
@@ -212,6 +227,28 @@ def _reference_entities(ref: ReferenceIdentity) -> list[dict]:
     return [reference, *parts]
 
 
+def _annotation_entities(entries: list[AnnotationProvenance]) -> list[dict]:
+    """One `SoftwareApplication` node per annotation-provenance entry, `#annotation-{n}`
+    in record order. `raw_header` is never emitted -- it is bulky and already lives on
+    the record.
+    """
+    nodes = []
+    for n, entry in enumerate(entries):
+        description = f"cache/build {entry.db_version}" if entry.db_version else None
+        nodes.append(
+            _drop_none(
+                {
+                    "@id": f"#annotation-{n}",
+                    "@type": "SoftwareApplication",
+                    "name": entry.tool,
+                    "version": entry.version,
+                    "description": description,
+                }
+            )
+        )
+    return nodes
+
+
 def to_rocrate(record: RunRecord) -> dict:
     """Build the RO-Crate ro-crate-metadata.json (JSON-LD) for a run.
 
@@ -260,6 +297,8 @@ def to_rocrate(record: RunRecord) -> dict:
     if record.reference_identity is not None:
         reference_entities = _reference_entities(record.reference_identity)
         mentions.append({"@id": "#reference"})
+    annotation_entities = _annotation_entities(record.annotation_identity)
+    mentions.extend({"@id": node["@id"]} for node in annotation_entities)
     if mentions:
         root["mentions"] = mentions
 
@@ -284,6 +323,7 @@ def to_rocrate(record: RunRecord) -> dict:
         *input_files,
         *output_files,
         *reference_entities,
+        *annotation_entities,
     ]
     # A fresh copy per call: callers may mutate the returned crate, and that
     # must never corrupt the shared _CONTEXT constant for later calls.
