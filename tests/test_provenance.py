@@ -275,13 +275,13 @@ def test_explicit_reference_fasta_and_gtf_with_hashes():
     assert fasta["@type"] == "File"
     assert fasta["name"] == "genome.fa"
     assert fasta["localPath"] == "/data/genome.fa"
-    assert fasta["encodingFormat"] == "http://edamontology.org/format_1929"
+    assert fasta["encodingFormat"] == {"@id": "http://edamontology.org/format_1929"}
     assert fasta["sha256"] == "f" * 64
     gtf = _by_id(crate, "#reference-gtf")
     assert gtf["@type"] == "File"
     assert gtf["name"] == "genes.gtf"
     assert gtf["localPath"] == "/data/genes.gtf"
-    assert gtf["encodingFormat"] == "http://edamontology.org/format_2306"
+    assert gtf["encodingFormat"] == {"@id": "http://edamontology.org/format_2306"}
     assert gtf["sha256"] == "g" * 64
     reference = _by_id(crate, "#reference")
     assert reference["name"] == "Explicit reference"
@@ -441,7 +441,7 @@ def test_known_site_explicit_relative_path_is_verbatim_localpath():
     assert node["localPath"] == "refs/dbsnp.vcf.gz"
     assert "contentUrl" not in node
     assert node["name"] == "dbsnp.vcf.gz"
-    assert node["encodingFormat"] == "http://edamontology.org/format_3016"
+    assert node["encodingFormat"] == {"@id": "http://edamontology.org/format_3016"}
     assert node["sha256"] == "d" * 64
 
 
@@ -577,6 +577,71 @@ def test_none_known_sites_gives_no_known_site_nodes():
     assert not any(str(i).startswith("#known-sites") for i in ids)
 
 
+# --- Format entities (RO-Crate 1.1 §27.1) -----------------------------------
+
+
+def test_file_encoding_format_links_to_a_website_entity():
+    ref = _ref(
+        mode="explicit",
+        genome=None,
+        fasta="/data/genome.fa",
+        gtf="/data/genes.gtf",
+        known_sites=[_site(role="dbsnp", path="/data/dbsnp.vcf.gz")],
+    )
+    crate = to_rocrate(_record(reference_identity=ref))
+    fasta_iri = "http://edamontology.org/format_1929"
+    gtf_iri = "http://edamontology.org/format_2306"
+    vcf_iri = "http://edamontology.org/format_3016"
+    assert _by_id(crate, "#reference-fasta")["encodingFormat"] == {"@id": fasta_iri}
+    assert _by_id(crate, "#reference-gtf")["encodingFormat"] == {"@id": gtf_iri}
+    assert _by_id(crate, "#known-sites-dbsnp")["encodingFormat"] == {"@id": vcf_iri}
+    fasta_entity = _by_id(crate, fasta_iri)
+    assert fasta_entity["@type"] == "WebSite"
+    assert fasta_entity["name"] == "FASTA"
+    assert _by_id(crate, gtf_iri)["name"] == "GTF"
+    assert _by_id(crate, vcf_iri)["name"] == "VCF"
+
+
+def test_format_entities_are_deduplicated_in_first_use_order():
+    sites = [
+        _site(role="dbsnp", path="/data/dbsnp.vcf.gz"),
+        _site(role="known_indels", path="/data/indels.vcf.gz"),
+    ]
+    ref = _ref(
+        mode="explicit",
+        genome=None,
+        fasta="/data/genome.fa",
+        gtf="/data/genes.gtf",
+        known_sites=sites,
+    )
+    crate = to_rocrate(_record(reference_identity=ref))
+    website_ids = [n["@id"] for n in crate["@graph"] if n.get("@type") == "WebSite"]
+    assert website_ids == [
+        "http://edamontology.org/format_1929",
+        "http://edamontology.org/format_2306",
+        "http://edamontology.org/format_3016",
+    ]
+
+
+def test_no_reference_means_no_format_entities():
+    crate = to_rocrate(_record())
+    assert not any(n.get("@type") == "WebSite" for n in crate["@graph"])
+
+
+def test_null_path_known_site_still_counts_as_a_vcf_format_use():
+    site = _site(role="dbsnp", path=None, sha256=None)
+    ref = _ref(mode="explicit", genome=None, fasta=None, gtf=None, known_sites=[site])
+    crate = to_rocrate(_record(reference_identity=ref))
+    website_ids = {n["@id"] for n in crate["@graph"] if n.get("@type") == "WebSite"}
+    assert website_ids == {"http://edamontology.org/format_3016"}
+
+
+def test_igenomes_reference_alone_has_no_format_entities():
+    ref = _ref(mode="igenomes", genome="GRCh38")
+    crate = to_rocrate(_record(reference_identity=ref))
+    assert not any(n.get("@type") == "WebSite" for n in crate["@graph"])
+
+
 # --- Annotation provenance ---------------------------------------------------
 
 
@@ -642,8 +707,8 @@ def test_graph_order():
     """The `@id` sequence of the graph, for a record with every branch
     populated (explicit reference, both hashes, harmonized, two known sites,
     two annotations), matches the documented order: descriptor, root,
-    pipeline, inputs, outputs, reference and its parts, known sites, then
-    annotations.
+    pipeline, inputs, outputs, reference and its parts, known sites,
+    annotations, then the format WebSite entities in first-use order.
     """
     sites = [
         _site(role="dbsnp", path="/data/dbsnp.vcf.gz"),
@@ -682,6 +747,9 @@ def test_graph_order():
         "#known-sites-known_indels",
         "#annotation-0",
         "#annotation-1",
+        "http://edamontology.org/format_1929",
+        "http://edamontology.org/format_2306",
+        "http://edamontology.org/format_3016",
     ]
 
 
@@ -697,9 +765,10 @@ def test_serialization_is_byte_stable():
 
 def test_no_none_values_in_new_entities():
     """Walks only the entities this feature adds -- every `#reference*`,
-    `#known-sites*` and `#annotation*` node, plus the root `mentions` list --
-    for a None value anywhere. It deliberately does not walk the whole crate:
-    the pre-existing `qcResults[].expected_range` field can be None (frozen by
+    `#known-sites*` and `#annotation*` node, every format `WebSite` entity,
+    plus the root `mentions` list -- for a None value anywhere. It
+    deliberately does not walk the whole crate: the pre-existing
+    `qcResults[].expected_range` field can be None (frozen by
     test_graph_unmoved_without_reference_or_annotation) and is out of scope
     for this sweep.
     """
@@ -736,5 +805,6 @@ def test_no_none_values_in_new_entities():
             node_id.startswith("#reference")
             or node_id.startswith("#known-sites")
             or node_id.startswith("#annotation")
+            or node.get("@type") == "WebSite"
         ):
             _assert_no_none(node, node_id)

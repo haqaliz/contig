@@ -17,6 +17,10 @@ schema.org (no standard reference-genome type exists):
   crate itself doesn't ship (the reference, its parts, known sites, annotation
   tools) gets a `#`-prefixed id rather than a File path;
 - formats and the genome build are typed with EDAM (bioontology.org/EDAM) IRIs;
+  a File's `encodingFormat` links to a `WebSite` contextual entity for that IRI
+  (RO-Crate 1.1 §27.1: a bare IRI string there is neither a MIME type nor a
+  link), while a `PropertyValue`'s `propertyID` (the genome build) stays a
+  plain IRI string, since §27.1 only constrains File nodes;
 - a checksum or version this module can't verify from the record is left off the
   node entirely, never fabricated -- `_drop_none` enforces that everywhere a node
   is assembled.
@@ -61,6 +65,14 @@ _EDAM_GENOME_BUILD = "http://edamontology.org/data_2340"  # Genome build identif
 _EDAM_FASTA = "http://edamontology.org/format_1929"
 _EDAM_GTF = "http://edamontology.org/format_2306"
 _EDAM_VCF = "http://edamontology.org/format_3016"
+
+# Display name for each format IRI's WebSite contextual entity (RO-Crate 1.1
+# §27.1's "adding detailed descriptions of encodings" pattern).
+_EDAM_FORMAT_NAMES = {
+    _EDAM_FASTA: "FASTA",
+    _EDAM_GTF: "GTF",
+    _EDAM_VCF: "VCF",
+}
 
 
 def _drop_none(node: dict) -> dict:
@@ -134,7 +146,7 @@ def _known_site_entities(sites: list[KnownSiteIdentity]) -> list[dict]:
                 node["name"] = site.path.rsplit("/", 1)[-1]
                 node["contentUrl"] = site.path
             node["sha256"] = site.sha256
-        node["encodingFormat"] = _EDAM_VCF
+        node["encodingFormat"] = {"@id": _EDAM_VCF}
         nodes.append(_drop_none(node))
     return nodes
 
@@ -180,7 +192,7 @@ def _reference_entities(ref: ReferenceIdentity) -> list[dict]:
                     "@type": "File",
                     "name": Path(ref.fasta).name,
                     "localPath": ref.fasta,
-                    "encodingFormat": _EDAM_FASTA,
+                    "encodingFormat": {"@id": _EDAM_FASTA},
                     "sha256": ref.fasta_sha256,
                 }
             )
@@ -192,7 +204,7 @@ def _reference_entities(ref: ReferenceIdentity) -> list[dict]:
                 "@type": "File",
                 "name": Path(ref.gtf).name,
                 "localPath": ref.gtf,
-                "encodingFormat": _EDAM_GTF,
+                "encodingFormat": {"@id": _EDAM_GTF},
                 "sha256": ref.gtf_sha256,
                 "version": ref.annotation_version,
             }
@@ -249,6 +261,23 @@ def _annotation_entities(entries: list[AnnotationProvenance]) -> list[dict]:
     return nodes
 
 
+def _format_entities(entities: list[dict]) -> list[dict]:
+    """One `WebSite` contextual entity per distinct EDAM format IRI a File node
+    in `entities` links to via `encodingFormat`, in first-use order and
+    deduplicated (RO-Crate 1.1 §27.1: `encodingFormat` must be a MIME string or
+    a link to a `WebSite`, not a bare IRI). A known-sites node with no recorded
+    path still carries `encodingFormat`, so it counts as a use too.
+    """
+    seen: dict[str, None] = {}
+    for entity in entities:
+        fmt = entity.get("encodingFormat")
+        if isinstance(fmt, dict) and "@id" in fmt:
+            seen.setdefault(fmt["@id"], None)
+    return [
+        {"@id": iri, "@type": "WebSite", "name": _EDAM_FORMAT_NAMES[iri]} for iri in seen
+    ]
+
+
 def to_rocrate(record: RunRecord) -> dict:
     """Build the RO-Crate ro-crate-metadata.json (JSON-LD) for a run.
 
@@ -301,6 +330,7 @@ def to_rocrate(record: RunRecord) -> dict:
     mentions.extend({"@id": node["@id"]} for node in annotation_entities)
     if mentions:
         root["mentions"] = mentions
+    format_entities = _format_entities(reference_entities)
 
     pipeline_app = {
         "@id": record.pipeline,
@@ -324,6 +354,7 @@ def to_rocrate(record: RunRecord) -> dict:
         *output_files,
         *reference_entities,
         *annotation_entities,
+        *format_entities,
     ]
     # A fresh copy per call: callers may mutate the returned crate, and that
     # must never corrupt the shared _CONTEXT constant for later calls.
