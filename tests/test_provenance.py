@@ -8,6 +8,7 @@ properties. Deterministic and offline; nothing is fetched or hashed here.
 
 from contig.models import (
     ExecutionTarget,
+    KnownSiteIdentity,
     QCResult,
     ReferenceIdentity,
     RunRecord,
@@ -404,3 +405,161 @@ def test_no_reference_identity_means_no_mentions_key():
     crate = to_rocrate(_record())
     root = _by_id(crate, "./")
     assert "mentions" not in root
+
+
+# --- Reference identity: known sites -----------------------------------------
+
+
+def _site(**overrides) -> KnownSiteIdentity:
+    """Local factory for a KnownSiteIdentity, defaulting to a minimal explicit
+    dbSNP entry. Not a shared fixture -- lives only in this test module.
+    """
+    base = dict(role="dbsnp", path="/data/dbsnp.vcf.gz", sha256=None, source="explicit")
+    base.update(overrides)
+    return KnownSiteIdentity(**base)
+
+
+def test_known_site_explicit_relative_path_is_verbatim_localpath():
+    site = _site(role="dbsnp", path="refs/dbsnp.vcf.gz", source="explicit", sha256="d" * 64)
+    ref = _ref(mode="explicit", genome=None, fasta=None, gtf=None, known_sites=[site])
+    crate = to_rocrate(_record(reference_identity=ref))
+    node = _by_id(crate, "#known-sites-dbsnp")
+    assert node["@type"] == "File"
+    assert node["alternateName"] == "dbsnp"
+    assert node["localPath"] == "refs/dbsnp.vcf.gz"
+    assert "contentUrl" not in node
+    assert node["name"] == "dbsnp.vcf.gz"
+    assert node["encodingFormat"] == "http://edamontology.org/format_3016"
+    assert node["sha256"] == "d" * 64
+
+
+def test_known_site_igenomes_s3_path_goes_to_content_url():
+    site = _site(
+        role="known_snps",
+        path=(
+            "s3://ngi-igenomes/igenomes/Homo_sapiens/GATK/GRCh38/Annotation/"
+            "GATKBundle/dbsnp_146.hg38.vcf.gz"
+        ),
+        source="igenomes",
+    )
+    ref = _ref(mode="igenomes", genome="GRCh38", known_sites=[site])
+    crate = to_rocrate(_record(reference_identity=ref))
+    node = _by_id(crate, "#known-sites-known_snps")
+    assert node["contentUrl"] == site.path
+    assert "localPath" not in node
+    assert node["name"] == "dbsnp_146.hg38.vcf.gz"
+
+
+def test_known_site_brace_pattern_gets_description_and_no_url_fields():
+    pattern = (
+        "s3://ngi-igenomes/igenomes/Homo_sapiens/GATK/GRCh38/Annotation/GATKBundle/"
+        "{Mills_and_1000G_gold_standard.indels.hg38,"
+        "beta/Homo_sapiens_assembly38.known_indels}.vcf.gz"
+    )
+    site = _site(role="known_indels", path=pattern, source="igenomes")
+    ref = _ref(mode="igenomes", genome="GRCh38", known_sites=[site])
+    crate = to_rocrate(_record(reference_identity=ref))
+    node = _by_id(crate, "#known-sites-known_indels")
+    assert "contentUrl" not in node
+    assert "localPath" not in node
+    assert node["description"] == (
+        f"Path pattern as recorded: {pattern}. Expands to more than one file; "
+        "not itself a single downloadable file."
+    )
+    # Basename rule: the text after the last "/" that precedes the opening
+    # brace, so the "/" inside the pattern's alternatives is not mistaken for
+    # a path separator.
+    assert node["name"] == (
+        "{Mills_and_1000G_gold_standard.indels.hg38,"
+        "beta/Homo_sapiens_assembly38.known_indels}.vcf.gz"
+    )
+
+
+def test_known_site_duplicate_role_gets_numeric_suffix():
+    sites = [
+        _site(role="known_indels", path="/data/a.vcf.gz"),
+        _site(role="known_indels", path="/data/b.vcf.gz"),
+        _site(role="known_indels", path="/data/c.vcf.gz"),
+    ]
+    ref = _ref(mode="explicit", genome=None, fasta=None, gtf=None, known_sites=sites)
+    crate = to_rocrate(_record(reference_identity=ref))
+    ids = {n["@id"] for n in crate["@graph"] if str(n["@id"]).startswith("#known-sites")}
+    assert ids == {
+        "#known-sites-known_indels",
+        "#known-sites-known_indels-1",
+        "#known-sites-known_indels-2",
+    }
+
+
+def test_known_site_null_path_has_only_core_keys():
+    site = _site(role="dbsnp", path=None, sha256=None)
+    ref = _ref(mode="explicit", genome=None, fasta=None, gtf=None, known_sites=[site])
+    crate = to_rocrate(_record(reference_identity=ref))
+    node = _by_id(crate, "#known-sites-dbsnp")
+    assert set(node) == {"@id", "@type", "alternateName", "encodingFormat"}
+
+
+def test_known_site_null_path_with_sha256_still_omits_it():
+    site = _site(role="dbsnp", path=None, sha256="e" * 64)
+    ref = _ref(mode="explicit", genome=None, fasta=None, gtf=None, known_sites=[site])
+    crate = to_rocrate(_record(reference_identity=ref))
+    node = _by_id(crate, "#known-sites-dbsnp")
+    assert set(node) == {"@id", "@type", "alternateName", "encodingFormat"}
+
+
+def test_known_site_ids_listed_in_reference_haspart_after_fasta_and_gtf():
+    site = _site(role="dbsnp", path="/data/dbsnp.vcf.gz")
+    ref = _ref(
+        mode="explicit",
+        genome=None,
+        fasta="/data/genome.fa",
+        gtf="/data/genes.gtf",
+        known_sites=[site],
+    )
+    crate = to_rocrate(_record(reference_identity=ref))
+    reference = _by_id(crate, "#reference")
+    assert reference["hasPart"] == [
+        {"@id": "#reference-fasta"},
+        {"@id": "#reference-gtf"},
+        {"@id": "#known-sites-dbsnp"},
+    ]
+
+
+def test_known_site_nodes_come_after_harmonization_in_graph_order():
+    site = _site(role="dbsnp", path="/data/dbsnp.vcf.gz")
+    ref = _ref(
+        mode="explicit",
+        genome=None,
+        fasta="/data/genome.fa",
+        gtf="/data/genes.gtf",
+        harmonized=True,
+        harmonized_direction="add_chr",
+        known_sites=[site],
+    )
+    crate = to_rocrate(_record(reference_identity=ref))
+    ids = [n["@id"] for n in crate["@graph"]]
+    assert ids.index("#reference-harmonization") < ids.index("#known-sites-dbsnp")
+
+
+def test_known_sites_in_igenomes_mode_populate_haspart():
+    site = _site(role="dbsnp", path="s3://bucket/dbsnp.vcf.gz", source="igenomes")
+    ref = _ref(mode="igenomes", genome="GRCh38", known_sites=[site])
+    crate = to_rocrate(_record(reference_identity=ref))
+    reference = _by_id(crate, "#reference")
+    assert reference["hasPart"] == [{"@id": "#known-sites-dbsnp"}]
+
+
+def test_empty_known_sites_list_gives_no_known_site_nodes():
+    ref = _ref(mode="igenomes", genome="GRCh38", known_sites=[])
+    crate = to_rocrate(_record(reference_identity=ref))
+    ids = {n["@id"] for n in crate["@graph"]}
+    assert not any(str(i).startswith("#known-sites") for i in ids)
+    reference = _by_id(crate, "#reference")
+    assert "hasPart" not in reference
+
+
+def test_none_known_sites_gives_no_known_site_nodes():
+    ref = _ref(mode="igenomes", genome="GRCh38", known_sites=None)
+    crate = to_rocrate(_record(reference_identity=ref))
+    ids = {n["@id"] for n in crate["@graph"]}
+    assert not any(str(i).startswith("#known-sites") for i in ids)
