@@ -10,9 +10,21 @@ never fetches or re-hashes anything.
 
 from __future__ import annotations
 
+import copy
+
 from contig.models import RunRecord
 
 _RO_CRATE_CONTEXT = "https://w3id.org/ro/crate/1.1/context"
+# The 1.1 context plus a term map for the two properties this module emits that
+# aren't in the base RO-Crate vocabulary: `sha256` (a schema.org checksum
+# property) and `localPath` (an RO-Crate term for a recorded filesystem path).
+_CONTEXT = [
+    _RO_CRATE_CONTEXT,
+    {
+        "sha256": "http://schema.org/sha256",
+        "localPath": "https://w3id.org/ro/terms#localPath",
+    },
+]
 
 
 def _file_entity(entity_id: str, sha256: str) -> dict:
@@ -78,4 +90,6 @@ def to_rocrate(record: RunRecord) -> dict:
     }
 
     graph = [descriptor, root, pipeline_app, *input_files, *output_files]
-    return {"@context": _RO_CRATE_CONTEXT, "@graph": graph}
+    # A fresh copy per call: callers may mutate the returned crate, and that
+    # must never corrupt the shared _CONTEXT constant for later calls.
+    return {"@context": copy.deepcopy(_CONTEXT), "@graph": graph}

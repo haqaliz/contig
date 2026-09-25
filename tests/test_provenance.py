@@ -118,3 +118,68 @@ def test_unverified_run_reports_unverified_verdict():
     crate = to_rocrate(_record(qc_results=[]))
     root = _by_id(crate, "./")
     assert root["verdict"] == "unverified"
+
+
+def test_context_maps_sha256_and_localpath():
+    crate = to_rocrate(_record())
+    assert crate["@context"] == [
+        "https://w3id.org/ro/crate/1.1/context",
+        {
+            "sha256": "http://schema.org/sha256",
+            "localPath": "https://w3id.org/ro/terms#localPath",
+        },
+    ]
+
+
+def test_graph_unmoved_without_reference_or_annotation():
+    """Characterization pin: today's graph, hand-written, for a record with no
+    reference_identity and no annotation_identity. The root has no `mentions`
+    key. This literal must never be built by calling `to_rocrate` -- it is the
+    frozen snapshot that AC1's context change (and every later phase) must not
+    disturb for this record shape.
+    """
+    record = _record()
+    expected = [
+        {
+            "@id": "ro-crate-metadata.json",
+            "@type": "CreativeWork",
+            "conformsTo": {"@id": "https://w3id.org/ro/crate/1.1"},
+            "about": {"@id": "./"},
+        },
+        {
+            "@id": "./",
+            "@type": "Dataset",
+            "identifier": "run-1",
+            "name": "Contig run run-1",
+            "mainEntity": {"@id": "nf-core/rnaseq"},
+            "hasPart": [
+                {"@id": "s1_R1.fastq.gz"},
+                {"@id": "samplesheet.csv"},
+                {"@id": "multiqc/multiqc_report.html"},
+            ],
+            "verdict": "pass",
+            "parameters": {"genome": "GRCh38"},
+            "containerDigests": {"star": "sha256:dead"},
+            "qcResults": [
+                {
+                    "check": "mapping_rate",
+                    "status": "pass",
+                    "message": "ok",
+                    "value": 92.0,
+                    "expected_range": None,
+                }
+            ],
+        },
+        {
+            "@id": "nf-core/rnaseq",
+            "@type": "SoftwareApplication",
+            "name": "nf-core/rnaseq",
+            "version": "3.26.0",
+        },
+        {"@id": "s1_R1.fastq.gz", "@type": "File", "sha256": "b" * 64},
+        {"@id": "samplesheet.csv", "@type": "File", "sha256": "a" * 64},
+        {"@id": "multiqc/multiqc_report.html", "@type": "File", "sha256": "c" * 64},
+    ]
+    crate = to_rocrate(record)
+    assert crate["@graph"] == expected
+    assert "mentions" not in _by_id(crate, "./")
