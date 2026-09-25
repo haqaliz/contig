@@ -6,6 +6,41 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+- **RO-Crate now names the reference genome and the annotation tool a run used
+  (`rocrate-reference-identity`).** `contig export <run> --rocrate` could say which pipeline,
+  which containers and which inputs a run used, but not which genome: `RunRecord.reference_identity`
+  and `.annotation_identity` were captured (C5/C7) but never projected into the crate.
+  `to_rocrate` (`src/contig/provenance.py`) now emits a `#reference` Dataset (an iGenomes
+  genome-key `PropertyValue`, or explicit FASTA/GTF `File`s with harmonization noted via
+  `additionalProperty`, plus one `File` per known-sites resource) and one
+  `#annotation-{n}` `SoftwareApplication` per `annotation_identity` entry, all reached from the
+  root Dataset's `mentions` list via `#`-prefixed ids, since these entities aren't shipped
+  inside the crate. A checksum or version the record doesn't carry is left off the node, never
+  fabricated; a brace-pattern known-sites path (iGenomes' `known_indels`) is kept verbatim in
+  `description`, labelled as a pattern rather than resolved. The dig also found a pre-existing
+  defect: the crate declares the RO-Crate 1.1 context, which does not define `sha256`, so every
+  checksum on every input/output `File` the crate has ever carried was silently dropped by any
+  JSON-LD processor that expands it. The `@context` term map added here (`sha256`, `localPath`)
+  fixes that for **every** exported crate, whether or not a reference is present, so **every
+  crate's `@context` bytes change**; the `@graph` is unchanged (dict-equal) for a record with no
+  reference and no annotation identity. `encodingFormat` is `{"@id": <EDAM IRI>}`, with one
+  deduplicated `WebSite` entity per format appended at the end of the graph, not a bare IRI
+  string: the validator gate below forced this reading of RO-Crate 1.1 rule 27.1. **Interview
+  decisions:** the context term map applies to every crate, not only ones with a reference; the
+  new entities are linked from the root via `mentions` using `#`-ids; annotation provenance
+  ships in this same slice rather than waiting on a separate C7 pass; and a brace-pattern path is
+  described, never parsed. **Validator gate (PRD S2):** `roc-validator` 0.11.4, profile
+  `ro-crate-1.1`, severity `RECOMMENDED`, run outside the repo in a throwaway venv (never a
+  project dependency). Result: the term map fixes master's REQUIRED "`sha256` not present in the
+  `@context`" error; the new entities add zero new REQUIRED issues; one RECOMMENDED warning is
+  kept deliberately (a one-item `mentions` stays a list, for a stable shape); master's
+  pre-existing REQUIRED issues (no `license`/`datePublished`/`description`, unmapped
+  `parameters`/`verdict`/`qcResults`, nested non-flattened objects, input/output Files not
+  shipped in the crate, among others) are unchanged and out of scope for this slice. **Honest
+  scope:** roadmap-pull, not demand-pull; nothing parses the crate today. No change to
+  `models.py`, signing, the CLI surface or the dashboard; stdlib only (`copy`, `pathlib`). PRD and
+  the validator-gate record are under `docs/planning/rocrate-reference-identity/`.
+
 ## [0.61.0] - 2026-09-22
 
 - **Multi-key `row` match for table claims ships — `table-locator-predicates`
