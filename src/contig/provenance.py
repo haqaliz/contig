@@ -11,8 +11,9 @@ never fetches or re-hashes anything.
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 
-from contig.models import RunRecord
+from contig.models import ReferenceIdentity, RunRecord
 
 _RO_CRATE_CONTEXT = "https://w3id.org/ro/crate/1.1/context"
 # The 1.1 context plus a term map for the two properties this module emits that
@@ -30,6 +31,105 @@ _CONTEXT = [
 def _file_entity(entity_id: str, sha256: str) -> dict:
     """One File node in the crate graph, carrying its recorded sha256 checksum."""
     return {"@id": entity_id, "@type": "File", "sha256": sha256}
+
+
+# EDAM (bioontology.org/EDAM) format/data IRIs used to type the reference
+# entities below. No standard RO-Crate reference-genome type exists, so this
+# module builds its own vocabulary on top of schema.org and RO-Crate terms
+# (`mentions`, `hasPart`, `identifier`, `PropertyValue`, `encodingFormat`),
+# anchored to EDAM where a concept term exists.
+_EDAM_GENOME_BUILD = "http://edamontology.org/data_2340"  # Genome build identifier
+_EDAM_FASTA = "http://edamontology.org/format_1929"
+_EDAM_GTF = "http://edamontology.org/format_2306"
+
+
+def _drop_none(node: dict) -> dict:
+    """Drop keys whose value is None, so no entity ever carries a fabricated null."""
+    return {k: v for k, v in node.items() if v is not None}
+
+
+def _harmonized_gtf_description(direction: str | None) -> str:
+    clause = f" (contig names rewritten: {direction})" if direction else ""
+    return (
+        f"Contig-harmonized copy of the user's annotation{clause}; "
+        "not the original file"
+    )
+
+
+def _reference_entities(ref: ReferenceIdentity) -> list[dict]:
+    """The `#reference` Dataset and its parts, in the fixed M6 sub-order:
+    genome-key (iGenomes) or fasta/gtf (explicit), then harmonization.
+
+    `#reference`'s `hasPart` lists only the File parts (fasta, then gtf) that
+    exist, in that order, so Task 3 can append known-site ids after them.
+    """
+    reference = {"@id": "#reference", "@type": "Dataset"}
+    parts: list[dict] = []
+    file_part_ids: list[dict] = []
+
+    if ref.mode == "igenomes":
+        reference["name"] = (
+            f"iGenomes {ref.genome} reference (downloaded by the pipeline)"
+        )
+        reference["identifier"] = {"@id": "#reference-genome-key"}
+        parts.append(
+            {
+                "@id": "#reference-genome-key",
+                "@type": "PropertyValue",
+                "propertyID": _EDAM_GENOME_BUILD,
+                "name": "genome",
+                "value": ref.genome,
+            }
+        )
+    else:
+        reference["name"] = "Explicit reference"
+        if ref.fasta is not None:
+            fasta = _drop_none(
+                {
+                    "@id": "#reference-fasta",
+                    "@type": "File",
+                    "name": Path(ref.fasta).name,
+                    "localPath": ref.fasta,
+                    "encodingFormat": _EDAM_FASTA,
+                    "sha256": ref.fasta_sha256,
+                }
+            )
+            parts.append(fasta)
+            file_part_ids.append({"@id": fasta["@id"]})
+        if ref.gtf is not None:
+            gtf = {
+                "@id": "#reference-gtf",
+                "@type": "File",
+                "name": Path(ref.gtf).name,
+                "localPath": ref.gtf,
+                "encodingFormat": _EDAM_GTF,
+                "sha256": ref.gtf_sha256,
+                "version": ref.annotation_version,
+            }
+            if ref.harmonized:
+                gtf["description"] = _harmonized_gtf_description(
+                    ref.harmonized_direction
+                )
+            gtf = _drop_none(gtf)
+            parts.append(gtf)
+            file_part_ids.append({"@id": gtf["@id"]})
+
+    reference["hasPart"] = file_part_ids
+
+    if ref.harmonized:
+        reference["additionalProperty"] = {"@id": "#reference-harmonization"}
+        parts.append(
+            _drop_none(
+                {
+                    "@id": "#reference-harmonization",
+                    "@type": "PropertyValue",
+                    "name": "contig_harmonization",
+                    "value": ref.harmonized_direction,
+                }
+            )
+        )
+
+    return [reference, *parts]
 
 
 def to_rocrate(record: RunRecord) -> dict:
@@ -75,6 +175,14 @@ def to_rocrate(record: RunRecord) -> dict:
     if record.contig_version:
         root["contigVersion"] = record.contig_version
 
+    reference_entities: list[dict] = []
+    mentions: list[dict] = []
+    if record.reference_identity is not None:
+        reference_entities = _reference_entities(record.reference_identity)
+        mentions.append({"@id": "#reference"})
+    if mentions:
+        root["mentions"] = mentions
+
     pipeline_app = {
         "@id": record.pipeline,
         "@type": "SoftwareApplication",
@@ -89,7 +197,14 @@ def to_rocrate(record: RunRecord) -> dict:
         "about": {"@id": "./"},
     }
 
-    graph = [descriptor, root, pipeline_app, *input_files, *output_files]
+    graph = [
+        descriptor,
+        root,
+        pipeline_app,
+        *input_files,
+        *output_files,
+        *reference_entities,
+    ]
     # A fresh copy per call: callers may mutate the returned crate, and that
     # must never corrupt the shared _CONTEXT constant for later calls.
     return {"@context": copy.deepcopy(_CONTEXT), "@graph": graph}
