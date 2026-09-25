@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.62.0] - 2026-09-26
+
 - **RO-Crate now names the reference genome and the annotation tool a run used
   (`rocrate-reference-identity`).** `contig export <run> --rocrate` could say which pipeline,
   which containers and which inputs a run used, but not which genome: `RunRecord.reference_identity`
@@ -4509,6 +4511,7 @@ compute. Pre-revenue, validation phase.
 [0.53.0]: https://github.com/haqaliz/contig/releases/tag/v0.53.0
 [0.55.1]: https://github.com/haqaliz/contig/releases/tag/v0.55.1
 [0.60.0]: https://github.com/haqaliz/contig/releases/tag/v0.60.0
+[0.62.0]: https://github.com/haqaliz/contig/releases/tag/v0.62.0
 [0.61.0]: https://github.com/haqaliz/contig/releases/tag/v0.61.0
 [0.59.0]: https://github.com/haqaliz/contig/releases/tag/v0.59.0
 [0.58.0]: https://github.com/haqaliz/contig/releases/tag/v0.58.0
