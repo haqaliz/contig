@@ -195,7 +195,7 @@ def test_graph_unmoved_without_reference_or_annotation():
     assert "mentions" not in _by_id(crate, "./")
 
 
-# --- Reference identity: iGenomes mode (AC3) ------------------------------
+# --- Reference identity: iGenomes mode -------------------------------------
 
 
 def test_igenomes_reference_has_genome_key_and_no_fasta_or_gtf():
@@ -224,7 +224,28 @@ def test_igenomes_reference_carries_no_sha256_localpath_or_version():
             assert "version" not in node
 
 
-# --- Reference identity: explicit mode, hashes (AC4-AC6) ------------------
+def test_igenomes_reference_has_no_haspart_key_when_empty():
+    record = _record(reference_identity=_ref(mode="igenomes", genome="GRCh38"))
+    crate = to_rocrate(record)
+    reference = _by_id(crate, "#reference")
+    assert "hasPart" not in reference
+
+
+def test_igenomes_reference_with_no_genome_omits_null_value_and_name_has_no_none():
+    record = _record(reference_identity=_ref(mode="igenomes", genome=None))
+    crate = to_rocrate(record)
+    reference = _by_id(crate, "#reference")
+    assert reference["name"] == "iGenomes reference (downloaded by the pipeline)"
+    assert "None" not in reference["name"]
+    key = _by_id(crate, "#reference-genome-key")
+    assert "value" not in key
+    for node in crate["@graph"]:
+        if str(node["@id"]).startswith("#reference"):
+            for value in node.values():
+                assert value is not None
+
+
+# --- Reference identity: explicit mode, hashes -----------------------------
 
 
 def test_explicit_reference_fasta_and_gtf_with_hashes():
@@ -302,7 +323,7 @@ def test_annotation_version_appears_only_on_gtf_node():
     assert "version" not in reference
 
 
-# --- Reference identity: harmonization (AC7) -------------------------------
+# --- Reference identity: harmonization -------------------------------------
 
 
 def test_harmonized_gtf_description_and_harmonization_property():
@@ -359,7 +380,7 @@ def test_not_harmonized_has_no_harmonization_node_or_gtf_description():
     assert "additionalProperty" not in reference
 
 
-# --- Root `mentions` link (M2, M6) -----------------------------------------
+# --- Root `mentions` link ---------------------------------------------------
 
 
 def test_root_mentions_the_reference():

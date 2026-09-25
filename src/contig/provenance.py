@@ -57,11 +57,13 @@ def _harmonized_gtf_description(direction: str | None) -> str:
 
 
 def _reference_entities(ref: ReferenceIdentity) -> list[dict]:
-    """The `#reference` Dataset and its parts, in the fixed M6 sub-order:
-    genome-key (iGenomes) or fasta/gtf (explicit), then harmonization.
+    """The `#reference` Dataset and its parts: a genome-key PropertyValue for an
+    iGenomes reference, or fasta/gtf File nodes for an explicit one, followed by
+    a harmonization PropertyValue when the reference is harmonized.
 
     `#reference`'s `hasPart` lists only the File parts (fasta, then gtf) that
-    exist, in that order, so Task 3 can append known-site ids after them.
+    exist, and the key is omitted entirely when there are none. Known-site ids
+    are appended after the fasta/gtf ids by a later projection step.
     """
     reference = {"@id": "#reference", "@type": "Dataset"}
     parts: list[dict] = []
@@ -70,16 +72,20 @@ def _reference_entities(ref: ReferenceIdentity) -> list[dict]:
     if ref.mode == "igenomes":
         reference["name"] = (
             f"iGenomes {ref.genome} reference (downloaded by the pipeline)"
+            if ref.genome is not None
+            else "iGenomes reference (downloaded by the pipeline)"
         )
         reference["identifier"] = {"@id": "#reference-genome-key"}
         parts.append(
-            {
-                "@id": "#reference-genome-key",
-                "@type": "PropertyValue",
-                "propertyID": _EDAM_GENOME_BUILD,
-                "name": "genome",
-                "value": ref.genome,
-            }
+            _drop_none(
+                {
+                    "@id": "#reference-genome-key",
+                    "@type": "PropertyValue",
+                    "propertyID": _EDAM_GENOME_BUILD,
+                    "name": "genome",
+                    "value": ref.genome,
+                }
+            )
         )
     else:
         reference["name"] = "Explicit reference"
@@ -114,7 +120,8 @@ def _reference_entities(ref: ReferenceIdentity) -> list[dict]:
             parts.append(gtf)
             file_part_ids.append({"@id": gtf["@id"]})
 
-    reference["hasPart"] = file_part_ids
+    if file_part_ids:
+        reference["hasPart"] = file_part_ids
 
     if ref.harmonized:
         reference["additionalProperty"] = {"@id": "#reference-harmonization"}
