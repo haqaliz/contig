@@ -35,7 +35,8 @@ All notable changes to Contig are recorded here. The format follows
   `@context`" error; the new entities add zero new REQUIRED issues; one RECOMMENDED warning is
   kept deliberately (a one-item `mentions` stays a list, for a stable shape); master's
   pre-existing REQUIRED issues (no `license`/`datePublished`/`description`, unmapped
-  `parameters`/`verdict`/`qcResults`) are unchanged and out of scope for this slice. **Honest
+  `parameters`/`verdict`/`qcResults`, nested non-flattened objects, input/output Files not
+  shipped in the crate, among others) are unchanged and out of scope for this slice. **Honest
   scope:** roadmap-pull, not demand-pull; nothing parses the crate today. No change to
   `models.py`, signing, the CLI surface or the dashboard; stdlib only (`copy`, `pathlib`). PRD and
   the validator-gate record are under `docs/planning/rocrate-reference-identity/`.

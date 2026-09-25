@@ -29,7 +29,7 @@ schema.org (no standard reference-genome type exists):
 from __future__ import annotations
 
 import copy
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 
 from contig.models import (
     AnnotationProvenance,
@@ -92,12 +92,14 @@ def _known_site_pattern_name(path: str) -> str:
     """The basename of a brace-pattern known-sites path: the text after the
     last '/' that precedes the pattern's opening '{'.
 
-    A brace pattern (e.g. the iGenomes known_indels path, which lists two
-    alternative filenames as `{a,dir/b}.vcf.gz`) can itself contain a '/'
-    inside the braces. Splitting on the last '/' in the whole string would
-    mistake that internal separator for the real one and cut the pattern in
-    half, so this only looks at the portion of the path before the opening
-    brace.
+    Handles both forms. The common case -- the actual iGenomes known_indels
+    path this module records, `{a,b}.vcf.gz` -- has no '/' inside the braces,
+    so splitting on the last '/' anywhere in the string would already work.
+    But a brace pattern's alternatives can themselves contain a '/' (e.g.
+    `{a,dir/b}.vcf.gz`), and splitting on the last '/' in the whole string
+    would then mistake that internal separator for the real one and cut the
+    pattern in half. This only looks at the portion of the path before the
+    opening brace, so both forms resolve to the same, correct basename.
     """
     prefix = path[: path.index("{")]
     slash = prefix.rfind("/")
@@ -190,7 +192,7 @@ def _reference_entities(ref: ReferenceIdentity) -> list[dict]:
                 {
                     "@id": "#reference-fasta",
                     "@type": "File",
-                    "name": Path(ref.fasta).name,
+                    "name": PurePosixPath(ref.fasta).name,
                     "localPath": ref.fasta,
                     "encodingFormat": {"@id": _EDAM_FASTA},
                     "sha256": ref.fasta_sha256,
@@ -202,7 +204,7 @@ def _reference_entities(ref: ReferenceIdentity) -> list[dict]:
             gtf = {
                 "@id": "#reference-gtf",
                 "@type": "File",
-                "name": Path(ref.gtf).name,
+                "name": PurePosixPath(ref.gtf).name,
                 "localPath": ref.gtf,
                 "encodingFormat": {"@id": _EDAM_GTF},
                 "sha256": ref.gtf_sha256,
@@ -282,7 +284,8 @@ def to_rocrate(record: RunRecord) -> dict:
     """Build the RO-Crate ro-crate-metadata.json (JSON-LD) for a run.
 
     The graph is assembled in a fixed order (descriptor, root, pipeline, inputs,
-    outputs) so the export is byte-stable for the same record.
+    outputs, reference entities including known sites, annotations, then the
+    format `WebSite` entities) so the export is byte-stable for the same record.
     """
     input_files = [
         _file_entity(name, digest)

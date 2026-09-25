@@ -487,6 +487,32 @@ def test_known_site_brace_pattern_gets_description_and_no_url_fields():
     )
 
 
+def test_known_site_brace_pattern_real_igenomes_path_no_internal_slash():
+    # The exact path Contig records for GATK.GRCh38 known_indels
+    # (bundle.py:156's _IGENOMES_KNOWN_SITES entry). Unlike the synthetic
+    # `beta/` case above, the brace's alternatives contain no "/" at all --
+    # this pins the common real-world form, not just the tricky one.
+    pattern = (
+        "s3://ngi-igenomes/igenomes/Homo_sapiens/GATK/GRCh38/Annotation/GATKBundle/"
+        "{Mills_and_1000G_gold_standard.indels.hg38,"
+        "Homo_sapiens_assembly38.known_indels}.vcf.gz"
+    )
+    site = _site(role="known_indels", path=pattern, source="igenomes")
+    ref = _ref(mode="igenomes", genome="GRCh38", known_sites=[site])
+    crate = to_rocrate(_record(reference_identity=ref))
+    node = _by_id(crate, "#known-sites-known_indels")
+    assert node["name"] == (
+        "{Mills_and_1000G_gold_standard.indels.hg38,"
+        "Homo_sapiens_assembly38.known_indels}.vcf.gz"
+    )
+    assert node["description"] == (
+        f"Path pattern as recorded: {pattern}. Expands to more than one file; "
+        "not itself a single downloadable file."
+    )
+    assert "contentUrl" not in node
+    assert "localPath" not in node
+
+
 def test_known_site_duplicate_role_gets_numeric_suffix():
     sites = [
         _site(role="known_indels", path="/data/a.vcf.gz"),
