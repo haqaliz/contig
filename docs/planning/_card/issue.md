@@ -1,26 +1,26 @@
-# Card: feat rocrate-reference-identity
+# Card: signature-stable canonical payload
 
-- **Type:** feat
-- **Id:** rocrate-reference-identity (no GitHub issue; inline brief)
-- **Branch:** `feat/rocrate-reference-identity/aliz`
-- **Source:** `/contig-next` pick, 2026-09-25
+Source: inline brief (no GitHub issue; from /contig-next handoff, 2026-10-02).
 
 ## Brief
 
-Map the run's `ReferenceIdentity` (mode, iGenomes `genome` key, `fasta`/`gtf` paths with
-their sha256, harmonization, and `known_sites`) into the RO-Crate export produced by
-`to_rocrate` in `src/contig/provenance.py`. This closes the C5 follow-on deferred in
-`docs/planning/reference-identity-provenance/prd.md:188` ("a follow-on can map the
-identity into the crate"); the C5 row in `CAPABILITY_ROADMAP.md:2475` still lists
-RO-Crate as pending.
+Signed Contig bundles (RunRecord and ReproduceRecord, Ed25519 via `src/contig/signing.py`) stop
+verifying whenever a model field is added or a rule-pack band flips a verdict, because
+`canonical_record_bytes` is `record.model_dump(mode="json")`, including the computed `verdict`.
+`docs/technical/CAPABILITY_ROADMAP.md` discloses four such breaks (somatic FAIL floor, reproduce
+slices 6 and 8, `RepairStep.detail`) and fixed none. Make verification independent of the current
+model shape, so already-signed bundles keep verifying and tampering is still detected.
 
-Constraints and caveats:
-- RO-Crate 1.1 has no standard term for a reference genome, so pick and document a
-  vocabulary.
-- Where a checksum is unavailable (iGenomes mode, unhashable file), emit the entity
-  without one rather than faking it (the current `_file_entity` requires a `sha256` str).
-- Never emit `annotation_version` while it is null.
-- Records with no `reference_identity` (Snakemake, older runs) must produce a
-  byte-identical crate; check existing rocrate tests first.
-- Offline, stdlib-only, no signed-field change.
-- Optionally fold in `AnnotationProvenance` (C7) if it fits the same shape.
+Candidate routes: verify over the bundle's stored raw JSON, or add a `canonical_version` with a
+legacy path.
+
+Caveats:
+- Pre-existing signatures were made over bytes with then-current fields (including null ones), so
+  the new scheme must reproduce them exactly.
+- A new signed field would itself be a fifth break; put any new metadata in the unsigned
+  `reproduce.json`.
+- `exclude_none` is ruled out (breaks every RunRecord signature).
+
+Tests first: a hand-signed old-shape fixture still verifies, a tampered field still fails, and the
+four existing no-longer-verifies pins flip. Layer-2 (reproducibility); stdlib plus the existing
+`cryptography` dependency; no new dependency.
