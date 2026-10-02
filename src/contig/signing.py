@@ -140,6 +140,18 @@ def sign_record(record: RunRecord, private_key: str) -> str:
     return signature.hex()
 
 
+def sign_raw(raw: str | bytes, private_key: str) -> str:
+    """Sign the canonical form of a stored record's raw JSON text; return hex.
+
+    Signs canonical_bytes_from_raw(raw), the exact bytes verify_raw checks, so a
+    record signed from the text written to disk always verifies against that file.
+    Raises ValueError for malformed JSON or a non-object.
+    """
+    _require_crypto()
+    private = Ed25519PrivateKey.from_private_bytes(_decode_key(private_key))
+    return private.sign(canonical_bytes_from_raw(raw)).hex()
+
+
 def verify_signature(record: RunRecord, signature: str, public_key: str) -> bool:
     """True iff `signature` (hex) is a valid Ed25519 signature of `record` by `public_key`.
 

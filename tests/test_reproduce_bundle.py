@@ -410,3 +410,59 @@ def test_verify_in_dir_tampered_reproduce_bundle_fails(tmp_path, monkeypatch):
     result = verify_signature_in_dir(tmp_path, record_file="reproduce_record.json")
 
     assert result == {"signed": True, "signature_ok": False}
+
+
+# --- Phase 4c: sign what is stored ---------------------------------------------
+
+
+def _record_with_claim(value) -> ReproduceRecord:
+    rec = _record()
+    rec.claim_results = [_claim(claimed=value)]
+    return rec
+
+
+@requires_signing
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), float("nan")])
+def test_non_finite_claim_bundle_verifies_raw(tmp_path, monkeypatch, value):
+    private_key, _ = generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+
+    write_reproduce_bundle(_record_with_claim(value), tmp_path)
+
+    result = verify_signature_in_dir(tmp_path, record_file="reproduce_record.json")
+    assert result.get("signature_ok") is True
+    assert "signature_detail" not in result
+
+
+@requires_signing
+def test_non_finite_claim_stored_as_null_and_verifies(tmp_path, monkeypatch):
+    private_key, _ = generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+
+    write_reproduce_bundle(_record_with_claim(float("inf")), tmp_path)
+
+    stored = json.loads((tmp_path / "reproduce_record.json").read_text())
+    assert stored["claim_results"][0]["claimed"] is None
+    assert verify_signature_in_dir(tmp_path, record_file="reproduce_record.json")[
+        "signature_ok"
+    ] is True
+
+
+@requires_signing
+def test_finite_records_sign_byte_identically_to_the_model_path(tmp_path, monkeypatch):
+    from contig.bundle import write_bundle
+    from contig.signing import sign_record
+    from tests.test_signing import _odd_reproduce_records, _odd_run_records
+
+    private_key, _ = generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+
+    for i, record in enumerate(_odd_run_records() + _odd_reproduce_records()):
+        d = tmp_path / str(i)
+        if isinstance(record, ReproduceRecord):
+            write_reproduce_bundle(record, d)
+        else:
+            write_bundle(record, d)
+        sidecar = json.loads((d / "signature.json").read_text())
+        assert sidecar["signature"] == sign_record(record, private_key)
+        assert sidecar["signed_sha256"] == canonical_sha256(record)

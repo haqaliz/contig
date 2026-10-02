@@ -43,25 +43,37 @@ def write_bundle(record: RunRecord, dest_dir: str | Path) -> Path:
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
     json_path = dest / "run_record.json"
-    json_path.write_text(record.model_dump_json(indent=2))
-    _maybe_write_signature(record, dest)
+    record_text = record.model_dump_json(indent=2)
+    json_path.write_text(record_text)
+    _maybe_write_signature(record, dest, record_text=record_text)
     return json_path
 
 
-def _maybe_write_signature(record: RunRecord, dest: Path) -> None:
-    """Write signature.json when a signing key is configured; otherwise do nothing."""
+def _maybe_write_signature(
+    record: RunRecord, dest: Path, *, record_text: str | None = None
+) -> None:
+    """Write signature.json when a signing key is configured; otherwise do nothing.
+
+    Signs the canonical form of ``record_text`` (the exact text stored in the record
+    file), so the signature always verifies against what is on disk, even for values
+    model_dump_json renders differently from model_dump (e.g. Infinity -> null).
+    Defaults to ``record.model_dump_json(indent=2)``.
+    """
     private_key = os.environ.get(SIGNING_KEY_ENV)
     if not private_key:
         return
     # Imported lazily so the bundle module loads even where cryptography is absent;
     # a configured key with signing unavailable raises, surfacing the misconfig.
-    from contig.signing import canonical_sha256, public_key_for, sign_record
+    from contig.signing import canonical_sha256_from_raw, public_key_for, sign_raw
+
+    if record_text is None:
+        record_text = record.model_dump_json(indent=2)
 
     sidecar = {
         "algo": "ed25519",
         "public_key": public_key_for(private_key),
-        "signature": sign_record(record, private_key),
-        "signed_sha256": canonical_sha256(record),
+        "signature": sign_raw(record_text, private_key),
+        "signed_sha256": canonical_sha256_from_raw(record_text),
     }
     (dest / "signature.json").write_text(json.dumps(sidecar, indent=2))
 
@@ -149,8 +161,9 @@ def write_reproduce_bundle(
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
     json_path = dest / "reproduce_record.json"
-    json_path.write_text(record.model_dump_json(indent=2))
-    _maybe_write_signature(record, dest)
+    record_text = record.model_dump_json(indent=2)
+    json_path.write_text(record_text)
+    _maybe_write_signature(record, dest, record_text=record_text)
 
     manifest = {
         "reproduce_id": record.reproduce_id,

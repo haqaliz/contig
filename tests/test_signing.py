@@ -631,3 +631,28 @@ def test_stored_verdict_current_logic_would_not_compute_still_verifies(tmp_path)
     stored["verdict"] = "warn" if stored["verdict"] != "warn" else "fail"
     (tmp_path / "run_record.json").write_text(_json.dumps(stored, indent=2))
     assert verify_signature_in_dir(tmp_path)["signature_ok"] is False
+
+
+# --- Phase 4c: sign_raw ---------------------------------------------------------
+
+@pytest.mark.skipif(not signing_available(), reason="cryptography not installed")
+def test_sign_raw_round_trips_with_verify_raw_and_matches_sign_record():
+    from contig.signing import sign_raw
+
+    private_key, public_key = generate_keypair()
+    record = _record()
+    raw = record.model_dump_json(indent=2)
+    sig = sign_raw(raw, private_key)
+    assert verify_raw(raw, sig, public_key) is True
+    assert sig == sign_record(record, private_key)
+    assert verify_raw(raw.replace("r1", "r2"), sig, public_key) is False
+
+
+@pytest.mark.skipif(not signing_available(), reason="cryptography not installed")
+@pytest.mark.parametrize("bad", ["not json", "[1, 2]", b"\xff\xfe"])
+def test_sign_raw_rejects_malformed_raw(bad):
+    from contig.signing import sign_raw
+
+    private_key, _ = generate_keypair()
+    with pytest.raises(ValueError):
+        sign_raw(bad, private_key)
