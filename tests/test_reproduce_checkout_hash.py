@@ -12,7 +12,7 @@ to `None`) and echoes it in the unsigned `reproduce.json` manifest. Adding a
 signed field breaks old signatures made before the field existed -- this is
 the third disclosed signature break (after slice 6's source_url/source_commit)
 and is pinned, not silently absorbed, by
-`test_pre_slice_8_signature_over_a_record_without_tree_hash_no_longer_verifies`.
+`test_pre_slice_8_signed_record_file_without_tree_hash_still_verifies`.
 
 Phase 3 wires `compute_tree_sha256` into `contig reproduce`'s remote path: the
 digest is taken right after a successful fetch, before `run_started_at` is
@@ -339,58 +339,69 @@ def test_reproduce_manifest_emits_source_tree_sha256(tmp_path: Path) -> None:
     assert manifest_none["source_tree_sha256"] is None
 
 
-# --- disclosed caveat: a pre-slice-8 SIGNED bundle no longer verifies ----------
+# --- a pre-slice-8 SIGNED bundle still verifies --------------------------------
 #
-# Adding source_tree_sha256 to the record is back-compatible for LOADING (the
-# test above) but NOT for a signature made before the field existed --
-# `canonical_record_bytes` is `record.model_dump(mode="json")`, which now
-# includes an extra null key that the old signed bytes never had. This is the
-# third disclosed signature break (after slice 6's source_url/source_commit);
-# it is pinned here as a KNOWN property, not a latent surprise.
+# Adding source_tree_sha256 is back-compatible for LOADING and, since verification
+# runs over the stored record FILE's own text, for a signature made before the
+# field existed. The fixture deletes the key from the stored JSON and signs over
+# canonical_bytes_from_raw of that exact text.
 
 
-def _pre_slice_8_canonical_bytes(record: ReproduceRecord) -> bytes:
-    """The canonical bytes this record would have produced before slice 8.
+def _write_signed_old_shape_reproduce_bundle(dest, record, drop):
+    """Write an old-shape reproduce_record.json (keys in `drop` deleted from the
+    stored text) plus a sidecar signed over `canonical_bytes_from_raw` of that text."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-    Rebuilt by dropping exactly the field slice 8 added -- the rest of the
-    canonicalization (sorted keys, compact separators, UTF-8) is copied from
-    `signing.canonical_record_bytes` so the only difference under test is the
-    added key.
-    """
+    from contig.signing import canonical_bytes_from_raw, canonical_sha256_from_raw
+
+    private_key, public_key = generate_keypair()
     payload = record.model_dump(mode="json")
-    old = {k: v for k, v in payload.items() if k != "source_tree_sha256"}
-    assert set(payload) - set(old) == {"source_tree_sha256"}
-    return json.dumps(old, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    for key in drop:
+        del payload[key]
+    text = json.dumps(payload, indent=2)
+    (dest / "reproduce_record.json").write_text(text)
+    signature = (
+        Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key))
+        .sign(canonical_bytes_from_raw(text))
+        .hex()
+    )
+    (dest / "signature.json").write_text(
+        json.dumps(
+            {
+                "algo": "ed25519",
+                "public_key": public_key,
+                "signature": signature,
+                "signed_sha256": canonical_sha256_from_raw(text),
+            }
+        )
+    )
+    return text
 
 
 @requires_signing
-def test_pre_slice_8_signature_over_a_record_without_tree_hash_no_longer_verifies(
-    tmp_path, monkeypatch
-):
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+def test_pre_slice_8_signed_record_file_without_tree_hash_still_verifies(tmp_path):
+    from contig.bundle import verify_signature_in_dir
 
-    private_key, public_key = generate_keypair()
     record = _record()  # a local run: the new field is None
     assert record.source_tree_sha256 is None
 
-    # Sign the bytes an older Contig would have produced for this same record.
-    old_signature = (
-        Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key))
-        .sign(_pre_slice_8_canonical_bytes(record))
-        .hex()
+    text = _write_signed_old_shape_reproduce_bundle(
+        tmp_path, record, ("source_tree_sha256",)
     )
+    stored = json.loads(text)
+    assert "source_tree_sha256" not in stored
 
-    # The extra null key changes the canonical payload, so the old signature
-    # does not verify -- even though nothing about the run itself changed.
-    assert verify_signature(record, old_signature, public_key) is False
+    result = verify_signature_in_dir(tmp_path, record_file="reproduce_record.json")
+    assert result == {"signed": True, "signature_ok": True}
 
-    # And the fresh signature over today's bytes does verify: the break is the
-    # payload shape, not the signing machinery.
-    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
-    _maybe_write_signature(record, tmp_path)
-    sidecar = json.loads((tmp_path / "signature.json").read_text())
-    assert verify_signature(record, sidecar["signature"], sidecar["public_key"]) is True
-    assert sidecar["signature"] != old_signature
+    stored["run_command"] = "evil"
+    (tmp_path / "reproduce_record.json").write_text(json.dumps(stored, indent=2))
+    assert (
+        verify_signature_in_dir(tmp_path, record_file="reproduce_record.json")[
+            "signature_ok"
+        ]
+        is False
+    )
 
 
 # --- Phase 3: CLI wiring (remote-only, pre-stamp) -----------------------------

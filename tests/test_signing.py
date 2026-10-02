@@ -109,6 +109,41 @@ def test_signature_excludes_itself_so_verification_is_stable():
     assert verify_signature(record, signature, public_key) is True
 
 
+def _write_signed_old_shape_bundle(dest, record, strip, record_file="run_record.json"):
+    """Write a genuinely old-shape record FILE plus a sidecar signed over its own text.
+
+    `strip` mutates the dumped payload dict (deleting the newer key(s), nested where
+    applicable). The file text is the stripped JSON; the signature is over
+    `canonical_bytes_from_raw` of exactly that text, as an older Contig's signer
+    would have produced for it. Returns (public_key, file_text).
+    """
+    import json as _json
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    private_key, public_key = generate_keypair()
+    payload = record.model_dump(mode="json")
+    strip(payload)
+    text = _json.dumps(payload, indent=2)
+    (dest / record_file).write_text(text)
+    signature = (
+        Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key))
+        .sign(canonical_bytes_from_raw(text))
+        .hex()
+    )
+    (dest / "signature.json").write_text(
+        _json.dumps(
+            {
+                "algo": "ed25519",
+                "public_key": public_key,
+                "signature": signature,
+                "signed_sha256": canonical_sha256_from_raw(text),
+            }
+        )
+    )
+    return public_key, text
+
+
 # --- disclosed caveat: patch_applied breaks pre-field signatures, narrowly -----
 #
 # `RepairStep.patch_applied` is back-compatible for LOADING (a pre-field bundle
@@ -175,29 +210,28 @@ def _pre_patch_applied_canonical_bytes(record: RunRecord) -> bytes:
 
 
 @requires_signing
-def test_pre_field_signature_over_a_record_with_repair_history_no_longer_verifies():
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+def test_pre_field_signed_record_file_with_repair_history_still_verifies(tmp_path):
+    import json as _json
 
-    private_key, public_key = generate_keypair()
+    from contig.bundle import verify_signature_in_dir
+
     record = _record_with_repair_history()
-    assert record.repair_history  # the break needs at least one entry
+    assert record.repair_history  # the nested key needs at least one entry
 
-    # Sign the bytes an older Contig would have produced for this same record.
-    old_signature = (
-        Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key))
-        .sign(_pre_patch_applied_canonical_bytes(record))
-        .hex()
-    )
+    def strip(payload):
+        for step in payload["repair_history"]:
+            del step["patch_applied"]
 
-    # The extra nested key changes the canonical payload, so the old signature
-    # does not verify -- even though nothing about the run itself changed.
-    assert verify_signature(record, old_signature, public_key) is False
+    _write_signed_old_shape_bundle(tmp_path, record, strip)
 
-    # A fresh signature over today's bytes does verify, and differs: the break is
-    # the payload shape, not the signing machinery.
-    new_signature = sign_record(record, private_key)
-    assert verify_signature(record, new_signature, public_key) is True
-    assert new_signature != old_signature
+    # The stored file is genuinely old-shape: no entry carries patch_applied.
+    stored = _json.loads((tmp_path / "run_record.json").read_text())
+    assert stored["repair_history"]
+    assert all("patch_applied" not in step for step in stored["repair_history"])
+
+    # Verification is over the stored file's own text, so model growth no longer
+    # breaks the signature.
+    assert verify_signature_in_dir(tmp_path) == {"signed": True, "signature_ok": True}
 
 
 @requires_signing
@@ -352,78 +386,49 @@ def _pre_known_sites_canonical_bytes(record: RunRecord) -> bytes:
     return _json.dumps(old, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
+def _strip_known_sites(payload):
+    del payload["reference_identity"]["known_sites"]
+
+
 @requires_signing
-def test_pre_slice_signed_bundle_loads_but_no_longer_verifies():
+def test_pre_slice_signed_bundle_loads_and_still_verifies(tmp_path):
     import json as _json
 
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from contig.bundle import verify_signature_in_dir
 
-    private_key, public_key = generate_keypair()
     record = _record_with_reference_identity()
     assert record.reference_identity is not None
     assert record.reference_identity.known_sites is None  # a pre-slice capture
 
-    # Sign the bytes an older Contig would have produced for this same record.
-    old_bytes = _pre_known_sites_canonical_bytes(record)
-    assert old_bytes != canonical_record_bytes(record)
+    _write_signed_old_shape_bundle(tmp_path, record, _strip_known_sites)
 
-    old_signature = (
-        Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key))
-        .sign(old_bytes)
-        .hex()
-    )
+    stored = _json.loads((tmp_path / "run_record.json").read_text())
+    assert "known_sites" not in stored["reference_identity"]
 
-    # Back-compat: the pre-slice JSON (no known_sites key) still LOADS, with the
-    # new field defaulting to None -- old bundles are never rejected.
-    loaded = RunRecord.model_validate(_json.loads(old_bytes))
+    # Back-compat: the pre-slice JSON still LOADS, with the new field None.
+    loaded = RunRecord.model_validate(stored)
     assert loaded.reference_identity is not None
     assert loaded.reference_identity.known_sites is None
 
-    # The extra nested key changes the canonical payload, so the old signature is
-    # honestly reported as a mismatch -- never a silent pass.
-    assert verify_signature(record, old_signature, public_key) is False
-    assert verify_signature(loaded, old_signature, public_key) is False
-
-    # A fresh signature over today's bytes does verify, and differs: the break is
-    # the payload shape, not the signing machinery.
-    new_signature = sign_record(record, private_key)
-    assert verify_signature(record, new_signature, public_key) is True
-    assert new_signature != old_signature
+    assert verify_signature_in_dir(tmp_path) == {"signed": True, "signature_ok": True}
 
 
 @requires_signing
-def test_pre_slice_signed_bundle_reports_signature_ok_false(tmp_path):
+def test_pre_slice_signed_bundle_reports_signature_ok_true(tmp_path):
     # The user-visible fate, through the same bundle load and status helper that
-    # `contig verify` uses: a pre-slice signature sidecar is READ (signed: True)
-    # and reported NOT ok (signature_ok: False) -- the honest mismatch, never a
-    # dropped signature and never a silent re-sign.
+    # `contig verify` uses: the pre-slice sidecar is READ and reported ok.
     import json as _json
-
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     from contig.bundle import load_bundle
     from contig.cli import _signature_status
 
-    private_key, public_key = generate_keypair()
     record = _record_with_reference_identity()
-
-    old_bytes = _pre_known_sites_canonical_bytes(record)
-    old_signature = (
-        Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key))
-        .sign(old_bytes)
-        .hex()
-    )
-
-    # A pre-slice bundle as it would sit on disk: run_record.json without the
-    # known_sites key, signature.json over those bytes.
     run_dir = tmp_path / "r1"
     run_dir.mkdir()
-    (run_dir / "run_record.json").write_text(old_bytes.decode("utf-8"))
-    (run_dir / "signature.json").write_text(
-        _json.dumps(
-            {"algo": "ed25519", "public_key": public_key, "signature": old_signature}
-        )
-    )
+    _write_signed_old_shape_bundle(run_dir, record, _strip_known_sites)
+    assert "known_sites" not in _json.loads((run_dir / "run_record.json").read_text())[
+        "reference_identity"
+    ]
 
     loaded = load_bundle(run_dir)
     assert loaded.reference_identity is not None
@@ -431,8 +436,21 @@ def test_pre_slice_signed_bundle_reports_signature_ok_false(tmp_path):
 
     assert _signature_status(str(tmp_path), "r1", loaded) == {
         "signed": True,
-        "signature_ok": False,
+        "signature_ok": True,
     }
+
+
+@requires_signing
+def test_pre_slice_signed_file_with_tampered_content_still_fails(tmp_path):
+    from contig.bundle import verify_signature_in_dir
+
+    _write_signed_old_shape_bundle(
+        tmp_path, _record_with_reference_identity(), _strip_known_sites
+    )
+    path = tmp_path / "run_record.json"
+    path.write_text(path.read_text().replace("nf-core/rnaseq", "nf-core/evil"))
+
+    assert verify_signature_in_dir(tmp_path)["signature_ok"] is False
 
 
 @requires_signing
@@ -585,3 +603,31 @@ def test_verify_raw_returns_false_for_a_valid_but_different_key():
     record = _record()
     sig = sign_record(record, priv)
     assert verify_raw(record.model_dump_json(indent=2), sig, other_pub) is False
+
+
+# --- the stored verdict is signed as stored, not recomputed ----------------------
+
+
+@requires_signing
+def test_stored_verdict_current_logic_would_not_compute_still_verifies(tmp_path):
+    import json as _json
+
+    from contig.bundle import verify_signature_in_dir
+
+    record = _record()
+    current = record.model_dump(mode="json").get("verdict")
+
+    def set_verdict(payload):
+        # A verdict value no current logic would compute for this record.
+        payload["verdict"] = "pass" if current != "pass" else "fail"
+
+    _write_signed_old_shape_bundle(tmp_path, record, set_verdict)
+    stored = _json.loads((tmp_path / "run_record.json").read_text())
+    assert stored["verdict"] != current
+
+    assert verify_signature_in_dir(tmp_path) == {"signed": True, "signature_ok": True}
+
+    # Changing the stored verdict afterwards breaks the signature.
+    stored["verdict"] = "warn" if stored["verdict"] != "warn" else "fail"
+    (tmp_path / "run_record.json").write_text(_json.dumps(stored, indent=2))
+    assert verify_signature_in_dir(tmp_path)["signature_ok"] is False
