@@ -109,6 +109,7 @@ from contig.bundle import (
     compute_input_checksums,
     compute_output_checksums,
     compute_tree_sha256,
+    verify_signature_in_dir,
     write_reproduce_bundle,
 )
 from contig.cost import cost_report
@@ -2256,7 +2257,7 @@ def verify(
                 raise typer.Exit(code=1)
             return
         if sig_bad:
-            typer.echo(f"Signature mismatch for run {run_id}: the record was modified.", err=True)
+            _echo_signature_mismatch(run_id, sig)
             _echo_concordance(concordance)
             raise typer.Exit(code=1)
         if verdict_fail:
@@ -2286,7 +2287,7 @@ def verify(
         _echo_concordance(concordance)
         return
     if sig_bad:
-        typer.echo(f"Signature mismatch for run {run_id}: the record was modified.", err=True)
+        _echo_signature_mismatch(run_id, sig)
     if not result["ok"]:
         typer.echo(f"Drift detected for run {run_id}:", err=True)
         for rel in result["changed"]:
@@ -2790,23 +2791,31 @@ def _echo_concordance(concordance: list | None) -> None:
 
 
 def _signature_status(runs_dir: str, run_id: str, record: RunRecord) -> dict:
-    """Read runs/<id>/signature.json and report whether the record is signed and intact.
+    """Report whether runs/<id> is signed and its stored record is intact.
 
-    Returns {} when there is no signature sidecar. When signing is unavailable
-    (the cryptography package is absent) the signature cannot be checked, so we
-    report signed without a signature_ok claim rather than a false mismatch.
+    Returns {} when there is no signature sidecar. The signature is checked over the
+    record file's stored bytes (bundle.verify_signature_in_dir). Only when that file
+    is absent do we fall back to verifying the in-memory model; a mismatch against
+    the stored bytes is never retried through the model. When signing is unavailable
+    we report signed without a signature_ok claim rather than a false mismatch.
     """
-    sidecar = Path(runs_dir) / run_id / "signature.json"
-    if not sidecar.exists():
-        return {}
+    run_dir = Path(runs_dir) / run_id
+    status = verify_signature_in_dir(run_dir)
+    if not status.pop("record_missing", False):
+        return status
     try:
-        payload = _json.loads(sidecar.read_text())
-    except (OSError, ValueError):
+        payload = _json.loads((run_dir / "signature.json").read_text())
+        ok = verify_signature(record, payload.get("signature", ""), payload.get("public_key", ""))
+    except (OSError, ValueError, AttributeError):
         return {"signed": True, "signature_ok": False}
-    if not signing_available():
-        return {"signed": True}
-    ok = verify_signature(record, payload.get("signature", ""), payload.get("public_key", ""))
     return {"signed": True, "signature_ok": bool(ok)}
+
+
+def _echo_signature_mismatch(run_id: str, sig: dict) -> None:
+    if sig.get("signature_detail") == "sidecar_hash_mismatch":
+        typer.echo("Signature sidecar disagrees with the record: signed_sha256 does not match.", err=True)
+    else:
+        typer.echo(f"Signature mismatch for run {run_id}: the record was modified.", err=True)
 
 
 @app.command()

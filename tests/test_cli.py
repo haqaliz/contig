@@ -3778,6 +3778,125 @@ def test_verify_flags_a_tampered_signature(tmp_path, monkeypatch):
     assert result.exit_code != 0
 
 
+def _signed_run(tmp_path, monkeypatch, run_id):
+    import pytest
+    from contig import signing
+
+    if not signing.signing_available():
+        pytest.skip("cryptography not installed")
+    priv, pub = signing.generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", priv)
+    _write_run(tmp_path, run_id, [TaskEvent(process="X", status="COMPLETED", exit=0)])
+    return priv, pub, tmp_path / run_id
+
+
+def _verify_json(tmp_path, run_id):
+    import json
+
+    result = runner.invoke(app, ["verify", run_id, "--runs-dir", str(tmp_path), "--json"])
+    return result, json.loads(result.output.splitlines()[0])
+
+
+def test_verify_flags_a_tampered_stored_verdict(tmp_path, monkeypatch):
+    import json
+
+    _priv, _pub, run_dir = _signed_run(tmp_path, monkeypatch, "tv")
+    path = run_dir / "run_record.json"
+    rec = json.loads(path.read_text())
+    rec["verdict"] = "pass" if rec.get("verdict") != "pass" else "fail"
+    path.write_text(json.dumps(rec, indent=2))
+    result, data = _verify_json(tmp_path, "tv")
+    assert result.exit_code == 1
+    assert data["signature_ok"] is False
+
+
+def test_verify_flags_an_unknown_key_added_after_signing(tmp_path, monkeypatch):
+    import json
+
+    _priv, _pub, run_dir = _signed_run(tmp_path, monkeypatch, "uk")
+    path = run_dir / "run_record.json"
+    rec = json.loads(path.read_text())
+    rec["injected_key"] = "x"
+    path.write_text(json.dumps(rec, indent=2))
+    result, data = _verify_json(tmp_path, "uk")
+    assert result.exit_code == 1
+    assert data["signature_ok"] is False
+
+
+def test_verify_accepts_an_old_shape_record_signed_over_its_stored_bytes(tmp_path, monkeypatch):
+    import json
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from contig import signing
+
+    priv, pub, run_dir = _signed_run(tmp_path, monkeypatch, "old")
+    path = run_dir / "run_record.json"
+    rec = json.loads(path.read_text())
+    # An older writer predated these optional keys: drop them from the stored JSON.
+    for key in ("nextflow_version", "contig_version", "resource_usage"):
+        assert key in rec
+        rec.pop(key)
+    text = json.dumps(rec, indent=2)
+    path.write_text(text)
+    sig = Ed25519PrivateKey.from_private_bytes(signing._decode_key(priv)).sign(
+        signing.canonical_bytes_from_raw(text)
+    )
+    sidecar = {
+        "algo": "ed25519",
+        "public_key": pub,
+        "signature": sig.hex(),
+        "signed_sha256": signing.canonical_sha256_from_raw(text),
+    }
+    (run_dir / "signature.json").write_text(json.dumps(sidecar))
+    result, data = _verify_json(tmp_path, "old")
+    assert result.exit_code == 0
+    assert data["signed"] is True and data["signature_ok"] is True
+    assert "record_missing" not in data
+
+
+def test_verify_flags_a_sidecar_hash_disagreement(tmp_path, monkeypatch):
+    import json
+
+    _priv, _pub, run_dir = _signed_run(tmp_path, monkeypatch, "sh")
+    sc_path = run_dir / "signature.json"
+    sc = json.loads(sc_path.read_text())
+    sc["signed_sha256"] = "0" * 64
+    sc_path.write_text(json.dumps(sc))
+    result = runner.invoke(app, ["verify", "sh", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "Signature sidecar disagrees with the record: signed_sha256 does not match." in result.output
+    assert "the record was modified" not in result.output
+
+
+def test_signature_status_falls_back_to_model_only_when_record_file_absent(tmp_path, monkeypatch):
+    from contig import cli
+    from contig.bundle import load_bundle
+
+    _priv, _pub, run_dir = _signed_run(tmp_path, monkeypatch, "fb")
+    record = load_bundle(run_dir)
+    (run_dir / "run_record.json").unlink()
+    status = cli._signature_status(str(tmp_path), "fb", record)
+    assert status == {"signed": True, "signature_ok": True}
+
+
+def test_signature_status_never_rescues_a_raw_mismatch_via_the_model(tmp_path, monkeypatch):
+    import json
+    from contig import cli
+    from contig.bundle import load_bundle
+
+    _priv, _pub, run_dir = _signed_run(tmp_path, monkeypatch, "nr")
+    original = load_bundle(run_dir)
+    path = run_dir / "run_record.json"
+    rec = json.loads(path.read_text())
+    rec["pipeline"] = "nf-core/evil"
+    path.write_text(json.dumps(rec, indent=2))
+    tampered = load_bundle(run_dir)  # still validates into RunRecord
+    for candidate in (original, tampered):
+        assert cli._signature_status(str(tmp_path), "nr", candidate) == {
+            "signed": True,
+            "signature_ok": False,
+        }
+
+
 def test_verify_errors_on_missing_run(tmp_path):
     result = runner.invoke(app, ["verify", "nope", "--runs-dir", str(tmp_path)])
     assert result.exit_code != 0
