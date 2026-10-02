@@ -9,6 +9,7 @@ from contig.bundle import (
     compute_output_checksums,
     compute_reference_identity,
     load_bundle,
+    verify_signature_in_dir,
     write_bundle,
 )
 from contig.models import ExecutionTarget, QCResult, RunRecord, SexInference, TaskEvent, sha256_file
@@ -485,3 +486,125 @@ def test_compute_sex_inference_no_vcf_returns_none(tmp_path):
     from contig.bundle import compute_sex_inference
 
     assert compute_sex_inference(tmp_path) is None
+
+
+# --- verify_signature_in_dir (verify over the stored record file) ---------------
+
+
+def _signed_bundle(tmp_path, monkeypatch):
+    private_key, public_key = generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+    write_bundle(_full_record(), tmp_path)
+    return public_key
+
+
+def _edit_record(tmp_path, mutate, name="run_record.json"):
+    path = tmp_path / name
+    data = json.loads(path.read_text())
+    mutate(data)
+    path.write_text(json.dumps(data, indent=2))
+
+
+def _edit_sidecar(tmp_path, mutate):
+    path = tmp_path / "signature.json"
+    data = json.loads(path.read_text())
+    mutate(data)
+    path.write_text(json.dumps(data, indent=2))
+
+
+def test_verify_in_dir_no_sidecar_is_empty(tmp_path, monkeypatch):
+    monkeypatch.delenv("CONTIG_SIGNING_KEY", raising=False)
+    write_bundle(_minimal_record(), tmp_path)
+
+    assert verify_signature_in_dir(tmp_path) == {}
+
+
+@requires_signing
+def test_verify_in_dir_without_cryptography_reports_signed_only(tmp_path, monkeypatch):
+    _signed_bundle(tmp_path, monkeypatch)
+    monkeypatch.setattr("contig.signing.signing_available", lambda: False)
+
+    assert verify_signature_in_dir(tmp_path) == {"signed": True}
+
+
+@requires_signing
+def test_verify_in_dir_record_file_missing(tmp_path, monkeypatch):
+    _signed_bundle(tmp_path, monkeypatch)
+    (tmp_path / "run_record.json").unlink()
+
+    assert verify_signature_in_dir(tmp_path) == {"signed": True, "record_missing": True}
+
+
+@requires_signing
+def test_verify_in_dir_valid_run_bundle(tmp_path, monkeypatch):
+    _signed_bundle(tmp_path, monkeypatch)
+
+    assert verify_signature_in_dir(tmp_path) == {"signed": True, "signature_ok": True}
+
+
+@requires_signing
+def test_verify_in_dir_tampered_record_value_fails(tmp_path, monkeypatch):
+    _signed_bundle(tmp_path, monkeypatch)
+    _edit_record(tmp_path, lambda d: d.update(pipeline="nf-core/other"))
+
+    assert verify_signature_in_dir(tmp_path) == {"signed": True, "signature_ok": False}
+
+
+@requires_signing
+def test_verify_in_dir_tampered_stored_verdict_fails(tmp_path, monkeypatch):
+    _signed_bundle(tmp_path, monkeypatch)
+    _edit_record(tmp_path, lambda d: d["qc_results"][0].update(status="fail"))
+
+    assert verify_signature_in_dir(tmp_path) == {"signed": True, "signature_ok": False}
+
+
+@requires_signing
+def test_verify_in_dir_unknown_extra_key_added_after_signing_fails(tmp_path, monkeypatch):
+    _signed_bundle(tmp_path, monkeypatch)
+    _edit_record(tmp_path, lambda d: d.update(injected="evil"))
+
+    assert verify_signature_in_dir(tmp_path) == {"signed": True, "signature_ok": False}
+
+
+@requires_signing
+def test_verify_in_dir_signed_sha256_mismatch_with_valid_signature(tmp_path, monkeypatch):
+    _signed_bundle(tmp_path, monkeypatch)
+    _edit_sidecar(tmp_path, lambda d: d.update(signed_sha256="0" * 64))
+
+    assert verify_signature_in_dir(tmp_path) == {
+        "signed": True,
+        "signature_ok": False,
+        "signature_detail": "sidecar_hash_mismatch",
+    }
+
+
+@requires_signing
+def test_verify_in_dir_sidecar_without_signed_sha256_skips_cross_check(tmp_path, monkeypatch):
+    _signed_bundle(tmp_path, monkeypatch)
+    _edit_sidecar(tmp_path, lambda d: d.pop("signed_sha256"))
+
+    assert verify_signature_in_dir(tmp_path) == {"signed": True, "signature_ok": True}
+
+
+@requires_signing
+def test_verify_in_dir_unparseable_sidecar_fails(tmp_path, monkeypatch):
+    _signed_bundle(tmp_path, monkeypatch)
+    (tmp_path / "signature.json").write_text("{not json")
+
+    assert verify_signature_in_dir(tmp_path) == {"signed": True, "signature_ok": False}
+
+
+@requires_signing
+def test_verify_in_dir_malformed_record_file_fails_without_raising(tmp_path, monkeypatch):
+    _signed_bundle(tmp_path, monkeypatch)
+    (tmp_path / "run_record.json").write_text("{truncated")
+
+    assert verify_signature_in_dir(tmp_path) == {"signed": True, "signature_ok": False}
+
+
+@requires_signing
+def test_verify_in_dir_non_object_record_file_fails(tmp_path, monkeypatch):
+    _signed_bundle(tmp_path, monkeypatch)
+    (tmp_path / "run_record.json").write_text("[1, 2, 3]")
+
+    assert verify_signature_in_dir(tmp_path) == {"signed": True, "signature_ok": False}

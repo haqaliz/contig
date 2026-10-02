@@ -66,6 +66,55 @@ def _maybe_write_signature(record: RunRecord, dest: Path) -> None:
     (dest / "signature.json").write_text(json.dumps(sidecar, indent=2))
 
 
+def verify_signature_in_dir(
+    dest_dir: str | Path, record_file: str = "run_record.json"
+) -> dict[str, object]:
+    """Verify a bundle's signature over the record file as stored on disk.
+
+    Returns ``{}`` (no sidecar), ``{"signed": True}`` (cryptography unavailable),
+    ``{"signed": True, "record_missing": True}``, or
+    ``{"signed": True, "signature_ok": bool}``. When the signature verifies but the
+    sidecar's ``signed_sha256`` disagrees with the stored file's canonical hash,
+    ``signature_ok`` is False with ``signature_detail: "sidecar_hash_mismatch"``.
+    A sidecar without ``signed_sha256`` skips that cross-check. Never raises on a
+    malformed sidecar or record file.
+    """
+    dest = Path(dest_dir)
+    sidecar_path = dest / "signature.json"
+    if not sidecar_path.is_file():
+        return {}
+    try:
+        sidecar = json.loads(sidecar_path.read_text())
+        signature = sidecar["signature"]
+        public_key = sidecar["public_key"]
+        signed_sha256 = sidecar.get("signed_sha256")
+        if not (isinstance(signature, str) and isinstance(public_key, str)):
+            raise ValueError("sidecar fields must be strings")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {"signed": True, "signature_ok": False}
+
+    from contig.signing import canonical_sha256_from_raw, signing_available, verify_raw
+
+    if not signing_available():
+        return {"signed": True}
+    record_path = dest / record_file
+    if not record_path.is_file():
+        return {"signed": True, "record_missing": True}
+    try:
+        raw = record_path.read_text()
+    except (OSError, UnicodeDecodeError):
+        return {"signed": True, "signature_ok": False}
+    if not verify_raw(raw, signature, public_key):
+        return {"signed": True, "signature_ok": False}
+    if signed_sha256 is not None and signed_sha256 != canonical_sha256_from_raw(raw):
+        return {
+            "signed": True,
+            "signature_ok": False,
+            "signature_detail": "sidecar_hash_mismatch",
+        }
+    return {"signed": True, "signature_ok": True}
+
+
 def load_bundle(dest_dir: str | Path) -> RunRecord:
     """Reconstruct the RunRecord from ``dest_dir/run_record.json``."""
     json_path = Path(dest_dir) / "run_record.json"

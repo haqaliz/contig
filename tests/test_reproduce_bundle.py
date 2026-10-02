@@ -11,7 +11,12 @@ import json
 
 import pytest
 
-from contig.bundle import _maybe_write_signature, load_reproduction, write_reproduce_bundle
+from contig.bundle import (
+    _maybe_write_signature,
+    load_reproduction,
+    verify_signature_in_dir,
+    write_reproduce_bundle,
+)
 from contig.models import ClaimResult, Diagnosis, Patch, RepairStep, ReproduceRecord
 from contig.signing import canonical_sha256, generate_keypair, signing_available, verify_signature
 
@@ -372,3 +377,32 @@ def test_pre_slice_6_signature_over_a_record_without_source_fields_no_longer_ver
     sidecar = json.loads((tmp_path / "signature.json").read_text())
     assert verify_signature(record, sidecar["signature"], sidecar["public_key"]) is True
     assert sidecar["signature"] != old_signature
+
+
+# --- verify_signature_in_dir over a reproduce bundle ----------------------------
+
+
+@requires_signing
+def test_verify_in_dir_valid_reproduce_bundle(tmp_path, monkeypatch):
+    private_key, _ = generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+    write_reproduce_bundle(_record(), tmp_path)
+
+    result = verify_signature_in_dir(tmp_path, record_file="reproduce_record.json")
+
+    assert result == {"signed": True, "signature_ok": True}
+
+
+@requires_signing
+def test_verify_in_dir_tampered_reproduce_bundle_fails(tmp_path, monkeypatch):
+    private_key, _ = generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+    write_reproduce_bundle(_record(), tmp_path)
+    path = tmp_path / "reproduce_record.json"
+    data = json.loads(path.read_text())
+    data["exit_code"] = 1
+    path.write_text(json.dumps(data, indent=2))
+
+    result = verify_signature_in_dir(tmp_path, record_file="reproduce_record.json")
+
+    assert result == {"signed": True, "signature_ok": False}
