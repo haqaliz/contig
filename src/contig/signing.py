@@ -74,12 +74,15 @@ def canonical_bytes_from_raw(raw: str | bytes) -> bytes:
 
     Parses `raw`, requires a JSON object, and applies the same canonical rule as
     canonical_record_bytes, so it equals the signer's bytes for a file written by
-    model_dump_json. Raises ValueError for malformed JSON or a non-object.
+    model_dump_json. Raises ValueError for malformed JSON, a non-object, or JSON nested too deeply.
     """
-    payload = json.loads(raw)
-    if not isinstance(payload, dict):
-        raise ValueError("record JSON must be an object")
-    return _canonical_dumps(payload)
+    try:
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            raise ValueError("record JSON must be an object")
+        return _canonical_dumps(payload)
+    except RecursionError as exc:
+        raise ValueError("record JSON is nested too deeply") from exc
 
 
 def canonical_sha256_from_raw(raw: str | bytes) -> str:

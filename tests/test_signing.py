@@ -5,9 +5,17 @@ they assert the clear "signing unavailable" path instead, so the suite stays gre
 on a machine without the optional dependency.
 """
 
+import hashlib
+
 import pytest
 
-from contig.models import ExecutionTarget, RunRecord, TaskEvent
+from contig.models import (
+    ClaimResult,
+    ExecutionTarget,
+    ReproduceRecord,
+    RunRecord,
+    TaskEvent,
+)
 from contig.signing import (
     SigningUnavailableError,
     canonical_bytes_from_raw,
@@ -452,11 +460,6 @@ def test_pre_slice_signature_over_a_record_with_no_reference_identity_still_veri
 
 # --- Phase 1: canonicalize the stored record JSON, not a re-dumped model --------
 
-import hashlib  # noqa: E402
-
-from contig.models import ClaimResult, ReproduceRecord  # noqa: E402
-
-
 def _odd_run_records() -> list[RunRecord]:
     values = [1e16, 1e-7, 0.1 + 0.2, -0.0, 1.5e300, 5e-324, 123456789.123456789]
     out = []
@@ -533,8 +536,8 @@ def test_verify_raw_round_trips_and_detects_tamper():
 
 
 @requires_signing
-def test_verify_raw_survives_an_added_unknown_field_only_via_raw_bytes():
-    # A field unknown to the model is part of the stored JSON, so it is covered.
+def test_verify_raw_rejects_an_added_unknown_field():
+    # A field unknown to the model is part of the stored JSON, so tampering with it fails.
     priv, pub = generate_keypair()
     record = _record()
     sig = sign_record(record, priv)
@@ -555,3 +558,30 @@ def test_verify_raw_returns_false_for_malformed_raw_or_signature_or_key():
     assert verify_raw("[1]", sig, pub) is False
     assert verify_raw(raw, "zz", pub) is False
     assert verify_raw(raw, sig, "nothex!!") is False
+
+
+_DEEP = "[" * 100000 + "]" * 100000
+
+
+def test_canonical_bytes_from_raw_deep_nesting_raises_value_error():
+    with pytest.raises(ValueError):
+        canonical_bytes_from_raw(_DEEP)
+    with pytest.raises(ValueError):
+        canonical_bytes_from_raw('{"a":' + _DEEP + "}")
+
+
+@requires_signing
+def test_verify_raw_deep_nesting_returns_false_never_raises():
+    priv, pub = generate_keypair()
+    sig = sign_record(_record(), priv)
+    assert verify_raw(_DEEP, sig, pub) is False
+    assert verify_raw('{"a":' + _DEEP + "}", sig, pub) is False
+
+
+@requires_signing
+def test_verify_raw_returns_false_for_a_valid_but_different_key():
+    priv, pub = generate_keypair()
+    _, other_pub = generate_keypair()
+    record = _record()
+    sig = sign_record(record, priv)
+    assert verify_raw(record.model_dump_json(indent=2), sig, other_pub) is False
