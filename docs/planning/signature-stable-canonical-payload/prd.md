@@ -1,6 +1,6 @@
 # PRD: signature-stable canonical payload
 
-Status: draft for review. Source: inline brief (`docs/planning/_card/issue.md`) and
+Status: shipped to master 2026-10-03 (PR #44, merge 4fe9b2e), unreleased (batched into the next version cut). Source: inline brief (`docs/planning/_card/issue.md`) and
 `understanding.md`. Roadmap-push, not demand-pull: no design partner asked for it.
 
 ## Problem Statement
