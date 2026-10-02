@@ -52,16 +52,39 @@ def _require_crypto() -> None:
         )
 
 
-def canonical_record_bytes(record: RunRecord) -> bytes:
-    """The exact bytes a signature signs: the record as canonical JSON.
-
-    Pydantic's model_dump_json is rendered key-sorted so the serialization is
-    stable regardless of field insertion order, and encoded UTF-8. The record
-    carries no signature field, so there is nothing to exclude: the signature can
-    never sign itself. The verifier recomputes these same bytes to check a record.
-    """
-    payload = record.model_dump(mode="json")
+def _canonical_dumps(payload: object) -> bytes:
+    """The one canonical rule: sorted keys, compact separators, UTF-8."""
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def canonical_record_bytes(record: RunRecord) -> bytes:
+    """The canonical bytes of a model, as the SIGNER computes them.
+
+    The model is dumped to JSON-mode primitives and rendered with the canonical
+    rule (sorted keys, compact separators, UTF-8). The record carries no signature
+    field, so there is nothing to exclude: the signature can never sign itself.
+    Verification of a stored file should use canonical_bytes_from_raw, which
+    applies the same rule to the file's own JSON rather than a re-dumped model.
+    """
+    return _canonical_dumps(record.model_dump(mode="json"))
+
+
+def canonical_bytes_from_raw(raw: str | bytes) -> bytes:
+    """Canonical bytes of a stored record's raw JSON text, with no model round-trip.
+
+    Parses `raw`, requires a JSON object, and applies the same canonical rule as
+    canonical_record_bytes, so it equals the signer's bytes for a file written by
+    model_dump_json. Raises ValueError for malformed JSON or a non-object.
+    """
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError("record JSON must be an object")
+    return _canonical_dumps(payload)
+
+
+def canonical_sha256_from_raw(raw: str | bytes) -> str:
+    """The hex SHA-256 of canonical_bytes_from_raw(raw)."""
+    return hashlib.sha256(canonical_bytes_from_raw(raw)).hexdigest()
 
 
 def canonical_sha256(record: RunRecord) -> str:
@@ -124,6 +147,21 @@ def verify_signature(record: RunRecord, signature: str, public_key: str) -> bool
     try:
         public = Ed25519PublicKey.from_public_bytes(_decode_key(public_key))
         public.verify(bytes.fromhex(signature), canonical_record_bytes(record))
+        return True
+    except (InvalidSignature, ValueError):
+        return False
+
+
+def verify_raw(raw: str | bytes, signature: str, public_key: str) -> bool:
+    """True iff `signature` (hex) is valid for the canonical form of raw record JSON.
+
+    Malformed raw JSON, a tampered record, a wrong key or a malformed signature
+    all return False rather than raising.
+    """
+    _require_crypto()
+    try:
+        public = Ed25519PublicKey.from_public_bytes(_decode_key(public_key))
+        public.verify(bytes.fromhex(signature), canonical_bytes_from_raw(raw))
         return True
     except (InvalidSignature, ValueError):
         return False

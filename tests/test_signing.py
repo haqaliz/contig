@@ -10,11 +10,14 @@ import pytest
 from contig.models import ExecutionTarget, RunRecord, TaskEvent
 from contig.signing import (
     SigningUnavailableError,
+    canonical_bytes_from_raw,
     canonical_record_bytes,
     canonical_sha256,
+    canonical_sha256_from_raw,
     generate_keypair,
     signing_available,
     sign_record,
+    verify_raw,
     verify_signature,
 )
 
@@ -445,3 +448,110 @@ def test_pre_slice_signature_over_a_record_with_no_reference_identity_still_veri
     )
 
     assert verify_signature(record, old_signature, public_key) is True
+
+
+# --- Phase 1: canonicalize the stored record JSON, not a re-dumped model --------
+
+import hashlib  # noqa: E402
+
+from contig.models import ClaimResult, ReproduceRecord  # noqa: E402
+
+
+def _odd_run_records() -> list[RunRecord]:
+    values = [1e16, 1e-7, 0.1 + 0.2, -0.0, 1.5e300, 5e-324, 123456789.123456789]
+    out = []
+    for i, v in enumerate(values):
+        r = _record(f"r{i}")
+        r.parameters = {
+            "f": v,
+            "uni": "caf\u00e9 \u2603 \U0001f9ec",
+            "nested": {"a": None, "b": [], "c": {}, "d": [1, 2.0, None, {"z": v}]},
+            "empty_list": [],
+            "empty_dict": {},
+            "quote": 'he said "hi"\n\t\\',
+        }
+        out.append(r)
+    return out
+
+
+def _odd_reproduce_records() -> list[ReproduceRecord]:
+    out = []
+    for v in [1e16, 1e-7, 0.1 + 0.2, 0.0, 1.0, 123456789.123456789]:
+        out.append(
+            ReproduceRecord(
+                reproduce_id="rp_1",
+                repo="https://example.com/p\u00e4per",
+                run_command="python train.py \u2603",
+                claims_sha256="a" * 64,
+                claim_results=[
+                    ClaimResult(
+                        id="c1", status="reproduced", claimed=v, observed=v,
+                        tolerance=0.02, delta=None, message="caf\u00e9",
+                    ),
+                    ClaimResult(
+                        id="c2", status="reproduced", claimed=v, observed=None,
+                        tolerance=1e-7, delta=0.1 + 0.2, message="",
+                    ),
+                ],
+                exit_code=0,
+                created_at="2026-07-18T00:00:00Z",
+            )
+        )
+    return out
+
+
+@pytest.mark.parametrize("record", _odd_run_records() + _odd_reproduce_records())
+def test_raw_canonical_bytes_equal_model_canonical_bytes_for_corpus(record):
+    raw = record.model_dump_json(indent=2)
+    assert canonical_bytes_from_raw(raw) == canonical_record_bytes(record)
+    assert canonical_bytes_from_raw(raw.encode("utf-8")) == canonical_record_bytes(record)
+
+
+def test_canonical_sha256_from_raw_matches_model_sha():
+    record = _record()
+    raw = record.model_dump_json(indent=2)
+    assert canonical_sha256_from_raw(raw) == canonical_sha256(record)
+    assert canonical_sha256_from_raw(raw) == hashlib.sha256(
+        canonical_record_bytes(record)
+    ).hexdigest()
+
+
+@pytest.mark.parametrize("bad", ["{not json", "", b"\xff\xfe", "[1, 2]", "3", "null", '"s"'])
+def test_canonical_bytes_from_raw_rejects_malformed_or_non_object(bad):
+    with pytest.raises(ValueError):
+        canonical_bytes_from_raw(bad)
+
+
+@requires_signing
+def test_verify_raw_round_trips_and_detects_tamper():
+    priv, pub = generate_keypair()
+    record = _record()
+    sig = sign_record(record, priv)
+    raw = record.model_dump_json(indent=2)
+    assert verify_raw(raw, sig, pub) is True
+    assert verify_raw(raw.replace("r1", "r2"), sig, pub) is False
+
+
+@requires_signing
+def test_verify_raw_survives_an_added_unknown_field_only_via_raw_bytes():
+    # A field unknown to the model is part of the stored JSON, so it is covered.
+    priv, pub = generate_keypair()
+    record = _record()
+    sig = sign_record(record, priv)
+    import json
+
+    data = json.loads(record.model_dump_json())
+    data["future_field"] = 1
+    assert verify_raw(json.dumps(data), sig, pub) is False
+
+
+@requires_signing
+def test_verify_raw_returns_false_for_malformed_raw_or_signature_or_key():
+    priv, pub = generate_keypair()
+    record = _record()
+    sig = sign_record(record, priv)
+    raw = record.model_dump_json(indent=2)
+    assert verify_raw("{bad", sig, pub) is False
+    assert verify_raw("[1]", sig, pub) is False
+    assert verify_raw(raw, "zz", pub) is False
+    assert verify_raw(raw, sig, "nothex!!") is False
