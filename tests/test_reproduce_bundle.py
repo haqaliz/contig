@@ -11,7 +11,12 @@ import json
 
 import pytest
 
-from contig.bundle import _maybe_write_signature, load_reproduction, write_reproduce_bundle
+from contig.bundle import (
+    _maybe_write_signature,
+    load_reproduction,
+    verify_signature_in_dir,
+    write_reproduce_bundle,
+)
 from contig.models import ClaimResult, Diagnosis, Patch, RepairStep, ReproduceRecord
 from contig.signing import canonical_sha256, generate_keypair, signing_available, verify_signature
 
@@ -313,62 +318,151 @@ def test_bundle_json_without_source_fields_still_loads_as_none(tmp_path):
     assert loaded.source_commit is None
 
 
-# --- disclosed caveat: a pre-slice-6 SIGNED bundle no longer verifies ----------
+# --- a pre-slice-6 SIGNED bundle still verifies --------------------------------
 #
-# Adding source_url/source_commit is back-compatible for LOADING (the test above)
-# but NOT for a signature made before the fields existed. `canonical_record_bytes`
-# is `record.model_dump(mode="json")` (signing.py:63), which includes every field,
-# so today's canonical payload carries two extra null keys that the old signed
-# bytes never had. This test pins that as a KNOWN, DISCLOSED property rather than
-# a latent surprise -- if it ever starts passing, the canonical-payload contract
-# changed and the CHANGELOG's disclosure needs revisiting.
+# Adding source_url/source_commit is back-compatible for LOADING and, since
+# verification runs over the stored record FILE's own text (not a re-dumped
+# model), for a signature made before the fields existed too. The fixture is a
+# genuinely old-shape file: the two keys are deleted from the stored JSON, and
+# the signature is over canonical_bytes_from_raw of that exact text.
 
 
-def _pre_slice_6_canonical_bytes(record: ReproduceRecord) -> bytes:
-    """The canonical bytes this record would have produced before slice 6.
+def _write_signed_old_shape_reproduce_bundle(dest, record, drop):
+    """Write an old-shape reproduce_record.json (keys in `drop` deleted from the
+    stored text) plus a sidecar signed over `canonical_bytes_from_raw` of that text."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-    Rebuilt by dropping exactly the two fields slice 6 added (source_url,
-    source_commit) -- the rest of the canonicalization (sorted keys, compact
-    separators, UTF-8) is copied from `signing.canonical_record_bytes`. Later
-    slices (e.g. slice 8's source_tree_sha256) added more fields that this
-    helper does NOT drop, so for a `_record()` built today the "old" payload
-    still carries `source_tree_sha256: null` alongside the dropped keys' old
-    values -- it is not a byte-for-byte reproduction of an actual pre-slice-6
-    payload. That's fine here: the assertion below only needs the old and
-    fresh payloads to differ so the old signature fails to verify, not that
-    the old payload is historically exact.
-    """
+    from contig.signing import canonical_bytes_from_raw, canonical_sha256_from_raw
+
+    private_key, public_key = generate_keypair()
     payload = record.model_dump(mode="json")
-    old = {k: v for k, v in payload.items() if k not in ("source_url", "source_commit")}
-    assert set(payload) - set(old) == {"source_url", "source_commit"}
-    return json.dumps(old, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    for key in drop:
+        del payload[key]
+    text = json.dumps(payload, indent=2)
+    (dest / "reproduce_record.json").write_text(text)
+    signature = (
+        Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key))
+        .sign(canonical_bytes_from_raw(text))
+        .hex()
+    )
+    (dest / "signature.json").write_text(
+        json.dumps(
+            {
+                "algo": "ed25519",
+                "public_key": public_key,
+                "signature": signature,
+                "signed_sha256": canonical_sha256_from_raw(text),
+            }
+        )
+    )
+    return text
 
 
 @requires_signing
-def test_pre_slice_6_signature_over_a_record_without_source_fields_no_longer_verifies(
-    tmp_path, monkeypatch
-):
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
-    private_key, public_key = generate_keypair()
+def test_pre_slice_6_signed_record_file_without_source_fields_still_verifies(tmp_path):
     record = _record()  # a local run: both new fields are None
     assert record.source_url is None and record.source_commit is None
 
-    # Sign the bytes an older Contig would have produced for this same record.
-    old_signature = (
-        Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key))
-        .sign(_pre_slice_6_canonical_bytes(record))
-        .hex()
+    text = _write_signed_old_shape_reproduce_bundle(
+        tmp_path, record, ("source_url", "source_commit")
+    )
+    stored = json.loads(text)
+    assert "source_url" not in stored and "source_commit" not in stored
+
+    result = verify_signature_in_dir(tmp_path, record_file="reproduce_record.json")
+    assert result == {"signed": True, "signature_ok": True}
+
+    # Tampering with the stored file still breaks it.
+    stored["run_command"] = "evil"
+    (tmp_path / "reproduce_record.json").write_text(json.dumps(stored, indent=2))
+    assert (
+        verify_signature_in_dir(tmp_path, record_file="reproduce_record.json")[
+            "signature_ok"
+        ]
+        is False
     )
 
-    # The two extra null keys change the canonical payload, so the old signature
-    # does not verify -- even though nothing about the run itself changed.
-    assert verify_signature(record, old_signature, public_key) is False
 
-    # And the fresh signature over today's bytes does verify: the break is the
-    # payload shape, not the signing machinery.
+# --- verify_signature_in_dir over a reproduce bundle ----------------------------
+
+
+@requires_signing
+def test_verify_in_dir_valid_reproduce_bundle(tmp_path, monkeypatch):
+    private_key, _ = generate_keypair()
     monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
-    _maybe_write_signature(record, tmp_path)
-    sidecar = json.loads((tmp_path / "signature.json").read_text())
-    assert verify_signature(record, sidecar["signature"], sidecar["public_key"]) is True
-    assert sidecar["signature"] != old_signature
+    write_reproduce_bundle(_record(), tmp_path)
+
+    result = verify_signature_in_dir(tmp_path, record_file="reproduce_record.json")
+
+    assert result == {"signed": True, "signature_ok": True}
+
+
+@requires_signing
+def test_verify_in_dir_tampered_reproduce_bundle_fails(tmp_path, monkeypatch):
+    private_key, _ = generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+    write_reproduce_bundle(_record(), tmp_path)
+    path = tmp_path / "reproduce_record.json"
+    data = json.loads(path.read_text())
+    data["exit_code"] = 1
+    path.write_text(json.dumps(data, indent=2))
+
+    result = verify_signature_in_dir(tmp_path, record_file="reproduce_record.json")
+
+    assert result == {"signed": True, "signature_ok": False}
+
+
+# --- Phase 4c: sign what is stored ---------------------------------------------
+
+
+def _record_with_claim(value) -> ReproduceRecord:
+    rec = _record()
+    rec.claim_results = [_claim(claimed=value)]
+    return rec
+
+
+@requires_signing
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), float("nan")])
+def test_non_finite_claim_bundle_verifies_raw(tmp_path, monkeypatch, value):
+    private_key, _ = generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+
+    write_reproduce_bundle(_record_with_claim(value), tmp_path)
+
+    result = verify_signature_in_dir(tmp_path, record_file="reproduce_record.json")
+    assert result.get("signature_ok") is True
+    assert "signature_detail" not in result
+
+
+@requires_signing
+def test_non_finite_claim_stored_as_null_and_verifies(tmp_path, monkeypatch):
+    private_key, _ = generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+
+    write_reproduce_bundle(_record_with_claim(float("inf")), tmp_path)
+
+    stored = json.loads((tmp_path / "reproduce_record.json").read_text())
+    assert stored["claim_results"][0]["claimed"] is None
+    assert verify_signature_in_dir(tmp_path, record_file="reproduce_record.json")[
+        "signature_ok"
+    ] is True
+
+
+@requires_signing
+def test_finite_records_sign_byte_identically_to_the_model_path(tmp_path, monkeypatch):
+    from contig.bundle import write_bundle
+    from contig.signing import sign_record
+    from tests.test_signing import _odd_reproduce_records, _odd_run_records
+
+    private_key, _ = generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+
+    for i, record in enumerate(_odd_run_records() + _odd_reproduce_records()):
+        d = tmp_path / str(i)
+        if isinstance(record, ReproduceRecord):
+            write_reproduce_bundle(record, d)
+        else:
+            write_bundle(record, d)
+        sidecar = json.loads((d / "signature.json").read_text())
+        assert sidecar["signature"] == sign_record(record, private_key)
+        assert sidecar["signed_sha256"] == canonical_sha256(record)

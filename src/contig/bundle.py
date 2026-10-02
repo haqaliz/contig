@@ -43,27 +43,96 @@ def write_bundle(record: RunRecord, dest_dir: str | Path) -> Path:
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
     json_path = dest / "run_record.json"
-    json_path.write_text(record.model_dump_json(indent=2))
-    _maybe_write_signature(record, dest)
+    record_text = record.model_dump_json(indent=2)
+    json_path.write_text(record_text)
+    _maybe_write_signature(record, dest, record_text=record_text)
     return json_path
 
 
-def _maybe_write_signature(record: RunRecord, dest: Path) -> None:
-    """Write signature.json when a signing key is configured; otherwise do nothing."""
+def _maybe_write_signature(
+    record: RunRecord, dest: Path, *, record_text: str | None = None
+) -> None:
+    """Write signature.json when a signing key is configured; otherwise do nothing.
+
+    Signs the canonical form of ``record_text`` (the exact text stored in the record
+    file), so the signature always verifies against what is on disk, even for values
+    model_dump_json renders differently from model_dump (e.g. Infinity -> null).
+    Defaults to ``record.model_dump_json(indent=2)``.
+    """
     private_key = os.environ.get(SIGNING_KEY_ENV)
     if not private_key:
         return
     # Imported lazily so the bundle module loads even where cryptography is absent;
     # a configured key with signing unavailable raises, surfacing the misconfig.
-    from contig.signing import canonical_sha256, public_key_for, sign_record
+    from contig.signing import canonical_sha256_from_raw, public_key_for, sign_raw
+
+    if record_text is None:
+        record_text = record.model_dump_json(indent=2)
 
     sidecar = {
         "algo": "ed25519",
         "public_key": public_key_for(private_key),
-        "signature": sign_record(record, private_key),
-        "signed_sha256": canonical_sha256(record),
+        "signature": sign_raw(record_text, private_key),
+        "signed_sha256": canonical_sha256_from_raw(record_text),
     }
     (dest / "signature.json").write_text(json.dumps(sidecar, indent=2))
+
+
+def verify_signature_in_dir(
+    dest_dir: str | Path,
+    record_file: str = "run_record.json",
+    *,
+    record_text: str | None = None,
+) -> dict[str, object]:
+    """Verify a bundle's signature over the record file as stored on disk.
+
+    Returns ``{}`` (no sidecar), ``{"signed": True}`` (cryptography unavailable),
+    ``{"signed": True, "record_missing": True}``, or
+    ``{"signed": True, "signature_ok": bool}``. When the signature verifies but the
+    sidecar's ``signed_sha256`` disagrees with the stored file's canonical hash,
+    ``signature_ok`` is False with ``signature_detail: "sidecar_hash_mismatch"``.
+    A sidecar without ``signed_sha256`` skips that cross-check. Never raises on a
+    malformed sidecar or record file. When ``record_text`` is given it is verified
+    instead of re-reading the file, so a caller that already parsed the record can
+    check the signature against those exact bytes.
+    """
+    dest = Path(dest_dir)
+    sidecar_path = dest / "signature.json"
+    if not sidecar_path.is_file():
+        return {}
+    try:
+        sidecar = json.loads(sidecar_path.read_text())
+        signature = sidecar["signature"]
+        public_key = sidecar["public_key"]
+        signed_sha256 = sidecar.get("signed_sha256")
+        if not (isinstance(signature, str) and isinstance(public_key, str)):
+            raise ValueError("sidecar fields must be strings")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {"signed": True, "signature_ok": False}
+
+    from contig.signing import canonical_sha256_from_raw, signing_available, verify_raw
+
+    if not signing_available():
+        return {"signed": True}
+    if record_text is not None:
+        raw = record_text
+    else:
+        record_path = dest / record_file
+        if not record_path.is_file():
+            return {"signed": True, "record_missing": True}
+        try:
+            raw = record_path.read_text()
+        except (OSError, UnicodeDecodeError):
+            return {"signed": True, "signature_ok": False}
+    if not verify_raw(raw, signature, public_key):
+        return {"signed": True, "signature_ok": False}
+    if signed_sha256 is not None and signed_sha256 != canonical_sha256_from_raw(raw):
+        return {
+            "signed": True,
+            "signature_ok": False,
+            "signature_detail": "sidecar_hash_mismatch",
+        }
+    return {"signed": True, "signature_ok": True}
 
 
 def load_bundle(dest_dir: str | Path) -> RunRecord:
@@ -94,14 +163,15 @@ def write_reproduce_bundle(
     echo of that attested value, not a second source of truth. When
     ``CONTIG_SIGNING_KEY`` is set, also writes a detached signature sidecar over the
     record's canonical content, via the same ``_maybe_write_signature`` used for
-    RunRecord -- it only calls ``record.model_dump(mode="json")`` under the hood, so
-    it signs a ReproduceRecord exactly as it signs a RunRecord.
+    RunRecord -- it signs the canonical form of the exact record text written to
+    disk (``sign_raw``), the same path for RunRecord and ReproduceRecord.
     """
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
     json_path = dest / "reproduce_record.json"
-    json_path.write_text(record.model_dump_json(indent=2))
-    _maybe_write_signature(record, dest)
+    record_text = record.model_dump_json(indent=2)
+    json_path.write_text(record_text)
+    _maybe_write_signature(record, dest, record_text=record_text)
 
     manifest = {
         "reproduce_id": record.reproduce_id,
