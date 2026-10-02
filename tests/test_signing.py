@@ -144,17 +144,20 @@ def _write_signed_old_shape_bundle(dest, record, strip, record_file="run_record.
     return public_key, text
 
 
-# --- disclosed caveat: patch_applied breaks pre-field signatures, narrowly -----
+# --- history: patch_applied broke pre-field signatures on the MODEL path -------
 #
 # `RepairStep.patch_applied` is back-compatible for LOADING (a pre-field bundle
-# reads as False) but NOT for a signature made before the field existed:
-# `canonical_record_bytes` is `record.model_dump(mode="json")`, so every
+# reads as False) but NOT for a signature made before the field existed on the
+# model path (`verify_signature`): `canonical_record_bytes` is
+# `record.model_dump(mode="json")`, so every
 # repair_history entry now carries an extra key the old signed bytes never had.
 # Unlike the slice-6/slice-8 breaks this one is NESTED — the added key lives
 # inside a list of sub-models, not at the top level — which is why the strip
 # below has to recurse and why the break is narrow: a record with an EMPTY
 # repair_history serializes byte-identically and its old signature still
-# verifies. Both properties are pinned here as KNOWN, not left as surprises.
+# verifies. Both model-path properties stay pinned here (the tests below). The raw
+# path (`verify_signature_in_dir`) now verifies such old-shape files -- see the
+# flipped pins.
 
 
 def _record_with_repair_history(run_id: str = "r1") -> RunRecord:
@@ -334,7 +337,7 @@ def test_pre_advisory_literal_signature_over_an_env_kind_patch_still_verifies():
     assert verify_signature(record, old_signature, public_key) is True
 
 
-# --- ReferenceIdentity.known_sites breaks pre-slice signatures, NOT narrowly --
+# --- history: known_sites broke pre-slice signatures on the MODEL path -------
 #
 # `ReferenceIdentity.known_sites` is back-compatible for LOADING (a pre-slice
 # bundle reads as None) but NOT for a signature made before the field existed:
@@ -344,10 +347,11 @@ def test_pre_advisory_literal_signature_over_an_env_kind_patch_still_verifies():
 # narrow: it does not need a known-sites entry to fire -- any record whose
 # `reference_identity` is non-None serializes differently, even one that captured
 # no known sites at all. The strip below only has to reach one level down, but it
-# applies to every reference-bearing record. The break, its bound (a record with
-# no reference identity is byte-identical and still verifies), and the honest
-# verify-path report (signed, not ok -- never a silent re-sign) are all pinned
-# here as KNOWN, not left as surprises.
+# applies to every reference-bearing record. The model-path break, its bound (a
+# record with no reference identity is byte-identical and still verifies), and the
+# honest model-path report (signed, not ok -- never a silent re-sign) stay pinned
+# here. The raw path (`verify_signature_in_dir`) now verifies such old-shape
+# files -- see the flipped pins.
 
 
 def _record_with_reference_identity(run_id: str = "r1") -> RunRecord:

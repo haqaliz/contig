@@ -25,7 +25,7 @@ the same raw verification as a library function (no CLI command verifies them to
    the signature itself verifies.
 5. Malformed / non-object record file => mismatch (exit 1), not a crash.
 6. Raw mismatch never falls back to the model path; model path only when the record file is absent.
-7. Non-finite audit: claims loader rejects non-finite `claimed`; test documents that observed values
+7. Non-finite audit: non-finite claimed values are accepted by `load_claims` (unchanged by design); the stored record holds null and signing now signs the stored text, so such a bundle verifies (see PRD Q2, option 1). Test documents that observed values
    are rejected pre-record, so `Infinity` cannot be signed.
 8. `uv run pytest` green; `--json` output keys unchanged on the success and plain-mismatch paths.
 

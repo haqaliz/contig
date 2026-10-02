@@ -48,7 +48,7 @@ Nice: none.
 
 ## Technical Considerations
 - Semantic change (accepted): the stored `verdict` string is part of what is signed and is no longer
-  recomputed at verify time. Verify now means "the file is exactly what was signed".
+  recomputed at verify time. Verify now means the record's canonical JSON content is unchanged since signing (whitespace, key-order and escape-form edits that leave the parsed values identical do not break it). That is true for the SIGNATURE only: `--fail-on-verdict` (`cli.py`), `contig show` and the HTML report (`report.py`) still use the `record.verdict` recomputed from the current rule pack.
 - Byte-identity is the central risk. `model_dump_json` (file) vs `model_dump(mode="json")`+`json.dumps`
   (legacy) can differ for non-finite floats (JSON emits null; legacy would emit `Infinity`) and
   possibly float formatting; the equality corpus must cover floats, non-ASCII, nested optionals,
@@ -70,4 +70,4 @@ the sidecar, so verify proves integrity, not signer identity); dashboard verific
 bundles (PRD N1 defers it); re-signing tooling; signing new fields.
 
 ## Outcome
-Shipped as `signature-stable-canonical-payload` (Unreleased). Verification runs over the stored record file text; all five disclosed breaks no longer invalidate earlier signatures; the stored `verdict` is signed as written and not recomputed. Finite records sign byte-identically to before. Limits as stated: fixtures are hand-signed, reproduce bundles are still not verified by any CLI command, and an old-path bundle with a non-finite claim cannot be verified raw (believed unreachable, untested). See CHANGELOG [Unreleased].
+Shipped as `signature-stable-canonical-payload` (Unreleased). Verification runs over the stored record file text; all five disclosed breaks no longer invalidate earlier signatures; the stored `verdict` is signed as written and not recomputed (for the signature only; `--fail-on-verdict`, `contig show` and the HTML report still use the recomputed `record.verdict`). Finite records sign byte-identically to before. Limits as stated: fixtures are hand-signed, reproduce bundles are still not verified by any CLI command, and a legacy-signed bundle holding ANY non-finite float (a claim, or e.g. `QCResult.value`) cannot be verified raw; such bundles also failed under the old code (no regression), reachable in principle (`load_claims` accepted NaN/Infinity), believed absent in practice, untested. See CHANGELOG [Unreleased].

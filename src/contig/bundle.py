@@ -155,8 +155,8 @@ def write_reproduce_bundle(
     echo of that attested value, not a second source of truth. When
     ``CONTIG_SIGNING_KEY`` is set, also writes a detached signature sidecar over the
     record's canonical content, via the same ``_maybe_write_signature`` used for
-    RunRecord -- it only calls ``record.model_dump(mode="json")`` under the hood, so
-    it signs a ReproduceRecord exactly as it signs a RunRecord.
+    RunRecord -- it signs the canonical form of the exact record text written to
+    disk (``sign_raw``), the same path for RunRecord and ReproduceRecord.
     """
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)

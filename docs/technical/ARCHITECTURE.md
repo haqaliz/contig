@@ -346,7 +346,10 @@ engine. What is implemented now:
   to integrity of the record itself. Verification runs over the canonical form (sorted keys,
   compact separators) of the stored `run_record.json` text, not a re-dumped model, so adding a
   model field later does not invalidate earlier signatures; the stored `verdict` is signed as
-  written and not recomputed at verify time. It proves the file is unchanged since signing, not
+  written and not recomputed at verify time (true for the signature only: `--fail-on-verdict`, `contig show` and
+  the HTML report still use the `record.verdict` recomputed from the current rule pack). It proves the record's
+  canonical JSON content is unchanged since signing (whitespace, key-order and escape-form edits that leave the
+  parsed values identical do not break it), not
   who signed it (the public key is read from the sidecar).
 - **Access control and tenancy.** The dashboard integrates Auth0 for authentication
   and role-based authorization (writer/admin gates the action routes; read views are
