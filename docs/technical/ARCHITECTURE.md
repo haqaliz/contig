@@ -343,7 +343,11 @@ engine. What is implemented now:
 - **Tamper-evident records.** A run can be signed (Ed25519, `contig keygen` +
   `CONTIG_SIGNING_KEY`): the bundle gets a detached signature, and `contig verify`
   confirms the shared provenance record was not modified, so reproducibility extends
-  to integrity of the record itself.
+  to integrity of the record itself. Verification runs over the canonical form (sorted keys,
+  compact separators) of the stored `run_record.json` text, not a re-dumped model, so adding a
+  model field later does not invalidate earlier signatures; the stored `verdict` is signed as
+  written and not recomputed at verify time. It proves the file is unchanged since signing, not
+  who signed it (the public key is read from the sidecar).
 - **Access control and tenancy.** The dashboard integrates Auth0 for authentication
   and role-based authorization (writer/admin gates the action routes; read views are
   open to any authenticated user), configured entirely from env so Contig stays open

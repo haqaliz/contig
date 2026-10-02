@@ -61,13 +61,13 @@ Nice: none.
 - R2: a record file edited by hand then re-signed elsewhere is out of scope.
 - R3: reasoned, not observed: no real long-lived signed bundles exist in CI; fixtures are hand-signed.
 - Q1 (resolved): no command verifies reproduce bundles; see M1.
-- Q2: non-finite floats. Verified on a toy model: floats and non-ASCII are byte-identical between
-  file JSON and legacy path, but `inf` is `null` in the file vs `Infinity` in legacy bytes. Audit the
-  models for any field that can hold inf/NaN during planning; if unreachable, document it; if
-  reachable, define behavior.
+- Q2 (resolved, option 1, decided by the human): non-finite floats. Floats and non-ASCII are byte-identical between file JSON and legacy path, but `inf` is `null` in the file vs `Infinity` in legacy bytes. Decision: sign the stored text, so a non-finite claim is signed as null; the loader (`load_claims`) is not changed.
 - Q3 (resolved): no user-facing surface relied on the recomputed-verdict signal; stated here.
 
 ## Out of Scope
 `canonical_version`; signature-contract redesign; trust/identity of the public key (it is read from
 the sidecar, so verify proves integrity, not signer identity); dashboard verification of reproduce
 bundles (PRD N1 defers it); re-signing tooling; signing new fields.
+
+## Outcome
+Shipped as `signature-stable-canonical-payload` (Unreleased). Verification runs over the stored record file text; all five disclosed breaks no longer invalidate earlier signatures; the stored `verdict` is signed as written and not recomputed. Finite records sign byte-identically to before. Limits as stated: fixtures are hand-signed, reproduce bundles are still not verified by any CLI command, and an old-path bundle with a non-finite claim cannot be verified raw (believed unreachable, untested). See CHANGELOG [Unreleased].

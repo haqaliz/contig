@@ -957,7 +957,7 @@ travels with the code. **Known caveat (disclosed, not fixed):** `verdict` is a
 old bundle re-reduces the verdict under the new band and its Ed25519 signature no longer
 matches. The blast radius is only bundles whose verdict actually flips — empty somatic call
 sets, i.e. broken runs — and it is a pre-existing property of any rule-pack edit, inherited
-unchanged from v0.35.0. **Accepted, eyes open:** a legitimately mutation-free targeted panel
+unchanged from v0.35.0. **RESOLVED by `signature-stable-canonical-payload` (Unreleased):** verification now runs over the stored record file, so this no longer invalidates a prior signature; the text above is kept as history. **Accepted, eyes open:** a legitimately mutation-free targeted panel
 would FAIL (the engine has no target-type signal; `--fail-on-verdict` is opt-in, and the
 revisit trigger is the first real-world report of one). **Honest limit:** no real nf-core/sarek
 run in CI — the floor catches a failure that is *reasoned* (a truncated/crashed Mutect2 step
@@ -1283,6 +1283,8 @@ pins the *data* they ran against).
   contig naming or assembly signature does not match the selected reference.
 - Surface reference identity in the provenance panel and the methods output.
 
+**Shipped (signature-stable canonical payload, Unreleased).** `contig verify` and `verify_signature_in_dir` now check the Ed25519 signature over the canonical form (sorted keys, compact separators) of the **stored record file text**, not a re-validated and re-dumped model, so the five disclosed breaks (the verdict v0.35.0/v0.37.0 note, reproduce slice 6, slice 8, `RepairStep.patch_applied`, `ReferenceIdentity.known_sites`) no longer invalidate signatures made before them, and a future model-field addition cannot. The sidecar's `signed_sha256` is cross-checked (`sidecar_hash_mismatch`, its own stderr line; absent skips). **Semantic change, accepted:** the stored `verdict` string is part of the signed bytes and is not recomputed at verify time; verify means "the file is exactly what was signed". Non-finite claims (`load_claims` accepts NaN/Infinity) are stored as null by `model_dump_json`; signing the stored text signs them as null, and finite records sign byte-identically to before (guard test). **Honest limits:** roadmap-push, not demand-pull; fixtures are hand-signed old-shape files, no real long-lived signed bundles exist in CI; verification proves the file is unchanged since signing, not who signed it (the public key is still read from the sidecar); reproduce bundles are still not verified by any CLI command (library function and tests only); a bundle signed under the old model path with a non-finite claim cannot be verified raw (believed unreachable, not tested); signature-affecting edits to a record file by a newer contig are out of scope.
+
 **Acceptance (test-first):** a run whose data and reference disagree is caught at
 pre-flight with the exact mismatch named; the reference identity appears in the
 bundle and reproduces on re-run.
@@ -1540,7 +1542,7 @@ detector corpus carries no `RepairStep`. **Honest limits:** push, not demand-pul
 self-audit, not a partner request); it recovers nothing new, only changes what the record
 *says*; and it is the **fourth disclosed signature break** though the **narrowest** — the key
 is nested in a list, so a record with an empty `repair_history` still verifies, which is
-pinned by its own test rather than asserted.
+pinned by its own test rather than asserted. **RESOLVED by `signature-stable-canonical-payload` (Unreleased):** verification now runs over the stored record file, so this no longer invalidates a prior signature; the text above is kept as history.
 
 **The honest half of the failure catalog is now covered — and the half left out is the finding
 (catalog-coverage slice, Unreleased).** This closes the gap this section itself named above
@@ -2128,7 +2130,7 @@ difference: **that blast radius was only bundles whose verdict flips; this is *e
 reproduce bundle** (signing is opt-in via `CONTIG_SIGNING_KEY`, which bounds it — not a reason to
 soften it). Not fixed because canonicalizing with `exclude_none` would change `RunRecord`'s bytes
 too and break **every** existing signature — strictly worse; pinned instead by
-`test_pre_slice_6_signature_over_a_record_without_source_fields_no_longer_verifies`. **Honest
+`test_pre_slice_6_signature_over_a_record_without_source_fields_no_longer_verifies`. **RESOLVED by `signature-stable-canonical-payload` (Unreleased):** verification now runs over the stored record file, so this no longer invalidates a prior signature; the text above is kept as history. **Honest
 limits:** **no real git, network, or repo in CI** — the `Fetcher` seam is injected everywhere
 (mirroring `Executor`/`IndexBuilder`/`Installer`) and the real `default_fetcher` is asserted on for
 **argv shape only, never executed** — so the slice is **reasoned and unit-tested, not observed: no
@@ -2275,7 +2277,7 @@ third disclosed signature break, not fixed:** the new signed field changes
 `canonical_record_bytes`, so a pre-slice-8 signed reproduce bundle still *loads* but no longer
 *verifies* — after slice 6's `source_url`/`source_commit` and the somatic FAIL-floor's `verdict`,
 bounded to opt-in `CONTIG_SIGNING_KEY` signers, pinned by
-`test_pre_slice_8_signature_over_a_record_without_tree_hash_no_longer_verifies`. Unlike every
+`test_pre_slice_8_signature_over_a_record_without_tree_hash_no_longer_verifies`. **RESOLVED by `signature-stable-canonical-payload` (Unreleased):** verification now runs over the stored record file, so this no longer invalidates a prior signature; the text above is kept as history. Unlike every
 prior C8 slice, the core of this one is **fully CI-observable** — real fixture trees on disk, no
 injected-seam reasoning required — only the CLI-remote wiring rides the `Fetcher` seam. No new
 dependency (stdlib `hashlib`/`os`). **Still deferred:** hashing the
