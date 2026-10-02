@@ -29,11 +29,14 @@ modified" though nothing was modified.
 
 ## Requirements
 Must:
-- M1: `contig verify` verifies over the stored raw JSON of `run_record.json` (and the reproduce
-  equivalent): parse to a dict, canonicalize with the existing rule (sort_keys, compact separators,
-  UTF-8), verify. No model re-validation or re-dump on the verify path.
+- M1: `contig verify` verifies run bundles over the stored raw JSON of `run_record.json`: parse to a dict, canonicalize with the existing rule (sort_keys, compact separators,
+  UTF-8), verify. No model re-validation or re-dump on the verify path. Reproduce bundles are never verified by any
+  command today (`_signature_status` has one caller, `cli.py:2244`, taking a `RunRecord`); they get
+  the raw verify as a library function plus a test only, no new CLI surface.
 - M2: no `canonical_version` and no signed-field change; sidecar format unchanged (so no sixth break).
-- M3: keep model-based `verify_signature(record, ...)` as a fallback for callers without a file.
+- M3: keep model-based `verify_signature(record, ...)` for callers without a file. Ordering: raw
+  first; the model path runs ONLY when no record file exists, and is never a retry after a raw
+  mismatch (that would let a tampered file pass whenever the model happened to match).
 - M4: cross-check the sidecar's `signed_sha256` against the raw canonical hash; a disagreement is a
   distinct, clearly worded mismatch.
 - M5: flip the five "no longer verifies" pins to "still verifies"; add a pin for the verdict case.
@@ -57,8 +60,12 @@ Nice: none.
 - R1: byte divergence on edge values (above) causing false mismatches. Mitigation: G4 corpus test.
 - R2: a record file edited by hand then re-signed elsewhere is out of scope.
 - R3: reasoned, not observed: no real long-lived signed bundles exist in CI; fixtures are hand-signed.
-- Q1: reproduce verification path: `_signature_status` is described for run bundles; confirm whether
-  `contig verify` or any command verifies reproduce bundles, and wire the raw path there too.
+- Q1 (resolved): no command verifies reproduce bundles; see M1.
+- Q2: non-finite floats. Verified on a toy model: floats and non-ASCII are byte-identical between
+  file JSON and legacy path, but `inf` is `null` in the file vs `Infinity` in legacy bytes. Audit the
+  models for any field that can hold inf/NaN during planning; if unreachable, document it; if
+  reachable, define behavior.
+- Q3 (resolved): no user-facing surface relied on the recomputed-verdict signal; stated here.
 
 ## Out of Scope
 `canonical_version`; signature-contract redesign; trust/identity of the public key (it is read from
