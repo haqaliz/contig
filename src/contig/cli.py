@@ -214,7 +214,7 @@ from contig.lifecycle import (
     write_approval,
 )
 from contig.self_heal import self_heal_run
-from contig.workspace import RunNotFoundError, list_run_ids, load_run
+from contig.workspace import RunNotFoundError, list_run_ids, load_run, load_run_with_text
 
 app = typer.Typer(help="Contig: agentic bioinformatics analyst.")
 
@@ -2165,7 +2165,7 @@ def verify(
         )
         raise typer.Exit(code=1)
     try:
-        record = load_run(runs_dir, run_id)
+        record, record_text = load_run_with_text(runs_dir, run_id)
     except RunNotFoundError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
@@ -2242,7 +2242,7 @@ def verify(
 
     # A signed run carries a signature.json sidecar; a mismatch is a verification
     # failure (the record was tampered with), so it fails the verify just like drift.
-    sig = _signature_status(runs_dir, run_id, record)
+    sig = _signature_status(runs_dir, run_id, record, record_text=record_text)
     sig_bad = sig.get("signed") and sig.get("signature_ok") is False
 
     if not record.output_checksums:
@@ -2790,7 +2790,9 @@ def _echo_concordance(concordance: list | None) -> None:
         typer.echo(f"  {qc.check}: {qc.status.upper()}{value} ({qc.message})")
 
 
-def _signature_status(runs_dir: str, run_id: str, record: RunRecord) -> dict:
+def _signature_status(
+    runs_dir: str, run_id: str, record: RunRecord, *, record_text: str | None = None
+) -> dict:
     """Report whether runs/<id> is signed and its stored record is intact.
 
     Returns {} when there is no signature sidecar. The signature is checked over the
@@ -2800,7 +2802,7 @@ def _signature_status(runs_dir: str, run_id: str, record: RunRecord) -> dict:
     we report signed without a signature_ok claim rather than a false mismatch.
     """
     run_dir = Path(runs_dir) / run_id
-    status = verify_signature_in_dir(run_dir)
+    status = verify_signature_in_dir(run_dir, record_text=record_text)
     if not status.pop("record_missing", False):
         return status
     try:

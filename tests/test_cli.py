@@ -3867,6 +3867,30 @@ def test_verify_flags_a_sidecar_hash_disagreement(tmp_path, monkeypatch):
     assert "the record was modified" not in result.output
 
 
+def test_verify_reads_the_record_file_once_so_signature_covers_parsed_content(tmp_path, monkeypatch):
+    import json
+    from pathlib import Path
+
+    _priv, _pub, run_dir = _signed_run(tmp_path, monkeypatch, "once")
+    rec_path = run_dir / "run_record.json"
+    original = rec_path.read_text()
+    tampered = json.dumps({**json.loads(original), "pipeline": "nf-core/evil"}, indent=2)
+    reads = []
+    real_read_text = Path.read_text
+
+    def racing_read_text(self, *args, **kwargs):
+        if self.name == "run_record.json":
+            reads.append(self)
+            return original if len(reads) == 1 else tampered
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", racing_read_text)
+    result = runner.invoke(app, ["verify", "once", "--runs-dir", str(tmp_path), "--json"])
+    assert len(reads) == 1
+    data = json.loads(result.output)
+    assert data["signed"] is True and data["signature_ok"] is True
+
+
 def test_signature_status_falls_back_to_model_only_when_record_file_absent(tmp_path, monkeypatch):
     from contig import cli
     from contig.bundle import load_bundle

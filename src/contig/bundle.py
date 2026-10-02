@@ -79,7 +79,10 @@ def _maybe_write_signature(
 
 
 def verify_signature_in_dir(
-    dest_dir: str | Path, record_file: str = "run_record.json"
+    dest_dir: str | Path,
+    record_file: str = "run_record.json",
+    *,
+    record_text: str | None = None,
 ) -> dict[str, object]:
     """Verify a bundle's signature over the record file as stored on disk.
 
@@ -89,7 +92,9 @@ def verify_signature_in_dir(
     sidecar's ``signed_sha256`` disagrees with the stored file's canonical hash,
     ``signature_ok`` is False with ``signature_detail: "sidecar_hash_mismatch"``.
     A sidecar without ``signed_sha256`` skips that cross-check. Never raises on a
-    malformed sidecar or record file.
+    malformed sidecar or record file. When ``record_text`` is given it is verified
+    instead of re-reading the file, so a caller that already parsed the record can
+    check the signature against those exact bytes.
     """
     dest = Path(dest_dir)
     sidecar_path = dest / "signature.json"
@@ -109,13 +114,16 @@ def verify_signature_in_dir(
 
     if not signing_available():
         return {"signed": True}
-    record_path = dest / record_file
-    if not record_path.is_file():
-        return {"signed": True, "record_missing": True}
-    try:
-        raw = record_path.read_text()
-    except (OSError, UnicodeDecodeError):
-        return {"signed": True, "signature_ok": False}
+    if record_text is not None:
+        raw = record_text
+    else:
+        record_path = dest / record_file
+        if not record_path.is_file():
+            return {"signed": True, "record_missing": True}
+        try:
+            raw = record_path.read_text()
+        except (OSError, UnicodeDecodeError):
+            return {"signed": True, "signature_ok": False}
     if not verify_raw(raw, signature, public_key):
         return {"signed": True, "signature_ok": False}
     if signed_sha256 is not None and signed_sha256 != canonical_sha256_from_raw(raw):

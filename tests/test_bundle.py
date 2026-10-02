@@ -543,6 +543,23 @@ def test_verify_in_dir_valid_run_bundle(tmp_path, monkeypatch):
 
 
 @requires_signing
+def test_verify_in_dir_record_text_is_used_instead_of_the_file(tmp_path, monkeypatch):
+    _signed_bundle(tmp_path, monkeypatch)
+    original = (tmp_path / "run_record.json").read_text()
+    _edit_record(tmp_path, lambda d: d.update(pipeline="nf-core/other"))
+    swapped = (tmp_path / "run_record.json").read_text()
+
+    assert verify_signature_in_dir(tmp_path, record_text=original) == {
+        "signed": True,
+        "signature_ok": True,
+    }
+    assert verify_signature_in_dir(tmp_path, record_text=swapped) == {
+        "signed": True,
+        "signature_ok": False,
+    }
+
+
+@requires_signing
 def test_verify_in_dir_tampered_record_value_fails(tmp_path, monkeypatch):
     _signed_bundle(tmp_path, monkeypatch)
     _edit_record(tmp_path, lambda d: d.update(pipeline="nf-core/other"))

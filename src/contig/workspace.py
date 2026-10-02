@@ -36,6 +36,19 @@ def load_run(runs_dir: str | Path, run_id: str) -> RunRecord:
     return load_bundle(bundle_dir)
 
 
+def load_run_with_text(runs_dir: str | Path, run_id: str) -> tuple[RunRecord, str]:
+    """Like ``load_run`` but also return the record file text it parsed.
+
+    The file is read exactly once, so a caller can verify a signature against the
+    same text the record was built from.
+    """
+    record_path = bundle_dir_for(runs_dir, run_id) / "run_record.json"
+    if not record_path.exists():
+        raise RunNotFoundError(f"no bundled run {run_id!r} in {runs_dir}")
+    text = record_path.read_text()
+    return RunRecord.model_validate_json(text), text
+
+
 def load_launch_manifest(runs_dir: str | Path, run_id: str) -> LaunchManifest | None:
     """Load the launch sidecar for ``run_id`` from ``runs_dir``, tolerantly.
 
