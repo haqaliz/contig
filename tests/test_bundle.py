@@ -551,11 +551,54 @@ def test_verify_in_dir_tampered_record_value_fails(tmp_path, monkeypatch):
 
 
 @requires_signing
-def test_verify_in_dir_tampered_stored_verdict_fails(tmp_path, monkeypatch):
+def test_verify_in_dir_tampered_stored_verdict_string_fails(tmp_path, monkeypatch):
+    _signed_bundle(tmp_path, monkeypatch)
+    stored = json.loads((tmp_path / "run_record.json").read_text())["verdict"]
+    flipped = "fail" if stored == "pass" else "pass"
+    assert stored != flipped
+
+    _edit_record(tmp_path, lambda d: d.update(verdict=flipped))
+
+    assert json.loads((tmp_path / "run_record.json").read_text())["verdict"] == flipped
+    assert verify_signature_in_dir(tmp_path) == {"signed": True, "signature_ok": False}
+
+
+@requires_signing
+def test_verify_in_dir_tampered_qc_results_fails(tmp_path, monkeypatch):
     _signed_bundle(tmp_path, monkeypatch)
     _edit_record(tmp_path, lambda d: d["qc_results"][0].update(status="fail"))
 
     assert verify_signature_in_dir(tmp_path) == {"signed": True, "signature_ok": False}
+
+
+@requires_signing
+def test_verify_in_dir_reads_stored_bytes_and_does_not_recompute_verdict(
+    tmp_path, monkeypatch
+):
+    import contig.signing as signing
+
+    private_key, public_key = generate_keypair()
+    monkeypatch.setenv("CONTIG_SIGNING_KEY", private_key)
+    write_bundle(_full_record(), tmp_path)
+    # Rewrite the stored verdict to something the model would never compute for
+    # these qc_results, then re-sign the edited file bytes.
+    _edit_record(tmp_path, lambda d: d.update(verdict="fail"))
+    raw = (tmp_path / "run_record.json").read_text()
+    private = signing._decode_key(private_key)
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    sig = Ed25519PrivateKey.from_private_bytes(private).sign(
+        signing.canonical_bytes_from_raw(raw)
+    ).hex()
+    _edit_sidecar(
+        tmp_path,
+        lambda d: d.update(
+            signature=sig, signed_sha256=signing.canonical_sha256_from_raw(raw)
+        ),
+    )
+
+    assert load_bundle(tmp_path).verdict != "fail"
+    assert verify_signature_in_dir(tmp_path) == {"signed": True, "signature_ok": True}
 
 
 @requires_signing
