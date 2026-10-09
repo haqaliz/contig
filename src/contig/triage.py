@@ -5,6 +5,35 @@ whitelisted egress payload) into a Contig-owned `TriageResult`. The default
 seam is `NullTriage` -- the "no triage" result -- and `default_jev_triage`
 is the real, env-gated, https-only transport. Every failure mode degrades
 to the Null behavior: never raise, never change caller behavior.
+
+R6 egress whitelist (single declaration `PAYLOAD_WHITELIST`):
+the Jev request carries only numeric QC metrics and metadata -- each
+check's numeric `value` plus `check`/`kind`/`status`/numeric
+`expected_range` (never `message`), the run's numeric summary
+(`task_counts`, `failed_tasks`, `repair_attempts`, the `verdict` string
+rendered), and file `size`/`sha256` only. NEVER: raw reads, FASTQ/BAM/VCF
+data or paths, read bytes, sample identifiers beyond the opaque `run_id`,
+raw log text, or keys. The constructed payload is asserted in tests (mutation
+control: raw-read markers can never appear).
+
+R7 egress contract (transport):
+`default_jev_triage` POSTs the whitelisted payload (Contig-owned JSON over
+stdlib `urllib`) to the base URL in `CONTIG_JEV_URL` with a strict
+`_TRIAGE_TIMEOUT = 30` s timeout and a size-bound
+`_MAX_TRIAGE_RESPONSE_BYTES = 64 KiB` response. The endpoint must be
+`https://` (the payload rides a bearer key): a non-https URL is refused by
+the seam, except `http://localhost` for the manual live gate behind the
+explicit `CONTIG_JEV_ALLOW_HTTP` opt-out (off by default). The reply JSON
+`{"items": [{"id": ..., "confidence": 0-1}]}` is parsed defensively
+(`parse_triage_response`); item ids are `{run_id}:{surface}:{check}`, so a
+response item always addresses a real check in the payload.
+
+Degrade-to-Null contract:
+key absent/empty ⇒ no request constructed at all (asserted); URL
+absent/empty/refused ⇒ no request; transport failure, timeout, HTTP error,
+oversized response, or malformed reply ⇒ `TriageResult(mode="null", ...)`
+with the cause named in `reason`. The seam never raises, and never logs or
+otherwise emits `CONTIG_JEV_KEY` (only `os.environ.get` reads it).
 """
 
 from __future__ import annotations
