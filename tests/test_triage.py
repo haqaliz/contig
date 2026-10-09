@@ -335,3 +335,352 @@ def test_mutation_control_holds_sha256_and_sizes_only() -> None:
         assert isinstance(file_meta["size"], (int, float))
         assert isinstance(file_meta["sha256"], str)
         assert len(file_meta["sha256"]) == 64
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: env gate — CONTIG_JEV_KEY absent/empty ⇒ Null, no request constructed
+# ---------------------------------------------------------------------------
+
+# R6/R2: the constructed request is the observable; absent key ⇒ the seam
+# must never build or send one (asserted on the _post_json hook).
+
+
+def _request(mode: str = "shadow", surface: str = "qc_anomaly") -> TriageRequest:
+    return TriageRequest(
+        run_id="run-abc-1",
+        surface=surface,  # type: ignore[arg-type]
+        mode=mode,  # type: ignore[arg-type]
+        payload=build_triage_payload(_sync_ok_run_meta(), _sync_ok_checks()),
+    )
+
+
+def _capturing_post_json(calls: list) -> object:
+    def fake_post_json(url, payload, **kwargs):
+        calls.append((url, payload, kwargs))
+        return '{"items": []}'
+
+    return fake_post_json
+
+
+def test_key_absent_returns_null_and_post_json_never_called(monkeypatch) -> None:
+    monkeypatch.delenv("CONTIG_JEV_KEY", raising=False)
+    monkeypatch.delenv("CONTIG_JEV_URL", raising=False)
+    calls: list = []
+
+    monkeypatch.setattr(triage, "_post_json", _capturing_post_json(calls))
+    result = triage.default_jev_triage(_request())
+
+    assert result.mode == "null"
+    assert result.confidence is None
+    assert result.items == {}
+    assert result.reason is not None
+    assert calls == []
+
+
+def test_key_empty_returns_null_and_post_json_never_called(monkeypatch) -> None:
+    monkeypatch.setenv("CONTIG_JEV_KEY", "")
+    monkeypatch.delenv("CONTIG_JEV_URL", raising=False)
+    calls: list = []
+
+    monkeypatch.setattr(triage, "_post_json", _capturing_post_json(calls))
+    result = triage.default_jev_triage(_request())
+
+    assert result.mode == "null"
+    assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: transport — https-only URL gate, localhost opt-out
+# ---------------------------------------------------------------------------
+
+
+def test_https_url_hits_transport_and_returns_result(monkeypatch) -> None:
+    monkeypatch.setenv("CONTIG_JEV_KEY", "super-secret-key-value")
+    monkeypatch.setenv("CONTIG_JEV_URL", "https://triage.example.com/v1")
+    monkeypatch.delenv("CONTIG_JEV_ALLOW_HTTP", raising=False)
+    calls: list = []
+
+    def fake_post_json(url, payload, **kwargs):
+        calls.append((url, payload, kwargs))
+        return '{"items": [{"id": "run-abc-1:qc_anomaly:insert_size_median", "confidence": 0.9}]}'
+
+    monkeypatch.setattr(triage, "_post_json", fake_post_json)
+    result = triage.default_jev_triage(_request())
+
+    assert result.mode == "shadow"
+    assert result.confidence == 0.9
+    assert result.items == {"run-abc-1:qc_anomaly:insert_size_median": 0.9}
+    assert result.reason is None
+    assert calls and calls[0][0] == "https://triage.example.com/v1"
+    assert calls[0][1] == _request().payload
+
+
+def test_non_https_url_refused_without_transport(monkeypatch) -> None:
+    monkeypatch.setenv("CONTIG_JEV_KEY", "super-secret-key-value")
+    monkeypatch.setenv("CONTIG_JEV_URL", "http://evil.example/triage")
+    monkeypatch.delenv("CONTIG_JEV_ALLOW_HTTP", raising=False)
+    calls: list = []
+
+    monkeypatch.setattr(triage, "_post_json", _capturing_post_json(calls))
+    result = triage.default_jev_triage(_request())
+
+    assert result.mode == "null"
+    assert result.items == {}
+    assert calls == []
+    assert "http" in result.reason.lower()
+
+
+def test_localhost_http_refused_without_opt_out(monkeypatch) -> None:
+    monkeypatch.setenv("CONTIG_JEV_KEY", "super-secret-key-value")
+    monkeypatch.setenv("CONTIG_JEV_URL", "http://localhost:8000/triage")
+    monkeypatch.delenv("CONTIG_JEV_ALLOW_HTTP", raising=False)
+    calls: list = []
+
+    monkeypatch.setattr(triage, "_post_json", _capturing_post_json(calls))
+    result = triage.default_jev_triage(_request())
+
+    assert result.mode == "null"
+    assert calls == []
+
+
+def test_localhost_http_allowed_with_explicit_opt_out(monkeypatch) -> None:
+    monkeypatch.setenv("CONTIG_JEV_KEY", "super-secret-key-value")
+    monkeypatch.setenv("CONTIG_JEV_URL", "http://localhost:8000/triage")
+    monkeypatch.setenv("CONTIG_JEV_ALLOW_HTTP", "1")
+    calls: list = []
+
+    monkeypatch.setattr(triage, "_post_json", _capturing_post_json(calls))
+    result = triage.default_jev_triage(_request())
+
+    assert result.mode == "shadow"
+    assert calls and calls[0][0] == "http://localhost:8000/triage"
+
+
+def test_garbage_url_refused_without_raise(monkeypatch) -> None:
+    monkeypatch.setenv("CONTIG_JEV_KEY", "super-secret-key-value")
+    monkeypatch.delenv("CONTIG_JEV_ALLOW_HTTP", raising=False)
+    calls: list = []
+    monkeypatch.setattr(triage, "_post_json", _capturing_post_json(calls))
+
+    for url in ("http://", "https://", "not-a-url", "ftp://triage.example.com"):
+        monkeypatch.setenv("CONTIG_JEV_URL", url)
+        result = triage.default_jev_triage(_request())
+        assert result.mode == "null"
+        assert result.items == {}
+        assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: _post_json — the one network touch point, failure ⇒ None, never raises
+# ---------------------------------------------------------------------------
+
+
+class _FakeResponse:
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self, n: int = -1) -> bytes:
+        return self._body[:n]
+
+
+def _patch_urlopen(monkeypatch, fake):
+    monkeypatch.setattr(triage.urllib.request, "urlopen", fake)
+
+
+def test_post_json_posts_json_and_returns_raw_text(monkeypatch) -> None:
+    captured: dict = {}
+
+    def fake_urlopen(request, timeout):
+        captured["timeout"] = timeout
+        captured["method"] = request.method
+        captured["url"] = request.full_url
+        captured["body"] = request.data
+        captured["content_type"] = request.get_header("Content-type")
+        return _FakeResponse(b'{"items": []}\n')
+
+    _patch_urlopen(monkeypatch, fake_urlopen)
+    text = triage._post_json(
+        "https://triage.example.com/v1",
+        {"run": {}, "checks": []},
+        timeout=30,
+        max_bytes=65536,
+    )
+
+    assert text == '{"items": []}\n'
+    assert captured["timeout"] == 30
+    assert captured["method"] == "POST"
+    assert captured["url"] == "https://triage.example.com/v1"
+    assert captured["content_type"] == "application/json"
+    assert b"CONTIG_JEV_KEY" not in captured["body"]
+
+
+def test_post_json_http_error_returns_none(monkeypatch) -> None:
+    import urllib.error
+
+    def fake_urlopen(request, timeout):
+        raise urllib.error.HTTPError(
+            "https://triage.example.com/v1", 500, "Internal Server Error", None, None
+        )
+
+    _patch_urlopen(monkeypatch, fake_urlopen)
+    assert (
+        triage._post_json("https://triage.example.com/v1", {}, timeout=30, max_bytes=1024)
+        is None
+    )
+
+
+def test_post_json_urlerror_returns_none(monkeypatch) -> None:
+    import urllib.error
+
+    def fake_urlopen(request, timeout):
+        raise urllib.error.URLError("connection refused")
+
+    _patch_urlopen(monkeypatch, fake_urlopen)
+    assert (
+        triage._post_json("https://triage.example.com/v1", {}, timeout=30, max_bytes=1024)
+        is None
+    )
+
+
+def test_post_json_timeout_returns_none(monkeypatch) -> None:
+    import socket
+
+    def fake_urlopen(request, timeout):
+        raise socket.timeout("timed out")
+
+    _patch_urlopen(monkeypatch, fake_urlopen)
+    assert (
+        triage._post_json("https://triage.example.com/v1", {}, timeout=30, max_bytes=1024)
+        is None
+    )
+
+
+def test_post_json_read_is_size_bounded(monkeypatch) -> None:
+    def fake_urlopen(request, timeout):
+        return _FakeResponse(b"x" * (65536 + 1))
+
+    _patch_urlopen(monkeypatch, fake_urlopen)
+    text = triage._post_json(
+        "https://triage.example.com/v1", {}, timeout=30, max_bytes=65536
+    )
+    assert len(text) <= 65536 + 1  # a single read() is bounded
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: degrade to Null on transport failure / oversized / malformed
+# ---------------------------------------------------------------------------
+
+
+def test_transport_failure_degrades_to_null(monkeypatch) -> None:
+    monkeypatch.setenv("CONTIG_JEV_KEY", "super-secret-key-value")
+    monkeypatch.setenv("CONTIG_JEV_URL", "https://triage.example.com/v1")
+    monkeypatch.setattr(triage, "_post_json", lambda url, payload, **kw: None)
+
+    result = triage.default_jev_triage(_request())
+    assert result.mode == "null"
+    assert result.confidence is None
+    assert result.items == {}
+    assert result.reason is not None
+
+
+def test_oversized_response_degrades_to_null_with_oversized_reason(monkeypatch) -> None:
+    monkeypatch.setenv("CONTIG_JEV_KEY", "super-secret-key-value")
+    monkeypatch.setenv("CONTIG_JEV_URL", "https://triage.example.com/v1")
+    monkeypatch.setattr(
+        triage, "_post_json", lambda url, payload, **kw: "x" * (65536 + 1)
+    )
+
+    result = triage.default_jev_triage(_request())
+    assert result.mode == "null"
+    assert result.reason is not None
+    assert "oversized" in result.reason.lower()
+
+
+def test_malformed_response_degrades_to_null(monkeypatch) -> None:
+    monkeypatch.setenv("CONTIG_JEV_KEY", "super-secret-key-value")
+    monkeypatch.setenv("CONTIG_JEV_URL", "https://triage.example.com/v1")
+    monkeypatch.setattr(triage, "_post_json", lambda url, payload, **kw: "not json {")
+
+    result = triage.default_jev_triage(_request())
+    assert result.mode == "null"
+    assert result.items == {}
+    assert result.reason is not None
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: parse_triage_response — defensive, never raises
+# ---------------------------------------------------------------------------
+
+
+def test_parse_triage_response_accepts_valid_items_with_matching_ids() -> None:
+    text = '{"items": [{"id": "run-abc-1:qc_anomaly:a", "confidence": 0.5}]}'
+    items = triage.parse_triage_response(
+        text, known_ids={"run-abc-1:qc_anomaly:a", "run-abc-1:qc_anomaly:b"}
+    )
+    assert items == {"run-abc-1:qc_anomaly:a": 0.5}
+
+
+def test_parse_triage_response_malformed_json_returns_none() -> None:
+    for text in ("", "   ", "not json {", '{"items": ['):
+        assert triage.parse_triage_response(text, known_ids=set()) is None
+
+
+def test_parse_triage_response_bad_shapes_return_none() -> None:
+    for text in ("[]", '"hello"', "42", '{"not_items": []}', '{"items": {}}'):
+        assert triage.parse_triage_response(text, known_ids=set()) is None
+
+
+def test_parse_triage_response_unknown_ids_dropped() -> None:
+    text = (
+        '{"items": ['
+        '{"id": "run-abc-1:qc_anomaly:known", "confidence": 0.5},'
+        '{"id": "other:surface:unknown", "confidence": 0.9}'
+        "]}"
+    )
+    items = triage.parse_triage_response(
+        text, known_ids={"run-abc-1:qc_anomaly:known"}
+    )
+    assert items == {"run-abc-1:qc_anomaly:known": 0.5}
+
+
+def test_parse_triage_response_bad_confidence_dropped() -> None:
+    text = (
+        '{"items": ['
+        '{"id": "r:s:a", "confidence": 1.5},'
+        '{"id": "r:s:b", "confidence": -0.1},'
+        '{"id": "r:s:c", "confidence": "high"},'
+        '{"id": "r:s:d", "confidence": null},'
+        '{"id": "r:s:e", "confidence": 0.5}'
+        "]}"
+    )
+    items = triage.parse_triage_response(text, known_ids={"r:s:a", "r:s:b", "r:s:c", "r:s:d", "r:s:e"})
+    assert items == {"r:s:e": 0.5}
+
+
+def test_parse_triage_response_never_raises_on_junk() -> None:
+    for text in ("{", "]", "null", "2026-10-10", "\x00\xff", "x" * 100000):
+        triage.parse_triage_response(text, known_ids=set())
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: the key never leaves the machine in any payload
+# ---------------------------------------------------------------------------
+
+
+def test_jev_key_name_never_in_any_constructed_payload() -> None:
+    run_meta = dict(_sync_ok_run_meta())
+    run_meta["CONTIG_JEV_KEY"] = "super-secret-key-value"
+    run_meta["api_key"] = "another-secret"
+    checks = _sync_ok_checks()
+    checks[0]["CONTIG_JEV_KEY"] = "super-secret-key-value"
+
+    payload = build_triage_payload(run_meta, checks)
+    assert "CONTIG_JEV_KEY" not in json.dumps(payload)
+    assert "super-secret-key-value" not in json.dumps(payload)
+    _assert_no_forbidden_tokens(payload)

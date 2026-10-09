@@ -9,7 +9,12 @@ to the Null behavior: never raise, never change caller behavior.
 
 from __future__ import annotations
 
+import json
 import math
+import os
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from typing import Callable, Literal
 
@@ -184,3 +189,173 @@ def build_triage_payload(run_meta: dict, checks: list[dict]) -> dict:
             run[key] = value
     checks_out = [c for c in (_filter_check(c) for c in checks) if c is not None]
     return {"run": run, "checks": checks_out}
+
+
+# ---------------------------------------------------------------------------
+# R2/R7: env-gated https-only transport behind a _post_json seam
+# ---------------------------------------------------------------------------
+
+# BYOK gate (mirrors SIGNING_KEY_ENV in bundle.py): absent/empty ⇒ NullTriage
+# behavior, no network, exit unchanged. The key is never logged and never
+# included in any payload.
+JEV_KEY_ENV = "CONTIG_JEV_KEY"
+
+# The https base URL for the triage request; absent/empty ⇒ Null behavior.
+# No hard-coded vendor URL: the Jev endpoint contract is unverified, so the
+# URL is recorded here, not papered over.
+JEV_URL_ENV = "CONTIG_JEV_URL"
+
+# Manual live-gate opt-out: when set truthy, http://localhost URLs are
+# accepted for the owner-run smoke test. Off by default; the payload carries
+# a bearer key, so plain-http egress is refused everywhere else.
+JEV_ALLOW_HTTP_ENV = "CONTIG_JEV_ALLOW_HTTP"
+
+# A triage request that hangs must not hang a run/verify: strict timeout,
+# mirroring _FETCH_TIMEOUT in paper_intake.py.
+_TRIAGE_TIMEOUT = 30
+
+# Response size bound: a pathological triage response is an honest give-up
+# ("oversized"), never a read-hang or an unbounded buffer.
+_MAX_TRIAGE_RESPONSE_BYTES = 64 * 1024
+
+
+def _url_allowed(url: str) -> bool:
+    """True when `url` is an https endpoint, or localhost behind the opt-out.
+
+    Scheme parsing must not raise on garbage input: bad URLs simply refuse
+    the triage (Null behavior). Never regex-only: `urllib.parse` decides.
+    """
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return False
+    if not parsed.hostname:
+        return False
+    if parsed.scheme == "https":
+        return True
+    if parsed.scheme == "http" and parsed.hostname == "localhost":
+        return bool(os.environ.get(JEV_ALLOW_HTTP_ENV))
+    return False
+
+
+def _post_json(
+    url: str,
+    payload: dict,
+    *,
+    timeout: int = _TRIAGE_TIMEOUT,
+    max_bytes: int = _MAX_TRIAGE_RESPONSE_BYTES,
+) -> str | None:
+    """POST `payload` (a JSON object) to `url`; return the raw reply text.
+
+    The only network touch point of this module; tests patch it (and, for
+    the transport itself, the module-level `urllib.request.urlopen`). Never
+    raises: connection errors, HTTP errors and timeouts all return None (the
+    caller degrades to Null behavior). The reply is read size-bounded so a
+    pathological response cannot hang the caller.
+    """
+    data = json.dumps(payload, sort_keys=True).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read(max_bytes + 1)
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
+        return None
+    except Exception:
+        return None
+    return body.decode("utf-8", errors="replace")
+
+
+def _null_result(reason: str) -> TriageResult:
+    """The shared degrade: mode="null", no triage signal, reason named."""
+    return TriageResult(mode="null", confidence=None, items={}, reason=reason)
+
+
+def parse_triage_response(text: str, *, known_ids: set[str]) -> dict[str, float] | None:
+    """Parse a Contig-owned triage reply into `{item_id: confidence}`.
+
+    The reply shape is `{"items": [{"id": ..., "confidence": 0-1}]}`. A
+    request is only usable as a whole (dict with a list `items`); anything
+    else — malformed JSON, non-dict, missing/ non-list `items` — returns None
+    (Null behavior). Item-level problems never raise: ids unknown to the
+    payload are dropped (an item always addresses a real check), and
+    confidence values outside [0, 1], or non-numeric, are dropped.
+    """
+    try:
+        obj = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    raw_items = obj.get("items")
+    if not isinstance(raw_items, list):
+        return None
+    items: dict[str, float] = {}
+    for entry in raw_items:
+        if not isinstance(entry, dict):
+            continue
+        item_id = entry.get("id")
+        confidence = entry.get("confidence")
+        if not isinstance(item_id, str) or item_id not in known_ids:
+            continue
+        if isinstance(confidence, bool) or not isinstance(
+            confidence, (int, float)
+        ):
+            continue
+        if not math.isfinite(confidence) or not (0.0 <= confidence <= 1.0):
+            continue
+        items[item_id] = float(confidence)
+    return items
+
+
+def default_jev_triage(req: TriageRequest) -> TriageResult:
+    """The real seam: env-gated, https-only POST, defensively parsed.
+
+    Every failure mode degrades to the Null behavior (never raises, never
+    changes caller behavior): key absent/empty ⇒ no request constructed at
+    all; URL absent/empty or refused ⇒ no request; transport failure,
+    oversized or malformed reply ⇒ Null with the reason named. On success
+    the result carries the request's mode and the parsed check-level
+    confidences (ids `{run_id}:{surface}:{check}`); `confidence` is the mean
+    of the check-level confidences.
+    """
+    if not os.environ.get(JEV_KEY_ENV):
+        return _null_result(f"{JEV_KEY_ENV} is not set; triage disabled")
+    url = os.environ.get(JEV_URL_ENV)
+    if not url:
+        return _null_result(f"{JEV_URL_ENV} is not set; triage disabled")
+    if not _url_allowed(url):
+        return _null_result(f"refusing non-https triage URL {url!r}")
+    try:
+        text = _post_json(
+            url,
+            req.payload,
+            timeout=_TRIAGE_TIMEOUT,
+            max_bytes=_MAX_TRIAGE_RESPONSE_BYTES,
+        )
+    except Exception:
+        text = None
+    if text is None:
+        return _null_result("triage request failed")
+    if len(text.encode("utf-8", errors="replace")) > _MAX_TRIAGE_RESPONSE_BYTES:
+        return _null_result(
+            "triage response oversized (exceeds "
+            f"{_MAX_TRIAGE_RESPONSE_BYTES} bytes)"
+        )
+    check_names = [
+        check["check"]
+        for check in req.payload.get("checks", [])
+        if isinstance(check, dict) and isinstance(check.get("check"), str)
+    ]
+    known_ids = {f"{req.run_id}:{req.surface}:{name}" for name in check_names}
+    items = parse_triage_response(text, known_ids=known_ids)
+    if items is None:
+        return _null_result("malformed triage response")
+    confidence = sum(items.values()) / len(items) if items else None
+    return TriageResult(
+        mode=req.mode, confidence=confidence, items=items, reason=None
+    )
