@@ -2512,7 +2512,18 @@ read-only **`contig triage-stats`** command (row counts by surface/mode, skip
 events, and an honest confidence-vs-actual cross-tab — never a calibration
 curve); a stdlib-only, **`https://`-only transport** (30 s timeout, response size
 bound, defensive parse; `http://localhost` behind an explicit opt-out for the
-**manual-marked live gate**, S2).
+**manual-marked live gate**, S2). **Calibrated to the real Jev systemone protocol
+(live gate, 2026-10-10, `fix/triage-systemone-calibration`):** the endpoint is
+pinned `https://api.typesafe.ai/v1/systemone` (`CONTIG_JEV_URL` overrides), the
+request body is the real envelope `{model, state, questions}` with one `triage`
+score question (two ordered criteria levels so the score lands in [0, 1] by
+construction), the key rides in `Authorization: Bearer <key>` (never in the
+body), the reply `answers.triage.{score,confidence}` is parsed fail-closed
+(`{"error": ...}` or any malformed/out-of-range shape degrades to Null, never a
+guessed score), and the model id is a full id from `CONTIG_JEV_MODEL` (aliases
+`jev`/`system-one` refused, reproducible-policy precedent); the owner's live gate
+round-tripped the real endpoint and returned `score 0.2 / confidence 0.6` on a
+synthetic clean run.
 
 **Why it is leverage.** It is *not* the moat — it protects it. The verified verdict
 (concordance, plausibility, structural checks) and the self-heal loop are the

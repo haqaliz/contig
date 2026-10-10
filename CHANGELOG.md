@@ -47,9 +47,18 @@ All notable changes to Contig are recorded here. The format follows
   seam threads through `self_heal_run`/`run_heal_scenario` so heal-guard stays
   deterministic. `contig show` gains a shadow/active footer note when a key was
   present. **Honest limits:** owner demand-pull, not a user request; the vendor's
-  API is unverified from this repo (the seam makes the http round-trip the only
-  uncompiled surface; a `manual`-marked live test `tests/test_triage_live.py` is
-  the owner-run gate, never in CI); the ledger accrues nothing until real keyed runs
+  API contract was unverified at ship time and has since been **calibrated to the
+  real Jev systemone protocol (live gate, 2026-10-10, `fix/triage-systemone-
+  calibration`)**: a pinned default endpoint `https://api.typesafe.ai/v1/
+  systemone` (overridable via `CONTIG_JEV_URL`), a request body
+  `{model, state, questions}` with one `triage` score question (two ordered
+  criteria levels), the key in `Authorization: Bearer <key>` (never in the
+  body), a fail-closed parse of the reply `answers.triage.{score,confidence}`,
+  and a full-id model policy (`CONTIG_JEV_MODEL`; aliases `jev`/`system-one`
+  refused). The owner's live gate round-tripped the real endpoint and returned
+  `score 0.2 / confidence 0.6` on a synthetic clean run. A `manual`-marked live
+  test `tests/test_triage_live.py` remains the owner-run gate, never in CI. The
+  ledger accrues nothing until real keyed runs
   exist; self-heal attempt ordering is unbuilt (no ordering axis exists in the
   loop), with a committed revisit trigger — if the next 20 real keyed runs produce
   no ledger rows or no measurable confidence-to-outcome relationship, the layer is
