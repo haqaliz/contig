@@ -45,7 +45,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Callable, Literal
+from pathlib import Path
+from typing import Callable, Literal, Mapping
 
 
 @dataclass(frozen=True)
@@ -409,3 +410,51 @@ def triage_for(
     if mode_requested:
         return default_jev_triage, "active"
     return default_jev_triage, "shadow"
+
+
+# ---------------------------------------------------------------------------
+# Wiring helpers: the R4 skip predicate and the R8 calibration ledger writer
+# ---------------------------------------------------------------------------
+
+# The band keys a rule declares (rule_pack.py `_status_for`); a `fail_*` key
+# means the rule can FAIL a verdict, so no active-mode triage may skip it (R4).
+_BAND_KEYS = ("warn_below", "warn_above", "fail_below", "fail_above")
+_FAIL_BAND_PREFIX = "fail_"
+
+
+def is_skippable_check(kind: str, bands: "Mapping[str, object] | None") -> bool:
+    """The R4 predicate: may an active-mode triage skip this check?
+
+    True iff `kind == "concordance"` (cross-tool corroboration is at-most-WARN,
+    so skipping it can never change a verdict) or `bands` is present (not
+    None) with no `fail_*` key among the rule's band keys
+    (`warn_below`/`warn_above`/`fail_below`/`fail_above`). A FAIL-capable rule
+    (`ts_tv`, `het_hom`, `variant_count`, `somatic_variant_count`) or a
+    band-less structural/did-it-run check is never skippable. Pinned by an
+    enumeration test walking the shipped rule packs, so a future FAIL band
+    joining a skippable rule is a deliberate act.
+    """
+    if kind == "concordance":
+        return True
+    if bands is None:
+        return False
+    return not any(key.startswith(_FAIL_BAND_PREFIX) for key in bands)
+
+
+def append_ledger_row(runs_dir: str | os.PathLike, row: dict) -> None:
+    """Append one row to `<runs_dir>/triage-ledger.jsonl` (R8, wiring-owned).
+
+    The unsigned calibration sidecar: one line per triaged decision, consumed
+    by `contig triage-stats` (ledger aspect). Append-only, `errors="replace"`,
+    never raises: an unwritable path degrades silently, because a calibration
+    ledger must never fail a run/verify.
+    """
+    if not row:
+        return
+    try:
+        path = Path(runs_dir) / "triage-ledger.jsonl"
+        Path(runs_dir).mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8", errors="replace") as fh:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+    except (OSError, TypeError, ValueError):
+        return

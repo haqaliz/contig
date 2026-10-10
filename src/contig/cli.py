@@ -122,6 +122,7 @@ from contig.models import (
     ExecutionTarget,
     HealSnapshot,
     LaunchManifest,
+    QCResult,
     ReproduceSnapshot,
     RunRecord,
     RunSummary,
@@ -143,7 +144,15 @@ from contig.report import (
     render_run_report,
     render_run_report_html,
 )
-from contig.triage import JEV_KEY_ENV, triage_for
+from contig.triage import (
+    JEV_KEY_ENV,
+    TriageRequest,
+    TriageResult,
+    append_ledger_row,
+    build_triage_payload,
+    is_skippable_check,
+    triage_for,
+)
 from contig.verification.concordance import evaluate_concordance
 from contig.verification.count_concordance import (
     _COUNT_MATRIX_GLOB,
@@ -2254,9 +2263,86 @@ def verify(
     # can never influence the `ok`/exit decision below. The capture out-param and
     # the corpus family are threaded through the fired helper so the hook after the
     # dispatch (PRD R4a, verify-time slice) can append a pending VerificationCase.
+    #
+    # Triage (C9): the seam is constructed exactly once per invocation from the
+    # environment (triage_for). Absent key => NullTriage / "null": nothing is
+    # consulted and nothing is appended -- byte-identical to before.
+    triage_seam, triage_mode = triage_for(triage_active, triage_threshold)
     capture_metrics: dict[str, dict[str, float]] = {}
     concordance_family: str | None = None
-    if concordance_vcf:
+    concordance: list | None = None
+    concordance_requested = bool(
+        concordance_vcf or concordance_auto or concordance_counts
+        or concordance_counts_auto or concordance_sc_counts or concordance_sc_counts_auto
+    )
+    triage_skip = False
+    triage_result: TriageResult | None = None
+    if triage_mode in ("shadow", "active") and concordance_requested:
+        summary = RunSummary.from_events(record.events)
+        request = TriageRequest(
+            run_id=run_id,
+            surface="verify_concordance",
+            mode=triage_mode,  # type: ignore[arg-type]
+            payload=build_triage_payload(
+                {
+                    "run_id": run_id,
+                    "assay": assay_for_pipeline(record.pipeline) or "rnaseq",
+                    "pipeline": record.pipeline,
+                    "task_counts": summary.total_tasks,
+                    "failed_tasks": summary.failed_tasks,
+                    "repair_attempts": len(record.repair_history),
+                    "verdict": record.verdict,
+                    "files": [
+                        {"sha256": digest}
+                        for digest in record.output_checksums.values()
+                    ],
+                },
+                [
+                    {"check": q.check, "kind": q.kind, "status": q.status, "value": q.value}
+                    for q in record.qc_results
+                ],
+            ),
+        )
+        triage_result = triage_seam(request)
+        # R5/R4: the ONLY active-mode skip surface. The dispatched concordance
+        # evaluator is skipped iff active mode AND Jev confidence below the
+        # threshold AND the check passes the R4 predicate (concordance is
+        # always skippable: at-most-WARN corroboration, never FAIL-capable).
+        if (
+            triage_mode == "active"
+            and triage_result.confidence is not None
+            and triage_result.confidence < triage_threshold
+            and is_skippable_check("concordance", None)
+        ):
+            triage_skip = True
+
+    if triage_skip:
+        check_id = _resolved_concordance_check_id(
+            concordance_vcf=concordance_vcf,
+            concordance_auto=concordance_auto,
+            concordance_counts=concordance_counts,
+            concordance_counts_auto=concordance_counts_auto,
+            concordance_sc_counts=concordance_sc_counts,
+            concordance_sc_counts_auto=concordance_sc_counts_auto,
+        )
+        # The honest skip surface (R3/R4): the corroboration is NOT run; the
+        # result is a per-invocation UNVERIFIED presentation (never PASS, never
+        # a silent absence, never persisted into the signed record) naming the
+        # threshold and the reason.
+        concordance = [
+            QCResult(
+                check=check_id,
+                kind="concordance",
+                status="unverified",
+                message=(
+                    f"Skipping concordance: triage is active with Jev confidence "
+                    f"{triage_result.confidence} below --triage-threshold "
+                    f"{triage_threshold}; the {check_id} corroboration was not run "
+                    "(recorded UNVERIFIED, never a pass)."
+                ),
+            )
+        ]
+    elif concordance_vcf:
         concordance = _evaluate_run_concordance(
             record, runs_dir, run_id, concordance_vcf, capture_metrics=capture_metrics
         )
@@ -2301,6 +2387,28 @@ def verify(
         concordance_family = _concordance_family("concordance_sc_counts_auto")
     else:
         concordance = None
+
+    # R8 calibration row: one per triaged decision. Skipped => actual
+    # "skipped"; otherwise the actual status summary of the checks that ran.
+    # Shadow mode runs everything and records the outcome; null mode never
+    # gets here (no consultation happened, so no row -- absent key means an
+    # absent ledger).
+    if triage_result is not None:
+        append_ledger_row(
+            runs_dir,
+            {
+                "run_id": run_id,
+                "attempt": len(record.repair_history),
+                "surface": "verify_concordance",
+                "mode": triage_mode,
+                "confidence": triage_result.confidence,
+                "reason": triage_result.reason,
+                "checks": sorted(triage_result.items),
+                "actual": (
+                    "skipped" if triage_skip else _worst_concordance_status(concordance)
+                ),
+            },
+        )
 
     # Verify-time concordance capture (PRD R4a, verify-time slice): a non-empty
     # concordance list earns ONE pending VerificationCase in the shared sidecar
@@ -2393,6 +2501,62 @@ def _concordance_family(flag_name: str) -> str | None:
     degrades to "no capture" rather than a crash.
     """
     return _CONCORDANCE_FAMILY_FLAGS.get(flag_name)
+
+
+# The dispatched evaluator's canonical check id per concordance flag (R5 skip
+# surface): the honest name a SKIPPED concordance check presents as UNVERIFIED.
+_TRIAGE_CONCORDANCE_CHECK_IDS: dict[str, str] = {
+    "concordance_vcf": "genotype_concordance",
+    "concordance_auto": "genotype_concordance",
+    "concordance_counts": "spearman_concordance",
+    "concordance_counts_auto": "spearman_concordance",
+    "concordance_sc_counts": "sc_count_concordance",
+    "concordance_sc_counts_auto": "sc_count_concordance",
+}
+
+
+def _resolved_concordance_check_id(
+    *,
+    concordance_vcf: object,
+    concordance_auto: object,
+    concordance_counts: object,
+    concordance_counts_auto: object,
+    concordance_sc_counts: object,
+    concordance_sc_counts_auto: object,
+) -> str:
+    """The one dispatched concordance check id for the flag set.
+
+    The six flags are mutually exclusive (validated earlier), so exactly one
+    resolves; an unknown/empty set degrades to the generic "concordance" label
+    rather than crashing.
+    """
+    for name, value in (
+        ("concordance_vcf", concordance_vcf),
+        ("concordance_auto", concordance_auto),
+        ("concordance_counts", concordance_counts),
+        ("concordance_counts_auto", concordance_counts_auto),
+        ("concordance_sc_counts", concordance_sc_counts),
+        ("concordance_sc_counts_auto", concordance_sc_counts_auto),
+    ):
+        if value:
+            return _TRIAGE_CONCORDANCE_CHECK_IDS.get(name, "concordance")
+    return "concordance"
+
+
+_STATUS_SEVERITY = {"pass": 0, "unverified": 1, "warn": 2, "fail": 3}
+
+
+def _worst_concordance_status(concordance: list | None) -> str:
+    """The actual outcome summary for the ledger row: the worst status that ran.
+
+    `"none"` when the evaluator produced no checks (an assay-gate honest skip);
+    otherwise the most severe status among the concordance results.
+    """
+    if not concordance:
+        return "none"
+    return max(
+        concordance, key=lambda qc: _STATUS_SEVERITY.get(qc.status, 0)
+    ).status
 
 
 def _capture_pending_concordance_case(
