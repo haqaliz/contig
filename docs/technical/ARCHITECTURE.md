@@ -366,6 +366,7 @@ engine. What is implemented now:
 Genomic data is sensitive even when not clinical (it is identifying, familial, and often consented for a narrow purpose). Trust is a product feature.
 
 - **Data never crosses the plane boundary by default.** Reads, references, and intermediates live in the user's `work_dir`. The control plane sees logs, exit codes, QC metrics, file *names and checksums*, never sequence content. Any export is explicit, scoped, and logged.
+- **Optional triage egress (BYOK, off by default).** The C9 triage seam sends numeric QC metrics and metadata only — the whitelist is declared in `src/contig/triage.py` (`PAYLOAD_WHITELIST`): never raw reads, paths, or log text. It is opt-in via the user's own key (`CONTIG_JEV_KEY`), posted to an `https://` endpoint only, and every triaged decision is recorded in the unsigned local sidecar `runs/triage-ledger.jsonl` (read via `contig triage-stats`).
 - **Outbound-only runner.** The data-plane daemon polls the control plane; nothing opens an inbound port on the user's machine or cloud.
 - **Least-privilege compute creds.** In user-cloud mode, Contig assumes a scoped role the user grants (specific buckets, Batch queue); we never hold long-lived keys to their account.
 - **Secrets management.** API keys and cloud creds are referenced by name (`credentials_ref`), held in the user's environment or a secrets manager, never persisted in the control plane or in provenance.
