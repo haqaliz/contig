@@ -6,6 +6,58 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+- **C9 slice 1: Jev calibrated triage (BYOK, optional) ships
+  (`jev-calibrated-triage`, owner demand-pull 2026-09-19 — see the C9 roadmap
+  section).** The verified verdict and the self-heal loop are the
+  trustworthy-but-costly core; Jev (TypeSafe's "System One" decision model) is a
+  cheap triage/prioritization signal over run *metadata* that can decide which QC
+  anomalies are worth an expensive deep check — a router over metrics, never a
+  determination about biology. An injectable `Triage` seam (`src/contig/triage.py`:
+  `Triage`, `TriageRequest`, `TriageResult`, `NullTriage` default,
+  `default_jev_triage`, `build_triage_payload` with the single `PAYLOAD_WHITELIST`
+  declaration, `parse_triage_response`) follows the house injectable-seam pattern
+  (`Executor`/`Fetcher`/`Sleeper`), **off by default**: `CONTIG_JEV_KEY` absent ⇒
+  NullTriage, no network, exit unchanged (asserted on the constructed request); key
+  present ⇒ **shadow mode by default** (everything runs, Jev logged alongside).
+  Active mode only behind `--triage-active` + `--triage-threshold` on `contig run`/
+  `verify`, with the stall-flag refusal discipline (threshold without active, active
+  without key, both named). Egress is whitelisted numeric QC metrics/metadata only —
+  never raw reads, paths, log text, or keys — asserted by a mutation-control test;
+  the transport is Contig-owned JSON over stdlib `urllib`, https-only (non-https
+  refused; `http://localhost` behind a documented `CONTIG_JEV_ALLOW_HTTP` opt-out
+  for the manual gate), 30 s timeout, a 64 KiB response bound, and a defensive parse
+  (malformed ⇒ Null behavior, never raises; unknown item ids and out-of-[0,1]
+  confidence dropped). **Two wrap sites, one carrying active-mode skipping:** the
+  qc_anomaly verdict-trigger (`self_heal.py`) is **ledger-capture only** — the
+  trigger always fires and its Diagnosis/pending-corpus capture is untouched (there
+  is no deep re-check to pre-screen in that path, stated honestly rather than
+  invented); the **verify-time concordance dispatch** (`cli.py`) is the only
+  active-mode skip surface, gated by a pure `is_skippable_check` predicate
+  (`kind == "concordance"` or a rule with no `fail_*` bound — the enumeration test
+  pins `ts_tv`, `het_hom`, `variant_count`, `somatic_variant_count` as never
+  skippable, so a future FAIL band is a deliberate act). A skipped check renders as
+  an honest UNVERIFIED `kind="concordance"` result naming the threshold and reason —
+  never absent, never PASS, exit code unchanged — and the **verdict-identity
+  invariant** (triage on vs off ⇒ identical verify verdicts on the checks that ran)
+  is enforced by test. The **calibration ledger** appends one row per triaged
+  decision to the unsigned `runs/triage-ledger.jsonl` (surface, mode, whitelisted
+  inputs, Jev confidence, actual outcome); `contig triage-stats` reads it across
+  runs (repair-stats pattern) with an honest empty/absent note and a
+  confidence-vs-actual cross-tab that never over-claims a calibration curve. The
+  seam threads through `self_heal_run`/`run_heal_scenario` so heal-guard stays
+  deterministic. `contig show` gains a shadow/active footer note when a key was
+  present. **Honest limits:** owner demand-pull, not a user request; the vendor's
+  API is unverified from this repo (the seam makes the http round-trip the only
+  uncompiled surface; a `manual`-marked live test `tests/test_triage_live.py` is
+  the owner-run gate, never in CI); the ledger accrues nothing until real keyed runs
+  exist; self-heal attempt ordering is unbuilt (no ordering axis exists in the
+  loop), with a committed revisit trigger — if the next 20 real keyed runs produce
+  no ledger rows or no measurable confidence-to-outcome relationship, the layer is
+  restated as taxonomy-only. No `models.py` change, no signature break, no new
+  dependency (stdlib only); eval-guard 93.3% and heal-guard 100% unmoved (no
+  baseline refreeze); full suite 3422 passed / 2 skipped. Plan/PRD under
+  `docs/planning/jev-calibrated-triage/`.
+
 ## [0.63.0] - 2026-10-03
 
 - **Signatures now survive model changes (`signature-stable-canonical-payload`).** `contig verify` re-validated the stored `run_record.json` into a Pydantic model and re-dumped it, so any new model field, or a rule-pack change that flipped the computed `verdict`, broke every earlier signature; five such breaks were disclosed (the verdict v0.35.0/v0.37.0 note, reproduce slice 6, slice 8, `RepairStep.patch_applied`, `ReferenceIdentity.known_sites`). `src/contig/signing.py` now canonicalizes the stored JSON itself (`canonical_bytes_from_raw`, `canonical_sha256_from_raw`, `verify_raw`, `sign_raw`, sharing one `_canonical_dumps`; malformed, non-object or over-deep JSON raises `ValueError`, and `verify_raw` never raises), and `verify_signature_in_dir` (`bundle.py`) verifies over the stored record text, cross-checking the sidecar's `signed_sha256` (distinct detail `sidecar_hash_mismatch`; an absent `signed_sha256` skips the check). `_maybe_write_signature` signs the canonical form of the exact text written. `contig verify` (`cli.py`) uses the helper, falls back to the model path only when the record file is absent and never as a retry after a raw mismatch, and prints `Signature sidecar disagrees with the record: signed_sha256 does not match.` on a hash mismatch; the plain mismatch text and `--json` keys are unchanged (`signature_detail` appears only on the hash-mismatch path). All five disclosed breaks are resolved: the pins in `tests/test_signing.py`, `tests/test_reproduce_bundle.py` and `tests/test_reproduce_checkout_hash.py` flipped from "no longer verifies" to old-shape signed files that still verify. A stale docstring that said `model_dump_json` was fixed (the code uses `model_dump` plus `json.dumps`). **Semantic change, accepted:** the stored `verdict` string is now part of the signed file bytes and is not recomputed at verify time, so verify means the record's canonical JSON content is unchanged since signing (whitespace, key-order and escape-form edits that leave the parsed values identical do not break it). That is true for the SIGNATURE only: `--fail-on-verdict` (`cli.py`), `contig show` and the HTML report (`report.py`) still use the `record.verdict` recomputed from the current rule pack. Previously a rule-pack edit that flipped a verdict broke the signature. **Non-finite claims:** `load_claims` accepts NaN/Infinity and `model_dump_json` stores them as null, but the old signing path signed `Infinity`; signing the stored text fixes that, so a non-finite claim is signed (and stored) as null. The loader was deliberately not changed. Finite records sign byte-identically to before (guard test). **Honest limits:** roadmap-push, not demand-pull; fixtures are hand-signed old-shape files and no real long-lived signed bundles exist in CI; verification proves the record's canonical JSON content is unchanged since signing, not who signed it (the public key is still read from the sidecar); reproduce bundles are still not verified by any CLI command (library function and tests only, and the dashboard shows but never verifies); a legacy-signed bundle holding ANY non-finite float (a claim, or e.g. `QCResult.value`) cannot be verified raw; such bundles also failed under the old code (no regression), and the case is reachable in principle (`load_claims` accepted NaN/Infinity), believed absent in practice, and not tested; signature-affecting edits to a record file by a newer contig are out of scope.
