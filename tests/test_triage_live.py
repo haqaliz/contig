@@ -1,10 +1,13 @@
 """Manual live gate for the real Jev triage transport (PRD S2, BYOK).
 
-This test is the owner's smoke check against a real `CONTIG_JEV_URL` with a
-real `CONTIG_JEV_KEY` — it is unconditionally skipped so it never runs in CI
-and never fires incidentally in a full local suite. To run it, remove the
-skip marker locally and set CONTIG_JEV_KEY + CONTIG_JEV_URL (https, or
-http://localhost with CONTIG_JEV_ALLOW_HTTP set).
+This test is the owner's smoke check against a real Jev systemone endpoint
+with a real `CONTIG_JEV_KEY` and a full `CONTIG_JEV_MODEL` id (e.g.
+`jev-1.13.0`) — it is unconditionally skipped so it never runs in CI and
+never fires incidentally in a full local suite. To run it, remove the skip
+marker locally and set CONTIG_JEV_KEY + CONTIG_JEV_MODEL (https endpoint,
+or http://localhost with CONTIG_JEV_ALLOW_HTTP set). Without
+CONTIG_JEV_URL the pinned default `https://api.typesafe.ai/v1/systemone`
+is used.
 
 The assertion is shape-only: the seam must return a well-formed
 `TriageResult` and must never raise, whatever the vendor reply is.

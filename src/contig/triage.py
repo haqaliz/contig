@@ -17,20 +17,30 @@ raw log text, or keys. The constructed payload is asserted in tests (mutation
 control: raw-read markers can never appear).
 
 R7 egress contract (transport):
-`default_jev_triage` POSTs the whitelisted payload (Contig-owned JSON over
-stdlib `urllib`) to the base URL in `CONTIG_JEV_URL` with a strict
-`_TRIAGE_TIMEOUT = 30` s timeout and a size-bound
+`default_jev_triage` POSTs the REAL Jev systemone envelope -- `{model,
+state, questions}` with ONE `triage` score question whose ordered
+`criteria` array has EXACTLY two levels (level0 clean, level1 suspicious),
+so the returned score lies in [0, 1] by construction -- over stdlib
+`urllib` to the pinned `DEFAULT_JEV_ENDPOINT`
+(`https://api.typesafe.ai/v1/systemone`) unless `CONTIG_JEV_URL` overrides
+it, with the key in `Authorization: Bearer <key>`, a strict
+`_TRIAGE_TIMEOUT = 30` s timeout, and a size-bound
 `_MAX_TRIAGE_RESPONSE_BYTES = 64 KiB` response. The endpoint must be
 `https://` (the payload rides a bearer key): a non-https URL is refused by
 the seam, except `http://localhost` for the manual live gate behind the
-explicit `CONTIG_JEV_ALLOW_HTTP` opt-out (off by default). The reply JSON
-`{"items": [{"id": ..., "confidence": 0-1}]}` is parsed defensively
-(`parse_triage_response`); item ids are `{run_id}:{surface}:{check}`, so a
-response item always addresses a real check in the payload.
+explicit `CONTIG_JEV_ALLOW_HTTP` opt-out (off by default). `CONTIG_JEV_MODEL`
+names the full model id; aliases are refused (not reproducible policy). The
+real reply `{"answers": {"triage": {"type": "score", "score": 0-1,
+"confidence": 0-1}}, "usage": ...}` is parsed fail-closed by
+`parse_triage_response` into `(score, confidence)` -- a declined
+(`{"error": ...}`), malformed, or out-of-range reply is Null behavior,
+never a guessed value.
 
 Degrade-to-Null contract:
-key absent/empty ⇒ no request constructed at all (asserted); URL
-absent/empty/refused ⇒ no request; transport failure, timeout, HTTP error,
+key absent/empty ⇒ no request constructed at all (asserted); model
+absent/blank or an alias ⇒ no request; a refused URL ⇒ no request (absent
+URL ⇒ the pinned default endpoint); a state carrying a key the whitelist
+does not name ⇒ no egress; transport failure, timeout, HTTP error,
 oversized response, or malformed reply ⇒ `TriageResult(mode="null", ...)`
 with the cause named in `reason`. The seam never raises, and never logs or
 otherwise emits `CONTIG_JEV_KEY` (only `os.environ.get` reads it).
@@ -73,12 +83,13 @@ class TriageResult:
 
     `mode` is `"null"` for the no-triage degrade (with `reason` set) or the
     request's mode (`"shadow"`/`"active"`) on a usable response. `confidence`
-    is `None` when there was no triage; otherwise the overall 0-1 signal
-    (mean of the check-level `items` confidences). `items` maps item ids --
-    `{run_id}:{surface}:{check}`, always addressing a real check in the
-    payload -- to their 0-1 confidence. `reason` is `None` on success and
-    names the degrade cause (unset key, refused URL, transport failure,
-    oversized/malformed response) otherwise.
+    is `None` when there was no triage; otherwise the reply's
+    `answers.triage.confidence` (0-1). `items` maps the one score item --
+    id `{run_id}:{surface}:triage` -- to the reply's `answers.triage.score`
+    (0-1); a score is never guessed from a shape the contract does not name.
+    `reason` is `None` on success and names the degrade cause (unset key or
+    model, alias model, refused URL, non-whitelisted payload, transport
+    failure, oversized/malformed response) otherwise.
     """
 
     mode: str
@@ -230,10 +241,46 @@ def build_triage_payload(run_meta: dict, checks: list[dict]) -> dict:
 # included in any payload.
 JEV_KEY_ENV = "CONTIG_JEV_KEY"
 
-# The https base URL for the triage request; absent/empty ⇒ Null behavior.
-# No hard-coded vendor URL: the Jev endpoint contract is unverified, so the
-# URL is recorded here, not papered over.
+# The https base URL for the triage request; absent/blank ⇒ the pinned
+# `DEFAULT_JEV_ENDPOINT` is used -- the REAL Jev systemone protocol URL
+# (verified live 2026-09-22 by the sibling Belay integration). Never a
+# guessed endpoint.
 JEV_URL_ENV = "CONTIG_JEV_URL"
+
+# The env var naming the full model id (e.g. `jev-1.13.0`). Absent/blank ⇒
+# Null behavior naming the env; aliases are refused (a short alias would pin
+# the reply to whatever the vendor's alias table says on the operator's box,
+# which is not reproducible policy -- the Belay D-2 precedent).
+JEV_MODEL_ENV = "CONTIG_JEV_MODEL"
+
+# The pinned default Jev systemone endpoint (see `JEV_URL_ENV`).
+DEFAULT_JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
+
+# Model id aliases. Full ids only — an alias is not reproducible policy.
+_MODEL_ALIASES = frozenset({"jev", "system-one"})
+
+# The single score question's name in the `questions` envelope.
+_QUESTION_NAME = "triage"
+
+# The score question's Contig-scoped instructions: how likely THIS run's QC
+# anomalies are worth an expensive deep check. Higher = more worth running.
+_QUESTION_INSTRUCTIONS = (
+    "Score how likely this run's QC anomalies are worth an expensive deep "
+    "check. The `state` is a JSON object of whitelisted QC metrics and "
+    "metadata for one run: task counts, repair attempts, the rendered "
+    "verdict, file sizes/hashes, and each failed or anomalous check's "
+    "numeric value and shape metadata. A higher score means the run is MORE "
+    "likely to warrant a deep corroboration pass (an expensive re-check of "
+    "the suspicious anomaly)."
+)
+
+# The ordered level descriptions. Exactly TWO levels, ordered from clean
+# (level 0) to suspicious (level 1), so the returned score lies in [0, 1]
+# by construction.
+_QUESTION_CRITERIA = [
+    "The run looks clean: nothing in the QC metrics suggests the anomaly is worth a deep check.",
+    "The run looks suspicious: the QC metrics suggest the anomaly is worth a deep check.",
+]
 
 # Manual live-gate opt-out: when set truthy, http://localhost URLs are
 # accepted for the owner-run smoke test. Off by default; the payload carries
@@ -268,17 +315,83 @@ def _url_allowed(url: str) -> bool:
     return False
 
 
+def _build_systemone_request(model: str, state: dict) -> dict:
+    """The real Jev systemone request envelope for one score question.
+
+    `state` is the whitelisted egress payload; `questions` holds exactly ONE
+    score question named `triage` whose ordered `criteria` array has exactly
+    two levels (level0 clean, level1 suspicious), so the returned score lies
+    in [0, 1] by construction. Pure: no env, no IO.
+    """
+    return {
+        "model": model,
+        "state": state,
+        "questions": {
+            _QUESTION_NAME: {
+                "type": "score",
+                "instructions": _QUESTION_INSTRUCTIONS,
+                "criteria": list(_QUESTION_CRITERIA),
+            }
+        },
+    }
+
+
+def _state_keys_whitelisted(state: object) -> bool:
+    """True iff every section of `state` carries only whitelisted keys.
+
+    Defense in depth before egress: the state must be the payload shape
+    (`run`/`checks` sections, `files` entries under `run`) whose keys all
+    come from `PAYLOAD_WHITELIST`. A hand-built or drifted state carrying any
+    key the whitelist does not name is refused, so the transport is never
+    called with it.
+    """
+    if not isinstance(state, dict):
+        return False
+    if set(state) - {"run", "checks"}:
+        return False
+    run = state.get("run")
+    if run is not None and (
+        not isinstance(run, dict) or set(run) - PAYLOAD_WHITELIST["run"]
+    ):
+        return False
+    checks = state.get("checks")
+    if checks is not None and not isinstance(checks, list):
+        return False
+    if isinstance(checks, list):
+        for check in checks:
+            if (
+                not isinstance(check, dict)
+                or set(check) - PAYLOAD_WHITELIST["check"]
+            ):
+                return False
+    if isinstance(run, dict):
+        files = run.get("files")
+        if files is not None and not isinstance(files, list):
+            return False
+        if isinstance(files, list):
+            for file_meta in files:
+                if (
+                    not isinstance(file_meta, dict)
+                    or set(file_meta) - PAYLOAD_WHITELIST["file"]
+                ):
+                    return False
+    return True
+
+
 def _post_json(
     url: str,
     payload: dict,
     *,
     timeout: int = _TRIAGE_TIMEOUT,
     max_bytes: int = _MAX_TRIAGE_RESPONSE_BYTES,
+    key: str,
 ) -> str | None:
     """POST `payload` (a JSON object) to `url`; return the raw reply text.
 
-    The only network touch point of this module; tests patch it (and, for
-    the transport itself, the module-level `urllib.request.urlopen`). Never
+    The key rides in `Authorization: Bearer <key>` (never in the body); the
+    payload rides as JSON with `Content-Type: application/json`. The only
+    network touch point of this module; tests patch it (and, for the
+    transport itself, the module-level `urllib.request.urlopen`). Never
     raises: connection errors, HTTP errors and timeouts all return None (the
     caller degrades to Null behavior). The reply is read size-bounded so a
     pathological response cannot hang the caller.
@@ -288,7 +401,10 @@ def _post_json(
         url,
         data=data,
         method="POST",
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        },
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -305,15 +421,15 @@ def _null_result(reason: str) -> TriageResult:
     return TriageResult(mode="null", confidence=None, items={}, reason=reason)
 
 
-def parse_triage_response(text: str, *, known_ids: set[str]) -> dict[str, float] | None:
-    """Parse a Contig-owned triage reply into `{item_id: confidence}`.
+def parse_triage_response(text: str) -> tuple[float, float] | None:
+    """Parse the real systemone reply into `(score, confidence)`, or None.
 
-    The reply shape is `{"items": [{"id": ..., "confidence": 0-1}]}`. A
-    request is only usable as a whole (dict with a list `items`); anything
-    else — malformed JSON, non-dict, missing/ non-list `items` — returns None
-    (Null behavior). Item-level problems never raise: ids unknown to the
-    payload are dropped (an item always addresses a real check), and
-    confidence values outside [0, 1], or non-numeric, are dropped.
+    The reply shape is `{"answers": {"triage": {"type": "score", "score":
+    0-1, "confidence": 0-1}}, "usage": ...}`. None (Null behavior, a score is
+    never guessed) for: malformed JSON, a non-dict reply, `{"error": ...}`
+    (the endpoint's decline), a missing or non-object `answers` or
+    `answers.triage`, or a boolean/non-numeric/out-of-[0,1] `score` or
+    `confidence`.
     """
     try:
         obj = json.loads(text)
@@ -321,51 +437,65 @@ def parse_triage_response(text: str, *, known_ids: set[str]) -> dict[str, float]
         return None
     if not isinstance(obj, dict):
         return None
-    raw_items = obj.get("items")
-    if not isinstance(raw_items, list):
+    if "error" in obj:
         return None
-    items: dict[str, float] = {}
-    for entry in raw_items:
-        if not isinstance(entry, dict):
-            continue
-        item_id = entry.get("id")
-        confidence = entry.get("confidence")
-        if not isinstance(item_id, str) or item_id not in known_ids:
-            continue
-        if isinstance(confidence, bool) or not isinstance(
-            confidence, (int, float)
-        ):
-            continue
-        if not math.isfinite(confidence) or not (0.0 <= confidence <= 1.0):
-            continue
-        items[item_id] = float(confidence)
-    return items
+    answers = obj.get("answers")
+    if not isinstance(answers, dict):
+        return None
+    answer = answers.get(_QUESTION_NAME)
+    if not isinstance(answer, dict):
+        return None
+    score = answer.get("score")
+    confidence = answer.get("confidence")
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        return None
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        return None
+    if not math.isfinite(score) or not (0.0 <= score <= 1.0):
+        return None
+    if not math.isfinite(confidence) or not (0.0 <= confidence <= 1.0):
+        return None
+    return (float(score), float(confidence))
 
 
 def default_jev_triage(req: TriageRequest) -> TriageResult:
-    """The real seam: env-gated, https-only POST, defensively parsed.
+    """The real seam: env-gated, https-only POST, fail-closed parse.
 
     Every failure mode degrades to the Null behavior (never raises, never
     changes caller behavior): key absent/empty ⇒ no request constructed at
-    all; URL absent/empty or refused ⇒ no request; transport failure,
-    oversized or malformed reply ⇒ Null with the reason named. On success
-    the result carries the request's mode and the parsed check-level
-    confidences (ids `{run_id}:{surface}:{check}`); `confidence` is the mean
-    of the check-level confidences.
+    all; model absent/blank or an alias ⇒ no request; a refused URL ⇒ no
+    request (absent URL ⇒ the pinned `DEFAULT_JEV_ENDPOINT`); a payload
+    carrying a key the whitelist does not name ⇒ no egress; transport
+    failure, oversized or malformed reply ⇒ Null with the reason named. On
+    success the result carries the request's mode, the reply's
+    `answers.triage.confidence`, and the one score item
+    `{run_id}:{surface}:triage` mapped to the reply's score.
     """
-    if not os.environ.get(JEV_KEY_ENV):
+    key = os.environ.get(JEV_KEY_ENV)
+    if not key:
         return _null_result(f"{JEV_KEY_ENV} is not set; triage disabled")
-    url = os.environ.get(JEV_URL_ENV)
-    if not url:
-        return _null_result(f"{JEV_URL_ENV} is not set; triage disabled")
+    model = (os.environ.get(JEV_MODEL_ENV) or "").strip()
+    if not model:
+        return _null_result(f"{JEV_MODEL_ENV} is not set; triage disabled")
+    if model in _MODEL_ALIASES:
+        return _null_result(
+            f"model id {model!r} is an alias; {JEV_MODEL_ENV} must name a "
+            "full model id (aliases are not reproducible policy)"
+        )
+    url = (os.environ.get(JEV_URL_ENV) or "").strip() or DEFAULT_JEV_ENDPOINT
     if not _url_allowed(url):
         return _null_result(f"refusing non-https triage URL {url!r}")
+    if not _state_keys_whitelisted(req.payload):
+        return _null_result(
+            "payload carries key(s) outside the whitelist; refusing egress"
+        )
     try:
         text = _post_json(
             url,
-            req.payload,
+            _build_systemone_request(model, req.payload),
             timeout=_TRIAGE_TIMEOUT,
             max_bytes=_MAX_TRIAGE_RESPONSE_BYTES,
+            key=key,
         )
     except Exception:
         text = None
@@ -376,18 +506,15 @@ def default_jev_triage(req: TriageRequest) -> TriageResult:
             "triage response oversized (exceeds "
             f"{_MAX_TRIAGE_RESPONSE_BYTES} bytes)"
         )
-    check_names = [
-        check["check"]
-        for check in req.payload.get("checks", [])
-        if isinstance(check, dict) and isinstance(check.get("check"), str)
-    ]
-    known_ids = {f"{req.run_id}:{req.surface}:{name}" for name in check_names}
-    items = parse_triage_response(text, known_ids=known_ids)
-    if items is None:
+    parsed = parse_triage_response(text)
+    if parsed is None:
         return _null_result("malformed triage response")
-    confidence = sum(items.values()) / len(items) if items else None
+    score, confidence = parsed
     return TriageResult(
-        mode=req.mode, confidence=confidence, items=items, reason=None
+        mode=req.mode,
+        confidence=confidence,
+        items={f"{req.run_id}:{req.surface}:{_QUESTION_NAME}": score},
+        reason=None,
     )
 
 
