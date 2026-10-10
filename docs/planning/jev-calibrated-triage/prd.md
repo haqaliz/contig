@@ -1,7 +1,6 @@
 # PRD — Jev calibrated triage (C9, slice 1)
 
-**Stage:** draft for review gate · **Date:** 2026-10-10 · **Owner:** aliz
-**Source:** inline brief (contig-next handoff 2026-10-10) + C9 PRD/roadmap text from
+**Stage:** shipped to master 2026-10-10 (PR #45, merge a867681), unreleased (batched into the next version cut). Source: inline brief (contig-next handoff 2026-10-10) + C9 PRD/roadmap text from
 `origin/feat/jev-triage@888df6c` (`docs/planning/_card/c9-prd-branch.md`, `c9-roadmap-branch.md`)
 **Slug:** `jev-calibrated-triage` · **Branch:** `feat/jev-calibrated-triage/aliz`
 
