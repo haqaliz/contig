@@ -122,6 +122,7 @@ from contig.models import (
     ExecutionTarget,
     HealSnapshot,
     LaunchManifest,
+    QCResult,
     ReproduceSnapshot,
     RunRecord,
     RunSummary,
@@ -142,6 +143,17 @@ from contig.report import (
     render_reproduction,
     render_run_report,
     render_run_report_html,
+)
+from contig.triage import (
+    JEV_KEY_ENV,
+    TriageRequest,
+    TriageResult,
+    append_ledger_row,
+    build_triage_payload,
+    is_skippable_check,
+    load_triage_ledger,
+    triage_for,
+    triage_stats_report,
 )
 from contig.verification.concordance import evaluate_concordance
 from contig.verification.count_concordance import (
@@ -399,6 +411,56 @@ def _validate_stall_flags(
         raise typer.Exit(code=1)
 
 
+_TRIAGE_ACTIVE_HELP = (
+    "Consult the Jev triage seam in active mode: a concordance check whose "
+    "Jev confidence is below --triage-threshold is skipped and recorded "
+    "UNVERIFIED instead of running the expensive corroboration. Requires "
+    f"{JEV_KEY_ENV} in the environment; off by default (shadow mode)."
+)
+_TRIAGE_THRESHOLD_HELP = (
+    "Confidence budget for --triage-active: checks below this 0-1 value are "
+    "skipped and recorded UNVERIFIED (default: 0.5, reasoned-uncalibrated). "
+    "Requires --triage-active; refused otherwise."
+)
+
+
+def _validate_triage_flags(
+    ctx: typer.Context, *, triage_active: bool, triage_threshold: float
+) -> None:
+    """Refuse an incoherent --triage-active / --triage-threshold invocation.
+
+    Shared by `run` and `verify`. Mirrors `_validate_stall_flags`: the
+    threshold source must be read off the Click parameter source, because 0.5
+    is itself a legal explicit value. Active mode additionally requires the
+    BYOK env key (R2/R3), named in the refusal, and the threshold must sit in
+    [0, 1] (the confidence budget). Always runs before any filesystem/run work.
+    """
+    threshold_source = ctx.get_parameter_source("triage_threshold")
+    threshold_was_set = (
+        threshold_source is not None and threshold_source.name == "COMMANDLINE"
+    )
+    if threshold_was_set and not triage_active:
+        typer.echo(
+            "--triage-threshold requires --triage-active; pass --triage-active to "
+            "enable triage, or drop --triage-threshold.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if triage_active and not os.environ.get(JEV_KEY_ENV):
+        typer.echo(
+            f"--triage-active requires {JEV_KEY_ENV} in the environment; "
+            f"set {JEV_KEY_ENV} to enable active triage, or drop --triage-active.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if not 0.0 <= triage_threshold <= 1.0:
+        typer.echo(
+            f"--triage-threshold must be between 0 and 1 (got {triage_threshold}).",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def run(
     ctx: typer.Context,
@@ -434,6 +496,8 @@ def run(
     approval_timeout: float = typer.Option(1800, "--approval-timeout", help="Seconds to wait for a human approval before stopping."),
     detect_stalls: bool = typer.Option(False, "--detect-stalls", help=_DETECT_STALLS_HELP),
     stall_timeout: float = typer.Option(3600.0, "--stall-timeout", help=_STALL_TIMEOUT_HELP),
+    triage_active: bool = typer.Option(False, "--triage-active", help=_TRIAGE_ACTIVE_HELP),
+    triage_threshold: float = typer.Option(0.5, "--triage-threshold", help=_TRIAGE_THRESHOLD_HELP),
     notify: str = typer.Option(None, "--notify", help="Webhook URL to POST run lifecycle events to (http/https)."),
     fail_on_verdict: bool = typer.Option(False, "--fail-on-verdict", help="Exit non-zero if the run's verdict is FAIL (opt-in; WARN/UNVERIFIED do not). Default off."),
 ) -> None:
@@ -445,6 +509,7 @@ def run(
     bundled test profile.
     """
     _validate_stall_flags(ctx, detect_stalls=detect_stalls, stall_timeout=stall_timeout)
+    _validate_triage_flags(ctx, triage_active=triage_active, triage_threshold=triage_threshold)
     _dispatch_run(
         run_id=run_id,
         pipeline=pipeline,
@@ -478,6 +543,8 @@ def run(
         approval_timeout=approval_timeout,
         detect_stalls=detect_stalls,
         stall_timeout=stall_timeout,
+        triage_active=triage_active,
+        triage_threshold=triage_threshold,
         notify=notify,
         fail_on_verdict=fail_on_verdict,
     )
@@ -625,6 +692,8 @@ def _dispatch_run(
     approval_timeout: float = 1800,
     detect_stalls: bool = False,
     stall_timeout: float = 3600.0,
+    triage_active: bool = False,
+    triage_threshold: float = 0.5,
     notify: str | None = None,
     fail_on_verdict: bool = False,
 ) -> None:
@@ -899,6 +968,13 @@ def _dispatch_run(
     manifest_dir.mkdir(parents=True, exist_ok=True)
     (manifest_dir / "launch.json").write_text(manifest.model_dump_json(indent=2))
 
+    # The triage seam is constructed exactly once, env-derived: absent key =>
+    # NullTriage/"null" (byte-identical to before), key present =>
+    # default_jev_triage in shadow (default) or active mode. The mode string
+    # travels beside the seam so the qc_anomaly site can fill
+    # TriageRequest.mode and the ledger row (R3/R5).
+    triage_seam, triage_mode = triage_for(triage_active, triage_threshold)
+
     try:
         record = self_heal_run(
             pipeline=effective_pipeline,
@@ -926,6 +1002,8 @@ def _dispatch_run(
             approval_timeout=approval_timeout,
             notify_webhook=notify,
             harmonized_reference_direction=harmonized_direction,
+            triage=triage_seam,
+            triage_mode=triage_mode,
         )
     except ConfigGenerationError as exc:
         typer.echo(f"Cannot configure the '{backend}' backend: {exc}", err=True)
@@ -1921,6 +1999,43 @@ def infer_locators(
     )
 
 
+def _triage_footer_note(runs_dir: str, run_id: str) -> str | None:
+    """The S1 triage footer note for the `contig show` text report.
+
+    Keyed on the invocation fact (CONTIG_JEV_KEY present at show time); the
+    run's OWN ledger rows decide active vs shadow (an active run carries
+    `mode: "active"` rows in <runs_dir>/triage-ledger.jsonl). None when no key
+    is present, so the pre-triage rendering is byte-identical; a malformed or
+    unwritable ledger degrades to the shadow note, never a crash.
+    """
+    if not os.environ.get(JEV_KEY_ENV):
+        return None
+    modes: list[str] = []
+    ledger_path = Path(runs_dir) / "triage-ledger.jsonl"
+    if ledger_path.exists():
+        try:
+            text = ledger_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        for line in text.splitlines():
+            try:
+                row = _json.loads(line)
+            except ValueError:
+                continue
+            if (
+                isinstance(row, dict)
+                and row.get("run_id") == run_id
+                and isinstance(row.get("mode"), str)
+            ):
+                modes.append(row["mode"])
+    if "active" in modes:
+        return (
+            "triage active — below-threshold corroboration is skipped and "
+            "recorded UNVERIFIED"
+        )
+    return "triage shadow active — nothing skipped"
+
+
 @app.command()
 def show(
     run_id: str = typer.Argument(..., help="The run to inspect."),
@@ -1947,7 +2062,7 @@ def show(
     elif html:
         rendered = render_run_report_html(record)
     else:
-        rendered = render_run_report(record)
+        rendered = render_run_report(record, triage_note=_triage_footer_note(runs_dir, run_id))
     if output:
         Path(output).write_text(rendered)
         typer.echo(f"Wrote report to {output}")
@@ -1996,9 +2111,12 @@ def verify_outputs(record: RunRecord, results_dir: Path) -> dict:
 
 @app.command()
 def verify(
+    ctx: typer.Context,
     run_id: str = typer.Argument(..., help="The run whose outputs to re-verify."),
     runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
     json_out: bool = typer.Option(False, "--json", help="Emit the result as JSON (for the dashboard)."),
+    triage_active: bool = typer.Option(False, "--triage-active", help=_TRIAGE_ACTIVE_HELP),
+    triage_threshold: float = typer.Option(0.5, "--triage-threshold", help=_TRIAGE_THRESHOLD_HELP),
     fail_on_verdict: bool = typer.Option(
         False,
         "--fail-on-verdict",
@@ -2134,6 +2252,7 @@ def verify(
 
     The six concordance flags are mutually exclusive.
     """
+    _validate_triage_flags(ctx, triage_active=triage_active, triage_threshold=triage_threshold)
     if not _is_safe_run_id(run_id):
         typer.echo(f"Invalid run id: {run_id!r}", err=True)
         raise typer.Exit(code=1)
@@ -2183,9 +2302,86 @@ def verify(
     # can never influence the `ok`/exit decision below. The capture out-param and
     # the corpus family are threaded through the fired helper so the hook after the
     # dispatch (PRD R4a, verify-time slice) can append a pending VerificationCase.
+    #
+    # Triage (C9): the seam is constructed exactly once per invocation from the
+    # environment (triage_for). Absent key => NullTriage / "null": nothing is
+    # consulted and nothing is appended -- byte-identical to before.
+    triage_seam, triage_mode = triage_for(triage_active, triage_threshold)
     capture_metrics: dict[str, dict[str, float]] = {}
     concordance_family: str | None = None
-    if concordance_vcf:
+    concordance: list | None = None
+    concordance_requested = bool(
+        concordance_vcf or concordance_auto or concordance_counts
+        or concordance_counts_auto or concordance_sc_counts or concordance_sc_counts_auto
+    )
+    triage_skip = False
+    triage_result: TriageResult | None = None
+    if triage_mode in ("shadow", "active") and concordance_requested:
+        summary = RunSummary.from_events(record.events)
+        request = TriageRequest(
+            run_id=run_id,
+            surface="verify_concordance",
+            mode=triage_mode,  # type: ignore[arg-type]
+            payload=build_triage_payload(
+                {
+                    "run_id": run_id,
+                    "assay": assay_for_pipeline(record.pipeline) or "rnaseq",
+                    "pipeline": record.pipeline,
+                    "task_counts": summary.total_tasks,
+                    "failed_tasks": summary.failed_tasks,
+                    "repair_attempts": len(record.repair_history),
+                    "verdict": record.verdict,
+                    "files": [
+                        {"sha256": digest}
+                        for digest in record.output_checksums.values()
+                    ],
+                },
+                [
+                    {"check": q.check, "kind": q.kind, "status": q.status, "value": q.value}
+                    for q in record.qc_results
+                ],
+            ),
+        )
+        triage_result = triage_seam(request)
+        # R5/R4: the ONLY active-mode skip surface. The dispatched concordance
+        # evaluator is skipped iff active mode AND Jev confidence below the
+        # threshold AND the check passes the R4 predicate (concordance is
+        # always skippable: at-most-WARN corroboration, never FAIL-capable).
+        if (
+            triage_mode == "active"
+            and triage_result.confidence is not None
+            and triage_result.confidence < triage_threshold
+            and is_skippable_check("concordance", None)
+        ):
+            triage_skip = True
+
+    if triage_skip:
+        check_id = _resolved_concordance_check_id(
+            concordance_vcf=concordance_vcf,
+            concordance_auto=concordance_auto,
+            concordance_counts=concordance_counts,
+            concordance_counts_auto=concordance_counts_auto,
+            concordance_sc_counts=concordance_sc_counts,
+            concordance_sc_counts_auto=concordance_sc_counts_auto,
+        )
+        # The honest skip surface (R3/R4): the corroboration is NOT run; the
+        # result is a per-invocation UNVERIFIED presentation (never PASS, never
+        # a silent absence, never persisted into the signed record) naming the
+        # threshold and the reason.
+        concordance = [
+            QCResult(
+                check=check_id,
+                kind="concordance",
+                status="unverified",
+                message=(
+                    f"Skipping concordance: triage is active with Jev confidence "
+                    f"{triage_result.confidence} below --triage-threshold "
+                    f"{triage_threshold}; the {check_id} corroboration was not run "
+                    "(recorded UNVERIFIED, never a pass)."
+                ),
+            )
+        ]
+    elif concordance_vcf:
         concordance = _evaluate_run_concordance(
             record, runs_dir, run_id, concordance_vcf, capture_metrics=capture_metrics
         )
@@ -2230,6 +2426,28 @@ def verify(
         concordance_family = _concordance_family("concordance_sc_counts_auto")
     else:
         concordance = None
+
+    # R8 calibration row: one per triaged decision. Skipped => actual
+    # "skipped"; otherwise the actual status summary of the checks that ran.
+    # Shadow mode runs everything and records the outcome; null mode never
+    # gets here (no consultation happened, so no row -- absent key means an
+    # absent ledger).
+    if triage_result is not None:
+        append_ledger_row(
+            runs_dir,
+            {
+                "run_id": run_id,
+                "attempt": len(record.repair_history),
+                "surface": "verify_concordance",
+                "mode": triage_mode,
+                "confidence": triage_result.confidence,
+                "reason": triage_result.reason,
+                "checks": sorted(triage_result.items),
+                "actual": (
+                    "skipped" if triage_skip else _worst_concordance_status(concordance)
+                ),
+            },
+        )
 
     # Verify-time concordance capture (PRD R4a, verify-time slice): a non-empty
     # concordance list earns ONE pending VerificationCase in the shared sidecar
@@ -2322,6 +2540,62 @@ def _concordance_family(flag_name: str) -> str | None:
     degrades to "no capture" rather than a crash.
     """
     return _CONCORDANCE_FAMILY_FLAGS.get(flag_name)
+
+
+# The dispatched evaluator's canonical check id per concordance flag (R5 skip
+# surface): the honest name a SKIPPED concordance check presents as UNVERIFIED.
+_TRIAGE_CONCORDANCE_CHECK_IDS: dict[str, str] = {
+    "concordance_vcf": "genotype_concordance",
+    "concordance_auto": "genotype_concordance",
+    "concordance_counts": "spearman_concordance",
+    "concordance_counts_auto": "spearman_concordance",
+    "concordance_sc_counts": "sc_count_concordance",
+    "concordance_sc_counts_auto": "sc_count_concordance",
+}
+
+
+def _resolved_concordance_check_id(
+    *,
+    concordance_vcf: object,
+    concordance_auto: object,
+    concordance_counts: object,
+    concordance_counts_auto: object,
+    concordance_sc_counts: object,
+    concordance_sc_counts_auto: object,
+) -> str:
+    """The one dispatched concordance check id for the flag set.
+
+    The six flags are mutually exclusive (validated earlier), so exactly one
+    resolves; an unknown/empty set degrades to the generic "concordance" label
+    rather than crashing.
+    """
+    for name, value in (
+        ("concordance_vcf", concordance_vcf),
+        ("concordance_auto", concordance_auto),
+        ("concordance_counts", concordance_counts),
+        ("concordance_counts_auto", concordance_counts_auto),
+        ("concordance_sc_counts", concordance_sc_counts),
+        ("concordance_sc_counts_auto", concordance_sc_counts_auto),
+    ):
+        if value:
+            return _TRIAGE_CONCORDANCE_CHECK_IDS.get(name, "concordance")
+    return "concordance"
+
+
+_STATUS_SEVERITY = {"pass": 0, "unverified": 1, "warn": 2, "fail": 3}
+
+
+def _worst_concordance_status(concordance: list | None) -> str:
+    """The actual outcome summary for the ledger row: the worst status that ran.
+
+    `"none"` when the evaluator produced no checks (an assay-gate honest skip);
+    otherwise the most severe status among the concordance results.
+    """
+    if not concordance:
+        return "none"
+    return max(
+        concordance, key=lambda qc: _STATUS_SEVERITY.get(qc.status, 0)
+    ).status
 
 
 def _capture_pending_concordance_case(
@@ -4377,3 +4651,83 @@ def repair_stats(
         "  note: over real runs -- not `heal-guard`'s recovery_rate,"
         " which scores synthetic scenarios."
     )
+
+
+@app.command(name="triage-stats")
+def triage_stats(
+    runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the report as JSON (for the dashboard)."),
+) -> None:
+    """Report the calibration ledger over a runs directory (C9, R8).
+
+    Reads the unsigned sidecar `<runs_dir>/triage-ledger.jsonl` -- the file
+    `append_ledger_row` writes, one row per triaged decision -- across runs
+    and reports row counts by surface and mode, active-mode skip events, and
+    an honest confidence-vs-actual cross-tab with per-bucket row counts
+    (never a calibration curve).
+
+    Honest handling: an absent or empty ledger is "nothing measurable yet"
+    and exits 0 -- never a fabricated claim from zero rows; malformed/non-UTF-8
+    lines are skipped and counted in the report; an existing-but-unreadable
+    ledger is an honest error (exit non-zero).
+    """
+    ledger_path = Path(runs_dir) / "triage-ledger.jsonl"
+    if not ledger_path.is_file():
+        if json_out:
+            typer.echo(_json.dumps(triage_stats_report([], skipped_lines=0)))
+            return
+        typer.echo(
+            f"No triage ledger rows yet in {ledger_path} — nothing is measurable."
+        )
+        return
+    try:
+        rows, skipped_lines = load_triage_ledger(runs_dir)
+    except OSError as exc:
+        typer.echo(f"Cannot read triage ledger {ledger_path}: {exc}", err=True)
+        raise typer.Exit(code=1)
+    report = triage_stats_report(rows, skipped_lines=skipped_lines)
+
+    if json_out:
+        typer.echo(_json.dumps(report))
+        return
+    if not rows:
+        typer.echo(
+            f"No triage ledger rows yet in {ledger_path} — nothing is measurable."
+        )
+        if skipped_lines:
+            typer.echo(
+                f"  ({skipped_lines} line(s) skipped as malformed/non-UTF-8.)"
+            )
+        return
+
+    typer.echo(f"Triage stats: {report['total']} row(s) in {ledger_path}.")
+    typer.echo(
+        "  by surface: "
+        + ", ".join(f"{k}={v}" for k, v in report["by_surface"].items())
+    )
+    typer.echo(
+        "  by mode: " + ", ".join(f"{k}={v}" for k, v in report["by_mode"].items())
+    )
+    typer.echo(f"  skipped (active-mode): {report['skipped']}")
+    buckets = report["confidence_vs_actual"]
+    if buckets:
+        n_confidence = sum(bucket["rows"] for bucket in buckets)
+        typer.echo(
+            "  confidence vs actual ("
+            f"{n_confidence} row(s) that carry a confidence; per-bucket row"
+            " counts — a cross-tab, not a calibration curve):"
+        )
+        for bucket in buckets:
+            typer.echo(
+                f"    {bucket['actual']}: {bucket['rows']} row(s),"
+                f" mean confidence {bucket['mean_confidence']:.4f}"
+            )
+    else:
+        typer.echo(
+            "  confidence vs actual: no row carries a confidence yet —"
+            " nothing to cross-tab."
+        )
+    if report["skipped_lines"]:
+        typer.echo(
+            f"  {report['skipped_lines']} line(s) skipped as malformed/non-UTF-8."
+        )

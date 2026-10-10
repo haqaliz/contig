@@ -46,6 +46,13 @@ from contig.notify import emit_event
 from contig.reference_check import fasta_contigs, gtf_contigs
 from contig.registry import VARIANT_ASSAYS, assay_for_pipeline
 from contig.repair import propose_patches
+from contig.triage import (
+    NullTriage,
+    Triage,
+    TriageRequest,
+    append_ledger_row,
+    build_triage_payload,
+)
 from contig.verify_corpus import (
     append_verify_case,
     should_capture_verification,
@@ -1199,6 +1206,8 @@ def self_heal_run(
     resource_ceiling: dict[str, int] | None = None,
     harmonized_reference_direction: str | None = None,
     sleeper: Sleeper = time.sleep,
+    triage: Triage = NullTriage,
+    triage_mode: str = "null",
 ) -> RunRecord:
     """Run a pipeline and auto-recover from recoverable failures, logging the chain.
 
@@ -1317,6 +1326,60 @@ def self_heal_run(
                     ),
                     pending_path,
                 )
+                # R5 (ledger-only at this site): the seam is consulted AFTER
+                # the trigger fires -- the trigger itself is never gated and
+                # never changed by any seam. This site has no deep re-check to
+                # pre-screen today, so Jev's confidence is recorded against the
+                # actual QC-FAIL fact: the data that later calibrates "which
+                # QC anomalies are worth deep corroboration". Absent key ->
+                # mode "null" -> no consultation, no ledger row.
+                if triage_mode in ("shadow", "active"):
+                    summary = RunSummary.from_events(record.events)
+                    request = TriageRequest(
+                        run_id=run_id,
+                        surface="qc_anomaly",
+                        mode=triage_mode,  # type: ignore[arg-type]
+                        payload=build_triage_payload(
+                            {
+                                "run_id": run_id,
+                                "assay": assay,
+                                "pipeline": pipeline,
+                                "task_counts": summary.total_tasks,
+                                "failed_tasks": summary.failed_tasks,
+                                "repair_attempts": len(repair_history),
+                                "verdict": record.verdict,
+                                "files": [
+                                    {"sha256": digest}
+                                    for digest in record.output_checksums.values()
+                                ],
+                            },
+                            [
+                                {
+                                    "check": q.check,
+                                    "kind": q.kind,
+                                    "status": q.status,
+                                    "value": q.value,
+                                }
+                                for q in failed
+                            ],
+                        ),
+                    )
+                    result = triage(request)
+                    append_ledger_row(
+                        runs_dir,
+                        {
+                            "run_id": run_id,
+                            "attempt": attempt,
+                            "surface": "qc_anomaly",
+                            "mode": triage_mode,
+                            "confidence": result.confidence,
+                            "reason": result.reason,
+                            "checks": sorted(
+                                f"{run_id}:qc_anomaly:{q.check}" for q in failed
+                            ),
+                            "actual": f"QC-FAIL: {names}",
+                        },
+                    )
             return _finalize(
                 record, repair_history, run_dir,
                 runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,

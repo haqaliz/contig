@@ -32,6 +32,7 @@ from contig.models import (
 )
 from contig.runner import IndexBuilder, PipelineExecutionError, Sleeper, default_index_builder
 from contig.self_heal import _poll_approval_file, self_heal_run
+from contig.triage import NullTriage, Triage
 
 
 def _write_qc_artifact(run_dir: Path, artifact: str) -> None:
@@ -186,7 +187,11 @@ def _no_sleep(seconds: float) -> None:
 
 
 def run_heal_scenario(
-    scenario: HealScenario, tmp_dir: Path, *, sleeper: Sleeper = _no_sleep
+    scenario: HealScenario,
+    tmp_dir: Path,
+    *,
+    sleeper: Sleeper = _no_sleep,
+    triage: Triage = NullTriage,
 ) -> HealScenarioResult:
     """Drive the real `self_heal_run` with `scenario`'s scripted seams and score
     the terminal outcome against the scenario's expectations.
@@ -238,6 +243,7 @@ def run_heal_scenario(
             index_builder=_scripted_index_builder(scenario),
             poll=_scripted_poll(scenario),
             sleeper=sleeper,
+            triage=triage,
             auto_approve=scenario.auto_approve,
             resource_ceiling=scenario.resource_ceiling,
             max_attempts=scenario.max_attempts,
