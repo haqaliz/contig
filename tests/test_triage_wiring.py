@@ -616,23 +616,30 @@ def _write_second_vcf(tmp_path, name, vcf_body):
 
 
 def _canned_jev(post_json_calls, *, confidence):
-    """A `contig.triage._post_json` stand-in returning one canned item."""
+    """A `contig.triage._post_json` stand-in returning one canned score answer."""
 
     def fake_post_json(url, payload, **kwargs):
         post_json_calls.append((url, payload))
-        run_id = payload.get("run", {}).get("run_id", "run")
-        checks = payload.get("checks", [])
-        check = checks[0]["check"] if checks else "none"
         return json.dumps(
-            {"items": [{"id": f"{run_id}:verify_concordance:{check}", "confidence": confidence}]}
+            {
+                "answers": {
+                    "triage": {
+                        "type": "score",
+                        "score": confidence,
+                        "confidence": confidence,
+                    }
+                },
+                "usage": {"total_tokens": 1},
+            }
         )
 
     return fake_post_json
 
 
 def _setup_verified_jenv(monkeypatch, post_json_calls, *, confidence):
-    """A keyed + URLed environment with a canned transport (never network)."""
+    """A keyed + modeled + URLed environment with a canned transport (never network)."""
     monkeypatch.setenv(JEV_KEY_ENV, "super-secret-key-value")
+    monkeypatch.setenv("CONTIG_JEV_MODEL", "jev-1.13.0")
     monkeypatch.setenv("CONTIG_JEV_URL", "https://triage.example.com/v1")
     monkeypatch.delenv("CONTIG_JEV_ALLOW_HTTP", raising=False)
     monkeypatch.setattr(
