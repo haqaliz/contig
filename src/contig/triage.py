@@ -458,3 +458,102 @@ def append_ledger_row(runs_dir: str | os.PathLike, row: dict) -> None:
             fh.write(json.dumps(row, sort_keys=True) + "\n")
     except (OSError, TypeError, ValueError):
         return
+
+
+# ---------------------------------------------------------------------------
+# Ledger aspect: the tolerant reader and the pure stats report
+# ---------------------------------------------------------------------------
+
+
+def load_triage_ledger(runs_dir: str | os.PathLike) -> tuple[list[dict], int]:
+    """Read every row of `<runs_dir>/triage-ledger.jsonl`, tolerantly.
+
+    Returns `(rows, skipped)`: the parsed rows in file order, and the count
+    of lines that were not usable. A missing file is an absent ledger
+    (`([], 0)`) -- never an error, matching the run/verify paths that would
+    have written it. A malformed line, a line that parses to something other
+    than a JSON object, or a non-UTF-8 line is skipped and counted, never
+    raised: `snapshot_history`-style tolerance, because the ledger is user
+    data and one bad line must not blind the report to the rest.
+
+    An existing-but-unreadable file (permission, not-a-file, ...) raises
+    `OSError` -- that is a caller-visible finding, not an absence -- so
+    `contig triage-stats` can exit non-zero with an honest error instead of
+    reporting an empty ledger.
+    """
+    path = Path(runs_dir) / "triage-ledger.jsonl"
+    try:
+        with open(path, "rb") as fh:
+            lines = fh.readlines()
+    except FileNotFoundError:
+        return [], 0
+    rows: list[dict] = []
+    skipped = 0
+    for line in lines:
+        try:
+            text = line.decode("utf-8")
+        except UnicodeDecodeError:
+            skipped += 1
+            continue
+        try:
+            obj = json.loads(text)
+        except (ValueError, TypeError):
+            skipped += 1
+            continue
+        if not isinstance(obj, dict):
+            skipped += 1
+            continue
+        rows.append(obj)
+    return rows, skipped
+
+
+def triage_stats_report(rows: list[dict], *, skipped_lines: int = 0) -> dict:
+    """Counts over ledger rows, as a plain deterministic dict (R8).
+
+    Pure and rendered by somebody else (repair-stats' `repair_stats_report`
+    precedent). Counts `total` rows, buckets by the `surface`/`mode` strings
+    the rows actually carry, counts active-mode skip events (rows whose
+    `actual` is exactly `"skipped"`), and carries the loader's
+    `skipped_lines` tolerance count so the JSON shape stays stable even when
+    the ledger is absent.
+
+    `confidence_vs_actual` is a cross-tab, never a calibration claim:
+    buckets are keyed by `actual`, each carries its own explicit `rows`
+    denominator, and rows participate only when they carry a finite numeric
+    `confidence` and a string `actual`. The table states how many rows it is
+    built on (the sum of the bucket `rows`); a table over zero or one keyed
+    run is explicitly not a curve, and the CLI says so.
+    """
+    by_surface: dict[str, int] = {}
+    by_mode: dict[str, int] = {}
+    skipped = 0
+    cross: dict[str, list[float]] = {}
+    for row in rows:
+        surface = row.get("surface")
+        if isinstance(surface, str):
+            by_surface[surface] = by_surface.get(surface, 0) + 1
+        mode = row.get("mode")
+        if isinstance(mode, str):
+            by_mode[mode] = by_mode.get(mode, 0) + 1
+        actual = row.get("actual")
+        if actual == "skipped":
+            skipped += 1
+        confidence = row.get("confidence")
+        if _is_numeric(confidence) and isinstance(actual, str):
+            cross.setdefault(actual, []).append(float(confidence))
+    confidence_vs_actual = [
+        {
+            "actual": actual,
+            "rows": len(values),
+            "mean_confidence": sum(values) / len(values),
+        }
+        for actual, values in sorted(cross.items())
+    ]
+    return {
+        "total": len(rows),
+        "by_surface": dict(sorted(by_surface.items())),
+        "by_mode": dict(sorted(by_mode.items())),
+        "skipped": skipped,
+        "skipped_lines": skipped_lines,
+        "confidence_vs_actual": confidence_vs_actual,
+    }

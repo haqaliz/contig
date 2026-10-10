@@ -151,7 +151,9 @@ from contig.triage import (
     append_ledger_row,
     build_triage_payload,
     is_skippable_check,
+    load_triage_ledger,
     triage_for,
+    triage_stats_report,
 )
 from contig.verification.concordance import evaluate_concordance
 from contig.verification.count_concordance import (
@@ -4649,3 +4651,83 @@ def repair_stats(
         "  note: over real runs -- not `heal-guard`'s recovery_rate,"
         " which scores synthetic scenarios."
     )
+
+
+@app.command(name="triage-stats")
+def triage_stats(
+    runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the report as JSON (for the dashboard)."),
+) -> None:
+    """Report the calibration ledger over a runs directory (C9, R8).
+
+    Reads the unsigned sidecar `<runs_dir>/triage-ledger.jsonl` -- the file
+    `append_ledger_row` writes, one row per triaged decision -- across runs
+    and reports row counts by surface and mode, active-mode skip events, and
+    an honest confidence-vs-actual cross-tab with per-bucket row counts
+    (never a calibration curve).
+
+    Honest handling: an absent or empty ledger is "nothing measurable yet"
+    and exits 0 -- never a fabricated claim from zero rows; malformed/non-UTF-8
+    lines are skipped and counted in the report; an existing-but-unreadable
+    ledger is an honest error (exit non-zero).
+    """
+    ledger_path = Path(runs_dir) / "triage-ledger.jsonl"
+    if not ledger_path.is_file():
+        if json_out:
+            typer.echo(_json.dumps(triage_stats_report([], skipped_lines=0)))
+            return
+        typer.echo(
+            f"No triage ledger rows yet in {ledger_path} — nothing is measurable."
+        )
+        return
+    try:
+        rows, skipped_lines = load_triage_ledger(runs_dir)
+    except OSError as exc:
+        typer.echo(f"Cannot read triage ledger {ledger_path}: {exc}", err=True)
+        raise typer.Exit(code=1)
+    report = triage_stats_report(rows, skipped_lines=skipped_lines)
+
+    if json_out:
+        typer.echo(_json.dumps(report))
+        return
+    if not rows:
+        typer.echo(
+            f"No triage ledger rows yet in {ledger_path} — nothing is measurable."
+        )
+        if skipped_lines:
+            typer.echo(
+                f"  ({skipped_lines} line(s) skipped as malformed/non-UTF-8.)"
+            )
+        return
+
+    typer.echo(f"Triage stats: {report['total']} row(s) in {ledger_path}.")
+    typer.echo(
+        "  by surface: "
+        + ", ".join(f"{k}={v}" for k, v in report["by_surface"].items())
+    )
+    typer.echo(
+        "  by mode: " + ", ".join(f"{k}={v}" for k, v in report["by_mode"].items())
+    )
+    typer.echo(f"  skipped (active-mode): {report['skipped']}")
+    buckets = report["confidence_vs_actual"]
+    if buckets:
+        n_confidence = sum(bucket["rows"] for bucket in buckets)
+        typer.echo(
+            "  confidence vs actual ("
+            f"{n_confidence} row(s) that carry a confidence; per-bucket row"
+            " counts — a cross-tab, not a calibration curve):"
+        )
+        for bucket in buckets:
+            typer.echo(
+                f"    {bucket['actual']}: {bucket['rows']} row(s),"
+                f" mean confidence {bucket['mean_confidence']:.4f}"
+            )
+    else:
+        typer.echo(
+            "  confidence vs actual: no row carries a confidence yet —"
+            " nothing to cross-tab."
+        )
+    if report["skipped_lines"]:
+        typer.echo(
+            f"  {report['skipped_lines']} line(s) skipped as malformed/non-UTF-8."
+        )
