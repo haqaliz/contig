@@ -767,3 +767,71 @@ def test_verify_active_low_confidence_json_shape_is_unverified(tmp_path, monkeyp
     assert entry["status"] == "unverified"
     assert entry["kind"] == "concordance"
     assert "0.5" in entry["message"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 (S1): the `contig show` text-report footer note
+# ---------------------------------------------------------------------------
+
+
+def _write_plain_run(runs_dir, run_id):
+    from contig.bundle import write_bundle
+
+    record = RunRecord(
+        run_id=run_id,
+        pipeline="nf-core/rnaseq",
+        pipeline_revision="3.26.0",
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_checksums={},
+        events=[TaskEvent(process="X", status="COMPLETED", exit=0)],
+    )
+    write_bundle(record, Path(runs_dir) / run_id)
+
+
+def test_show_footer_notes_shadow_when_key_present(tmp_path, monkeypatch):
+    # S1: with CONTIG_JEV_KEY present (the invocation fact -- key presence),
+    # the text report footer notes shadow mode; `show` itself is never active.
+    _write_plain_run(tmp_path, "s1")
+    monkeypatch.setenv(JEV_KEY_ENV, "super-secret-key-value")
+    result = runner.invoke(app, ["show", "s1", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "triage shadow active — nothing skipped" in result.output
+
+
+def test_show_footer_notes_active_from_the_run_ledger(tmp_path, monkeypatch):
+    # The run's OWN ledger rows decide active vs shadow for the footer.
+    _write_plain_run(tmp_path, "s2")
+    ledger = tmp_path / "triage-ledger.jsonl"
+    ledger.write_text(
+        json.dumps(
+            {"run_id": "s2", "attempt": 0, "surface": "verify_concordance",
+             "mode": "active", "confidence": 0.2, "reason": None,
+             "checks": [], "actual": "skipped"}
+        )
+        + "\n"
+    )
+    monkeypatch.setenv(JEV_KEY_ENV, "super-secret-key-value")
+    result = runner.invoke(app, ["show", "s2", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "triage active" in result.output
+
+
+def test_show_footer_absent_without_key_is_unchanged(tmp_path, monkeypatch):
+    # No key => no footer line at all: the text report is byte-identical to
+    # its pre-triage rendering.
+    _write_plain_run(tmp_path, "s3")
+    monkeypatch.delenv(JEV_KEY_ENV, raising=False)
+
+    def render(record):
+        from contig.report import render_run_report
+
+        return render_run_report(record)
+
+    from contig.workspace import load_run
+
+    record = load_run(tmp_path, "s3")
+    before = render(record)
+    result = runner.invoke(app, ["show", "s3", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert result.output.rstrip("\n") == before
+    assert "triage" not in result.output.lower()

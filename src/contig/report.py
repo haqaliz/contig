@@ -144,8 +144,13 @@ def _status_text(qc: QCResult) -> str:
     return f"{qc.status.upper()}{tag}"
 
 
-def render_run_report(record: RunRecord) -> str:
-    """Render a multi-line, terminal-friendly report of a run."""
+def render_run_report(record: RunRecord, triage_note: str | None = None) -> str:
+    """Render a multi-line, terminal-friendly report of a run.
+
+    `triage_note` is an optional footer line (S1: the triage shadow/active
+    status note `contig show` appends when a key was present); None adds
+    nothing, so the pre-triage rendering is byte-identical.
+    """
     summary = RunSummary.from_events(record.events)
     lines = [
         f"VERDICT: {record.verdict.upper()}",
@@ -197,6 +202,8 @@ def render_run_report(record: RunRecord) -> str:
                 # leave a reader knowing nothing happened but not what to do
                 # about it, so surface the guidance itself.
                 lines.append(f"    guidance: {step.patch.rationale}")
+    if triage_note is not None:
+        lines.append(triage_note)
     return "\n".join(lines)
 
 

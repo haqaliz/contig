@@ -1997,6 +1997,43 @@ def infer_locators(
     )
 
 
+def _triage_footer_note(runs_dir: str, run_id: str) -> str | None:
+    """The S1 triage footer note for the `contig show` text report.
+
+    Keyed on the invocation fact (CONTIG_JEV_KEY present at show time); the
+    run's OWN ledger rows decide active vs shadow (an active run carries
+    `mode: "active"` rows in <runs_dir>/triage-ledger.jsonl). None when no key
+    is present, so the pre-triage rendering is byte-identical; a malformed or
+    unwritable ledger degrades to the shadow note, never a crash.
+    """
+    if not os.environ.get(JEV_KEY_ENV):
+        return None
+    modes: list[str] = []
+    ledger_path = Path(runs_dir) / "triage-ledger.jsonl"
+    if ledger_path.exists():
+        try:
+            text = ledger_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        for line in text.splitlines():
+            try:
+                row = _json.loads(line)
+            except ValueError:
+                continue
+            if (
+                isinstance(row, dict)
+                and row.get("run_id") == run_id
+                and isinstance(row.get("mode"), str)
+            ):
+                modes.append(row["mode"])
+    if "active" in modes:
+        return (
+            "triage active — below-threshold corroboration is skipped and "
+            "recorded UNVERIFIED"
+        )
+    return "triage shadow active — nothing skipped"
+
+
 @app.command()
 def show(
     run_id: str = typer.Argument(..., help="The run to inspect."),
@@ -2023,7 +2060,7 @@ def show(
     elif html:
         rendered = render_run_report_html(record)
     else:
-        rendered = render_run_report(record)
+        rendered = render_run_report(record, triage_note=_triage_footer_note(runs_dir, run_id))
     if output:
         Path(output).write_text(rendered)
         typer.echo(f"Wrote report to {output}")
