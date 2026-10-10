@@ -143,6 +143,7 @@ from contig.report import (
     render_run_report,
     render_run_report_html,
 )
+from contig.triage import JEV_KEY_ENV, triage_for
 from contig.verification.concordance import evaluate_concordance
 from contig.verification.count_concordance import (
     _COUNT_MATRIX_GLOB,
@@ -399,6 +400,56 @@ def _validate_stall_flags(
         raise typer.Exit(code=1)
 
 
+_TRIAGE_ACTIVE_HELP = (
+    "Consult the Jev triage seam in active mode: a concordance check whose "
+    "Jev confidence is below --triage-threshold is skipped and recorded "
+    "UNVERIFIED instead of running the expensive corroboration. Requires "
+    f"{JEV_KEY_ENV} in the environment; off by default (shadow mode)."
+)
+_TRIAGE_THRESHOLD_HELP = (
+    "Confidence budget for --triage-active: checks below this 0-1 value are "
+    "skipped and recorded UNVERIFIED (default: 0.5, reasoned-uncalibrated). "
+    "Requires --triage-active; refused otherwise."
+)
+
+
+def _validate_triage_flags(
+    ctx: typer.Context, *, triage_active: bool, triage_threshold: float
+) -> None:
+    """Refuse an incoherent --triage-active / --triage-threshold invocation.
+
+    Shared by `run` and `verify`. Mirrors `_validate_stall_flags`: the
+    threshold source must be read off the Click parameter source, because 0.5
+    is itself a legal explicit value. Active mode additionally requires the
+    BYOK env key (R2/R3), named in the refusal, and the threshold must sit in
+    [0, 1] (the confidence budget). Always runs before any filesystem/run work.
+    """
+    threshold_source = ctx.get_parameter_source("triage_threshold")
+    threshold_was_set = (
+        threshold_source is not None and threshold_source.name == "COMMANDLINE"
+    )
+    if threshold_was_set and not triage_active:
+        typer.echo(
+            "--triage-threshold requires --triage-active; pass --triage-active to "
+            "enable triage, or drop --triage-threshold.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if triage_active and not os.environ.get(JEV_KEY_ENV):
+        typer.echo(
+            f"--triage-active requires {JEV_KEY_ENV} in the environment; "
+            f"set {JEV_KEY_ENV} to enable active triage, or drop --triage-active.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if not 0.0 <= triage_threshold <= 1.0:
+        typer.echo(
+            f"--triage-threshold must be between 0 and 1 (got {triage_threshold}).",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def run(
     ctx: typer.Context,
@@ -434,6 +485,8 @@ def run(
     approval_timeout: float = typer.Option(1800, "--approval-timeout", help="Seconds to wait for a human approval before stopping."),
     detect_stalls: bool = typer.Option(False, "--detect-stalls", help=_DETECT_STALLS_HELP),
     stall_timeout: float = typer.Option(3600.0, "--stall-timeout", help=_STALL_TIMEOUT_HELP),
+    triage_active: bool = typer.Option(False, "--triage-active", help=_TRIAGE_ACTIVE_HELP),
+    triage_threshold: float = typer.Option(0.5, "--triage-threshold", help=_TRIAGE_THRESHOLD_HELP),
     notify: str = typer.Option(None, "--notify", help="Webhook URL to POST run lifecycle events to (http/https)."),
     fail_on_verdict: bool = typer.Option(False, "--fail-on-verdict", help="Exit non-zero if the run's verdict is FAIL (opt-in; WARN/UNVERIFIED do not). Default off."),
 ) -> None:
@@ -445,6 +498,7 @@ def run(
     bundled test profile.
     """
     _validate_stall_flags(ctx, detect_stalls=detect_stalls, stall_timeout=stall_timeout)
+    _validate_triage_flags(ctx, triage_active=triage_active, triage_threshold=triage_threshold)
     _dispatch_run(
         run_id=run_id,
         pipeline=pipeline,
@@ -478,6 +532,8 @@ def run(
         approval_timeout=approval_timeout,
         detect_stalls=detect_stalls,
         stall_timeout=stall_timeout,
+        triage_active=triage_active,
+        triage_threshold=triage_threshold,
         notify=notify,
         fail_on_verdict=fail_on_verdict,
     )
@@ -625,6 +681,8 @@ def _dispatch_run(
     approval_timeout: float = 1800,
     detect_stalls: bool = False,
     stall_timeout: float = 3600.0,
+    triage_active: bool = False,
+    triage_threshold: float = 0.5,
     notify: str | None = None,
     fail_on_verdict: bool = False,
 ) -> None:
@@ -899,6 +957,13 @@ def _dispatch_run(
     manifest_dir.mkdir(parents=True, exist_ok=True)
     (manifest_dir / "launch.json").write_text(manifest.model_dump_json(indent=2))
 
+    # The triage seam is constructed exactly once, env-derived: absent key =>
+    # NullTriage/"null" (byte-identical to before), key present =>
+    # default_jev_triage in shadow (default) or active mode. The mode string
+    # travels beside the seam so the qc_anomaly site can fill
+    # TriageRequest.mode and the ledger row (R3/R5).
+    triage_seam, triage_mode = triage_for(triage_active, triage_threshold)
+
     try:
         record = self_heal_run(
             pipeline=effective_pipeline,
@@ -926,6 +991,8 @@ def _dispatch_run(
             approval_timeout=approval_timeout,
             notify_webhook=notify,
             harmonized_reference_direction=harmonized_direction,
+            triage=triage_seam,
+            triage_mode=triage_mode,
         )
     except ConfigGenerationError as exc:
         typer.echo(f"Cannot configure the '{backend}' backend: {exc}", err=True)
@@ -1996,9 +2063,12 @@ def verify_outputs(record: RunRecord, results_dir: Path) -> dict:
 
 @app.command()
 def verify(
+    ctx: typer.Context,
     run_id: str = typer.Argument(..., help="The run whose outputs to re-verify."),
     runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
     json_out: bool = typer.Option(False, "--json", help="Emit the result as JSON (for the dashboard)."),
+    triage_active: bool = typer.Option(False, "--triage-active", help=_TRIAGE_ACTIVE_HELP),
+    triage_threshold: float = typer.Option(0.5, "--triage-threshold", help=_TRIAGE_THRESHOLD_HELP),
     fail_on_verdict: bool = typer.Option(
         False,
         "--fail-on-verdict",
@@ -2134,6 +2204,7 @@ def verify(
 
     The six concordance flags are mutually exclusive.
     """
+    _validate_triage_flags(ctx, triage_active=triage_active, triage_threshold=triage_threshold)
     if not _is_safe_run_id(run_id):
         typer.echo(f"Invalid run id: {run_id!r}", err=True)
         raise typer.Exit(code=1)

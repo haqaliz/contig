@@ -46,6 +46,7 @@ from contig.notify import emit_event
 from contig.reference_check import fasta_contigs, gtf_contigs
 from contig.registry import VARIANT_ASSAYS, assay_for_pipeline
 from contig.repair import propose_patches
+from contig.triage import NullTriage, Triage
 from contig.verify_corpus import (
     append_verify_case,
     should_capture_verification,
@@ -1199,6 +1200,8 @@ def self_heal_run(
     resource_ceiling: dict[str, int] | None = None,
     harmonized_reference_direction: str | None = None,
     sleeper: Sleeper = time.sleep,
+    triage: Triage = NullTriage,
+    triage_mode: str = "null",
 ) -> RunRecord:
     """Run a pipeline and auto-recover from recoverable failures, logging the chain.
 

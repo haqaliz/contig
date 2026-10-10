@@ -388,3 +388,24 @@ def default_jev_triage(req: TriageRequest) -> TriageResult:
     return TriageResult(
         mode=req.mode, confidence=confidence, items=items, reason=None
     )
+
+
+def triage_for(
+    mode_requested: bool, threshold: float | None
+) -> tuple[Triage, str]:
+    """The env-derived seam + mode string for the wiring sites.
+
+    The single construction point of the seam the run/verify paths hand to the
+    wrap sites: absent/empty `CONTIG_JEV_KEY` gives `(NullTriage, "null")` (no
+    triage, no ledger rows); a key present gives `default_jev_triage`, in
+    `"shadow"` mode by default, and `"active"` when `mode_requested`
+    (`--triage-active`). The mode string feeds `TriageRequest.mode`
+    (shadow/active) and the ledger row's `mode` field. `threshold` is the
+    caller's 0-1 confidence budget for the active-mode skip decision; it does
+    not influence which seam or mode is selected.
+    """
+    if not os.environ.get(JEV_KEY_ENV):
+        return NullTriage, "null"
+    if mode_requested:
+        return default_jev_triage, "active"
+    return default_jev_triage, "shadow"
