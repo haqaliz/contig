@@ -1,54 +1,34 @@
-# Card: Jev calibrated triage (C9, BYOK, optional)
+# feat star-index-corrupt-heal — heal a corrupt/partial STAR genome index
 
-Source: inline brief (no GitHub issue; from /contig-next handoff, 2026-10-10).
-Owner: aliz. Type: feat. Slug: `jev-calibrated-triage`.
+Source: inline brief (no GitHub issue; from `/contig-next` handoff, 2026-10-17).
+Owner: aliz. Type: feat. Slug: `star-index-corrupt-heal`.
+Branch: `feat/star-index-corrupt-heal/aliz`.
 
 ## Brief
 
-Build C9 "Jev calibrated triage" from `docs/technical/CAPABILITY_ROADMAP.md`
-(the C9 section, which lives on the unmerged remote branch
-`origin/feat/jev-triage` at commit `888df6c` — master does not contain it):
+Add a C2 detector branch (and heal coverage) for a **corrupt/partial STAR genome
+index** — the `FATAL GENOME INDEX FILE error: … is corrupt` signature that today
+falls through to `tool_crash`, distinct from the shipped missing
+(`genomeParameters.txt`) and version-incompatible (`Genome version`+`INCOMPATIBLE`)
+STAR branches (`src/contig/detect.py:270-295`). Classify it `missing_index` at
+0.85 and reuse the **unchanged** `_build_star_index` rebuild+redirect heal
+(`src/contig/self_heal.py:919`): the user's index is never mutated, the retried
+run points at run-scoped scratch, and every give-up is honest. Seed one golden
+corpus case + one heal-guard scenario, keep the detector guard at 100%, and pin
+negative controls (genuine missing/version-incompatible STAR text, plus a corrupt
+line that must still classify `missing_index`) — the needle must be AND-guarded so
+it does not steal from the sibling branches. Caveat to carry: this is push not
+demand-pull and the case is **"rarer"** (`docs/planning/self-heal-dir-index/prd.md:153`);
+organic frequency is unmeasured and no real STAR runs in CI, so the real-run check
+stays a manual post-merge gate.
 
-Jev (TypeSafe's "System One" decision model — typed Choice/Score/Bool with a
-calibrated 0–1 confidence, ~150 ms, ~100x cheaper than an LLM) is a cheap
-**triage/prioritization** signal over run *metadata*: which QC anomalies and
-step failures are worth the expensive deep check or a self-heal attempt, and in
-what order. It is a router over metrics, never a determination about biology.
+## Source references
 
-Slice 1 must:
-- Add a `Triage` seam (injectable) with `NullTriage` as the default and a
-  `JevTriage` implementation behind `CONTIG_JEV_KEY` (BYOK, off by default;
-  absent key => no triage, no network, exit unchanged).
-- Prioritize QC-anomaly deep checks and self-heal ordering by Jev confidence,
-  behind a budget knob.
-- Record a calibration ledger: Jev confidence per triaged run/step vs the
-  verdict the execution-grounded check later produced. Folds into the C6 eval
-  flywheel.
-- Send only whitelisted numeric QC metrics/metadata — never raw reads, FASTQs,
-  BAMs, or VCFs — asserted on the constructed payload in a test.
-- Shadow mode is the default when a key is present: run everything, log Jev
-  alongside.
-- Jev never sets a `contig verify` verdict, never promotes a check to PASS,
-  never overrides concordance/plausibility. Triage on vs off => identical
-  verify verdicts on the checks that ran (enforced by a test).
-
-Guardrails (CLAUDE.md): Layer 2 only; no Layer-1 authoring; no raw-read egress;
-no correctness over-claiming (UNVERIFIED is never PASS); no clinical claims.
-Test-first; Jev stubbed in CI (deterministic, no network); a live call is a
-`manual`-marked owner-run gate. Stdlib-only posture: no new dependency
-(pydantic/typer/cryptography only); follow the shipped env-gated provider seams
-(`detect._selected_provider`, `extract_with_llm`, the DOI `urllib` fetch).
-
-## Caveats from the handoff
-
-- The C9 PRD + roadmap section live ONLY on `origin/feat/jev-triage`
-  (commit `888df6c`, branched at v0.60.0, 76 commits behind master). Bring them
-  into the worktree before planning; copies saved next to this card.
-- No Jev/TypeSafe API surface exists anywhere in `src/contig/` — the vendor's
-  request/response shape is unverified from the repo. Keep Jev behind the
-  injectable `Triage` seam so absence/failure degrades to `NullTriage`.
-
-## Reference copies (taken from origin/feat/jev-triage @ 888df6c)
-
-- `docs/planning/_card/c9-prd-branch.md` — the branch's PRD stub.
-- `docs/planning/_card/c9-roadmap-branch.md` — the branch's C9 roadmap section.
+- C2 deferral listing the corrupt/partial STAR signature: `docs/technical/CAPABILITY_ROADMAP.md:556`.
+- The slice that deferred it (N1): `docs/planning/self-heal-dir-index/prd.md:153`
+  ("`FATAL GENOME INDEX FILE error ... is corrupt` — deferred this slice (rarer;
+  same rebuild heal, easy follow-on)").
+- The shipped STAR directory-index heal this extends: `docs/technical/CAPABILITY_ROADMAP.md:261-275`
+  (STAR/BWA directory-index slice).
+- Strategic grounding: `CLAUDE.md` (the moat is the run/self-heal/verify/reproduce
+  layer); `docs/ROADMAP.md` Phase-1 metric (unattended-completion rate).
