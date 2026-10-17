@@ -294,6 +294,23 @@ def diagnose_failure(events: list[TaskEvent], log_text: str) -> Diagnosis:
             confidence=0.85,
         )
 
+    # STAR emits "FATAL GENOME INDEX FILE error" for a corrupt or partially
+    # built index. AND-guarded on "corrupt" so it does NOT steal from the
+    # missing-reference / absent-index branches: the index-error phrase alone
+    # (no "corrupt" token) is left to those sibling classes.
+    star_corrupt_lines = [
+        line
+        for line in _matching_lines(log_text, ("genome index file error",))
+        if _has_any(line, ("corrupt",))
+    ]
+    if star_corrupt_lines:
+        return Diagnosis(
+            failure_class="missing_index",
+            root_cause="STAR's genome index is corrupt or was not fully built.",
+            evidence=star_corrupt_lines,
+            confidence=0.85,
+        )
+
     # Classic bwa's index loader reports a missing index this way. Narrow on
     # purpose: a line must carry BOTH the loader's function name AND the
     # "fail to locate the index" phrase.

@@ -324,6 +324,39 @@ def test_star_incompatible_genome_version_is_missing_index() -> None:
     assert any("INCOMPATIBLE" in e for e in d.evidence)
 
 
+def test_star_corrupt_genome_index_is_missing_index() -> None:
+    # A corrupt / partially built index trips STAR's FATAL GENOME INDEX FILE
+    # error, distinct from the absent-index and version-incompatible wordings.
+    events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=1)]
+    log = (
+        "EXITING because of FATAL GENOME INDEX FILE error: transcriptInfo.tab "
+        "is corrupt, or is incompatible with the current STAR version\n"
+        "SOLUTION: re-generate genome index"
+    )
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "missing_index"
+    assert d.confidence == 0.85
+    assert any("corrupt" in e for e in d.evidence)
+
+
+def test_star_index_file_error_without_corrupt_is_not_missing_index() -> None:
+    # Negative control: the index-error phrase alone (no "corrupt" token) must
+    # not trigger the corrupt-index branch; it belongs to the sibling classes.
+    events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=1)]
+    log = "EXITING because of FATAL GENOME INDEX FILE error: unknown index layout"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class != "missing_index"
+
+
+def test_corrupt_without_star_index_phrase_is_tool_crash() -> None:
+    # Negative control: a bare "corrupt" line with no STAR index-error phrase
+    # stays an unrecognized crash, so the AND-guard does not over-trigger.
+    events = [TaskEvent(process="STAR_ALIGN", status="FAILED", exit=1)]
+    log = "samtools: warning: the file appears to be corrupt; skipping record"
+    d = diagnose_failure(events, log_text=log)
+    assert d.failure_class == "tool_crash"
+
+
 def test_bwa_missing_index_is_missing_index() -> None:
     events = [TaskEvent(process="BWA_MEM", status="FAILED", exit=1)]
     log = "[E::bwa_idx_load_from_disk] fail to locate the index files"
