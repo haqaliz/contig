@@ -553,7 +553,10 @@ verdict/exit-code/manifest/signature change; no new dependency.
 **Deferred to later C2 slices:** bwa-mem2 **build/redirect** (detection shipped v0.11.0;
 build blocked until a live trigger exists) and the classic-vs-mem2 aligner-mismatch heal;
 classic-BWA index build/redirect (needs a supported `bwa index` target, e.g. sarek
-`--aligner bwa-mem`); a corrupt/partial STAR index signature; the still-missing single-file
+`--aligner bwa-mem`); a corrupt/partial STAR index signature (**CLOSED — Unreleased,
+`star-index-corrupt-heal`: detected as `missing_index` @0.85 and healed via the shipped
+STAR rebuild+redirect; `_is_star_signature` widened, one golden case + one `heal-guard`
+scenario**); the still-missing single-file
 index kind (the BAM/CRAM form of `.csi`); and the wider failure catalog — the
 assembly-signature form of reference/build mismatch (no sample-side contig signal in raw
 FASTQ or finished bundle), exhaustive per-assembly alias-table completeness beyond the
