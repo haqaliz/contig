@@ -114,13 +114,16 @@ def _is_star_signature(line: str) -> bool:
     """True when an evidence line is a STAR (directory) genome-index failure.
 
     Matches the missing-index phrasing (``genomeParameters.txt`` /
-    ``could not open genome file``) or the version-incompatible phrasing
-    (``Genome version`` AND ``INCOMPATIBLE`` on the same line).
+    ``could not open genome file``), the version-incompatible phrasing
+    (``Genome version`` AND ``INCOMPATIBLE`` on the same line), or the
+    corrupt-index phrasing (``GENOME INDEX FILE error`` AND ``corrupt``).
     """
     low = line.lower()
     if "genomeparameters.txt" in low or "could not open genome file" in low:
         return True
-    return "genome version" in low and "incompatible" in low
+    return ("genome version" in low and "incompatible" in low) or (
+        "genome index file error" in low and "corrupt" in low
+    )
 
 
 def _parse_missing_index(diagnosis: Diagnosis) -> tuple[str, str] | None:
