@@ -9,8 +9,8 @@ All notable changes to Contig are recorded here. The format follows
 - **The corrupt/partial STAR genome-index failure is now detected and healed
   (`star-index-corrupt-heal`, C2 follow-on N1).** STAR's
   `EXITING because of FATAL GENOME INDEX FILE error: <file> is corrupt, or is
-  incompatible with the current STAR version` — which names only the offending file's
-  basename and **no path** — previously fell through the runtime detector to `tool_crash`
+  incompatible with the current STAR version`, which names only the offending file's
+  basename and **no path**, previously fell through the runtime detector to `tool_crash`
   at 0.4, so the loop never diagnosed it and the run ended in an honest but useless FAIL.
   A new **AND-guarded** detector branch (`GENOME INDEX FILE error` **plus** `corrupt`,
   placed with the sibling STAR branches and before the `tool_crash` fallthrough) classifies
@@ -21,7 +21,7 @@ All notable changes to Contig are recorded here. The format follows
   `<run_id>/healed_index/star`, the retry is redirected, and the outcome is
   `built_index_and_retried`; every give-up stays honest
   (`index_unresolvable` / `index_build_failed`), bounded to one rebuild per path.
-  **No new `FailureClass`** — `missing_index` already existed, so no dashboard/TS/literal
+  **No new `FailureClass`**, `missing_index` already existed, so no dashboard/TS/literal
   change.
   - **Corpus, loop, and guards.** One golden training case (`star-corrupt-index`; training
     corpus **28 → 29**, held at 100%) and negative controls (an `GENOME INDEX FILE error`
@@ -31,11 +31,11 @@ All notable changes to Contig are recorded here. The format follows
     scenarios **23 → 24**, `covered_classes` held at **17** (`missing_index` was already
     covered), guarded outcome-match held at **1.0**, `heal_baseline.json` refrozen as a
     deliberate act (`--update-baseline`); informational recovery **11/23 → 12/24** (a
-    corpus-composition move, never guarded). `eval-guard` is **unmoved at 93.3%** — the
+    corpus-composition move, never guarded). `eval-guard` is **unmoved at 93.3%**, the
     holdout file was deliberately not touched (no twin: the STAR corrupt phrase has no
     genuinely independent sibling wording, and `missing_index` is already holdout-covered).
   - **To exercise the heal in CI, one fixture hook + one builder arm were added** (the
-    slice was **not** detect-only — a detector branch alone yields an honest
+    slice was **not** detect-only, a detector branch alone yields an honest
     `index_unresolvable` give-up, not a recovery): `HealScenario.star_index_artifact` (an
     additive, defaulted-`None` named fixture directive mirroring `stale_index_artifact`)
     seeds `params["star_index"]`, and `heal._scripted_index_builder` gained a STAR arm that
@@ -43,7 +43,7 @@ All notable changes to Contig are recorded here. The format follows
     so a STAR scenario would otherwise degrade to `index_build_failed`). Both are additive;
     existing scenarios are byte-identical.
   - **Read honestly.** Push, not demand-pull; the case is **"rarer"** (the N1 deferral's
-    own word), organic frequency is unmeasured, and **no real STAR/nf-core run is in CI** —
+    own word), organic frequency is unmeasured, and **no real STAR/nf-core run is in CI**,
     the wording is confirmed against public STAR reports (alexdobin/STAR#978), not a
     captured Contig run; every mis-wording degrades to today's `tool_crash` rather than a
     false positive, and the manual gate confirms it against a real corrupt index. Efficacy

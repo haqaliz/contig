@@ -36,7 +36,7 @@ assembly-signature; CRAM↔BAM; `safe`-risk builds; Layer-1; clinical claims.
 ## Acceptance criteria (testable)
 
 1. Corrupt STAR log → `missing_index` @0.85 with the matched line in evidence
-   (currently `tool_crash` — genuine RED).
+   (currently `tool_crash`, genuine RED).
 2. Existing STAR missing/version-incompatible lines still classify as before; a
    `.bai`-bearing corrupt line is not stolen; a bare `corrupt` line with no STAR phrase
    stays `tool_crash`.
@@ -54,5 +54,5 @@ docs/guard sync last (phase 5).
 
 ## Open questions / risks
 
-Efficacy is capped by `params["star_index"]` (the message names no path) — see PRD
+Efficacy is capped by `params["star_index"]` (the message names no path), see PRD
 Risks; wording confirmed against public STAR reports, not a captured Contig run.

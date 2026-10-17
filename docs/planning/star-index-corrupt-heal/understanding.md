@@ -1,4 +1,4 @@
-# Understanding — star-index-corrupt-heal (C2 follow-on)
+# Understanding, star-index-corrupt-heal (C2 follow-on)
 
 Phase-2 dig note. Source: `docs/planning/_card/issue.md` (inline brief, `/contig-next`
 handoff 2026-10-17) plus a graphify-first code map. **No `graphify-out/` in this
@@ -14,7 +14,7 @@ falls through the detector to `tool_crash` at confidence 0.4
 run ends in an honest but unhelpful FAIL. The slice makes the engine **detect** it
 as `missing_index` and **heal** it by reusing the shipped STAR directory-index
 rebuild+redirect (`_build_star_index`), landing a golden corpus case and a
-heal-guard scenario. No new `FailureClass` — `missing_index` already exists
+heal-guard scenario. No new `FailureClass`, `missing_index` already exists
 (`models.py:276`).
 
 ## Affected areas (verified)
@@ -26,7 +26,7 @@ heal-guard scenario. No new `FailureClass` — `missing_index` already exists
   (`:213-243`), nor `missing_reference`/`reference_mismatch`. It reaches the
   `tool_crash` fallback at `:456-465`. New branch goes beside the other STAR branches,
   AND-guarded, before `tool_crash`.
-- **Routing predicate — the load-bearing finding the brief under-stated.**
+- **Routing predicate, the load-bearing finding the brief under-stated.**
   Reaching the heal is **not** a detect.py-only change. `_parse_missing_index`
   (`src/contig/self_heal.py:126-155`) routes to `kind == "star"` only if a line
   passes `_is_star_signature` (`:113-123`), which today matches only
@@ -36,7 +36,7 @@ heal-guard scenario. No new `FailureClass` — `missing_index` already exists
   reaching `_build_star_index`. **So `_is_star_signature` must also match the corrupt
   phrasing**; the `_build_star_index` body itself is untouched.
 - **The heal** `_build_star_index` (`self_heal.py:653-760`): needs `params["fasta"]`
-  (`:697-705`) and a resolvable genomeDir — `parsed_path` from a
+  (`:697-705`) and a resolvable genomeDir, `parsed_path` from a
   `<dir>/genomeParameters.txt` token, else `params["star_index"]` (`:688`); writes a
   fresh `run_dir/healed_index/star` (`:714-718`), builds
   `STAR --runMode genomeGenerate …` (`:719-730`), redirects
@@ -44,7 +44,7 @@ heal-guard scenario. No new `FailureClass` — `missing_index` already exists
   (`:760`). Give-ups are honest (`index_unresolvable`/`index_build_failed`).
 - **Patch** `propose_patches` (`repair.py:56-65`): `missing_index` → one
   `kind="reference"`, `operation={"build_index": True}`, **`risk="needs_confirmation"`**
-  patch (gated). No STAR sub-cause branch exists — all three STAR flavours share it.
+  patch (gated). No STAR sub-cause branch exists, all three STAR flavours share it.
 - **Corpus** `src/contig/data/detector_corpus.jsonl` (28 lines) and
   `detector_corpus_holdout.jsonl` (15 lines): `FailureCase` schema
   (`models.py:486-494`). Training-corpus guard: `tests/test_corpus.py:150-153`
@@ -58,7 +58,7 @@ heal-guard scenario. No new `FailureClass` — `missing_index` already exists
   `params["star_index"]`**. Driver `run_heal_scenario` (`heal.py:189-300`) runs the
   **real** loop with only executor/index_builder/poll scripted.
 - **Mirrors**: `missing_index` is already in every literal enumeration
-  (`FRONT/derive.ts:282`, three dashboard label maps, both e2e pins at length 20) —
+  (`FRONT/derive.ts:282`, three dashboard label maps, both e2e pins at length 20),
   **no literal/count change anywhere**; only the scenario/corpus counts drift.
 
 ## Ambiguities / open questions for the interview
@@ -77,7 +77,7 @@ heal-guard scenario. No new `FailureClass` — `missing_index` already exists
    `star_index_artifact`), mirroring `stale_index_artifact`/`fasta_artifact`
    (additive, defaulted `None`). Alternative: accept that only corrupt
    `genomeParameters.txt` is CI-exercisable (which the *existing* branch already
-   catches — so it would not test the new needle). Recommendation: new fixture
+   catches, so it would not test the new needle). Recommendation: new fixture
    directive.
 3. **Exact needle.** AND-guard on `FATAL GENOME INDEX FILE error` **plus** `corrupt`
    (the family rule: phrase + token, so it cannot steal from `missing_index`
@@ -97,7 +97,7 @@ heal-guard scenario. No new `FailureClass` — `missing_index` already exists
 The brief says "reuse the **unchanged** `_build_star_index`" and reads as a
 detector-only slice. That is **half true**: the builder body is unchanged, but the
 heal is reachable only via `_is_star_signature`, which the corrupt phrasing does not
-match — so a `self_heal.py` change is **required**, and a `HealScenario` fixture hook
+match, so a `self_heal.py` change is **required**, and a `HealScenario` fixture hook
 is needed to exercise it in CI. The plan must include both, or the scenario will
 record an honest `index_unresolvable` give-up instead of the intended recovery.
 
