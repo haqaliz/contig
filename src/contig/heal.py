@@ -140,6 +140,18 @@ def _scripted_index_builder(scenario: HealScenario) -> IndexBuilder:
     def index_builder(cmd: list[str], cwd: Path) -> int:
         if result != "success":
             return 1
+        # STAR builds a DIRECTORY index (not a sidecar next to its input): the
+        # real `_build_star_index` passes a fresh scratch dir as --genomeDir and
+        # then gates on it being non-empty. Emit the one file that makes it
+        # non-empty so the simulated build mirrors the real one. An unknown tool
+        # still creates nothing, so existing scenarios stay unaffected.
+        if cmd[:1] == ["STAR"] and "--genomeDir" in cmd:
+            scratch = Path(cmd[cmd.index("--genomeDir") + 1])
+            if not scratch.is_absolute():
+                scratch = Path(cwd) / scratch
+            scratch.mkdir(parents=True, exist_ok=True)
+            (scratch / "genomeParameters.txt").touch()
+            return 0
         for tool, ext in _TOOL_EXT.items():
             if cmd[: len(tool)] == list(tool):
                 out = Path(cmd[-1])
@@ -209,21 +221,34 @@ def run_heal_scenario(
     )
     runs_dir = Path(tmp_dir) / "runs"
 
-    # Only a scenario that names a fixture gets a `params` argument at all: with
-    # `fasta_artifact` unset the call is byte-identical to what it was before the
-    # field existed, so `current_params` stays `{}` (`self_heal.py:977`).
-    extra_kwargs: dict[str, object] = {}
+    # Merge the scenario's named fixture directives into ONE `params` dict. The
+    # `params` kwarg is passed ONLY when the dict is non-empty: with no fixture
+    # named the call is byte-identical to what it was before these fields
+    # existed, so `current_params` stays `{}` (`self_heal.py:977`). `fasta` feeds
+    # the reference repairs; `star_index` gives `_build_star_index` a resolvable
+    # genomeDir for a STAR signature whose message carries no path.
+    params: dict[str, object] = {}
     if scenario.fasta_artifact is not None:
         fasta_path = _write_fasta_artifact(Path(tmp_dir), scenario.fasta_artifact)
-        extra_kwargs["params"] = {"fasta": str(fasta_path)}
+        params["fasta"] = str(fasta_path)
     # run_dir is deterministic (`runs_dir / f"heal-{scenario_id}"`, resolved
-    # in self_heal_run), so a scenario that names a stale sidecar can
-    # pre-create it there before the real loop runs -- the repair then
-    # atomically replaces it with the freshly built sidecar.
+    # in self_heal_run), so a scenario that names a run-dir artifact can
+    # pre-create it there before the real loop runs: the stale-index repair then
+    # atomically replaces its sidecar, and the STAR rebuild resolves the failing
+    # genomeDir from the directory created here.
+    if scenario.star_index_artifact is not None:
+        run_dir = Path(runs_dir) / f"heal-{scenario.scenario_id}"
+        star_dir = run_dir / scenario.star_index_artifact
+        star_dir.mkdir(parents=True, exist_ok=True)
+        params["star_index"] = str(star_dir)
     if scenario.stale_index_artifact is not None:
         run_dir = Path(runs_dir) / f"heal-{scenario.scenario_id}"
         run_dir.mkdir(parents=True, exist_ok=True)
         _write_stale_index_artifact(run_dir, scenario.stale_index_artifact)
+
+    extra_kwargs: dict[str, object] = {}
+    if params:
+        extra_kwargs["params"] = params
 
     diagnosed_class: str | None = None
     recovered = False

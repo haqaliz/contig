@@ -2426,6 +2426,56 @@ def test_parse_missing_index_determinism_picks_bai_token():
     assert _parse_missing_index(d) == ("aln.bam.bai", ".bai")
 
 
+def test_parse_missing_index_routes_star_corrupt_index_to_star():
+    # STAR's corrupt-index FATAL names transcriptInfo.tab but carries no
+    # "<dir>/genomeParameters.txt" token, so the failing genomeDir is unresolved
+    # ("" → resolved from params["star_index"] at build time) and the kind is
+    # "star". Without the corrupt phrasing this evidence routes to None.
+    from contig.models import Diagnosis
+    from contig.self_heal import _parse_missing_index
+
+    d = Diagnosis(
+        failure_class="missing_index",
+        root_cause="corrupt STAR genome index",
+        evidence=[
+            "EXITING because of FATAL GENOME INDEX FILE error: transcriptInfo.tab "
+            "is corrupt, or is incompatible with the current STAR version"
+        ],
+        confidence=0.85,
+    )
+    assert _parse_missing_index(d) == ("", "star")
+
+
+def test_parse_missing_index_plain_corrupt_line_is_not_star():
+    # Negative control: a bare "corrupt" line with no STAR index-error phrase
+    # must not be routed to the STAR directory-index rebuild (the AND-guard
+    # does not over-trigger on the word "corrupt" alone).
+    from contig.models import Diagnosis
+    from contig.self_heal import _is_star_signature, _parse_missing_index
+
+    plain = "samtools: warning: the file appears to be corrupt; skipping record"
+    d = Diagnosis(
+        failure_class="missing_index",
+        root_cause="x",
+        evidence=[plain],
+        confidence=0.5,
+    )
+    assert _parse_missing_index(d) is None
+    assert _is_star_signature(plain) is False
+
+
+def test_is_star_signature_true_for_star_corrupt_line():
+    # The corrupt-index phrasing is a STAR signature; a plain "corrupt" line is not.
+    from contig.self_heal import _is_star_signature
+
+    star_corrupt = (
+        "EXITING because of FATAL GENOME INDEX FILE error: transcriptInfo.tab "
+        "is corrupt, or is incompatible with the current STAR version"
+    )
+    assert _is_star_signature(star_corrupt) is True
+    assert _is_star_signature("the file appears to be corrupt") is False
+
+
 def test_index_build_command_bai(tmp_path):
     # AC2: .bai → samtools index <source>. Regression guard across the
     # (index_path, ext, run_dir) signature: suffix-strip kinds ignore run_dir.

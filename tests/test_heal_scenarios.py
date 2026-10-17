@@ -739,20 +739,20 @@ def test_shipped_heal_scenarios_all_reproduce_their_declared_outcomes():
     scenarios = load_heal_scenarios(default_heal_scenarios_path())
     report = evaluate_heal(scenarios)
 
-    assert report.total == 23
+    assert report.total == 24
     assert report.outcome_match_rate == 1.0, [
         (m.scenario_id, m.divergence) for m in report.mismatches
     ]
-    # 11 of 23, up from 11 of 22. This is a CORPUS-COMPOSITION change, not a
-    # behaviour change: the reference-mismatch give-up scenario added one more
-    # by-design give-up (reference_mismatch -- the class has no repair), and
-    # the ratio simply follows what was added. No pre-existing scenario
+    # 12 of 24, up from 11 of 23. This is a CORPUS-COMPOSITION change, not a
+    # behaviour change: the corrupt-STAR-index heal scenario added one more
+    # recovery (a real missing_index rebuild), and the ratio simply follows what
+    # was added. No pre-existing scenario
     # changed its outcome. `recovery_rate` is informational-only and is never
     # guarded (heal.py:413-414 compares only outcome_match_rate) -- the
     # guarded number is `outcome_match_rate`, which stayed at 1.0 across the
     # move.
-    assert report.healed == 11
-    assert report.recovery_rate == pytest.approx(11 / 23)
+    assert report.healed == 12
+    assert report.recovery_rate == pytest.approx(12 / 24)
 
     covered = {s.expected_class for s in scenarios}
     assert covered >= {
@@ -781,13 +781,13 @@ def test_shipped_heal_baseline_matches_shipped_scenarios():
     baseline = load_heal_baseline(default_heal_baseline_path())
 
     assert baseline is not None
-    assert baseline.scenario_count == 23
+    assert baseline.scenario_count == 24
     assert baseline.outcome_match_rate == 1.0
-    # 11/23 since the reference-mismatch give-up refreeze; 11/22 before it.
-    # Again a CORPUS-COMPOSITION move -- one more by-design give-up scenario
-    # (reference-mismatch-give-up, which recovers nothing) was added --
+    # 12/24 since the corrupt-STAR-index heal refreeze; 11/23 before it.
+    # Again a CORPUS-COMPOSITION move -- one more recovering scenario
+    # (star-corrupt-index-heal, a real missing_index rebuild) was added --
     # not a behaviour change, and never a guarded number.
-    assert baseline.recovery_rate == pytest.approx(11 / 23)
+    assert baseline.recovery_rate == pytest.approx(12 / 24)
     assert baseline.corpus_sha == sha256_file(scenarios_path)
     assert set(baseline.covered_classes) >= {
         "oom",
@@ -879,6 +879,105 @@ def test_run_heal_scenario_stale_index_rebuilds_and_retries(tmp_path):
         Path(tmp_path) / "runs" / "heal-stale-index-heal" / "fixtures" / "aln.bam.bai"
     )
     assert sidecar.read_bytes() != b"stale-index-artifact"
+
+
+def test_star_corrupt_index_heal_scenario_reaches_rebuild(tmp_path):
+    """S2 end-to-end: a corrupt STAR directory index -- whose FATAL message
+    ("GENOME INDEX FILE error ... is corrupt") carries NO path -- is rebuilt
+    through the REAL loop. `star_index_artifact` names a genomeDir the driver
+    creates and points `params["star_index"]` at, so `_build_star_index` can
+    resolve the failing directory; `fasta_artifact` supplies `params["fasta"]`,
+    and the scripted builder's STAR arm leaves a `genomeParameters.txt` in the
+    scratch dir so the non-empty success gate passes and the retry goes green.
+    """
+    scn = HealScenario(
+        scenario_id="star-corrupt-index-heal",
+        description="Corrupt STAR genome index is rebuilt and the run retried",
+        source="synthetic",
+        expected_class="missing_index",
+        attempts=[
+            AttemptSpec(
+                status="FAILED",
+                exit=1,
+                log_text=(
+                    "EXITING because of FATAL GENOME INDEX FILE error: transcriptInfo.tab "
+                    "is corrupt, or is incompatible with the current STAR version"
+                ),
+            ),
+            AttemptSpec(status="COMPLETED", exit=0, log_text="done"),
+        ],
+        auto_approve=True,
+        index_builder_result="success",
+        fasta_artifact="plain_gzip",
+        star_index_artifact="idx",
+        expected_outcome="built_index_and_retried",
+        expected_recovered=True,
+        expected_patch_applied=True,
+    )
+    result = run_heal_scenario(scn, tmp_path)
+    assert result.matched is True, result.divergence
+    assert result.actual_outcome == "built_index_and_retried"
+
+
+def test_fasta_only_scenario_params_merge_is_unchanged(monkeypatch, tmp_path):
+    """C: the params merge is non-breaking. A scenario naming ONLY
+    `fasta_artifact` must reach `self_heal_run` with `params == {"fasta": ...}`
+    -- no `star_index` key -- and a scenario naming no fixture at all must pass
+    NO `params` kwarg (so `current_params` stays `{}`). Capturing the real kwarg
+    (via the `self_heal_run` name `contig.heal` imports) asserts the byte-
+    identical claim directly, not inferred from behaviour.
+    """
+    import contig.heal as heal_module
+    from contig.runner import PipelineExecutionError
+
+    captured: list[dict] = []
+
+    def _capture(*args, **kwargs):
+        captured.append(kwargs)
+        raise PipelineExecutionError(1, None)
+
+    monkeypatch.setattr(heal_module, "self_heal_run", _capture)
+
+    fasta_only = HealScenario(
+        scenario_id="fasta-only",
+        description="fasta fixture only",
+        source="synthetic",
+        expected_class="reference_not_bgzf",
+        attempts=[AttemptSpec(status="FAILED", exit=1)],
+        expected_recovered=False,
+        expected_outcome="recompressed_reference_and_retried",
+        fasta_artifact="plain_gzip",
+    )
+    run_heal_scenario(fasta_only, tmp_path)
+    assert set(captured[-1]["params"]) == {"fasta"}
+
+    no_fixture = HealScenario(
+        scenario_id="no-fixture",
+        description="no fixture",
+        source="synthetic",
+        expected_class="oom",
+        attempts=[AttemptSpec(status="FAILED", exit=137)],
+        expected_recovered=False,
+        expected_outcome="patched_and_retried",
+    )
+    run_heal_scenario(no_fixture, tmp_path)
+    assert "params" not in captured[-1]
+
+
+def test_heal_scenario_star_index_artifact_defaults_to_none():
+    """S2: `star_index_artifact` is additive and default-inert. A scenario built
+    without it parses with the field at None, so every existing shipped line
+    keeps its behaviour (no genomeDir created, no `star_index` param merged)."""
+    scn = HealScenario(
+        scenario_id="no-star-artifact",
+        description="unchanged",
+        source="synthetic",
+        expected_class="oom",
+        attempts=[AttemptSpec(status="FAILED", exit=137)],
+        expected_recovered=False,
+        expected_outcome="gave_up",
+    )
+    assert scn.star_index_artifact is None
 
 
 # --- run_heal_scenario's defensive PipelineExecutionError branch -----------
