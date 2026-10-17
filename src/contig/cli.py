@@ -3998,7 +3998,7 @@ def heal_guard(
     exits 0. With --snapshot the result is also appended to the committed
     self-heal trend; with --history the recorded trend is printed instead.
 
-    Honest scope: the number is over **23 SYNTHETIC scenarios**, not a field
+    Honest scope: the number is over **24 SYNTHETIC scenarios**, not a field
     recovery rate. **17 covered failure classes**: alignment_format_mismatch,
     bad_param, conda_solve_failed, container_pull_failed, container_unavailable,
     disk_full, download_failed, missing_index, missing_reference, no_progress,
@@ -4034,7 +4034,7 @@ def heal_guard(
     we made reachable -- evidence that a taxonomy gap closed, not that a user
     was helped. Its recovery accounting is also an artifact: the scenario is
     green by construction (every task exits 0, only the QC verdict FAILs), so
-    it counts toward the corpus-wide informational-only recovery count (11/23)
+    it counts toward the corpus-wide informational-only recovery count (12/24)
     even though nothing was recovered in that one scenario specifically.
     platform_unsupported is reachable in production the same way (a real killed
     task can carry `exit is None`) -- it is only this scenario CORPUS it cannot
