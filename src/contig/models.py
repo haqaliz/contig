@@ -626,6 +626,16 @@ class HealScenario(BaseModel):
     # synthesizing the repair would stop measuring the thing under test. None
     # (the default) leaves a scenario's behaviour exactly as it was.
     stale_index_artifact: str | None = None
+    # Opt-in: create a genomeDir under the run dir and point `params["star_index"]`
+    # at it, so the REAL `_build_star_index` (self_heal.py:656) can resolve the
+    # failing directory for a STAR signature whose message carries NO path (the
+    # corrupt/version-incompatible FATAL lines). The value names the directory to
+    # create, relative to run_dir. Deliberately a named fixture directive rather
+    # than an injectable build result -- the loop only needs a resolvable
+    # genomeDir in params, and synthesizing the repair would stop measuring the
+    # thing under test. None (the default) leaves a scenario's behaviour exactly
+    # as it was: the driver then passes no `star_index` param.
+    star_index_artifact: str | None = None
     expected_recovered: bool
     expected_outcome: str
     # Opt-in assertion on whether the loop actually enacted a patch (R7), checked
