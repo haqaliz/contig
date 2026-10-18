@@ -191,6 +191,14 @@ Contig is built around **Layer 2** (the run-and-verify engine) and consumes Laye
 
 Contributions are welcome: code, curated pipelines, QC checks, and especially **failure cases** for the corpus. Start with [CONTRIBUTING.md](CONTRIBUTING.md), then open an [issue](https://github.com/haqaliz/contig/issues) or a pull request.
 
+## 💖 Support the project
+
+If this project is useful to you, you can chip in with a crypto donation:
+
+<a href="https://nowpayments.io/donation?api_key=52f38854-167a-4828-a00f-0424ab7dcc1e" target="_blank" rel="noreferrer noopener">
+    <img src="https://nowpayments.io/images/embeds/donation-button-black.svg" alt="Crypto donation button by NOWPayments">
+</a>
+
 ## 📄 License
 
 [Apache License 2.0](LICENSE) — permissive, with an explicit patent and trademark grant. Use, modify, and redistribute Contig, including commercially, under its terms. Contributions are accepted under the same license (see [CONTRIBUTING.md](CONTRIBUTING.md)). Contig orchestrates third-party pipelines (nf-core, Nextflow) that carry their own licenses; see [NOTICE](NOTICE).
