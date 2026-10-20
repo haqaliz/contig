@@ -1339,7 +1339,10 @@ def run_reproduction(
         if results_stale is None:
             try:
                 loaded = json.loads(results_file.read_text())
-            except json.JSONDecodeError:
+            # UnicodeDecodeError is not a JSONDecodeError: a non-UTF-8 file
+            # (binary, latin-1, a mis-encoded artifact) must degrade to
+            # "unparseable", never escape the guard as a crash.
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 loaded = None
             if isinstance(loaded, dict):
                 results = loaded

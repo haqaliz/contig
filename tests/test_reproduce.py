@@ -1368,6 +1368,21 @@ def test_run_reproduction_returns_full_record_metadata(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_run_reproduction_non_utf8_results_file_is_unverified_not_a_crash(tmp_path):
+    # C8-13: read_text() raises UnicodeDecodeError, which json.JSONDecodeError
+    # does not cover -- so a binary/latin-1 results.json used to escape the
+    # guard entirely. It must classify as an unparseable results file.
+    def executor(argv, repo):
+        (Path(repo) / "results.json").write_bytes(b"\xff\xfe\x00auc")
+        return 0, ""
+
+    record = _run(tmp_path, _claims(("auc", 0.9, 0.05)), executor)
+
+    assert record.claim_results[0].status == "unverified"
+    assert record.claim_results[0].observed is None
+    assert "unparseable" in record.claim_results[0].message
+
+
 def _run(tmp_path: Path, claims: list[Claim], executor, **overrides) -> "object":
     kwargs = dict(
         repo=str(tmp_path),
