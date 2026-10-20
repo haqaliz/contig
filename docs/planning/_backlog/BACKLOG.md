@@ -11,7 +11,7 @@ Workflow per item: `contig-begin-fast` → worktree `.claude/worktrees/<type>-<i
 | C1-1 | C1 | `.h5ad`/AnnData second-matrix parsing (dependency-gated) | code | todo |
 | C1-2 | C1 | Cell-count + cluster-stability agreement across quantifiers | code | todo |
 | C1-3 | C1 | FAIL severity on calibrated concordance bands | calibration | blocked |
-| C1-4 | C1 | Dashboard "corroborated by" line | code | todo |
+| C1-4 | C1 | Dashboard "corroborated by" line | code | done |
 | C1-5 | C1 | Single-cell STAR `--index` auto-build at verify time | code | todo |
 | C1-6 | C1 | Explicit `contig verify` somatic concordance flag/echo | code | todo |
 | C2-1 | C2 | Classic BWA index build/redirect | code | todo |
@@ -20,12 +20,12 @@ Workflow per item: `contig-begin-fast` → worktree `.claude/worktrees/<type>-<i
 | C2-4 | C2 | CRAM↔BAM conversion repair (revisit trigger) | code | todo |
 | C2-5 | C2 | `safe`-vs-gated auto-approval for reference-recompress patch | code | todo |
 | C2-6 | C2 | `resolve_reference` `--fasta`/`--gtf` coupling quirk | code | todo |
-| C2-7 | C2 | Fold observed peak into `FailureCase` corpus schema | code | todo |
+| C2-7 | C2 | Fold observed peak into `FailureCase` corpus schema | code | done |
 | C2-8 | C2 | Stall-window calibration on real runs | calibration | blocked |
 | C2-9 | C2 | Stall-specific escalation (widen / give up after 2) | code | todo |
 | C2-10 | C2 | Stall dashboard surface | code | todo |
 | C2-11 | C2 | Per-task stall detection | code | todo |
-| C2-12 | C2 | Stall watchdog on-by-default (decision-gated) | code | todo |
+| C2-12 | C2 | Stall watchdog on-by-default (decision-gated) | code | gated (roadmap: revisit trigger is real-run evidence) |
 | C2-13 | C2 | Walltime factor/ceiling calibration on real data | calibration | blocked |
 | C2-14 | C2 | `repair-stats --snapshot/--history` trend | code | todo |
 | C2-15 | C2 | `repair-stats` dashboard card | code | todo |
@@ -41,7 +41,7 @@ Workflow per item: `contig-begin-fast` → worktree `.claude/worktrees/<type>-<i
 | C3-2 | C3 | Doublet rate (single-cell; needs scanpy/scDblFinder) | code | todo |
 | C3-3 | C3 | Coverage-from-VCF | code | todo |
 | C3-4 | C3 | Multi-sample / per-sample support | code | todo |
-| C3-5 | C3 | Dashboard cards for C3 packs | code | todo |
+| C3-5 | C3 | Dashboard cards for C3 packs | code | done |
 | C3-6 | C3 | Reported-vs-inferred sex concordance | code | todo |
 | C3-7 | C3 | Capture-type-aware (WGS/WES/panel) bands + calibration | calibration | blocked |
 | C3-8 | C3 | Sex-check FAIL severity on calibrated bands | calibration | blocked |
@@ -53,7 +53,7 @@ Workflow per item: `contig-begin-fast` → worktree `.claude/worktrees/<type>-<i
 | C4-2 | C4 | `normal_median_vaf` FAIL severity + band calibration | calibration | blocked |
 | C4-3 | C4 | Directional tumor-vs-normal ratio/delta metric | code | todo |
 | C4-4 | C4 | Strelka2-native normal VAF | code | todo |
-| C4-5 | C4 | Dashboard "corroborated by" surface for swap signal | code | todo |
+| C4-5 | C4 | Dashboard "corroborated by" surface for swap signal | code | done |
 | C5-1 | C5 | Assembly-signature form of pre-flight reference mismatch | code | todo |
 | C5-2 | C5 | Known-sites / GTF-version consistency checks | code | todo |
 | C5-3 | C5 | Annotation/GTF version resolution | code | todo |
@@ -63,24 +63,24 @@ Workflow per item: `contig-begin-fast` → worktree `.claude/worktrees/<type>-<i
 | C7-1 | C7 | Annotation-pack FAIL severity | code | todo |
 | C7-2 | C7 | Research-use variant prioritization | code | todo |
 | C7-3 | C7 | Real VEP/SnpEff/sarek post-merge smoke (GRCh37 iGenomes) | manual | blocked |
-| C8-1 | C8 | Regex/numeric row predicates + column ranges | code | todo |
-| C8-2 | C8 | Figure/plot & table-cell(-image) claims (no plot-hash, stdlib-only) | code | blocked |
-| C8-3 | C8 | `contig reproduce <doi>` DOI resolution | code | todo |
+| C8-1 | C8 | Regex/numeric row predicates + column ranges | code | done |
+| C8-2 | C8 | Figure/plot & table-cell(-image) claims (no plot-hash, stdlib-only) | code | declined (hard-blocked by the stdlib-only contract) |
+| C8-3 | C8 | `contig reproduce <doi>` DOI resolution | code | declined (roadmap says out of scope in 3 places) |
 | C8-4 | C8 | Dashboard card(s) for reproduce | code | todo |
 | C8-5 | C8 | `occurrence: first\|last` + `group` override | code | gated (roadmap: gated on a counted experiment over 5 real repos) |
 | C8-6 | C8 | `flags` array for patterns | code | done |
-| C8-7 | C8 | Regex over binary files | code | todo |
+| C8-7 | C8 | Regex over binary files | code | declined (decoding binaries to regex is a footgun, no user need) |
 | C8-8 | C8 | Persist matched output on the record | code | todo |
 | C8-9 | C8 | Notebook-specific size bound | code | done |
 | C8-10 | C8 | `metadata.tags` / multi-key / regex cell matching | code | todo |
-| C8-11 | C8 | Non-text notebook outputs | code | todo |
+| C8-11 | C8 | Non-text notebook outputs | code | declined (no numeric value to bind) |
 | C8-12 | C8 | Structured staleness field on `ClaimResult` | code | todo |
 | C8-13 | C8 | Non-UTF-8 `results.json` raises `UnicodeDecodeError` | code | done |
 | C8-14 | C8 | Private-repo credentials | code | todo |
 | C8-15 | C8 | Submodules | code | todo |
-| C8-16 | C8 | Checkout pruning | code | todo |
-| C8-17 | C8 | Hash bundle's post-run `source/` copy | code | todo |
-| C8-18 | C8 | Local `source_commit` / dirty-state capture | code | todo |
+| C8-16 | C8 | Checkout pruning | code | done |
+| C8-17 | C8 | Hash bundle's post-run `source/` copy | code | needs-decision (signed payload change) |
+| C8-18 | C8 | Local `source_commit` / dirty-state capture | code | needs-decision (signed payload change) |
 | C8-19 | C8 | Direct non-doi.org PDF URLs | code | todo |
 | C8-20 | C8 | PDF-table extraction | code | todo |
 | C8-21 | C8 | `--pdf-extractor` override | code | todo |
