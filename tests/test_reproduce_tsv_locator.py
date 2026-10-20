@@ -265,6 +265,129 @@ def test_resolve_cell_multi_key_strips_key_cells_and_values():
 
 
 # ---------------------------------------------------------------------------
+# resolve_cell -- regex and numeric row predicates [C8-1]
+# ---------------------------------------------------------------------------
+
+_PREDICATE_ROWS = [
+    ["gene", "padj"],
+    ["TP53", "0.05"],
+    ["BRCA1", "0.5"],
+    ["tp53-mut", "NA"],
+]
+
+
+def test_resolve_cell_row_regex_predicate_matches():
+    cell, reason = resolve_cell(_PREDICATE_ROWS, "padj", {"gene": {"regex": "^BRC"}}, True)
+    assert cell == "0.5"
+    assert reason == ""
+
+
+def test_resolve_cell_row_regex_predicate_honours_inline_flags():
+    cell, reason = resolve_cell(
+        _PREDICATE_ROWS, "padj", {"gene": {"regex": "(?i)^tp53$"}}, True
+    )
+    assert cell == "0.05"
+    assert reason == ""
+
+
+def test_resolve_cell_row_regex_predicate_strips_the_cell():
+    rows = [["gene", "padj"], ["  TP53  ", "0.05"]]
+    cell, reason = resolve_cell(rows, "padj", {"gene": {"regex": "^TP53$"}}, True)
+    assert cell == "0.05"
+    assert reason == ""
+
+
+def test_resolve_cell_row_regex_predicate_zero_matches_returns_none_with_count():
+    cell, reason = resolve_cell(_PREDICATE_ROWS, "padj", {"gene": {"regex": "^NOPE"}}, True)
+    assert cell is None
+    assert "0 rows" in reason
+
+
+def test_resolve_cell_row_regex_predicate_two_matches_returns_none_with_count():
+    rows = [["gene", "padj"], ["TP53a", "0.05"], ["TP53b", "0.5"]]
+    cell, reason = resolve_cell(rows, "padj", {"gene": {"regex": "^TP53"}}, True)
+    assert cell is None
+    assert "2 rows" in reason
+
+
+def test_resolve_cell_row_numeric_gte_bound_is_inclusive():
+    cell, reason = resolve_cell(_PREDICATE_ROWS, "padj", {"padj": {"gte": 0.05}}, True)
+    assert cell is None  # 0.05 and 0.5 both match -> ambiguous
+    assert "2 rows" in reason
+
+    rows = [["gene", "padj"], ["A", "0.05"], ["B", "NA"]]
+    cell, reason = resolve_cell(rows, "padj", {"padj": {"gte": 0.05}}, True)
+    assert cell == "0.05"
+    assert reason == ""
+
+
+def test_resolve_cell_row_numeric_lt_bound_is_exclusive():
+    rows = [["gene", "padj"], ["A", "0.05"]]
+    cell, reason = resolve_cell(rows, "padj", {"padj": {"lt": 0.05}}, True)
+    assert cell is None
+    assert "0 rows" in reason
+
+
+def test_resolve_cell_row_numeric_range_selects_one_row():
+    cell, reason = resolve_cell(
+        _PREDICATE_ROWS, "gene", {"padj": {"gt": 0.1, "lte": 0.5}}, True
+    )
+    assert cell == "BRCA1"
+    assert reason == ""
+
+
+def test_resolve_cell_row_numeric_eq_composes_with_a_comparison():
+    rows = [["gene", "padj"], ["A", "0.5"], ["B", "0.5001"]]
+    cell, reason = resolve_cell(
+        rows, "gene", {"padj": {"gte": 0.5, "eq": 0.5}}, True
+    )
+    assert cell == "A"
+    assert reason == ""
+
+
+def test_resolve_cell_row_numeric_unparseable_cell_is_not_a_match():
+    cell, reason = resolve_cell(_PREDICATE_ROWS, "gene", {"padj": {"lt": 1}}, True)
+    assert cell is None  # 0.05 and 0.5 match; "NA" is simply skipped
+    assert "2 rows" in reason
+
+
+def test_resolve_cell_row_numeric_does_not_accept_a_percent_suffix():
+    rows = [["gene", "padj"], ["A", "5%"]]
+    cell, reason = resolve_cell(rows, "gene", {"padj": {"gt": 0}}, True)
+    assert cell is None
+    assert "0 rows" in reason
+
+
+def test_resolve_cell_row_predicates_and_with_exact_strings():
+    cell, reason = resolve_cell(
+        _PREDICATE_ROWS,
+        "gene",
+        {"gene": "TP53", "padj": {"lte": 0.1}},
+        True,
+    )
+    assert cell == "TP53"
+    assert reason == ""
+
+
+def test_resolve_cell_row_predicate_malformed_is_unresolved_never_raises():
+    malformed = [
+        {},
+        {"regex": "("},
+        {"regex": 5},
+        {"gt": "1"},
+        {"gt": 1, "regex": "x"},
+        {"nope": 1},
+    ]
+    for predicate in malformed:
+        cell, reason = resolve_cell(
+            _PREDICATE_ROWS, "gene", {"padj": predicate}, True
+        )
+        assert cell is None
+        assert reason
+        assert "predicate" in reason
+
+
+# ---------------------------------------------------------------------------
 # resolve_cell -- never raises, wild/adversarial inputs
 # ---------------------------------------------------------------------------
 

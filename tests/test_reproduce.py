@@ -548,6 +548,87 @@ def test_load_claims_rejects_row_object_non_string_value(tmp_path):
         load_claims(path)
 
 
+def test_load_claims_accepts_row_regex_predicate(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "out/x.tsv",
+                        "column": "log2FoldChange",
+                        "row": {"gene": {"regex": "^(TP53|BRCA1)$"}},
+                    }
+                )
+            ]
+        ),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == TableLocator(
+        "out/x.tsv",
+        "log2FoldChange",
+        {"gene": {"regex": "^(TP53|BRCA1)$"}},
+        "\t",
+        True,
+    )
+
+
+def test_load_claims_accepts_row_numeric_predicate(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "out/x.tsv",
+                        "column": "log2FoldChange",
+                        "row": {"padj": {"gt": 0.01, "lte": 0.05}},
+                    }
+                )
+            ]
+        ),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == TableLocator(
+        "out/x.tsv", "log2FoldChange", {"padj": {"gt": 0.01, "lte": 0.05}}, "\t", True
+    )
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        {},
+        {"nope": 1},
+        {"gt": "0.05"},
+        {"gte": True},
+        {"regex": "("},
+        {"regex": 5},
+        {"regex": "x", "gt": 0},
+    ],
+)
+def test_load_claims_rejects_malformed_row_predicate(tmp_path, predicate):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "out/x.tsv",
+                        "column": "log2FoldChange",
+                        "row": {"padj": predicate},
+                    }
+                )
+            ]
+        ),
+    )
+    with pytest.raises(ClaimsError) as exc:
+        load_claims(path)
+    assert "padj" in str(exc.value)
+
+
 def test_load_claims_rejects_delimiter_not_single_char(tmp_path):
     path = _write(
         tmp_path,
@@ -2025,6 +2106,81 @@ def test_run_reproduction_table_claim_multi_key_matching_is_reproduced(tmp_path)
     result = record.claim_results[0]
     assert result.status == "reproduced"
     assert result.observed == -2.31
+
+
+def test_run_reproduction_table_claim_regex_row_predicate_is_reproduced(tmp_path):
+    _write_tsv(
+        tmp_path,
+        "out/de.tsv",
+        [_DE_HEADER, ["ENSG1_mut", "-2.31", "0.001"], ["ENSG2", "0.5", "0.2"]],
+    )
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator(
+                "out/de.tsv",
+                "log2FoldChange",
+                {"gene_id": {"regex": "^ENSG1"}},
+                "\t",
+                True,
+            ),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == -2.31
+
+
+def test_run_reproduction_table_claim_numeric_row_predicate_is_reproduced(tmp_path):
+    _write_tsv(
+        tmp_path,
+        "out/de.tsv",
+        [_DE_HEADER, ["ENSG1", "-2.31", "0.001"], ["ENSG2", "0.5", "0.2"]],
+    )
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator(
+                "out/de.tsv",
+                "log2FoldChange",
+                {"padj": {"lt": 0.01}},
+                "\t",
+                True,
+            ),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == -2.31
+
+
+def test_run_reproduction_table_claim_numeric_predicate_zero_matches_is_unverified(tmp_path):
+    _write_tsv(tmp_path, "out/de.tsv", [_DE_HEADER, ["ENSG1", "-2.31", "0.5"]])
+    claims = [
+        Claim(
+            id="log2fc",
+            value=-2.31,
+            tolerance=0.05,
+            locator=TableLocator(
+                "out/de.tsv",
+                "log2FoldChange",
+                {"padj": {"lt": 0.01}},
+                "\t",
+                True,
+            ),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "0 rows" in result.message
 
 
 def test_run_reproduction_table_claim_multi_key_ambiguous_is_unverified(tmp_path):

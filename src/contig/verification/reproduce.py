@@ -185,14 +185,16 @@ class TableLocator:
     repo-relative TSV/CSV file path -- named `source` internally for the
     same reason as `Locator.source`); `column` is a header name (str) or a
     0-based field index (int); `row` is a 0-based data-row index (int) or a
-    single-key `{column_name: value}` match (dict[str, str]); `delimiter`
-    is the resolved, single-character field separator; `header` says
-    whether row 0 of the file is a header row.
+    `{column_name: predicate}` match, where a predicate is an exact string, a
+    `{"regex": <pattern>}` object, or a numeric comparison object over
+    `gt`/`gte`/`lt`/`lte`/`eq`; `delimiter` is the resolved,
+    single-character field separator; `header` says whether row 0 of the
+    file is a header row.
     """
 
     source: str
     column: str | int
-    row: int | dict[str, str]
+    row: int | dict[str, str | dict[str, object]]
     delimiter: str
     header: bool
 
@@ -280,7 +282,7 @@ def _read_table(path: Path, delimiter: str) -> list[list[str]] | None:
 def resolve_cell(
     rows: list[list[str]],
     column: str | int,
-    row: int | dict[str, str],
+    row: int | dict[str, str | dict[str, object]],
     header: bool,
 ) -> tuple[str | None, str]:
     """Resolve one cell out of already-parsed table `rows`.
@@ -296,10 +298,12 @@ def resolve_cell(
     name -> unresolved) or a 0-based field index (out of range ->
     unresolved). `row` is either a 0-based index over the DATA rows (out of
     range -> unresolved, naming the data-row count) or a one-or-more-key
-    `{col: val}` object selecting the data row whose cells ALL equal the
-    keyed values after `.strip()` (an exact compare per key, no
-    case-fold/quote-strip; an empty object is unresolved) -- 0 or >1
-    matches -> unresolved, naming the match count.
+    `{col: predicate}` object selecting the data row whose cells ALL satisfy
+    the keyed predicates (a plain string is an exact `.strip()`ed equality, a
+    `{"regex": <pattern>}` object a regex `search` over the `.strip()`ed cell,
+    and a `gt`/`gte`/`lt`/`lte`/`eq` object a numeric comparison of the
+    strictly float-parsed cell; an empty or malformed predicate object is
+    unresolved) -- 0 or >1 matches -> unresolved, naming the match count.
 
     Headerless mode (`header=False`): `column` and `row` must both be
     ints, `row` indexing over ALL rows.
@@ -338,8 +342,11 @@ def resolve_cell(
                 return None, f"invalid row key-match: {row!r}"
             predicates = []
             for key_col, key_val in row.items():
-                if not isinstance(key_col, str) or not isinstance(key_val, str):
+                if not isinstance(key_col, str):
                     return None, f"invalid row key-match: {row!r}"
+                problem = _row_predicate_error(key_val)
+                if problem is not None:
+                    return None, f"invalid row predicate for {key_col!r}: {problem}"
                 key_matches = [i for i, name in enumerate(header_row) if name == key_col]
                 if not key_matches:
                     return None, f"row key column {key_col!r} not found in header"
@@ -348,12 +355,13 @@ def resolve_cell(
                         f"row key column {key_col!r} is ambiguous: "
                         f"{len(key_matches)} header matches"
                     )
-                predicates.append((key_matches[0], key_val.strip()))
+                predicates.append((key_matches[0], key_val))
             matched = [
                 r
                 for r in data_rows
                 if all(
-                    idx < len(r) and r[idx].strip() == wanted for idx, wanted in predicates
+                    idx < len(r) and _row_predicate_matches(r[idx], wanted)
+                    for idx, wanted in predicates
                 )
             ]
             if not matched:
@@ -397,6 +405,76 @@ def _compile_pattern(pattern: str, flags: tuple[str, ...]) -> re.Pattern[str]:
     for name in flags:
         bits |= _REGEX_FLAGS[name]
     return re.compile(pattern, bits)
+
+
+# The operators a numeric row predicate may carry. `eq` composes with a range
+# (`{"gte": 0.01, "eq": 0.05}`) and is also valid on its own.
+_PREDICATE_OPS = ("gt", "gte", "lt", "lte", "eq")
+
+
+def _row_predicate_error(predicate: object) -> str | None:
+    """Why `predicate` is not a valid row predicate, or None when it is.
+
+    A predicate is a plain string (exact, `.strip()`ed equality), a
+    `{"regex": <pattern>}` object (inline flags only -- no `flags` array), or a
+    numeric comparison over one or more of `gt`/`gte`/`lt`/`lte`/`eq`. Pure and
+    total, so `load_claims` (pre-run refusal) and `resolve_cell` (never raises)
+    share one rule set.
+    """
+    if isinstance(predicate, str):
+        return None
+    if not isinstance(predicate, dict) or not predicate:
+        return f"expected a string, a regex object, or a numeric comparison: {predicate!r}"
+    keys = list(predicate)
+    unknown = [key for key in keys if key not in _PREDICATE_OPS and key != "regex"]
+    if unknown:
+        return f"unknown operator {unknown[0]!r}"
+    if "regex" in predicate:
+        if keys != ["regex"]:
+            return "a regex predicate takes no other operator"
+        pattern = predicate["regex"]
+        if not isinstance(pattern, str) or not pattern.strip():
+            return f"invalid regex {pattern!r}"
+        try:
+            _compile_pattern(pattern, ())
+        except (ValueError, re.error) as exc:
+            return f"uncompilable regex {pattern!r}: {exc}"
+        return None
+    for op in keys:
+        operand = predicate[op]
+        if isinstance(operand, bool) or not isinstance(operand, (int, float)):
+            return f"non-numeric operand for {op!r}: {operand!r}"
+    return None
+
+
+def _compare_number(value: float, op: str, operand: float) -> bool:
+    if op == "gt":
+        return value > operand
+    if op == "gte":
+        return value >= operand
+    if op == "lt":
+        return value < operand
+    if op == "lte":
+        return value <= operand
+    return value == operand  # "eq"
+
+
+def _row_predicate_matches(cell: str, predicate: str | dict) -> bool:
+    """True when one table cell satisfies an already-validated `predicate`.
+
+    Exact strings compare the `.strip()`ed cell; a regex is a `search` over it
+    (so `^...$` anchors the whole cell); a numeric predicate strictly
+    float-parses it -- a cell that does not parse is simply not a match.
+    """
+    if isinstance(predicate, str):
+        return cell.strip() == predicate.strip()
+    if "regex" in predicate:
+        return _compile_pattern(predicate["regex"], ()).search(cell.strip()) is not None
+    try:
+        value = float(cell.strip())
+    except ValueError:
+        return False
+    return all(_compare_number(value, op, predicate[op]) for op in predicate)
 
 
 def resolve_match(
@@ -784,7 +862,7 @@ def load_claims(path: str | Path) -> list[Claim]:
                 raw_row = item["row"]
                 if isinstance(raw_row, bool) or not isinstance(raw_row, (int, dict)):
                     raise ClaimsError(f"claim {claim_id!r} has an invalid 'row': {raw_row!r}")
-                row: int | dict[str, str]
+                row: int | dict[str, str | dict[str, object]]
                 if isinstance(raw_row, dict):
                     if header is False:
                         raise ClaimsError(
@@ -801,9 +879,11 @@ def load_claims(path: str | Path) -> list[Claim]:
                             raise ClaimsError(
                                 f"claim {claim_id!r} has an invalid 'row' key: {row_key!r}"
                             )
-                        if isinstance(row_val, bool) or not isinstance(row_val, str):
+                        problem = _row_predicate_error(row_val)
+                        if problem is not None:
                             raise ClaimsError(
-                                f"claim {claim_id!r} has an invalid 'row' value: {row_val!r}"
+                                f"claim {claim_id!r} has an invalid 'row' predicate for "
+                                f"{row_key!r}: {problem}"
                             )
                     row = raw_row
                 else:
