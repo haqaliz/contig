@@ -67,11 +67,11 @@ Workflow per item: `contig-begin-fast` → worktree `.claude/worktrees/<type>-<i
 | C8-2 | C8 | Figure/plot & table-cell(-image) claims (no plot-hash, stdlib-only) | code | blocked |
 | C8-3 | C8 | `contig reproduce <doi>` DOI resolution | code | todo |
 | C8-4 | C8 | Dashboard card(s) for reproduce | code | todo |
-| C8-5 | C8 | `occurrence: first\|last` + `group` override | code | todo |
-| C8-6 | C8 | `flags` array for patterns | code | todo |
+| C8-5 | C8 | `occurrence: first\|last` + `group` override | code | gated (roadmap: gated on a counted experiment over 5 real repos) |
+| C8-6 | C8 | `flags` array for patterns | code | done |
 | C8-7 | C8 | Regex over binary files | code | todo |
 | C8-8 | C8 | Persist matched output on the record | code | todo |
-| C8-9 | C8 | Notebook-specific size bound | code | todo |
+| C8-9 | C8 | Notebook-specific size bound | code | done |
 | C8-10 | C8 | `metadata.tags` / multi-key / regex cell matching | code | todo |
 | C8-11 | C8 | Non-text notebook outputs | code | todo |
 | C8-12 | C8 | Structured staleness field on `ClaimResult` | code | todo |
