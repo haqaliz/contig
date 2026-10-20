@@ -200,6 +200,7 @@ from contig.verification.reproduce import (
     TableLocator,
     _MAX_MATCH_BYTES,
     load_claims,
+    prune_reproduce_checkouts,
     run_reproduction,
 )
 from contig.verification.structural import manifest_for
@@ -1147,6 +1148,15 @@ def reproduce(
             "refused without it)."
         ),
     ),
+    prune_checkouts: int = typer.Option(
+        None,
+        "--prune-checkouts",
+        help=(
+            "After a successful remote run, delete the source/ checkouts of the N "
+            "oldest remote reproduce runs (the current run is kept). Only "
+            "checkouts Contig fetched are eligible; off by default."
+        ),
+    ),
 ) -> None:
     """Reproduce a published paper/repo's claims against a fresh run.
 
@@ -1162,8 +1172,11 @@ def reproduce(
     checkout, with the URL and the resolved HEAD commit recorded on the
     bundle as `source_url`/`source_commit` -- the pin that says which
     revision produced this verdict. The record's `repo` stays the URL; the
-    local checkout path never enters the portable manifest. The freshness
-    requirement below applies to a fetched checkout exactly as to a local
+    local checkout path never enters the portable manifest. With
+    --prune-checkouts N, a successful remote run also removes the `source/`
+    checkouts of the N oldest remote runs (never the current run, and never a
+    local-path run). The freshness requirement below applies to a fetched
+    checkout exactly as to a local
     repo: a clone writes every file at clone time, and the clone happens
     BEFORE the run's start is stamped, so a repo that commits its outputs
     cannot report a false REPRODUCED off the authors' stored numbers.
@@ -1232,6 +1245,12 @@ def reproduce(
         if rev_argument.refusal is not None:
             typer.echo(rev_argument.refusal, err=True)
             raise typer.Exit(code=1)
+
+    # A count of zero (or a negative) would silently prune nothing while
+    # looking like a working flag; refuse it before any disk work instead.
+    if prune_checkouts is not None and prune_checkouts <= 0:
+        typer.echo("--prune-checkouts must be a positive integer", err=True)
+        raise typer.Exit(code=1)
 
     # The run id is generated here, ahead of every validation gate, because a
     # remote run's checkout path is derived from it and the containment guards
@@ -1408,6 +1427,18 @@ def reproduce(
         )
 
     write_reproduce_bundle(record, Path(runs_dir) / reproduce_id, requested_rev=rev)
+
+    # Opt-in housekeeping, and only after a SUCCESSFUL remote run: a failed run
+    # prunes nothing, and a local run has no Contig-owned checkout of its own.
+    if (
+        prune_checkouts is not None
+        and repo_argument.kind == "remote"
+        and record.exit_code == 0
+    ):
+        for message in prune_reproduce_checkouts(
+            Path(runs_dir), keep=prune_checkouts, current_id=reproduce_id
+        ):
+            typer.echo(message, err=True)
 
     # Capture: a finished run that is interesting for a human (a diverged or
     # unverified claim, any repair history, or a non-zero exit) earns a pending

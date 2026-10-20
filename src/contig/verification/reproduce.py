@@ -20,6 +20,7 @@ import json
 import math
 import re
 import shlex
+import shutil
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -1592,6 +1593,39 @@ def run_reproduction(
         created_at=created_at,
         repair_history=repair_history,
     )
+
+
+def prune_reproduce_checkouts(
+    runs_dir: str | Path, *, keep: int, current_id: str
+) -> list[str]:
+    """Remove the `source/` checkouts of the `keep` oldest remote reproduce runs.
+
+    Eligibility is deliberately narrow: only `<runs-dir>/<id>/source` where the
+    run's own record says `source_url` is set (a checkout this feature created).
+    A local-path run and the current run are never touched. Oldest is ordered by
+    the record's `created_at` (dir name as a tie-break). Returns one message per
+    removal that failed -- an empty list means every eligible checkout was pruned.
+    """
+    candidates: list[tuple[str, Path]] = []
+    for bundle in Path(runs_dir).iterdir():
+        source = bundle / "source"
+        if bundle.name == current_id or not source.is_dir():
+            continue
+        try:
+            record = json.loads((bundle / "reproduce_record.json").read_text())
+        except (OSError, ValueError):
+            continue
+        if record.get("source_url"):
+            candidates.append((record.get("created_at") or bundle.name, bundle))
+    candidates.sort(key=lambda item: (item[0], item[1].name))
+
+    failures: list[str] = []
+    for _, bundle in candidates[:keep]:
+        try:
+            shutil.rmtree(bundle / "source")
+        except OSError as exc:
+            failures.append(f"could not prune {bundle / 'source'}: {exc}")
+    return failures
 
 
 def reduce_reproduction(results: list[ClaimResult]) -> dict:
