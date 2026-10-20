@@ -61,6 +61,7 @@ from contig.verify_corpus import (
 from contig.resource_sizing import (
     PEAK_RSS_SAFETY_FACTOR,
     WALLTIME_SAFETY_FACTOR,
+    PeakSizing,
     TimeSizing,
     peak_informed_memory_gb,
     realtime_informed_time_h,
@@ -488,6 +489,20 @@ def _resource_ceiling_block(diagnosis, target, ceiling) -> str | None:
     return None
 
 
+def _oom_peak_sizing(diagnosis, run_dir, events, current_memory_gb) -> PeakSizing | None:
+    """The peak sizing for an OOM diagnosis, read from the run's partial trace.
+
+    The single source both the corpus capture and the retry sizing read, so the
+    recorded peak is exactly the one that sized the retry. None for any other
+    failure class (sizing only touches OOM / memory).
+    """
+    if diagnosis.failure_class != "oom":
+        return None
+    trace_path = run_dir / "trace.txt"
+    usage = parse_resource_usage_file(trace_path) if trace_path.exists() else []
+    return peak_informed_memory_gb(events, usage, current_gb=current_memory_gb)
+
+
 def _oom_memory_sizing(diagnosis, run_dir, events, current_memory_gb) -> tuple[int | None, str | None]:
     """Size an OOM memory retry from the run's observed peak RSS.
 
@@ -504,11 +519,9 @@ def _oom_memory_sizing(diagnosis, run_dir, events, current_memory_gb) -> tuple[i
     -- sizing only touches OOM / memory; the blind ``x2`` bump and the
     ``time_limit`` branch are unchanged.
     """
-    if diagnosis.failure_class != "oom":
+    sizing = _oom_peak_sizing(diagnosis, run_dir, events, current_memory_gb)
+    if sizing is None:
         return None, None
-    trace_path = run_dir / "trace.txt"
-    usage = parse_resource_usage_file(trace_path) if trace_path.exists() else []
-    sizing = peak_informed_memory_gb(events, usage, current_gb=current_memory_gb)
     if sizing.tier == "sibling_peak":
         detail = (
             f"scaled memory to ~{sizing.target_gb} GB from same-process sibling peak "
@@ -1419,6 +1432,12 @@ def self_heal_run(
             # provisional label (pending human confirmation). Capture needs a
             # record (events) to be faithful; a trace-less failure has nothing.
             if exc.record is not None:
+                # The same peak the OOM sizing below reads, captured on the case
+                # so the corpus can be calibrated on it (C2-7).
+                current_mem_gb = int(
+                    _lead_number(current_target.resource_limits.get("memory"), _DEFAULT_MEMORY_GB)
+                )
+                peak_sizing = _oom_peak_sizing(diagnosis, run_dir, events, current_mem_gb)
                 append_case(
                     failure_case_from_run(
                         exc.record,
@@ -1426,6 +1445,9 @@ def self_heal_run(
                         diagnosis.failure_class,
                         case_id=f"{run_id}-attempt{attempt}",
                         source=f"pending:{run_id}",
+                        observed_peak_rss_mb=(
+                            peak_sizing.observed_peak_mb if peak_sizing else None
+                        ),
                     ),
                     pending_path,
                 )

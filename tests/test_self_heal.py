@@ -3336,6 +3336,27 @@ def test_self_heal_sizes_oom_retry_from_observed_peak(tmp_path):
     assert "oom_task" in step.detail
 
 
+def test_self_heal_oom_capture_records_observed_peak_in_pending_corpus(tmp_path):
+    # C2-7: the peak the OOM sizer reads must also land on the pending corpus
+    # case, from the same source (the run's own partial trace).
+    oom_trace = _peak_trace("FAILED", 137, "60 GB")
+    ok_trace = _peak_trace("COMPLETED", 0, "20 GB")
+    state = {"n": 0}
+
+    def executor(cmd, trace_path):
+        state["n"] += 1
+        if state["n"] == 1:
+            _write(trace_path, oom_trace, "out of memory exit 137")
+            return 1
+        _write(trace_path, ok_trace, "done")
+        return 0
+
+    _heal(tmp_path, executor)
+    (case,) = load_corpus(tmp_path / "runs" / "pending_corpus.jsonl")
+    assert case.expected_class == "oom"
+    assert case.observed_peak_rss_mb == pytest.approx(60 * 1024)
+
+
 def test_self_heal_oom_falls_back_to_blind_bump_without_usable_peak(tmp_path):
     # No usable observed peak in the trace (the killed row has no peak_rss) ->
     # the retry must scale the OLD blind x2 way (8 GB -> 16 GB) and the detail

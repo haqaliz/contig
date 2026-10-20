@@ -492,6 +492,9 @@ class FailureCase(BaseModel):
     events: list[TaskEvent] = []
     log_text: str = ""
     expected_class: FailureClass
+    # The peak RSS the OOM sizer observed (MB); None when no usable peak exists,
+    # so the corpus can be calibrated on it without inventing a value.
+    observed_peak_rss_mb: float | None = None
 
 
 class DetectorMismatch(BaseModel):

@@ -111,12 +111,15 @@ def failure_case_from_run(
     *,
     case_id: str | None = None,
     source: str | None = None,
+    observed_peak_rss_mb: float | None = None,
 ) -> FailureCase:
     """Build a corpus FailureCase from a failed run.
 
     Keep only the failing events (what the detector keys on), bundle the
     captured log, and attach the label. This is the loop that turns a real
     failed run into labeled corpus data instead of hand-authoring cases.
+    `observed_peak_rss_mb` is the OOM sizer's own peak reading (None when the
+    run carried no usable peak), so the corpus can be calibrated on it later.
     """
     failing = [event for event in record.events if event.is_failure]
     return FailureCase(
@@ -126,6 +129,7 @@ def failure_case_from_run(
         events=failing,
         log_text=log_text,
         expected_class=expected_class,
+        observed_peak_rss_mb=observed_peak_rss_mb,
     )
 
 

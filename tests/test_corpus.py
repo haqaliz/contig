@@ -223,6 +223,43 @@ def test_append_case_adds_one_line_to_corpus(tmp_path):
     assert len(loaded) == 2
 
 
+def test_failure_case_observed_peak_round_trips_through_jsonl(tmp_path):
+    # C2-7: the observed peak RSS rides on the corpus case so it is queryable,
+    # not only prose in RepairStep.detail.
+    from contig.corpus import load_corpus, save_corpus
+    from contig.models import FailureCase
+
+    case = FailureCase(case_id="a", description="d", source="run:r1",
+                       log_text="out of memory exit 137", expected_class="oom",
+                       observed_peak_rss_mb=61440.0)
+    path = tmp_path / "c.jsonl"
+    save_corpus([case], path)
+    assert '"observed_peak_rss_mb":61440.0' in path.read_text()
+    (loaded,) = load_corpus(path)
+    assert loaded.observed_peak_rss_mb == 61440.0
+
+
+def test_failure_case_without_observed_peak_loads_and_reserializes_as_null(tmp_path):
+    # Old corpus JSONL predates the field: it must load unchanged, and a case
+    # with no usable peak must stay null -- never 0 or a guessed value.
+    from contig.corpus import load_corpus, save_corpus
+    from contig.models import FailureCase
+
+    path = tmp_path / "c.jsonl"
+    path.write_text(
+        '{"case_id": "a", "description": "d", "source": "synthetic", '
+        '"events": [], "log_text": "boom", "expected_class": "tool_crash"}\n'
+    )
+    (loaded,) = load_corpus(path)
+    assert loaded.observed_peak_rss_mb is None
+
+    save_corpus([loaded], path)
+    assert '"observed_peak_rss_mb":null' in path.read_text()
+    (reloaded,) = load_corpus(path)
+    assert isinstance(reloaded, FailureCase)
+    assert reloaded.observed_peak_rss_mb is None
+
+
 # --- scoring an arbitrary detector (PRD contract C) ----------------------------
 
 
