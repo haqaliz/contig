@@ -1494,6 +1494,36 @@ def test_self_heal_auto_approve_advisory_gives_up_honestly_without_retry(tmp_pat
     assert final["state"] == "finished"
 
 
+def test_self_heal_auto_approve_never_applies_a_destructive_patch(tmp_path):
+    # `risk="destructive"` used to be a field the engine never read: under
+    # --auto-approve any gated patch was applied, including one that overwrites
+    # user data. No patch in repair.py is destructive today, so this is
+    # defensive -- but the carve-out must exist before one ever is.
+    state = {"n": 0}
+    executor = _failing_then_capturing(state, _CONDA_LOG, lambda cmd, tp: None)
+    destructive = Patch(
+        kind="reference",
+        operation={"set_reference": "/elsewhere/genome.fa"},
+        rationale="replace the user's reference in place",
+        risk="destructive",
+        expected_signal="pipeline stops failing",
+    )
+
+    record = _heal(
+        tmp_path,
+        executor,
+        auto_approve=True,
+        params={"input": "sheet.csv"},
+        propose=lambda diagnosis: [destructive],
+    )
+
+    step = record.repair_history[-1]
+    assert step.outcome == "gave_up"
+    assert step.patch_applied is False
+    assert "destructive" in (step.detail or "")
+    assert state["n"] == 1  # never applied, never retried
+
+
 def test_self_heal_advisory_pending_approval_has_no_operation_key(tmp_path):
     # PRD R5: an advisory's pending_approval.json must never claim a machine
     # operation is on offer (there is none), but must still carry the

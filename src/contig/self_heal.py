@@ -1522,6 +1522,26 @@ def self_heal_run(
 
                 # --auto-approve is non-interactive: it always takes the best-ranked
                 # gated fix, so there is no choice to make even when ambiguous.
+                # EXCEPT destructive: applying one unattended is exactly what the
+                # risk tier exists to prevent, so a human must be in the loop.
+                if auto_approve and gated.risk == "destructive":
+                    _record_attempt(
+                        run_dir,
+                        repair_history,
+                        RepairStep(attempt=attempt, diagnosis=diagnosis, patch=gated,
+                                   outcome="gave_up",
+                                   detail=(
+                                       "destructive patch requires human approval; "
+                                       "--auto-approve never applies one. "
+                                       + gated.rationale
+                                   ),
+                                   patch_applied=False),
+                    )
+                    return _finalize(
+                        exc.record, repair_history, run_dir,
+                        runs_dir=runs_dir, run_id=run_id, webhook=notify_webhook,
+                        harmonized_reference_direction=harmonized_reference_direction,
+                    )
                 if auto_approve:
                     current_target, current_params, outcome, detail, cont = (
                         _apply_patch_and_maybe_build(
