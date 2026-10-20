@@ -677,6 +677,80 @@ def test_load_claims_pattern_keeps_inline_flags_verbatim(tmp_path):
     assert claims[0].locator == PatternLocator(source=None, pattern="(?im)^auc = ([0-9.]+)$")
 
 
+def test_load_claims_pattern_flags_array_is_kept_on_the_locator(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [_claim(**{"pattern": "(?m)^auc = (.*)$", "flags": ["IGNORECASE", "DOTALL"]})]
+        ),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == PatternLocator(
+        source=None, pattern="(?m)^auc = (.*)$", flags=("IGNORECASE", "DOTALL")
+    )
+
+
+def test_load_claims_pattern_without_flags_is_back_compatible(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"pattern": "Final AUC: ([0-9.]+)"})]),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == PatternLocator(
+        source=None, pattern="Final AUC: ([0-9.]+)"
+    )
+    assert claims[0].locator.flags == ()
+
+
+def test_load_claims_rejects_unknown_pattern_flag_before_any_run(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"pattern": "auc=([0-9.]+)", "flags": ["NOT_A_FLAG"]})]),
+    )
+    with pytest.raises(ClaimsError, match="NOT_A_FLAG"):
+        load_claims(path)
+
+
+def test_load_claims_rejects_flags_without_pattern(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps([_claim(**{"flags": ["IGNORECASE"]})]),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+def test_run_reproduction_pattern_flags_array_ignorecase_is_reproduced(tmp_path):
+    """A lowercase pattern over uppercase output only resolves with the flag
+    array -- proving the array is applied at run time, not merely parsed."""
+    _write_log(tmp_path, "logs/train.log", "FINAL AUC: 0.91\n")
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "id": "auc",
+                        "value": 0.91,
+                        "from": "logs/train.log",
+                        "pattern": "final auc: ([0-9.]+)",
+                        "flags": ["IGNORECASE"],
+                    }
+                )
+            ]
+        ),
+    )
+    record = _run(tmp_path, load_claims(path), _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == 0.91
+
+
 def test_load_claims_rejects_pattern_with_path(tmp_path):
     path = _write(
         tmp_path,

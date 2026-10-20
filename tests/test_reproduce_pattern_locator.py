@@ -51,6 +51,29 @@ def test_resolve_match_inline_multiline_flag_is_honored():
     assert reason == ""
 
 
+def test_resolve_match_named_flag_array_is_honored():
+    captured, reason = resolve_match(
+        "Final AUC: 0.91\n", r"final auc: ([\d.]+)", flags=("IGNORECASE",)
+    )
+    assert captured == "0.91"
+    assert reason == ""
+
+
+def test_resolve_match_named_flag_array_combines_with_inline_flags():
+    text = "header\nFINAL AUC: 0.91\ntrailer\n"
+    captured, reason = resolve_match(
+        text, r"(?m)^final auc: ([\d.]+)$", flags=("IGNORECASE",)
+    )
+    assert captured == "0.91"
+    assert reason == ""
+
+
+def test_resolve_match_unknown_flag_returns_none_never_raises():
+    captured, reason = resolve_match("AUC: 0.91\n", r"AUC: ([\d.]+)", flags=("BOGUS",))
+    assert captured is None
+    assert "BOGUS" in reason
+
+
 def test_resolve_match_multi_group_pattern_returns_group_one_only():
     captured, reason = resolve_match("auc=0.91 f1=0.73", r"auc=([\d.]+) f1=([\d.]+)")
     assert captured == "0.91"

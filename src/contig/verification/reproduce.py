@@ -51,6 +51,14 @@ _SAFE_PACKAGE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 # pattern that does match past the cut.
 _MAX_MATCH_BYTES = 8 * 1024 * 1024
 
+# The named flags a claim's optional `"flags": [...]` array may carry. Anything
+# else is refused by `load_claims` pre-run rather than silently ignored.
+_REGEX_FLAGS = {
+    "IGNORECASE": re.IGNORECASE,
+    "MULTILINE": re.MULTILINE,
+    "DOTALL": re.DOTALL,
+}
+
 # At most this many env-resurrection installs per run. Paired with the
 # per-run seen-set, the retry loop provably terminates: a module already
 # installed this run is never installed again, and the cap bounds distinct
@@ -193,11 +201,14 @@ class PatternLocator:
     `source` is the claims file's `"from"` field (a repo-relative text/log
     file path -- named `source` internally for the same reason as
     `Locator.source`), or `None`, which means the run's own captured
-    combined stdout+stderr rather than any file on disk.
+    combined stdout+stderr rather than any file on disk; `flags` are the
+    claim's named regex flags (`"flags": [...]`), applied on top of any
+    inline `(?i)`/`(?m)`/`(?s)`.
     """
 
     source: str | None
     pattern: str
+    flags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -211,12 +222,14 @@ class NotebookLocator:
     that selects the unique cell whose source contains that substring;
     `pattern` is a Python regex whose capture is the observed value (group 1
     when the pattern has capturing groups, otherwise the whole match), applied
-    to that cell's extracted textual output.
+    to that cell's extracted textual output; `flags` are the claim's named
+    regex flags, applied on top of any inline flags.
     """
 
     source: str
     cell: int | dict[str, str]
     pattern: str
+    flags: tuple[str, ...] = ()
 
 
 def _resolve_delimiter(source: str, explicit: str | None) -> str | None:
@@ -370,7 +383,21 @@ def resolve_cell(
     return target_row[col_idx], ""
 
 
-def resolve_match(text: str, pattern: str) -> tuple[str | None, str]:
+def _compile_pattern(pattern: str, flags: tuple[str, ...]) -> re.Pattern[str]:
+    """Compile a claim's pattern with its named `flags`; an unknown name raises
+    `ValueError` (a `re.error` never is one, so the two stay distinguishable)."""
+    unknown = [name for name in flags if name not in _REGEX_FLAGS]
+    if unknown:
+        raise ValueError(f"unknown pattern flag {unknown[0]!r}")
+    bits = 0
+    for name in flags:
+        bits |= _REGEX_FLAGS[name]
+    return re.compile(pattern, bits)
+
+
+def resolve_match(
+    text: str, pattern: str, flags: tuple[str, ...] = ()
+) -> tuple[str | None, str]:
     """Resolve one captured string out of `text` with a user-authored regex.
 
     Pure, never raises -- any oversized text, uncompilable pattern, ambiguous
@@ -394,10 +421,12 @@ def resolve_match(text: str, pattern: str) -> tuple[str | None, str]:
     from `match.group(1)` -- the one input shape that would otherwise crash a
     caller on `float(None)` -- so it is unresolved as well.
 
-    Flags are supplied inline in the pattern (`(?i)`, `(?m)`, `(?s)`); there
-    is no separate flags argument. The compile is wrapped defensively so the
-    contract holds even when called directly with an uncompilable pattern
-    (`load_claims` already gates this pre-run).
+    Flags are supplied inline in the pattern (`(?i)`, `(?m)`, `(?s)`) or as
+    names in `flags` (`"IGNORECASE"`/`"MULTILINE"`/`"DOTALL"`), which combine
+    with the inline ones; an unknown name is unresolved, never ignored. The
+    compile is wrapped defensively so the contract holds even when called
+    directly with an uncompilable pattern (`load_claims` already gates this
+    pre-run).
     """
     if len(text) > _MAX_MATCH_BYTES:
         return None, (
@@ -405,7 +434,9 @@ def resolve_match(text: str, pattern: str) -> tuple[str | None, str]:
         )
 
     try:
-        compiled = re.compile(pattern)
+        compiled = _compile_pattern(pattern, flags)
+    except ValueError as exc:
+        return None, str(exc)
     except re.error as exc:
         return None, f"pattern {pattern!r} is not a valid regex: {exc}"
 
@@ -540,6 +571,29 @@ class Claim:
     locator: Locator | TableLocator | PatternLocator | NotebookLocator | None = None
 
 
+def _claim_pattern(claim_id: str, item: dict) -> tuple[str, tuple[str, ...]]:
+    """Validate a claim's `pattern` and optional `flags` pre-run, returning them
+    normalized. An unknown flag name is refused here, never ignored."""
+    raw_pattern = item["pattern"]
+    if not isinstance(raw_pattern, str) or not raw_pattern.strip():
+        raise ClaimsError(f"claim {claim_id!r} has an invalid 'pattern': {raw_pattern!r}")
+
+    raw_flags = item.get("flags", [])
+    if not isinstance(raw_flags, list) or not all(
+        isinstance(name, str) for name in raw_flags
+    ):
+        raise ClaimsError(f"claim {claim_id!r} has an invalid 'flags': {raw_flags!r}")
+    flags = tuple(raw_flags)
+
+    try:
+        _compile_pattern(raw_pattern, flags)
+    except ValueError as exc:
+        raise ClaimsError(f"claim {claim_id!r} has {exc}") from exc
+    except re.error as exc:
+        raise ClaimsError(f"claim {claim_id!r} has an uncompilable 'pattern': {exc}") from exc
+    return raw_pattern, flags
+
+
 def load_claims(path: str | Path) -> list[Claim]:
     """Read a JSON claims file: a list of `{"id", "value", "tolerance"?}` objects.
 
@@ -585,6 +639,7 @@ def load_claims(path: str | Path) -> list[Claim]:
         has_from = "from" in item
         has_path = "path" in item
         has_pattern = "pattern" in item
+        has_flags = "flags" in item
         has_cell = "cell" in item
         has_column = "column" in item
         has_row = "row" in item
@@ -597,6 +652,8 @@ def load_claims(path: str | Path) -> list[Claim]:
                 f"claim {claim_id!r} must set 'from' together with 'path', or with "
                 "'column'+'row', or with 'cell'+'pattern', or neither"
             )
+        if has_flags and not has_pattern:
+            raise ClaimsError(f"claim {claim_id!r} sets 'flags' without 'pattern'")
 
         source: str | None = None
         if has_from:
@@ -655,19 +712,10 @@ def load_claims(path: str | Path) -> list[Claim]:
             else:
                 raise ClaimsError(f"claim {claim_id!r} has an invalid 'cell': {raw_cell!r}")
 
-            raw_pattern = item["pattern"]
-            if not isinstance(raw_pattern, str) or not raw_pattern.strip():
-                raise ClaimsError(
-                    f"claim {claim_id!r} has an invalid 'pattern': {raw_pattern!r}"
-                )
-            try:
-                re.compile(raw_pattern)
-            except re.error as exc:
-                raise ClaimsError(
-                    f"claim {claim_id!r} has an uncompilable 'pattern': {exc}"
-                ) from exc
-
-            locator = NotebookLocator(source=raw_from, cell=cell, pattern=raw_pattern)
+            raw_pattern, flags = _claim_pattern(claim_id, item)
+            locator = NotebookLocator(
+                source=raw_from, cell=cell, pattern=raw_pattern, flags=flags
+            )
         elif has_pattern:
             if has_path:
                 raise ClaimsError(
@@ -679,19 +727,8 @@ def load_claims(path: str | Path) -> list[Claim]:
                     "(a table field has no meaning for a pattern locator)"
                 )
 
-            raw_pattern = item["pattern"]
-            if not isinstance(raw_pattern, str) or not raw_pattern.strip():
-                raise ClaimsError(
-                    f"claim {claim_id!r} has an invalid 'pattern': {raw_pattern!r}"
-                )
-            try:
-                re.compile(raw_pattern)
-            except re.error as exc:
-                raise ClaimsError(
-                    f"claim {claim_id!r} has an uncompilable 'pattern': {exc}"
-                ) from exc
-
-            locator = PatternLocator(source=source, pattern=raw_pattern)
+            raw_pattern, flags = _claim_pattern(claim_id, item)
+            locator = PatternLocator(source=source, pattern=raw_pattern, flags=flags)
         elif has_from:
             is_table_mode = has_column or has_row
             if has_path and is_table_mode:
@@ -1118,7 +1155,7 @@ def run_reproduction(
         if text is None:
             return None, f"locator file {loc.source!r} is missing or unreadable"
 
-        captured, reason = resolve_match(text, loc.pattern)
+        captured, reason = resolve_match(text, loc.pattern, loc.flags)
         if captured is None:
             return None, f"locator pattern in {where} did not resolve: {reason}"
 
@@ -1208,7 +1245,7 @@ def run_reproduction(
         if text is None:
             return None, f"notebook cell in {loc.source!r} did not resolve: {reason}"
 
-        captured, reason = resolve_match(text, loc.pattern)
+        captured, reason = resolve_match(text, loc.pattern, loc.flags)
         if captured is None:
             return None, f"notebook pattern in {loc.source!r} did not resolve: {reason}"
 
