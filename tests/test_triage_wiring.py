@@ -348,7 +348,7 @@ def test_skippable_enumeration_walks_the_shipped_rule_packs():
     # metric keys; two packs share the check name "duplication_rate", so the
     # metric key is the unambiguous handle).
     for metric in (
-        "percent_rRNA", "PERCENT_DUPLICATION", "median_vaf",
+        "PERCENT_DUPLICATION", "median_vaf",
         "strelka_median_vaf", "normal_median_vaf",
         "real_consequence_fraction", "intergenic_fraction",
     ):

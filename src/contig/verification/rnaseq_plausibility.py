@@ -26,14 +26,16 @@ from __future__ import annotations
 from contig.models import QCResult
 from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK, evaluate
 
-# The two plausibility checks this evaluator covers, in iteration order.
-_CHECKS = ("duplication_rate", "rrna_contamination")
+# The plausibility checks this evaluator covers, in iteration order.
+# rrna_contamination was dropped (C3-11): its slug never resolved and there is
+# no default rRNA-biotype source to parse instead.
+_CHECKS = ("duplication_rate",)
 
 
 def _violates_unit_range(rule: dict, value: float) -> bool:
     """True if `rule` declares a "fraction" unit and `value` sits outside [0, 1].
 
-    Rules with no "unit" key (e.g. rrna_contamination) are never guarded here.
+    Rules with no "unit" key are never guarded here.
     """
     # `not (0.0 <= value <= 1.0)`, not `value > 1.0 or value < 0.0` — the former
     # correctly catches NaN/±inf (any comparison with NaN is False, so `not

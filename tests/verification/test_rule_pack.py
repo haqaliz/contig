@@ -603,22 +603,13 @@ def test_rnaseq_plausibility_pack_is_importable():
     assert RNASEQ_PLAUSIBILITY_PACK
 
 
-def test_rnaseq_plausibility_pack_covers_duplication_and_rrna():
+def test_rnaseq_plausibility_pack_covers_duplication_only():
+    # rrna_contamination was dropped (C3-11): its slug never resolved and there
+    # is no default rRNA-biotype source to parse instead.
     from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK
 
     checks = {r["check"] for r in RNASEQ_PLAUSIBILITY_PACK}
-    assert "duplication_rate" in checks
-    assert "rrna_contamination" in checks
-
-
-def test_rnaseq_plausibility_rrna_contamination_has_warn_above():
-    # rrna_contamination keeps its WARN-capped band; duplication_rate does not
-    # (see test_rnaseq_plausibility_duplication_rate_has_no_band) — the pack is
-    # deliberately mixed-severity now, not one shared warn_above policy.
-    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK
-
-    rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "rrna_contamination")
-    assert "warn_above" in rule
+    assert checks == {"duplication_rate"}
 
 
 def test_rnaseq_plausibility_duplication_rate_has_no_band():
@@ -663,28 +654,6 @@ def test_rnaseq_plausibility_duplication_high_value_is_pass_not_warn():
 
     rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "duplication_rate")
     assert _status_for(0.95, rule) == "pass"
-
-
-def test_rnaseq_plausibility_rrna_below_band_is_pass():
-    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK, _status_for
-
-    rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "rrna_contamination")
-    assert _status_for(5.0, rule) == "pass"
-
-
-def test_rnaseq_plausibility_rrna_above_band_is_warn():
-    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK, _status_for
-
-    rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "rrna_contamination")
-    assert _status_for(50.0, rule) == "warn"
-
-
-def test_rnaseq_plausibility_rrna_never_fails():
-    # Even a value far above the band must not return "fail" (WARN-cap guarantee).
-    from contig.verification.rule_pack import RNASEQ_PLAUSIBILITY_PACK, _status_for
-
-    rule = next(r for r in RNASEQ_PLAUSIBILITY_PACK if r["check"] == "rrna_contamination")
-    assert _status_for(99999.0, rule) != "fail"
 
 
 # --- RNA-seq read-composition plausibility pack (C3 slice, Phase 2) ------------

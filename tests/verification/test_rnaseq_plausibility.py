@@ -7,7 +7,6 @@ The contract:
                         outside [0, 1] is refused as unverified rather than
                         rescaled (see the "unit": "fraction" guard in
                         evaluate_rnaseq_plausibility).
-- rrna_contamination  → in-band pass, out-of-band warn, never fail
                         (WARN-capped plausibility pack, untouched by this
                         phase).
 - metric absent       → unverified, value None, kind "metric"
@@ -116,51 +115,14 @@ def test_duplication_rate_missing_is_unverified():
 
 
 # ---------------------------------------------------------------------------
-# rrna_contamination / percent_rRNA
+# The metric absent → one unverified result, zero PASS
 # ---------------------------------------------------------------------------
 
 
-def test_rrna_contamination_inband_is_pass():
-    """In-band percent_rRNA → rrna_contamination:<sample> pass, value preserved."""
-    results = evaluate_rnaseq_plausibility({"S1": {"percent_rRNA": 2.0}})
-    matches = [r for r in results if r.check == "rrna_contamination:S1"]
-    assert len(matches) == 1
-    r = matches[0]
-    assert r.status == "pass"
-    assert r.kind == "metric"
-    assert r.value == 2.0
-
-
-def test_rrna_contamination_outofband_is_warn_never_fail():
-    """Out-of-band percent_rRNA (above warn_above=10) → warn, never fail."""
-    results = evaluate_rnaseq_plausibility({"S1": {"percent_rRNA": 25.0}})
-    matches = [r for r in results if r.check == "rrna_contamination:S1"]
-    assert len(matches) == 1
-    r = matches[0]
-    assert r.status == "warn"
-    assert r.status != "fail"
-
-
-def test_rrna_contamination_missing_is_unverified():
-    """Missing percent_rRNA → rrna_contamination:<sample> unverified, value None."""
+def test_metric_absent_gives_one_unverified_no_pass():
+    """Sample with the plausibility metric absent → one unverified, no pass."""
     results = evaluate_rnaseq_plausibility({"S1": {}})
-    matches = [r for r in results if r.check == "rrna_contamination:S1"]
-    assert len(matches) == 1
-    r = matches[0]
-    assert r.status == "unverified"
-    assert r.value is None
-    assert r.kind == "metric"
-
-
-# ---------------------------------------------------------------------------
-# Both metrics absent → two unverified results, zero PASS
-# ---------------------------------------------------------------------------
-
-
-def test_both_metrics_absent_gives_two_unverified_no_pass():
-    """Sample with both plausibility metrics absent → two unverified, no pass."""
-    results = evaluate_rnaseq_plausibility({"S1": {}})
-    assert len(results) == 2
+    assert len(results) == 1
     assert all(r.status == "unverified" for r in results)
     assert not any(r.status == "pass" for r in results)
 

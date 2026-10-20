@@ -310,18 +310,13 @@ MAG_RULE_PACK: list[dict] = [
 #     demo/make_sample_run.py:59,105) — the key and unit above are read from
 #     MultiQC's and Picard's own source, not from an observed report.
 #
-#   rrna_contamination (percent_rRNA, featureCounts rRNA biotype):
-#     Slug UNVERIFIED — a best-effort guess, never confirmed against a real
-#     report (demo/sample-run/results/multiqc/multiqc_data.json carries only
-#     uniquely_mapped_percent, percent_assigned, total_reads; this rule has
-#     never once fired on a real report). Declared scale 0-100.
-#     WARN-capped BY DECISION, not pending calibration: total-RNA /
-#     ribo-depletion protocols legitimately retain rRNA, so "extreme" and
-#     "unusual protocol" are the same number here too — the biology reason
-#     duplication_rate no longer needs still applies to this metric.
+#   rrna_contamination: DROPPED (C3-11). The `percent_rRNA` slug was an
+#     unverified guess that never fired on a real report, and there is no
+#     default machine-readable rRNA-biotype source in nf-core/rnaseq to replace
+#     it with. See the pack's inline note.
 #
-# Neither rule carries a fail band, for the two independent per-metric reasons
-# documented above — this is no longer one shared policy statement.
+# The remaining rule carries no band: a deep/high-input library legitimately
+# exceeds 90% duplication, so even a WARN would flag a legitimate protocol.
 RNASEQ_PLAUSIBILITY_PACK: list[dict] = [
     {
         "check": "duplication_rate",
@@ -334,12 +329,11 @@ RNASEQ_PLAUSIBILITY_PACK: list[dict] = [
             "PERCENT_DUPLICATION via MultiQC)"
         ),
     },
-    {
-        "check": "rrna_contamination",
-        "metric": "percent_rRNA",          # featureCounts rRNA biotype; slug unverified
-        "warn_above": 10.0,                # high => poor rRNA depletion
-        "message": "fraction of reads assigned to the rRNA biotype",
-    },
+    # rrna_contamination was DROPPED (C3-11). Its `percent_rRNA` slug was a
+    # guess that never once resolved against a real nf-core/rnaseq report, and
+    # nf-core/rnaseq has no default machine-readable rRNA-biotype source to
+    # parse instead. A check that can never fire reads as coverage it does not
+    # provide, so it is gone rather than left WARN-capped and dormant.
 ]
 
 
