@@ -322,6 +322,27 @@ def _discover_qc(
             )
             if capture_inputs is not None and multiqc_metrics:
                 capture_inputs["multiqc"] = multiqc_metrics
+    else:
+        # No report means the metric checks cannot run, not that they passed.
+        # Record the gap as UNVERIFIED so a structurally-clean run can never
+        # render as PASS with zero metric coverage. UNVERIFIED carries no
+        # severity, so a run that passes its other checks still passes -- the
+        # difference is that the gap is now visible instead of absent.
+        try:
+            pack = rule_pack_for(assay)
+        except ValueError:
+            pack = None
+        if pack is not None and assay not in _DEDICATED_METRIC_ASSAYS:
+            results.append(
+                QCResult(
+                    check="multiqc_report",
+                    status="unverified",
+                    message=(
+                        "no MultiQC report found; metric checks "
+                        f"({len(pack)}) were not run"
+                    ),
+                )
+            )
     # Check that BAM outputs exist and are non-empty. We do NOT blanket-check for
     # indexes here: many BAMs are intermediates that are never indexed, and a
     # spurious index_present:fail would wrongly drag the verdict to "fail".

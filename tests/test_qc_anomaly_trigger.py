@@ -160,17 +160,21 @@ def test_failed_task_event_with_exit_zero_is_not_a_qc_anomaly(tmp_path):
     assert [s for s in record.repair_history if s.outcome == QC_VERDICT_FLAGGED_OUTCOME] == []
 
 
-def test_run_with_no_qc_coverage_is_a_silent_skip(tmp_path):
+def test_run_with_no_qc_coverage_is_unverified_not_fail(tmp_path):
     # A3: no QC artifact means no check covered the run, which reduces to
-    # "unverified" and never to "fail". Nothing to diagnose, and asking
-    # overall_verdict for a severity over an empty list is not allowed.
+    # "unverified" and never to "fail". Since C3-12 the gap is recorded as one
+    # explicit UNVERIFIED check instead of an empty list, so it is visible in the
+    # report rather than absent. UNVERIFIED carries no severity: nothing to
+    # diagnose, and no anomaly is filed.
     def executor(cmd, trace_path):
         _write(trace_path, TRACE_OK, "ok")
         return 0
 
     record = _heal(tmp_path, executor)
 
-    assert record.qc_results == []
+    assert [(r.check, r.status) for r in record.qc_results] == [
+        ("multiqc_report", "unverified")
+    ]
     assert record.verdict == "unverified"
     assert record.repair_history == []
 

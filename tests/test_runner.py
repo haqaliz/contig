@@ -341,7 +341,11 @@ def test_run_pipeline_uses_variant_rule_pack_for_variant_assay(tmp_path):
 
 def test_run_pipeline_unverified_when_run_ok_but_no_multiqc_output(tmp_path):
     record = _run(tmp_path, TRACE_2_OK)  # default fake writes only the trace
-    assert record.qc_results == []
+    # C3-12: the missing report is recorded as UNVERIFIED (visible gap), not
+    # dropped from the list. It still cannot reduce to a pass.
+    assert [(r.check, r.status) for r in record.qc_results] == [
+        ("multiqc_report", "unverified")
+    ]
     assert record.verdict == "unverified"
 
 
