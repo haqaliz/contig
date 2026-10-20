@@ -208,11 +208,24 @@ def _resolve_dict_source(index_path: str, ext: str, run_dir: Path) -> str | None
 # new index kind is a one-row change. The argv builder takes ``(src, idx)`` —
 # suffix-strip kinds ignore ``idx``; ``.dict`` needs it (the output IS the
 # missing index path).
+def _csi_index_argv(src: str, idx: str) -> list[str]:
+    """CSI has two incompatible dialects, chosen by the source's own format.
+
+    A VCF's CSI is a bcftools index; a BAM's is `samtools index -c` (CSI is what
+    htslib asks for once a BAM has too many references for BAI). Dispatching on
+    the source suffix is the only signal available -- the `.csi` filename alone
+    cannot tell them apart.
+    """
+    if src.endswith(".bam"):
+        return ["samtools", "index", "-c", src]
+    return ["bcftools", "index", src]
+
+
 _INDEX_BUILD: dict[str, tuple[SourceDeriver, Callable[[str, str], list[str]]]] = {
     ".fai": (_strip_suffix, lambda src, idx: ["samtools", "faidx", src]),
     ".bai": (_strip_suffix, lambda src, idx: ["samtools", "index", src]),
     ".tbi": (_strip_suffix, lambda src, idx: ["tabix", "-p", "vcf", src]),
-    ".csi": (_strip_suffix, lambda src, idx: ["bcftools", "index", src]),
+    ".csi": (_strip_suffix, _csi_index_argv),
     ".dict": (_resolve_dict_source, lambda src, idx: ["samtools", "dict", "-o", idx, src]),
 }
 

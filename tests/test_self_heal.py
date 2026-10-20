@@ -2578,6 +2578,19 @@ def test_index_build_command_csi(tmp_path):
     ]
 
 
+def test_index_build_command_csi_bam_uses_samtools(tmp_path):
+    # C2-19: .csi has two dialects. For a BAM the CSI is built by samtools
+    # (`index -c`); for a VCF by bcftools. Running bcftools on a BAM would fail.
+    from contig.self_heal import _index_build_command
+
+    assert _index_build_command("aln.bam.csi", ".csi", tmp_path) == [
+        "samtools",
+        "index",
+        "-c",
+        "aln.bam",
+    ]
+
+
 def test_index_build_command_bai_absolute(tmp_path):
     # AC2: absolute .bai path strips suffix correctly.
     from contig.self_heal import _index_build_command
