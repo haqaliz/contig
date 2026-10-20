@@ -193,6 +193,9 @@ const FRACTION_RE = /(\d+)\/(\d+)/;
 // On the computable branch the messages open with "{label_a} vs {label_b}:";
 // used only as a fallback for annotator names when annotation_identity is empty.
 const LABELS_RE = /^(\S+) vs (\S+):/;
+// C1 concordance messages open with the compared pair, e.g. "a.vcf.gz vs
+// b.vcf.gz: ..." or "x.tsv and y.tsv share ...". Read it for display only.
+const PAIR_RE = /^(\S+ (?:vs|and) [^\s:]+)/;
 
 function findConcordance(
   results: QCResult[],
@@ -271,6 +274,121 @@ export function corroboratedByLine(
   }
 
   return line + ".";
+}
+
+// --- C1 cross-tool concordance (C1-4) -----------------------------------------
+// The C1 concordance results (germline, RNA-seq, somatic, single-cell) are
+// kind "concordance" checks like the C7 annotation ones, but carry no annotator
+// identity and use their own check names. This set keeps the C1 surface from
+// claiming the annotation line's consequence wording.
+const C1_CONCORDANCE_CHECKS = new Set([
+  "genotype_concordance", // germline genotype agreement
+  "site_overlap", // germline site agreement
+  "spearman_concordance", // RNA-seq (and single-cell pseudobulk) rank agreement
+  "fraction_agreeing", // RNA-seq (and single-cell) count agreement
+  "gene_overlap", // RNA-seq (and single-cell) gene-id overlap, informational
+  "somatic_site_overlap", // somatic PASS-site overlap
+  "sc_count_concordance", // single-cell matrix that could not be parsed
+]);
+
+export interface C1ConcordanceLine {
+  check: string;
+  status: QCStatus;
+  value: number | null;
+  // The compared pair/sample label the engine wrote, when the message has one.
+  label: string | null;
+}
+
+/**
+ * The C1 cross-tool concordance checks, read (never recomputed) from
+ * qc_results. Each line keeps the engine's status so an UNVERIFIED check can
+ * never read as corroboration. Empty when the run has no C1 checks.
+ */
+export function corroboratedByC1Lines(
+  results: QCResult[],
+): C1ConcordanceLine[] {
+  return results
+    .filter((r) => r.kind === "concordance" && C1_CONCORDANCE_CHECKS.has(r.check))
+    .map((r) => ({
+      check: r.check,
+      status: r.status,
+      value: r.value,
+      label: PAIR_RE.exec(r.message)?.[1] ?? null,
+    }));
+}
+
+// One plain-language line per C1 concordance check. UNVERIFIED is stated as
+// such and never as corroboration (a check with no second tool to compare
+// against proves nothing).
+export function corroboratedByC1Text(line: C1ConcordanceLine): string {
+  const subject = line.label ?? "a second tool";
+  if (line.status === "unverified") {
+    return `UNVERIFIED: ${line.check} — no cross-tool corroboration for ${subject}.`;
+  }
+  return `Corroborated by ${subject}: ${line.check} ${line.value ?? "n/a"}.`;
+}
+
+// The somatic swap smell-test check the engine emits (`normal_median_vaf[:<label>]`).
+// A high normal-column VAF means the somatic signal is in the normal (swap,
+// mislabel, or contamination); the engine's message says which. Render the
+// check, never re-derive its verdict from the value.
+export function normalMedianVafCheck(results: QCResult[]): QCResult | null {
+  return (
+    results.find(
+      (r) => r.check === "normal_median_vaf" ||
+        r.check.startsWith("normal_median_vaf:"),
+    ) ?? null
+  );
+}
+
+// --- C3 plausibility packs (C3-5) ---------------------------------------------
+export type PlausibilityGroupKey =
+  | "rnaseq_composition"
+  | "germline_sex"
+  | "germline_variant_count";
+
+// Each group's check names, before the engine's optional ":<sample>" suffix.
+const PLAUSIBILITY_PREFIXES: {
+  key: PlausibilityGroupKey;
+  prefixes: string[];
+}[] = [
+  {
+    key: "rnaseq_composition",
+    prefixes: [
+      "exonic_fraction",
+      "intronic_fraction",
+      "unassigned_fraction",
+      "rnaseq_composition_qc",
+    ],
+  },
+  { key: "germline_sex", prefixes: ["sex_plausibility"] },
+  { key: "germline_variant_count", prefixes: ["variant_count"] },
+];
+
+function hasCheckPrefix(check: string, prefix: string): boolean {
+  return check === prefix || check.startsWith(`${prefix}:`);
+}
+
+export interface PlausibilityGroup {
+  key: PlausibilityGroupKey;
+  rows: QCResult[];
+}
+
+/**
+ * Group a run's C3 plausibility checks into the three surfaces (RNA-seq mapping
+ * composition, germline sex check, germline variant count), read from
+ * qc_results. Groups with no checks are omitted so a run never renders an
+ * empty card.
+ */
+export function plausibilityGroups(results: QCResult[]): PlausibilityGroup[] {
+  return PLAUSIBILITY_PREFIXES.map(({ key, prefixes }) => ({
+    key,
+    rows: results.filter(
+      (r) =>
+        r.kind !== "concordance" &&
+        prefixes.some((p) => hasCheckPrefix(r.check, p)),
+    ),
+  })).filter((g) => g.rows.length > 0);
 }
 
 // The detector's failure classes (mirror of FailureClass in src/contig/models.py).

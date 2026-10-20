@@ -22,7 +22,12 @@ import {
 } from "@/components/ui/table";
 import {
   annotationIdentityNote,
+  corroboratedByC1Lines,
+  corroboratedByC1Text,
   corroboratedByLine,
+  normalMedianVafCheck,
+  plausibilityGroups,
+  type PlausibilityGroupKey,
 } from "@/lib/derive";
 import type { AnnotationProvenance, QCResult, QCStatus } from "@/lib/types";
 
@@ -120,6 +125,30 @@ function QcRows({ rows }: { rows: QCResult[] }) {
   );
 }
 
+// Copy for the compact C3 plausibility cards (C3-5). Each card renders only
+// when the run carries that pack's checks, so a non-RNA-seq run never shows an
+// empty composition card.
+const PLAUSIBILITY_COPY: Record<
+  PlausibilityGroupKey,
+  { title: string; description: string }
+> = {
+  rnaseq_composition: {
+    title: "Mapping composition (RNA-seq)",
+    description:
+      "Where reads fall relative to gene annotation (RSeQC read_distribution). An intronic- or intergenic-heavy library suggests gDNA contamination or failed enrichment; the engine sets the bands.",
+  },
+  germline_sex: {
+    title: "Karyotypic sex check (germline)",
+    description:
+      "Inferred from chrX heterozygosity plus chrY variant presence. A discordant call is a WARN-capped smell test (possible swap, aneuploidy, or contamination), never a diagnosis.",
+  },
+  germline_variant_count: {
+    title: "Call-set size (germline)",
+    description:
+      "Distinct variant sites in the primary call set. A near-empty or absurd count is a plausibility tripwire set by the engine, not a clinical threshold.",
+  },
+};
+
 export function QcPanel({
   qcResults,
   annotationIdentity,
@@ -160,6 +189,15 @@ export function QcPanel({
   });
   // The annotation tool(s) + cache/build id, surfaced honestly (PRD D1).
   const identityNote = annotationIdentityNote(annotationIdentity);
+  // C1 cross-tool concordance (germline/RNA-seq/somatic/single-cell), read from
+  // the same qc_results and rendered alongside the annotation corroboration.
+  const c1Lines = corroboratedByC1Lines(qcResults);
+  // The somatic swap smell-test check (C4-5), rendered exactly as the engine wrote
+  // it: never re-derived from the value.
+  const swap = normalMedianVafCheck(qcResults);
+  // C3 plausibility packs (mapping composition, sex check, variant count), each
+  // card shown only when the run carries its checks.
+  const plausible = plausibilityGroups(qcResults);
   const metric = qcResults.filter(
     (q) => q.kind !== "structural" && q.kind !== "concordance",
   );
@@ -219,6 +257,24 @@ export function QcPanel({
             {corroboration && (
               <p className="text-sm text-foreground">{corroboration}</p>
             )}
+            {c1Lines.length > 0 && (
+              <div>
+                <h3 className="mb-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                  Cross-tool concordance
+                </h3>
+                <ul className="space-y-1">
+                  {c1Lines.map((line) => (
+                    <li
+                      key={line.check}
+                      className="flex flex-wrap items-center gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm"
+                    >
+                      <StatusBadge status={line.status} />
+                      <span>{corroboratedByC1Text(line)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {identityNote && (
               <p className="text-xs text-muted-foreground">
                 Annotation: {identityNote} (research use).
@@ -228,6 +284,43 @@ export function QcPanel({
           </CardContent>
         </Card>
       )}
+
+      {swap && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex flex-wrap items-center gap-2">
+              <StatusBadge status={swap.status} />
+              Normal-sample VAF (somatic swap check)
+            </CardTitle>
+            <CardDescription>
+              The median variant allele fraction in the normal column at somatic
+              sites. A high value smells like a tumor/normal swap, a mislabel, or
+              tumor-in-normal contamination. The engine writes the check and its
+              message; this card only renders them.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <p className="font-mono text-xs text-muted-foreground">
+              {swap.check} · {formatValue(swap.value)}
+            </p>
+            <p className="text-sm">{swap.message}</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {plausible.map((group) => (
+        <Card key={group.key}>
+          <CardHeader>
+            <CardTitle>{PLAUSIBILITY_COPY[group.key].title}</CardTitle>
+            <CardDescription>
+              {PLAUSIBILITY_COPY[group.key].description}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <QcRows rows={group.rows} />
+          </CardContent>
+        </Card>
+      ))}
 
       {sampleGroups.length > 0 && (
         <Card>
