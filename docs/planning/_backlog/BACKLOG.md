@@ -31,8 +31,8 @@ Workflow per item: `contig-begin-fast` → worktree `.claude/worktrees/<type>-<i
 | C2-15 | C2 | `repair-stats` dashboard card | code | todo |
 | C2-16 | C2 | `risk="destructive"` no-op to engine; no `--auto-approve` carve-out | code | done |
 | C2-17 | C2 | `_write_pending_choice` advisory branch (unreachable today) | code | done |
-| C2-18 | C2 | `container_unavailable` wait leaves no trace in `RepairStep.detail` | code | todo |
-| C2-19 | C2 | Still-missing single-file index kind (BAM/CRAM `.csi`) | code | todo |
+| C2-18 | C2 | `container_unavailable` wait leaves no trace in `RepairStep.detail` | code | done |
+| C2-19 | C2 | Still-missing single-file index kind (BAM/CRAM `.csi`) | code | done |
 | C2-20 | C2 | Exhaustive per-assembly alias-table completeness | code | todo |
 | C2-21 | C2 | Runtime `reference_mismatch` detector-corpus case | code | todo |
 | C2-22 | C2 | Pin conflict repair (container/dependency repin) | code | todo |
@@ -47,7 +47,7 @@ Workflow per item: `contig-begin-fast` → worktree `.claude/worktrees/<type>-<i
 | C3-8 | C3 | Sex-check FAIL severity on calibrated bands | calibration | blocked |
 | C3-9 | C3 | Structured QCatch-JSON recognizer for simpleaf path | code | todo |
 | C3-10 | C3 | Mitochondrial-fraction plausibility | code | todo |
-| C3-11 | C3 | `rrna_contamination` guessed `percent_rRNA` slug | code | todo |
+| C3-11 | C3 | `rrna_contamination` guessed `percent_rRNA` slug | code | done |
 | C3-12 | C3 | MultiQC `None` gate: checks vanish instead of UNVERIFIED | code | done |
 | C4-1 | C4 | Panel-of-normals / germline-resource reference wiring | code | todo |
 | C4-2 | C4 | `normal_median_vaf` FAIL severity + band calibration | calibration | blocked |
@@ -102,6 +102,8 @@ Explicitly declined by design (not work): 16 items listed in the roadmap's
 `eval-guard` deliberate miss, BGZF fix target, BAM→CRAM, wrong-reference
 masquerade, full-clone fallback, AWS Batch undiagnosability, `_applied_word`
 alignment, `--step annotate`, `gene_symbol_concordance` severity, default exit code).
+
+Blocked items: see `BLOCKED_RUNBOOK.md` for the evidence each one needs.
 
 Execution order: dependency-first (C3-12, C8-13, C2-16 correctness fixes), then
 C5 → C2 → C3 → C4 → C1 → C8 → C6 → C7 → C9.
