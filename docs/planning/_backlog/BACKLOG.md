@@ -29,8 +29,8 @@ Workflow per item: `contig-begin-fast` → worktree `.claude/worktrees/<type>-<i
 | C2-13 | C2 | Walltime factor/ceiling calibration on real data | calibration | blocked |
 | C2-14 | C2 | `repair-stats --snapshot/--history` trend | code | todo |
 | C2-15 | C2 | `repair-stats` dashboard card | code | todo |
-| C2-16 | C2 | `risk="destructive"` no-op to engine; no `--auto-approve` carve-out | code | todo |
-| C2-17 | C2 | `_write_pending_choice` advisory branch (unreachable today) | code | todo |
+| C2-16 | C2 | `risk="destructive"` no-op to engine; no `--auto-approve` carve-out | code | done |
+| C2-17 | C2 | `_write_pending_choice` advisory branch (unreachable today) | code | done |
 | C2-18 | C2 | `container_unavailable` wait leaves no trace in `RepairStep.detail` | code | todo |
 | C2-19 | C2 | Still-missing single-file index kind (BAM/CRAM `.csi`) | code | todo |
 | C2-20 | C2 | Exhaustive per-assembly alias-table completeness | code | todo |
@@ -48,7 +48,7 @@ Workflow per item: `contig-begin-fast` → worktree `.claude/worktrees/<type>-<i
 | C3-9 | C3 | Structured QCatch-JSON recognizer for simpleaf path | code | todo |
 | C3-10 | C3 | Mitochondrial-fraction plausibility | code | todo |
 | C3-11 | C3 | `rrna_contamination` guessed `percent_rRNA` slug | code | todo |
-| C3-12 | C3 | MultiQC `None` gate: checks vanish instead of UNVERIFIED | code | todo |
+| C3-12 | C3 | MultiQC `None` gate: checks vanish instead of UNVERIFIED | code | done |
 | C4-1 | C4 | Panel-of-normals / germline-resource reference wiring | code | todo |
 | C4-2 | C4 | `normal_median_vaf` FAIL severity + band calibration | calibration | blocked |
 | C4-3 | C4 | Directional tumor-vs-normal ratio/delta metric | code | todo |
@@ -75,7 +75,7 @@ Workflow per item: `contig-begin-fast` → worktree `.claude/worktrees/<type>-<i
 | C8-10 | C8 | `metadata.tags` / multi-key / regex cell matching | code | todo |
 | C8-11 | C8 | Non-text notebook outputs | code | todo |
 | C8-12 | C8 | Structured staleness field on `ClaimResult` | code | todo |
-| C8-13 | C8 | Non-UTF-8 `results.json` raises `UnicodeDecodeError` | code | todo |
+| C8-13 | C8 | Non-UTF-8 `results.json` raises `UnicodeDecodeError` | code | done |
 | C8-14 | C8 | Private-repo credentials | code | todo |
 | C8-15 | C8 | Submodules | code | todo |
 | C8-16 | C8 | Checkout pruning | code | todo |

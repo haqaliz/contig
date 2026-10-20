@@ -1740,6 +1740,22 @@ def self_heal_run(
                 else None
             )
             detail = mem_detail or time_detail
+            # Only container_unavailable's patch carries wait_seconds
+            # (repair.py:46-55); every other safe retry has none, so this must
+            # never become a blanket backoff. Guard the type: only a positive
+            # real number sleeps (bool is an int subclass, so excluded
+            # explicitly -- a stray `True` must never be read as `1`).
+            wait_seconds = safe.operation.get("wait_seconds")
+            wait_applied = (
+                isinstance(wait_seconds, (int, float))
+                and not isinstance(wait_seconds, bool)
+                and wait_seconds > 0
+            )
+            if wait_applied:
+                wait_detail = (
+                    f"waited {wait_seconds:g}s for the container runtime to recover"
+                )
+                detail = f"{detail}; {wait_detail}" if detail else wait_detail
             _record_attempt(
                 run_dir,
                 repair_history,
@@ -1752,17 +1768,7 @@ def self_heal_run(
                            outcome="patched_and_retried", detail=detail,
                            patch_applied=True),
             )
-            # Only container_unavailable's patch carries wait_seconds
-            # (repair.py:46-55); every other safe retry has none, so this must
-            # never become a blanket backoff. Guard the type: only a positive
-            # real number sleeps (bool is an int subclass, so excluded
-            # explicitly -- a stray `True` must never be read as `1`).
-            wait_seconds = safe.operation.get("wait_seconds")
-            if (
-                isinstance(wait_seconds, (int, float))
-                and not isinstance(wait_seconds, bool)
-                and wait_seconds > 0
-            ):
+            if wait_applied:
                 sleeper(wait_seconds)
             attempt += 1
 

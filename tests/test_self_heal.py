@@ -117,6 +117,10 @@ def test_container_unavailable_heal_waits_via_injected_sleeper(tmp_path):
     assert step.diagnosis.failure_class == "container_unavailable"
     assert step.outcome == "patched_and_retried"
     assert step.patch_applied is True
+    # C2-18: the wait is the enacted fix, so the record must say it happened --
+    # otherwise the step looks like a bare retry that succeeded for no reason.
+    assert step.detail is not None
+    assert "15" in step.detail and "wait" in step.detail.lower()
 
 
 def test_container_pull_failed_heal_sleeps_zero_times(tmp_path):
