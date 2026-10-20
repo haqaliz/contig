@@ -3006,7 +3006,7 @@ def test_run_reproduction_notebook_missing_is_unverified(tmp_path):
 
 
 def test_run_reproduction_notebook_oversized_is_unverified_naming_size(tmp_path, monkeypatch):
-    monkeypatch.setattr(reproduce_module, "_MAX_MATCH_BYTES", 10)
+    monkeypatch.setattr(reproduce_module, "_MAX_NOTEBOOK_BYTES", 10)
     p = _write_notebook(tmp_path, "out.ipynb", _notebook_doc("AUC: 0.91\n"), _RUN_START)
     size = p.stat().st_size
     assert size > 10
@@ -3017,6 +3017,63 @@ def test_run_reproduction_notebook_oversized_is_unverified_naming_size(tmp_path,
     assert result.status == "unverified"
     assert result.observed is None
     assert str(size) in result.message
+
+
+def _padded_notebook(pad_bytes: int) -> dict:
+    """A one-cell notebook whose FILE is inflated by a binary output (the
+    embedded-figure shape a real figure-heavy `.ipynb` has), leaving the
+    extracted cell text small."""
+    doc = _notebook_doc("AUC: 0.91\n")
+    doc["cells"][0]["outputs"].append(
+        {"output_type": "display_data", "data": {"image/png": "A" * pad_bytes}}
+    )
+    return doc
+
+
+def test_run_reproduction_notebook_over_text_bound_but_under_notebook_bound_is_read(tmp_path):
+    p = _write_notebook(
+        tmp_path, "out.ipynb", _padded_notebook(9 * 1024 * 1024), _RUN_START
+    )
+    size = p.stat().st_size
+    assert reproduce_module._MAX_MATCH_BYTES < size < reproduce_module._MAX_NOTEBOOK_BYTES
+    record = _run(
+        tmp_path, [_nb_claim(0.91, 0)], _noop_executor(), run_started_at=_RUN_START
+    )
+    result = record.claim_results[0]
+    assert result.status == "reproduced"
+    assert result.observed == 0.91
+
+
+def test_run_reproduction_notebook_over_notebook_bound_is_unverified_not_diverged(tmp_path):
+    p = tmp_path / "out.ipynb"
+    p.write_text("x" * (reproduce_module._MAX_NOTEBOOK_BYTES + 1))
+    os.utime(p, (_RUN_START, _RUN_START))
+    record = _run(
+        tmp_path, [_nb_claim(0.91, 0)], _noop_executor(), run_started_at=_RUN_START
+    )
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert str(p.stat().st_size) in result.message
+    # Size is checked before the JSON parse, so the invalid content is never read.
+    assert "not valid JSON" not in result.message
+
+
+def test_run_reproduction_plain_text_over_8mib_is_still_unverified(tmp_path):
+    _write_log(tmp_path, "logs/train.log", "x" * (8 * 1024 * 1024 + 1))
+    claims = [
+        Claim(
+            id="auc",
+            value=0.91,
+            tolerance=0.05,
+            locator=PatternLocator("logs/train.log", r"AUC: ([0-9.]+)"),
+        )
+    ]
+    record = _run(tmp_path, claims, _noop_executor())
+    result = record.claim_results[0]
+    assert result.status == "unverified"
+    assert result.observed is None
+    assert "match limit" in result.message
 
 
 def test_run_reproduction_notebook_non_json_is_unverified(tmp_path):

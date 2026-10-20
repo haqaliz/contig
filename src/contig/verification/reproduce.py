@@ -51,6 +51,10 @@ _SAFE_PACKAGE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 # pattern that does match past the cut.
 _MAX_MATCH_BYTES = 8 * 1024 * 1024
 
+# Notebooks get a higher cap than plain text: embedded figure payloads inflate a
+# real `.ipynb` well past 8 MiB, while the text a pattern is run over stays small.
+_MAX_NOTEBOOK_BYTES = 32 * 1024 * 1024
+
 # The named flags a claim's optional `"flags": [...]` array may carry. Anything
 # else is refused by `load_claims` pre-run rather than silently ignored.
 _REGEX_FLAGS = {
@@ -1209,10 +1213,10 @@ def run_reproduction(
         except OSError:
             return None, f"notebook {loc.source!r} is missing or unreadable"
 
-        if stat.st_size > _MAX_MATCH_BYTES:
+        if stat.st_size > _MAX_NOTEBOOK_BYTES:
             return None, (
                 f"notebook {loc.source!r} is {stat.st_size} bytes, "
-                f"over the {_MAX_MATCH_BYTES}-byte match limit"
+                f"over the {_MAX_NOTEBOOK_BYTES}-byte match limit"
             )
 
         # Same rule as every other surface, applied through the shared
