@@ -4,9 +4,9 @@ from pathlib import Path
 import pytest
 
 from contig.corpus import load_corpus
-from contig.models import ExecutionTarget, Patch, RunSummary, sha256_file
+from contig.models import Diagnosis, ExecutionTarget, Patch, RunSummary, sha256_file
 from contig.runner import PipelineExecutionError
-from contig.self_heal import apply_patch, self_heal_run
+from contig.self_heal import _write_pending_choice, apply_patch, self_heal_run
 
 
 def _trace(status, exit_code):
@@ -1542,6 +1542,39 @@ def test_self_heal_advisory_pending_approval_has_no_operation_key(tmp_path):
     assert pending["diagnosis"]["failure_class"] == "conda_solve_failed"
     assert pending["diagnosis"]["evidence"]  # non-empty: the matched log lines
     assert pending["patch"]["rationale"]
+    assert "operation" not in pending["patch"]
+
+
+def test_self_heal_choice_gate_omits_operation_for_an_advisory_best_option(tmp_path):
+    # C2-17: the CHOICE writer had no advisory branch, so an advisory landing
+    # best-ranked would be serialized with an `operation` key -- the exact claim
+    # the single gate stopped making. Unreachable through the loop today (the
+    # advisory branch takes the single gate first), so this pins the writer's
+    # shape directly rather than driving a path that cannot exist yet.
+    advisory = Patch(
+        kind="advisory",
+        operation={},
+        rationale="clean the work dir yourself; Contig will not delete data",
+        risk="needs_confirmation",
+        expected_signal="disk space free",
+    )
+    other = Patch(
+        kind="param",
+        operation={"input": "sheet.csv"},
+        rationale="alternate fix",
+        risk="needs_confirmation",
+        expected_signal="pipeline starts",
+    )
+    diagnosis = Diagnosis(
+        failure_class="disk_full", root_cause="disk full", confidence=0.4
+    )
+
+    _write_pending_choice(tmp_path, "r", 1, diagnosis, [advisory, other], 30)
+
+    pending = json.loads((tmp_path / "pending_approval.json").read_text())
+    assert pending["decision_kind"] == "choice"
+    assert [o["kind"] for o in pending["options"]] == ["advisory", "param"]
+    assert pending["patch"]["kind"] == "advisory"
     assert "operation" not in pending["patch"]
 
 

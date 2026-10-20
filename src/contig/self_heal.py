@@ -419,8 +419,11 @@ def _write_pending_choice(
                     "kind": best.kind,
                     "risk": best.risk,
                     "rationale": best.rationale,
-                    "operation": best.operation,
                     "expected_signal": best.expected_signal,
+                    # Same rule as the single gate: an advisory has no
+                    # machine-applicable operation, so omit the key rather than
+                    # write `{}` and imply there was nothing to change.
+                    **({} if best.kind == "advisory" else {"operation": best.operation}),
                 },
             }
         )
