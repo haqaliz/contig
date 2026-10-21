@@ -35,7 +35,7 @@ better base model should make each of these stronger, never redundant.
 
 ## C1. Cross-tool concordance verification  ·  SHIPPED v0.2.0 (germline) + RNA-seq slice (Unreleased) + somatic slice (Unreleased) + single-cell slice (Unreleased)
 
-**Closed 2026-10-21 (wrap-up pass):** the dashboard corroborated-by line for C1 checks (see CHANGELOG).
+**Closed 2026-10-21 (wrap-up passes 1-2):** the dashboard corroborated-by line; `contig verify` now echoes the stored somatic concordance without a flag (see CHANGELOG).
 
 **Shipped (slice 1) in v0.2.0.** The verdict gained a third axis alongside QC
 thresholds and structural checks: `verification/concordance.py` computes a
@@ -206,7 +206,7 @@ verification-divergence cases.
 
 ## C2. Self-heal breadth plus auto resource-scaling  ·  months 2 to 3
 
-**Closed 2026-10-21 (wrap-up pass):** the BAM/CRAM `.csi` index kind (`samtools index -c`), `risk="destructive"` under `--auto-approve`, the choice gate's advisory `operation` key, the container-wait trace in `RepairStep.detail`, and the observed peak on `FailureCase` (see CHANGELOG).
+**Closed 2026-10-21 (wrap-up passes 1-2):** the BAM/CRAM `.csi` index kind, `risk="destructive"` under `--auto-approve`, the choice gate's advisory `operation` key, the container-wait trace, the observed peak on `FailureCase`, the stall dashboard surface, and `repair-stats --snapshot/--history` plus its card (see CHANGELOG).
 
 **Shipped (resource-aware slice):** OOM/walltime retries now scale only up to a
 bounded absolute ceiling (defaults 128 GB / 72 h) and give up honestly with a
@@ -774,7 +774,7 @@ including the real-corpus before/after (byte-identical) and why the field went o
 
 ## C3. Biological-plausibility verification  ·  SHIPPED v0.3.0 (germline) + RNA-seq slice (v0.6.0) + single-cell ingestion slice (Unreleased) + germline sex-check slice (Unreleased) + RNA-seq mapping-composition slice (Unreleased) + germline variant-count slice (Unreleased) + germline plausibility FAIL-severity slice (Unreleased) + somatic empty-call-set FAIL floor slice (Unreleased; the remaining VAF/RNA-seq FAIL bands **declined by design** — see below) + RNA-seq plausibility ingestion fix slice (Unreleased; `duplication_rate` corrected to its real MultiQC key/unit, shipped informational-only — no band)
 
-**Closed 2026-10-21 (wrap-up pass):** the missing-MultiQC UNVERIFIED gap, the never-firing `rrna_contamination` slug (dropped), and the C3 plausibility dashboard cards (see CHANGELOG).
+**Closed 2026-10-21 (wrap-up passes 1-2):** the missing-MultiQC UNVERIFIED gap, the never-firing `rrna_contamination` slug (dropped), and the C3 plausibility dashboard cards. Gene-body coverage, coverage-from-VCF, doublets, multi-sample, and reported-sex concordance remain blocked on upstream artifacts/data (see the backlog).
 
 **Shipped (germline slice) in v0.3.0.** The germline plausibility rules (Ti/Tv and
 het/hom ratios) already existed in `VARIANT_RULE_PACK` but were dormant because
@@ -1114,7 +1114,7 @@ distributions and flag implausible-but-completed runs for review.
 
 ## C4. New assay, depth-first: somatic variant calling  ·  SHIPPED v0.13.0 (intake→launch→verify) + VAF plausibility slice (Unreleased) + Strelka2-vs-Mutect2 concordance slice (Unreleased) + Strelka2-native VAF slice (Unreleased) + empty-call-set FAIL floor slice (Unreleased; VAF FAIL bands **declined by design**) + swapped-pair smell-test slice (Unreleased)
 
-**Closed 2026-10-21 (wrap-up pass):** the dashboard surface for the swapped-pair smell-test (see CHANGELOG).
+**Closed 2026-10-21 (wrap-up passes 1-2):** the dashboard surface for the swapped-pair smell-test, panel-of-normals/germline-resource wiring, the tumor-vs-normal VAF delta, and the Strelka2-native normal VAF (see CHANGELOG).
 
 **Shipped (slice 1) in v0.13.0.** A somatic (tumor–normal) assay is now on the engine end
 to end: a `somatic_variant_calling` registry entry + routing served by `nf-core/sarek`
@@ -1237,6 +1237,8 @@ cases.
 ---
 
 ## C5. Reference and input-data integrity  ·  month 5  ·  capture slice SHIPPED (Unreleased)
+
+**Closed 2026-10-21 (wrap-up pass 2):** known-sites contig consistency at pre-flight (zero overlap refuses, partial overlap breadcrumbs). Assembly-signature mismatch and annotation/GTF version resolution remain blocked (no sample-side signal / no reliable version source).
 
 **Shipped (capture slice — slice 1 of N).** A run now records its **reference
 identity** into provenance: a new `ReferenceIdentity` model captured at finalize from
@@ -1796,7 +1798,7 @@ ever. See [`../planning/variant-annotation-assay/prd.md`](../planning/variant-an
 
 ## C8. Reproduce & verify *existing published* work  ·  first slice SHIPPED v0.40.0 + output-locator slice 1.5 SHIPPED v0.41.0 + environment-resurrection slice 2 SHIPPED (Unreleased) + TSV/CSV table-locator slice 3 SHIPPED (Unreleased) + stdout/log pattern-locator slice 4 SHIPPED (Unreleased) + notebook (`.ipynb`) locator slice 5 SHIPPED (Unreleased) + freshness guard extended to **all** binding surfaces SHIPPED (Unreleased) + remote `https://` git-URL intake slice 6 SHIPPED (Unreleased) + `--rev` revision pinning slice 7 SHIPPED (Unreleased) + checkout-tree hash slice 8 SHIPPED (Unreleased) + local tree hash slice 9 SHIPPED (Unreleased) + paper-claim extraction (`contig extract-claims`) SHIPPED (Unreleased) + DOI/PDF intake (`extract-claims` accepts a DOI or local `.pdf`) SHIPPED (Unreleased) + locator-inference **candidate sweep** (aspect 1 of 3) SHIPPED (Unreleased) + **match-and-propose** (aspect 2 of 3) SHIPPED (Unreleased) + **M10 semantic filter** SHIPPED (Unreleased) + **`contig infer-locators` CLI** (aspect 3 of 3) SHIPPED (Unreleased)  ·  M7+
 
-**Closed 2026-10-21 (wrap-up pass):** the `flags` array, the notebook size bound, regex/numeric table-row predicates, the non-UTF-8 `results.json` crash, and opt-in checkout pruning (see CHANGELOG). Remaining C8 items are tracked in `docs/planning/_backlog/BACKLOG.md`.
+**Closed 2026-10-21 (wrap-up passes 1-2):** the `flags` array, the notebook size bound, regex/numeric table-row predicates, the non-UTF-8 `results.json` crash, opt-in checkout pruning, private-repo credentials, submodules, direct PDF URLs, `--pdf-extractor`, notebook tag addressing, and a loopback test of the real DOI fetcher (see CHANGELOG). Remaining C8 items are tracked in `docs/planning/_backlog/BACKLOG.md`.
 
 Point the shipped run → self-heal → verify → reproduce engine at a **third-party,
 already-published** bioinformatics repository (a paper + its code/data) and report which of

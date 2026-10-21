@@ -250,7 +250,12 @@ C2's BAM `.csi` index kind, destructive-patch carve-out, advisory choice gate,
 container-wait trace, and corpus peak RSS; C3's missing-MultiQC UNVERIFIED gap,
 the dropped `rrna_contamination` slug, and its dashboard cards; C4's swap-signal
 surface; and C8's `flags` array, notebook size bound, regex/numeric table
-predicates, non-UTF-8 `results.json` crash, and opt-in checkout pruning. Details
+predicates, non-UTF-8 `results.json` crash, and opt-in checkout pruning; plus
+pass 2 — PON/germline-resource wiring, the tumor-vs-normal VAF delta, Strelka2
+normal VAF, known-sites contig consistency, private-repo credentials, submodules,
+direct PDF URLs, `--pdf-extractor`, notebook tag addressing, `platform_unsupported`
+heal coverage, repair-stats history, the verify-guard/reproduce/stall/triage
+surfaces, and a real loopback test of the DOI fetcher. Details
 in [`CHANGELOG.md`](CHANGELOG.md); remaining items in
 [`docs/planning/_backlog/BACKLOG.md`](docs/planning/_backlog/BACKLOG.md).
 

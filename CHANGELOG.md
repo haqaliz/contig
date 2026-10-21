@@ -49,6 +49,52 @@ All notable changes to Contig are recorded here. The format follows
   remote run, removes `source/` from the N oldest remote reproduce runs, never
   the current run, never a local-path run.
 
+### Somatic assay (wrap-up pass 2)
+- **Panel-of-normals and germline resource are wired (C4-1):** typed `--pon`,
+  `--pon-tbi`, `--germline-resource`, `--germline-resource-tbi`, forwarded as
+  sarek's own params, refused pre-launch when a path is missing/unreadable or a
+  main file and its `.tbi` are unpaired, and replayed by `rerun`/`resume`.
+  `resume` now also replays `manifest.assay`.
+- **Directional tumor-vs-normal VAF delta (C4-3):** `tumor_normal_vaf_delta`,
+  informational and verdict-neutral, UNVERIFIED when either median is
+  uncomputable.
+- **Strelka2-native normal VAF (C4-4):** `strelka_normal_median_vaf` from the
+  NORMAL column's tier1 counts, reusing the existing count→VAF helpers,
+  informational-only.
+
+### Reproduce intake (wrap-up pass 2)
+- **Private repos (C8-14):** `CONTIG_GIT_TOKEN` is passed to git through the
+  environment (an `http.extraheader` via `GIT_CONFIG_*`), never argv, and is
+  redacted from fetcher output and errors.
+- **Submodules (C8-15):** opt-in `--allow-submodules`, refused unless
+  `--allow-fetch` is also set.
+- **Direct PDF URLs (C8-19):** `extract-claims` accepts `https://…pdf` behind
+  `--allow-fetch`, reusing the fetch seam, PDF sniff, 64 MiB cap, and
+  nothing-written-on-failure rule. Non-PDF responses are refused, not parsed.
+- **`--pdf-extractor` (C8-21):** point at an alternative pdftotext-compatible
+  binary; validated before any fetch.
+- **Notebook cells by metadata tag (C8-10):** `{"tag": "<name>"}` alongside
+  `{"contains": …}`, exactly-one preserved, combined/unknown selectors refused
+  pre-run.
+
+### Integrity and eval (wrap-up pass 2)
+- **Known-sites consistency (C5-2):** a supplied `--known-sites` VCF's contigs are
+  compared to the reference at pre-flight through the existing alias resolver.
+  Zero overlap refuses pre-launch ("looks like a different assembly"); partial
+  overlap records the existing structural WARN breadcrumb; unreadable or
+  contig-less files refuse honestly.
+- **`contig verify` echoes stored somatic concordance without a flag (C1-6)** on
+  the text paths; the JSON payload, stored verdict, and exit code are unchanged.
+- **`platform_unsupported` is heal-guarded (C6-1):** `AttemptSpec.exit` is now
+  optional, the driver writes a blank cell faithfully, and the baseline is
+  refrozen at 25 scenarios / outcome-match 1.0 / 18 covered classes.
+- **`repair-stats --snapshot` / `--history` (C2-14):** a `RepairStatsSnapshot`
+  JSONL plus the shared trend renderer (non-computable points render as a dash,
+  never 0%).
+- **Loopback test of the real DOI fetcher (C8-22):** the default `urllib` path is
+  now exercised against a real localhost server (citation meta, PDF sniff,
+  paywall refusal, duplicate metas), so it is observed rather than reasoned.
+
 ### Dashboard
 - **Cross-tool concordance is surfaced as a "corroborated by" line (C1-4),** with
   UNVERIFIED rendered as UNVERIFIED, never as corroborated.
@@ -57,6 +103,9 @@ All notable changes to Contig are recorded here. The format follows
 - **C3 plausibility cards (C3-5):** RNA-seq mapping composition, germline
   sex-check, and germline variant count, each rendering only when the run
   actually carries the checks.
+- **Stall evidence (C2-10), verify-guard trend (C6-2), reproduce summary (C8-4),
+  repair-stats trend (C2-15), and the Jev triage ledger (C9-3)** are now
+  surfaced; each renders nothing when its data is absent.
 
 - **The corrupt/partial STAR genome-index failure is now detected and healed
   (`star-index-corrupt-heal`, C2 follow-on N1).** STAR's
