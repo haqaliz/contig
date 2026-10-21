@@ -44,6 +44,7 @@ from contig.models import (
 )
 from contig.notify import emit_event
 from contig.reference_check import fasta_contigs, gtf_contigs
+from contig.reference_harmonize import known_sites_unmatched
 from contig.registry import VARIANT_ASSAYS, assay_for_pipeline
 from contig.repair import propose_patches
 from contig.triage import (
@@ -1831,6 +1832,41 @@ def _unmatched_harmonized_contigs(params: dict[str, object]) -> list[str]:
         return []
 
 
+def _unmatched_known_sites_contigs(
+    params: dict[str, object],
+) -> list[tuple[str, list[str]]]:
+    """Known-sites roles with contigs that have no equivalent FASTA spelling.
+
+    Recomputes what pre-flight already compared (alias/prefix aware) so a
+    partial overlap stays visible in the same structural-QC channel as the
+    harmonization breadcrumb. Unreadable files were refused at pre-flight;
+    degrade to `[]` here rather than crash finalize.
+    """
+    roles = [
+        (key, params.get(key))
+        for key in ("dbsnp", "known_indels", "known_snps")
+        if params.get(key)
+    ]
+    fasta = params.get("fasta")
+    if not roles or not fasta:  # no known-sites -> byte-identical finalize
+        return []
+    try:
+        fa = fasta_contigs(fasta)
+    except (OSError, EOFError, UnicodeDecodeError):
+        return []
+    if not fa:  # uncomparable -> never a fabricated breadcrumb
+        return []
+    found: list[tuple[str, list[str]]] = []
+    for key, path in roles:
+        try:
+            unmatched = list(known_sites_unmatched(fa, path))
+        except (OSError, EOFError, UnicodeDecodeError):
+            continue
+        if unmatched:
+            found.append(("--" + key.replace("_", "-"), unmatched))
+    return found
+
+
 def _finalize(
     record: RunRecord | None,
     repair_history: list[RepairStep],
@@ -1907,6 +1943,21 @@ def _finalize(
             check="reference_harmonized",
             status="warn",
             message=message,
+        ))
+    # Partial known-sites overlap: proceed (the shared contigs are still usable)
+    # but surface the unmatched contigs in the same structural-QC channel as the
+    # harmonization breadcrumb, never a silent pass.
+    for flag, unmatched in _unmatched_known_sites_contigs(record.parameters):
+        names = ", ".join(unmatched)
+        record.qc_results.append(QCResult(
+            kind="structural",
+            check="known_sites_contigs",
+            status="warn",
+            message=(
+                f"{len(unmatched)} contig(s) in {flag} have no equivalent in the "
+                f"reference FASTA and were left unchecked for consistency: {names}. "
+                "Confirm the known-sites file was built against the same assembly."
+            ),
         ))
     # Pending verification-case capture (PRD R4): appended AFTER the
     # harmonized-reference warn above so the case reflects the final verdict.

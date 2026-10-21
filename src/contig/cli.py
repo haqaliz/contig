@@ -135,8 +135,10 @@ from contig.planner import PlanningError
 from contig.planner import plan as build_plan
 from contig.progress import read_progress, render_progress
 from contig.reference import ReferenceError, resolve_reference
-from contig.reference_check import check_reference_consistency, fasta_contigs, gtf_contigs
-from contig.reference_harmonize import harmonize_gtf, plan_harmonization
+from contig.reference_check import (
+    _sample, check_reference_consistency, fasta_contigs, gtf_contigs, vcf_contigs,
+)
+from contig.reference_harmonize import harmonize_gtf, known_sites_unmatched, plan_harmonization
 from contig.registry import VARIANT_ASSAYS, UnknownAssayError, assay_for_pipeline, select_pipeline
 from contig.repair_stats import (
     collect_runs,
@@ -608,6 +610,37 @@ def _known_sites_params(
     }
 
 
+def _preflight_known_sites(fasta: str | None, known_sites: dict[str, str]) -> list[str]:
+    """Refuse known-sites files that cannot be verified against the reference.
+
+    A missing path stays warning-only (the existing honest degradation: finalize
+    hashes it to None), but an unreadable or contig-less file — and a file whose
+    contigs share nothing with the FASTA — must not launch a wrong-build run.
+    """
+    problems: list[str] = []
+    # iGenomes mode has no local FASTA to compare against; readability is still checked.
+    fa = fasta_contigs(fasta) if fasta else set()
+    for key, path in known_sites.items():
+        if not Path(path).is_file():
+            continue
+        flag = "--" + key.replace("_", "-")
+        try:
+            contigs = vcf_contigs(path)
+            unmatched = set(known_sites_unmatched(fa, path)) if fa else set()
+        except (OSError, EOFError, UnicodeDecodeError) as exc:
+            problems.append(f"{flag} known-sites file is unreadable: {path} ({exc})")
+            continue
+        if not contigs:
+            problems.append(f"{flag} known-sites file has no contig identifiers: {path}")
+        elif fa and len(unmatched) == len(contigs):
+            problems.append(
+                f"{flag} known-sites file looks like a different assembly: none of "
+                f"its {len(contigs)} contig(s) match the reference FASTA "
+                f"(known-sites has [{_sample(contigs)}], FASTA has [{_sample(fa)}])"
+            )
+    return problems
+
+
 _SOMATIC_REFERENCE_ROLES = (
     ("pon", "--pon", "pon_tbi", "--pon-tbi"),
     ("germline_resource", "--germline-resource", "germline_resource_tbi", "--germline-resource-tbi"),
@@ -992,6 +1025,12 @@ def _dispatch_run(
         for key, path in known_sites.items():
             if not Path(path).is_file():
                 typer.echo(f"Warning: known-sites file does not exist: {path}", err=True)
+        problems = _preflight_known_sites(params.get("fasta"), known_sites)
+        if problems:
+            typer.echo("Known-sites file is inconsistent with the reference:", err=True)
+            for problem in problems:
+                typer.echo(f"  - {problem}", err=True)
+            raise typer.Exit(code=1)
         params.update(known_sites)
     # Somatic Mutect2 reference inputs ride as params next to the known-sites
     # roles. Unlike those, a supplied-but-broken path is refused pre-launch:

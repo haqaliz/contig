@@ -37,6 +37,29 @@ def gtf_contigs(path) -> set[str]:
     return names
 
 
+def vcf_contigs(path) -> set[str]:
+    """VCF contig identifiers: ``##contig=<ID=…>`` header ids, else column 1.
+
+    The header is authoritative when present; a header-less VCF falls back to
+    the first column of its records (mirroring ``gtf_contigs``'s convention).
+    """
+    header: set[str] = set()
+    body: set[str] = set()
+    with _open_text(path) as fh:
+        for line in fh:
+            if line.startswith("##contig="):
+                for field in line.strip().split("<", 1)[-1].rstrip(">").split(","):
+                    if field.startswith("ID=") and field[3:].strip().strip('"'):
+                        header.add(field[3:].strip().strip('"'))
+            elif line.startswith("#"):
+                continue
+            else:
+                field0 = line.split("\t", 1)[0].strip()
+                if field0:
+                    body.add(field0)
+    return header or body
+
+
 def _sample(names: set[str], n: int = 3) -> str:
     return ", ".join(sorted(names)[:n])
 

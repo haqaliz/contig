@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Mapping
 
 from contig.contig_aliases import alias_group
-from contig.reference_check import _sample, fasta_contigs, gtf_contigs
+from contig.reference_check import _sample, fasta_contigs, gtf_contigs, vcf_contigs
 
 
 @dataclass(frozen=True)
@@ -64,6 +64,25 @@ def _candidate_names(g: str) -> set[str]:
     return names
 
 
+def resolve_contig(name: str, fasta: set[str]) -> str | None:
+    """The FASTA spelling of *name* (prefix/alias aware), or ``None``."""
+    cands = _candidate_names(name) & fasta
+    if not cands:
+        return None
+    return name if name in fasta else sorted(cands)[0]
+
+
+def known_sites_unmatched(fasta: set[str], known_sites_path) -> tuple[str, ...]:
+    """Known-sites VCF contigs with no equivalent spelling in *fasta*'s set.
+
+    Shares the GTF harmonizer's prefix/alias resolution, so ``chr1`` vs ``1``
+    is not a mismatch. Raises on an unreadable VCF (the pre-flight refuses it).
+    """
+    return tuple(
+        sorted(c for c in vcf_contigs(known_sites_path) if resolve_contig(c, fasta) is None)
+    )
+
+
 def plan_harmonization(fasta_path, gtf_path) -> HarmonizationPlan | None:
     """Build a FASTA-driven rename map for the GTF and decide whether to apply it.
 
@@ -82,11 +101,10 @@ def plan_harmonization(fasta_path, gtf_path) -> HarmonizationPlan | None:
     rename_map: dict[str, str] = {}
     unmatched: list[str] = []
     for g in gt:
-        cands = _candidate_names(g) & fa
-        if not cands:
+        chosen = resolve_contig(g, fa)
+        if chosen is None:
             unmatched.append(g)
             continue
-        chosen = g if g in fa else sorted(cands)[0]
         if chosen != g:
             rename_map[g] = chosen
 
