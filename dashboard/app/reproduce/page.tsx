@@ -5,6 +5,7 @@
 // `contig reproduce` executes an arbitrary shell command on the user's compute,
 // so the CLI remains the launch surface; this page only shows how.
 import { PageHeader } from "@/components/page-header";
+import { ReproduceSummary } from "@/components/reproduce-summary";
 import { listReproduceRuns } from "@/lib/reproduce";
 import { ReproduceTable } from "./reproduce-table";
 
@@ -38,7 +39,10 @@ export default async function ReproducePage() {
           </p>
         </div>
       ) : (
-        <ReproduceTable records={runs} />
+        <>
+          <ReproduceSummary records={runs} />
+          <ReproduceTable records={runs} />
+        </>
       )}
 
       <div className="rounded-xl border bg-card p-5">

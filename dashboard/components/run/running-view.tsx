@@ -39,7 +39,7 @@ const FAILURE_LABELS: Record<string, string> = {
   disk_full: "Disk full",
   permission_denied: "Permission denied",
   tool_crash: "Tool crashed",
-  no_progress: "No progress",
+  no_progress: "Stalled: no forward progress",
   qc_anomaly: "QC anomaly",
   unknown: "Unknown failure",
 };
@@ -227,6 +227,21 @@ export function RunningView({
                   <p className="text-sm text-muted-foreground">
                     {step.diagnosis.root_cause}
                   </p>
+                  {/* The stall watchdog's verdict lines (and any other evidence)
+                      are recorded on the diagnosis, so a live stall reads its
+                      own log evidence here instead of only in run.log. */}
+                  {step.diagnosis.evidence.length > 0 ? (
+                    <ul className="space-y-0.5">
+                      {step.diagnosis.evidence.map((line, i) => (
+                        <li
+                          key={i}
+                          className="rounded bg-muted/60 px-2 py-1 font-mono text-xs whitespace-pre-wrap break-words"
+                        >
+                          {line}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
                 </li>
               ))}
             </ul>

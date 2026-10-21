@@ -339,6 +339,39 @@ export interface HealSnapshot {
   contig_version: string | null;
 }
 
+// One verify verdict-match snapshot (src/contig/data/verify_history.jsonl, C6
+// verify regression guard). Mirrors VerifySnapshot in src/contig/models.py: the
+// labeled verification corpus replayed against the rules. The engine appends one
+// per line on `verify-guard --snapshot`; the /eval trend reads them.
+export interface VerifyFamilyScore {
+  matched: number;
+  total: number;
+  rate: number;
+}
+
+export interface VerifySnapshot {
+  timestamp: string;
+  case_count: number;
+  corpus_sha: string;
+  verdict_match_rate: number;
+  per_family: Record<string, VerifyFamilyScore>;
+  contig_version: string | null;
+}
+
+// One row of <runsDir>/triage-ledger.jsonl (C9 Jev triage calibration sidecar).
+// The engine appends one per triaged decision; only the counted fields are typed
+// here, and every field is optional because the ledger is user data.
+export interface TriageLedgerRow {
+  run_id?: string;
+  attempt?: number;
+  surface?: string;
+  mode?: string;
+  confidence?: number | null;
+  reason?: string;
+  checks?: string[];
+  actual?: string;
+}
+
 // The pre-run estimate from `contig estimate --json` (PRD contract B). The engine
 // scans prior FINISHED runs of the same pipeline to derive a per-sample resource
 // total and scales it to the requested sample count; with no history it falls

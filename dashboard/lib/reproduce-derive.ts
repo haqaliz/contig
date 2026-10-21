@@ -72,6 +72,38 @@ export function deriveReproduceOverall(
   return { overall: statusForRank(worstRank), counts };
 }
 
+export interface ReproduceSummary {
+  total: number;
+  byOverall: Record<string, number>;
+  recent: { id: string; overall: ReproduceOverall; createdAt: string }[];
+}
+
+/**
+ * The /reproduce index summary read from the already-loaded records: the count
+ * per derived overall and the newest verdicts, newest first. No new disk read
+ * and no recomputation of a claim's status; the same worst-of rule the table
+ * uses applies here.
+ */
+export function reproduceSummary(
+  records: ReproduceRecord[],
+  recentLimit = 5,
+): ReproduceSummary {
+  const byOverall: Record<string, number> = {};
+  for (const record of records) {
+    const { overall } = deriveReproduceOverall(record);
+    byOverall[overall] = (byOverall[overall] ?? 0) + 1;
+  }
+  const recent = [...records]
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .slice(0, recentLimit)
+    .map((record) => ({
+      id: record.reproduce_id,
+      overall: deriveReproduceOverall(record).overall,
+      createdAt: record.created_at,
+    }));
+  return { total: records.length, byOverall, recent };
+}
+
 /** Human label for a claim-status literal; anything unknown reads "Unknown". */
 export function claimStatusLabel(status: string): string {
   switch (status) {

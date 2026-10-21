@@ -7,6 +7,7 @@ import type {
   QCStatus,
   RunRecord,
   TaskEvent,
+  TriageLedgerRow,
   Verdict,
 } from "./types";
 
@@ -389,6 +390,40 @@ export function plausibilityGroups(results: QCResult[]): PlausibilityGroup[] {
         prefixes.some((p) => hasCheckPrefix(r.check, p)),
     ),
   })).filter((g) => g.rows.length > 0);
+}
+
+// --- C9 Jev triage ledger ------------------------------------------------------
+export interface TriageLedgerSummary {
+  total: number;
+  bySurface: Record<string, number>;
+  byMode: Record<string, number>;
+  skipped: number;
+  skippedLines: number;
+}
+
+/**
+ * Counts over the triage ledger rows (mirror of `triage_stats_report` in
+ * src/contig/triage.py, counts only). A row contributes to a bucket only when
+ * the field is a string, so a malformed value is ignored rather than guessed.
+ * An `actual` of exactly "skipped" is an active-mode skip event.
+ */
+export function triageLedgerSummary(
+  rows: TriageLedgerRow[],
+  skippedLines = 0,
+): TriageLedgerSummary {
+  const bySurface: Record<string, number> = {};
+  const byMode: Record<string, number> = {};
+  let skipped = 0;
+  for (const row of rows) {
+    if (typeof row.surface === "string") {
+      bySurface[row.surface] = (bySurface[row.surface] ?? 0) + 1;
+    }
+    if (typeof row.mode === "string") {
+      byMode[row.mode] = (byMode[row.mode] ?? 0) + 1;
+    }
+    if (row.actual === "skipped") skipped += 1;
+  }
+  return { total: rows.length, bySurface, byMode, skipped, skippedLines };
 }
 
 // The detector's failure classes (mirror of FailureClass in src/contig/models.py).

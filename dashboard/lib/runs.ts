@@ -31,6 +31,8 @@ import type {
   RunProgress,
   RunRecord,
   RunStatus,
+  TriageLedgerRow,
+  VerifySnapshot,
 } from "./types";
 import { canViewRun, filterOwnedRunIds, type Viewer } from "./ownership";
 
@@ -897,6 +899,30 @@ export async function getPendingApproval(
 // on `eval-detector --snapshot` and on corpus-promote. The /eval trend reads the
 // whole file to plot accuracy over time and per-class deltas.
 
+/**
+ * Every JSON object in a JSONL file, in file order. A missing file is an empty
+ * history, not an error; a malformed or half-written line is skipped so one bad
+ * line never breaks a trend.
+ */
+async function readJsonl<T>(file: string): Promise<T[]> {
+  let txt: string;
+  try {
+    txt = await fs.readFile(file, "utf8");
+  } catch {
+    return [];
+  }
+  const out: T[] = [];
+  for (const line of txt.split("\n")) {
+    if (line.trim().length === 0) continue;
+    try {
+      out.push(JSON.parse(line) as T);
+    } catch {
+      // Skip a malformed or half-written line; the rest of the history is valid.
+    }
+  }
+  return out;
+}
+
 /** Absolute path to the committed eval-history file (CONTIG_EVAL_HISTORY override). */
 function evalHistoryPath(): string {
   return process.env.CONTIG_EVAL_HISTORY
@@ -910,22 +936,7 @@ function evalHistoryPath(): string {
  * array when the history file is absent, so the page degrades gracefully.
  */
 export async function getEvalHistory(): Promise<EvalSnapshot[]> {
-  let txt: string;
-  try {
-    txt = await fs.readFile(evalHistoryPath(), "utf8");
-  } catch {
-    return [];
-  }
-  const out: EvalSnapshot[] = [];
-  for (const line of txt.split("\n")) {
-    if (line.trim().length === 0) continue;
-    try {
-      out.push(JSON.parse(line) as EvalSnapshot);
-    } catch {
-      // Skip a malformed or half-written line; the rest of the history is valid.
-    }
-  }
-  return out;
+  return readJsonl<EvalSnapshot>(evalHistoryPath());
 }
 
 // --- Holdout-accuracy history (C6 self-heal regression guard) -----------------
@@ -947,22 +958,7 @@ function holdoutHistoryPath(): string {
  * empty array when the history file is absent, so the page degrades gracefully.
  */
 export async function getHoldoutHistory(): Promise<EvalSnapshot[]> {
-  let txt: string;
-  try {
-    txt = await fs.readFile(holdoutHistoryPath(), "utf8");
-  } catch {
-    return [];
-  }
-  const out: EvalSnapshot[] = [];
-  for (const line of txt.split("\n")) {
-    if (line.trim().length === 0) continue;
-    try {
-      out.push(JSON.parse(line) as EvalSnapshot);
-    } catch {
-      // Skip a malformed or half-written line; the rest of the history is valid.
-    }
-  }
-  return out;
+  return readJsonl<EvalSnapshot>(holdoutHistoryPath());
 }
 
 // --- Self-heal outcome-match history (C6 self-heal regression guard) ----------
@@ -984,22 +980,68 @@ function healHistoryPath(): string {
  * empty array when the history file is absent, so the page degrades gracefully.
  */
 export async function getHealHistory(): Promise<HealSnapshot[]> {
+  return readJsonl<HealSnapshot>(healHistoryPath());
+}
+
+// --- Verify verdict-match history (C6 verify regression guard) -----------------
+// The engine appends one VerifySnapshot per line to
+// src/contig/data/verify_history.jsonl on `verify-guard --snapshot` (replaying
+// the labeled verification corpus). The /eval trend plots verdict-match over
+// time, distinct from detector accuracy and self-heal outcome-match.
+
+/** Absolute path to the committed verify-history file (CONTIG_VERIFY_HISTORY override). */
+function verifyHistoryPath(): string {
+  return process.env.CONTIG_VERIFY_HISTORY
+    ? path.resolve(process.env.CONTIG_VERIFY_HISTORY)
+    : path.resolve(repoRoot(), "src", "contig", "data", "verify_history.jsonl");
+}
+
+/** Every verify snapshot on disk, oldest first; empty when the file is absent. */
+export async function getVerifyHistory(): Promise<VerifySnapshot[]> {
+  return readJsonl<VerifySnapshot>(verifyHistoryPath());
+}
+
+// --- Jev triage ledger (C9) ----------------------------------------------------
+// The engine appends one row per triaged decision to
+// <runsDir>/triage-ledger.jsonl (an unsigned calibration sidecar). The /eval
+// surface reads it directly and counts; the dashboard never calls Jev.
+
+/**
+ * The triage ledger rows in file order plus the count of unusable lines. A
+ * missing ledger is an absent one (([], 0)); a malformed line is counted and
+ * skipped, never raised, matching `load_triage_ledger` in the engine.
+ */
+export async function getTriageLedger(): Promise<{
+  rows: TriageLedgerRow[];
+  skippedLines: number;
+}> {
+  const p = path.join(runsDir(), "triage-ledger.jsonl");
   let txt: string;
   try {
-    txt = await fs.readFile(healHistoryPath(), "utf8");
+    txt = await fs.readFile(p, "utf8");
   } catch {
-    return [];
+    return { rows: [], skippedLines: 0 };
   }
-  const out: HealSnapshot[] = [];
+  const rows: TriageLedgerRow[] = [];
+  let skippedLines = 0;
   for (const line of txt.split("\n")) {
     if (line.trim().length === 0) continue;
     try {
-      out.push(JSON.parse(line) as HealSnapshot);
+      const parsed = JSON.parse(line) as unknown;
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        !Array.isArray(parsed)
+      ) {
+        rows.push(parsed as TriageLedgerRow);
+      } else {
+        skippedLines += 1;
+      }
     } catch {
-      // Skip a malformed or half-written line; the rest of the history is valid.
+      skippedLines += 1;
     }
   }
-  return out;
+  return { rows, skippedLines };
 }
 
 // --- Notifications (PRD contract A) --------------------------------------------

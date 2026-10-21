@@ -20,6 +20,7 @@ import type { RepairStep } from "@/lib/types";
 // the running view and the approval gate so every surface reads the same).
 const FAILURE_LABELS: Record<string, string> = {
   oom: "Out of memory",
+  no_progress: "Stalled: no forward progress",
   tool_crash: "Tool crashed",
   reference: "Reference / input problem",
   reference_mismatch: "Reference mismatch",
