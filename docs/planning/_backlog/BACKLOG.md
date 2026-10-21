@@ -1,6 +1,6 @@
 # Contig — wrap-up backlog (all remaining capability items)
 
-**Status 2026-10-21 (wrap-up pass 2):** 33 done / 9 todo / 20 blocked / 15
+**Status 2026-10-21 (wrap-up pass 2):** 34 done / 8 todo / 20 blocked / 15
 needs-decision / 6 gated / 4 declined. Done items are on `master`; see
 `CHANGELOG.md`. Remaining "todo" rows are the only ones that are both
 buildable and unblocked; every other row names what it waits on.
@@ -60,7 +60,7 @@ Workflow per item: `contig-begin-fast` → worktree `.claude/worktrees/<type>-<i
 | C4-4 | C4 | Strelka2-native normal VAF | code | done |
 | C4-5 | C4 | Dashboard "corroborated by" surface for swap signal | code | done |
 | C5-1 | C5 | Assembly-signature form of pre-flight reference mismatch | code | todo |
-| C5-2 | C5 | Known-sites / GTF-version consistency checks | code | todo |
+| C5-2 | C5 | Known-sites / GTF-version consistency checks | code | done |
 | C5-3 | C5 | Annotation/GTF version resolution | code | todo |
 | C6-1 | C6 | `platform_unsupported` heal-guard coverage (needs `AttemptSpec.exit`) | code | done |
 | C6-2 | C6 | Verify-guard dashboard trend card | code | done |
