@@ -446,6 +446,24 @@ def test_run_rejects_conflicting_reference(tmp_path):
     assert result.exit_code != 0
 
 
+def test_run_fasta_without_gtf_is_refused_by_coupling_quirk(tmp_path):
+    # C2-6 pin: explicit mode forces --fasta AND --gtf (an rnaseq-era assumption;
+    # sarek accepts fasta but has no gtf param). Whether fasta-only should be
+    # legal is a per-pipeline policy decision, so this pins today's refusal --
+    # explicitly supplied fasta is never paired with a fabricated/default GTF.
+    sheet = _make_sheet(tmp_path)
+    fasta = tmp_path / "genome.fa"
+    fasta.write_text(">chr1\nACGT\n")
+    result = runner.invoke(
+        app,
+        ["run", "--run-id", "fonly", "--runs-dir", str(tmp_path / "runs"),
+         "--pipeline", "nf-core/sarek", "--input", str(sheet), "--fasta", str(fasta)],
+    )
+    assert result.exit_code == 1
+    assert "explicit mode requires both --fasta and --gtf" in result.output
+    assert not (tmp_path / "runs" / "fonly").exists()
+
+
 VARIANT_MQC = '{"report_general_stats_data":[{"S1":{"ts_tv":2.05,"het_hom":1.6,"mean_coverage":35.0}}]}'
 
 
