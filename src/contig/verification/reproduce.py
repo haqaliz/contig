@@ -225,8 +225,9 @@ class NotebookLocator:
     `.ipynb` path -- named `source` internally for the same reason as
     `Locator.source`, and always a real string, never `None`); `cell`
     addresses the target cell, either an `int` index into the notebook's
-    `cells` array or a single-key `{"contains": <source substring>}` object
-    that selects the unique cell whose source contains that substring;
+    `cells` array or a single-key `{"contains": <source substring>}` /
+    `{"tag": <metadata.tags entry>}` object that selects the unique cell
+    matching that substring (over `source`) or tag (over `cell.metadata.tags`);
     `pattern` is a Python regex whose capture is the observed value (group 1
     when the pattern has capturing groups, otherwise the whole match), applied
     to that cell's extracted textual output; `flags` are the claim's named
@@ -552,6 +553,20 @@ def _join_source_or_text(v: object) -> str:
     return ""
 
 
+def _cell_has_tag(cell: object, tag: str) -> bool:
+    """True when a notebook cell's `metadata.tags` list contains `tag`.
+
+    The `.ipynb` schema stores tags as `cell["metadata"]["tags"]` (a list of
+    strings); anything else -- a missing/None metadata, a string tag value, a
+    non-list -- is simply not a match. Pure, never raises.
+    """
+    if not isinstance(cell, dict):
+        return False
+    metadata = cell.get("metadata")
+    tags = metadata.get("tags") if isinstance(metadata, dict) else None
+    return isinstance(tags, list) and tag in tags
+
+
 def resolve_notebook_cell_text(
     doc: object, cell: int | dict[str, str]
 ) -> tuple[str | None, str]:
@@ -569,8 +584,9 @@ def resolve_notebook_cell_text(
     (bool is rejected -- it is an int subclass but never a valid address; a
     negative or out-of-range index is unresolved, naming the cell count); a
     `{"contains": s}` object selects the UNIQUE cell whose joined `source`
-    contains `s` (0 or >1 matches -> unresolved, naming the match count --
-    never an arbitrary pick).
+    contains `s`, and a `{"tag": s}` object the UNIQUE cell whose
+    `metadata.tags` list contains `s` (0 or >1 matches -> unresolved, naming
+    the match count -- never an arbitrary pick).
 
     Output text is the concatenation, in `outputs` order, of: `stream`
     outputs named `stdout` (their `text` field) and `execute_result` /
@@ -592,19 +608,22 @@ def resolve_notebook_cell_text(
             return None, f"cell index {cell} out of range ({len(cells)} cells)"
         idx = cell
     elif isinstance(cell, dict):
-        if list(cell.keys()) != ["contains"] or not isinstance(
-            cell.get("contains"), str
-        ):
+        key = next(iter(cell)) if len(cell) == 1 else None
+        if key not in ("contains", "tag") or not isinstance(cell[key], str):
             return None, f"invalid cell address: {cell!r}"
-        needle = cell["contains"]
-        matches = [
-            i
-            for i, c in enumerate(cells)
-            if needle in _join_source_or_text(c.get("source") if isinstance(c, dict) else None)
-        ]
+        value = cell[key]
+        if key == "contains":
+            matches = [
+                i
+                for i, c in enumerate(cells)
+                if value
+                in _join_source_or_text(c.get("source") if isinstance(c, dict) else None)
+            ]
+        else:
+            matches = [i for i, c in enumerate(cells) if _cell_has_tag(c, value)]
         if len(matches) != 1:
             return None, (
-                f"cell selector {{'contains': {needle!r}}} matched {len(matches)} cells"
+                f"cell selector {{{key!r}: {value!r}}} matched {len(matches)} cells"
             )
         idx = matches[0]
     else:
@@ -780,16 +799,17 @@ def load_claims(path: str | Path) -> list[Claim]:
                     )
                 cell = raw_cell
             elif isinstance(raw_cell, dict):
-                if list(raw_cell.keys()) != ["contains"]:
+                key = next(iter(raw_cell)) if len(raw_cell) == 1 else None
+                if key not in ("contains", "tag"):
                     raise ClaimsError(
                         f"claim {claim_id!r} has an invalid 'cell' object (expected a "
-                        f"single 'contains' key): {raw_cell!r}"
+                        f"single 'contains' or 'tag' key): {raw_cell!r}"
                     )
-                raw_contains = raw_cell["contains"]
-                if not isinstance(raw_contains, str) or not raw_contains.strip():
+                raw_value = raw_cell[key]
+                if not isinstance(raw_value, str) or not raw_value.strip():
                     raise ClaimsError(
-                        f"claim {claim_id!r} has an invalid 'cell' 'contains' value: "
-                        f"{raw_contains!r}"
+                        f"claim {claim_id!r} has an invalid 'cell' {key!r} value: "
+                        f"{raw_value!r}"
                     )
                 cell = raw_cell
             else:

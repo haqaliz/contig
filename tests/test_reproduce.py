@@ -1019,6 +1019,69 @@ def test_load_claims_notebook_contains_cell_attaches_notebook_locator(tmp_path):
     )
 
 
+def test_load_claims_notebook_tag_cell_attaches_notebook_locator(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "x.ipynb",
+                        "cell": {"tag": "results"},
+                        "pattern": "AUC: ([0-9.]+)",
+                    }
+                )
+            ]
+        ),
+    )
+    claims = load_claims(path)
+    assert claims[0].locator == NotebookLocator(
+        source="x.ipynb", cell={"tag": "results"}, pattern="AUC: ([0-9.]+)"
+    )
+
+
+def test_load_claims_notebook_rejects_cell_tag_and_contains_together(tmp_path):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "x.ipynb",
+                        "cell": {"tag": "results", "contains": "print(auc)"},
+                        "pattern": "AUC: ([0-9.]+)",
+                    }
+                )
+            ]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
+@pytest.mark.parametrize("value", ["", "   ", 5, None, ["results"]])
+def test_load_claims_notebook_rejects_bad_tag_value(tmp_path, value):
+    path = _write(
+        tmp_path,
+        "claims.json",
+        json.dumps(
+            [
+                _claim(
+                    **{
+                        "from": "x.ipynb",
+                        "cell": {"tag": value},
+                        "pattern": "AUC: ([0-9.]+)",
+                    }
+                )
+            ]
+        ),
+    )
+    with pytest.raises(ClaimsError):
+        load_claims(path)
+
+
 def test_load_claims_notebook_rejects_cell_without_from(tmp_path):
     path = _write(
         tmp_path,

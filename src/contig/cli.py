@@ -1294,9 +1294,9 @@ def reproduce(
 
     A locator may target a Jupyter notebook cell's output (`from` + `cell` +
     `pattern`), where `cell` is a code-cell index (or `{"contains": <source
-    substring>}`) and `pattern` is applied to that cell's captured stdout/
-    result text -- e.g. `{"id": "auc", "value": 0.91, "from": "out.ipynb",
-    "cell": 7, "pattern": "AUC: ([0-9.]+)"}`.
+    substring>}` / `{"tag": <cell metadata tag>}`) and `pattern` is applied to
+    that cell's captured stdout/ result text -- e.g. `{"id": "auc", "value":
+    0.91, "from": "out.ipynb", "cell": 7, "pattern": "AUC: ([0-9.]+)"}`.
 
     Every value read off disk must come from a file THIS run rewrote. Each
     locator carrying a `from` (JSON, TSV/CSV, text/log, notebook) and the

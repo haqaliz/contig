@@ -55,6 +55,12 @@ def _code(source, outputs):
     return {"cell_type": "code", "source": source, "outputs": outputs}
 
 
+def _tagged_code(source, outputs, *tags):
+    cell = _code(source, outputs)
+    cell["metadata"] = {"tags": list(tags)}
+    return cell
+
+
 def _doc(*cells):
     return {"cells": list(cells)}
 
@@ -149,6 +155,62 @@ def test_contains_matches_source_given_as_list_of_lines():
     text, reason = resolve_notebook_cell_text(doc, {"contains": "print(auc)"})
     assert text == "AUC: 0.91\n"
     assert reason == ""
+
+
+# ---------------------------------------------------------------------------
+# happy paths -- {"tag": ...} addressing over cell.metadata.tags
+# ---------------------------------------------------------------------------
+
+
+def test_tag_selects_matching_cell():
+    doc = _doc(
+        _tagged_code("import numpy", [_stdout("nope\n")], "setup"),
+        _tagged_code("print(auc)", [_stdout("AUC: 0.91\n")], "results"),
+    )
+    text, reason = resolve_notebook_cell_text(doc, {"tag": "results"})
+    assert text == "AUC: 0.91\n"
+    assert reason == ""
+
+
+def test_tag_matching_zero_cells_returns_none_with_count():
+    doc = _doc(
+        _tagged_code("print(auc)", [_stdout("a\n")], "setup"),
+        _tagged_code("print(b)", [_stdout("b\n")], "setup"),
+    )
+    text, reason = resolve_notebook_cell_text(doc, {"tag": "results"})
+    assert text is None
+    assert "0" in reason
+
+
+def test_tag_matching_two_cells_returns_none_with_count():
+    doc = _doc(
+        _tagged_code("print(auc)", [_stdout("a\n")], "results"),
+        _tagged_code("print(auc2)", [_stdout("b\n")], "results"),
+    )
+    text, reason = resolve_notebook_cell_text(doc, {"tag": "results"})
+    assert text is None
+    assert "2" in reason
+
+
+def test_tag_ignores_non_list_or_non_string_tags():
+    doc = _doc(
+        {"cell_type": "code", "source": "a", "outputs": [_stdout("a\n")]},
+        {
+            "cell_type": "code",
+            "source": "b",
+            "outputs": [_stdout("b\n")],
+            "metadata": {"tags": "results"},
+        },
+        {
+            "cell_type": "code",
+            "source": "c",
+            "outputs": [_stdout("c\n")],
+            "metadata": {"tags": [1, None]},
+        },
+    )
+    text, reason = resolve_notebook_cell_text(doc, {"tag": "results"})
+    assert text is None
+    assert "0" in reason
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +333,7 @@ def test_never_raises_on_wild_inputs():
         {"cells": [{"source": None, "outputs": "x"}]},
         {"cells": [{"outputs": [{"output_type": "stream", "text": 5}]}]},
     ]
-    wild_cells = [0, {"contains": "x"}, {"contains": ""}]
+    wild_cells = [0, {"contains": "x"}, {"contains": ""}, {"tag": "results"}, {"tag": ""}]
     for doc in wild_docs:
         for cell in wild_cells:
             result = resolve_notebook_cell_text(doc, cell)
