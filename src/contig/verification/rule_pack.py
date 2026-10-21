@@ -418,6 +418,15 @@ SOMATIC_PLAUSIBILITY_PACK: list[dict] = [
         "warn_above": 0.30,
         "message": "median normal-sample variant allele fraction (high => possible tumor/normal swap or contamination)",
     },
+    {   # directional tumor-vs-normal VAF delta (median tumor - median normal), a
+        # SECOND smell axis for a swap/mislabel/contamination: the expected direction
+        # is positive, but its magnitude depends on unobserved purity/clonality, so
+        # NO BAND -- informational only (verdict-neutral). Emitted ONLY by
+        # evaluate_delta_plausibility over a by_metric dict containing just this key.
+        "check": "tumor_normal_vaf_delta",
+        "metric": "tumor_normal_vaf_delta",
+        "message": "median tumor VAF minus median normal VAF (informational; near-zero or negative => possible swap, mislabel, or contamination)",
+    },
 ]
 
 

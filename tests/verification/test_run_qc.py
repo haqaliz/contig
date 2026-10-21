@@ -444,6 +444,28 @@ def test_discover_qc_includes_somatic_plausibility(tmp_path):
     assert any(c.startswith("pon_applied") for c in checks)
 
 
+def test_discover_qc_includes_somatic_vaf_delta(tmp_path):
+    # The directional tumor-vs-normal delta is wired beside the swap smell test,
+    # from the same Mutect2 VCF. Informational: no band, no verdict.
+    run_dir = tmp_path / "run"
+    header = (
+        "##fileformat=VCFv4.2\n"
+        "##tumor_sample=TUMOR\n"
+        "##normal_sample=NORMAL\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tNORMAL\tTUMOR\n"
+    )
+    vcf = run_dir / "results" / "variant_calling" / "mutect2" / "T_vs_N" / "x.vcf.gz"
+    _write_somatic_vcf_gz(vcf, header=header)
+
+    results = _discover_qc(run_dir, assay="somatic_variant_calling")
+
+    delta = [r for r in results if r.check.startswith("tumor_normal_vaf_delta")]
+    assert len(delta) == 1
+    assert delta[0].check == "tumor_normal_vaf_delta:TUMOR"
+    assert delta[0].value == pytest.approx(0.35 - 0.0)  # median(0.30, 0.40) - normal 0.0
+    assert delta[0].informational is True
+
+
 def test_somatic_plausibility_not_run_for_non_somatic_assay(tmp_path):
     # The same Mutect2 VCF under a germline (variant_calling) run does NOT get the
     # somatic checks — the gate is strictly keyed to somatic_variant_calling.

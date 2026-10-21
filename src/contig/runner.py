@@ -80,6 +80,7 @@ from contig.verification.somatic_concordance import (
     select_caller_vcfs,
 )
 from contig.verification.somatic_plausibility import (
+    evaluate_delta_plausibility,
     evaluate_somatic_plausibility,
     evaluate_swap_plausibility,
 )
@@ -440,6 +441,7 @@ def _discover_qc(
             somatic_concordance_capture: dict[str, dict[str, float]] = {}
             tumor_capture: dict[str, dict[str, float]] = {}
             swap_capture: dict[str, dict[str, float]] = {}
+            delta_capture: dict[str, dict[str, float]] = {}
             strelka_capture: dict[str, dict[str, float]] = {}
             # Match "mutect2" as a path COMPONENT below the run dir (sarek writes the
             # VCF under a `mutect2/` directory), not as a substring of the absolute
@@ -468,6 +470,13 @@ def _discover_qc(
                 # exit code or silently drop.
                 results.extend(
                     evaluate_swap_plausibility(mutect2, capture_metrics=swap_capture)
+                )
+                # Directional tumor-vs-normal VAF delta (C4-3), the same swap
+                # smell from the other side: informational only (no band), so it
+                # can never change the verdict; UNVERIFIED when either median is
+                # uncomputable.
+                results.extend(
+                    evaluate_delta_plausibility(mutect2, capture_metrics=delta_capture)
                 )
             else:
                 results.append(
@@ -537,7 +546,7 @@ def _discover_qc(
             # concordance family is only written when the concordance actually
             # ran (both callers present).
             if capture_inputs is not None:
-                for captured in (tumor_capture, swap_capture, strelka_capture):
+                for captured in (tumor_capture, swap_capture, delta_capture, strelka_capture):
                     for sample, metrics in captured.items():
                         if metrics:
                             somatic_plausibility_capture.setdefault(sample, {}).update(

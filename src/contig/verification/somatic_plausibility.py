@@ -275,6 +275,20 @@ def somatic_metrics(vcf_path: str | os.PathLike) -> SomaticMetrics:
     return SomaticMetrics(median_vaf=median_vaf, variant_count=count)
 
 
+def tumor_normal_vaf_delta(vcf_path: str | os.PathLike) -> float | None:
+    """Median tumor VAF minus median normal VAF from the same Mutect2 VCF.
+
+    Both medians come from the same resolved sample columns (``##tumor_sample=``
+    / ``##normal_sample=``) and the same biallelic record set. None when either
+    median is uncomputable -- never a partial or fabricated delta.
+    """
+    tumor = somatic_metrics(vcf_path).median_vaf
+    normal, _name = normal_median_vaf(vcf_path)
+    if tumor is None or normal is None:
+        return None
+    return tumor - normal
+
+
 def _header_lines(vcf_path: str | os.PathLike) -> list[str]:
     """Read the VCF header lines (up to and including ``#CHROM``)."""
     lines: list[str] = []
@@ -424,6 +438,72 @@ def evaluate_somatic_plausibility(
             kind="metric",
         )
     )
+
+    return results
+
+
+def evaluate_delta_plausibility(
+    vcf_path: str | os.PathLike,
+    sample: str | None = None,
+    *,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
+) -> list[QCResult]:
+    """Evaluate the directional tumor-vs-normal VAF delta, informationally.
+
+    The delta (median tumor VAF minus median normal VAF) is the expected POSITIVE
+    direction in a correctly-paired run; near-zero or negative points at a swap,
+    a mislabel, or contamination -- the same failure family the normal-VAF swap
+    check smells, seen from the other side. It carries NO band: a delta's expected
+    magnitude depends on the unobserved tumor purity, so it can never assert a
+    verdict. ``evaluate()`` marks the band-less rule ``informational=True``, which
+    ``overall_verdict`` ignores.
+
+    The ``by_metric`` dict holds ONLY this key, so this call never re-emits the
+    pack's other rules (the same isolation trick as the swap evaluator).
+
+    An uncomputable delta (either median None -- including an unresolvable
+    ``##normal_sample=`` column) yields one explicit "unverified" QCResult, never
+    a silent skip and never a false pass.
+
+    The sample label is ``sample`` if given, else the resolved tumor name, else
+    ``"sample"``.
+    """
+    delta = tumor_normal_vaf_delta(vcf_path)
+    label = sample or _tumor_sample_name(_header_lines(vcf_path)) or "sample"
+
+    by_metric = {"tumor_normal_vaf_delta": delta}
+    computable = {
+        metric: value for metric, value in by_metric.items() if value is not None
+    }
+    if capture_metrics is not None:
+        capture_metrics[label] = computable
+
+    results = [
+        result.model_copy(
+            update={
+                "message": (
+                    "tumor-minus-normal VAF delta (informational; near-zero or "
+                    "negative => possible swap, mislabel, or contamination): "
+                    f"{result.message}"
+                )
+            }
+        )
+        for result in evaluate({label: computable}, SOMATIC_PLAUSIBILITY_PACK)
+    ]
+
+    if delta is None:
+        results.append(
+            QCResult(
+                check=f"tumor_normal_vaf_delta:{label}",
+                status="unverified",
+                message=(
+                    f"{label}: tumor_normal_vaf_delta could not be computed "
+                    "(tumor or normal VAF unavailable)"
+                ),
+                value=None,
+                kind="metric",
+            )
+        )
 
     return results
 
