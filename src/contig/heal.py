@@ -92,20 +92,29 @@ def _write_attempt(
     Mirrors the `_trace(status, exit)` helper in tests/test_self_heal.py.
     """
     header = "task_id\thash\tnative_id\tname\tstatus\texit\tsubmit\tduration\trealtime\n"
-    row = f"1\tab/cd\t1\tNFCORE_RNASEQ:STAR_ALIGN (S1)\t{attempt.status}\t{attempt.exit}\t-\t-\t-\n"
+    # A killed task has no exit code; a blank cell parses back to None
+    # (events.py:94). An int renders byte-identically to before.
+    exit_cell = "" if attempt.exit is None else str(attempt.exit)
+    row = f"1\tab/cd\t1\tNFCORE_RNASEQ:STAR_ALIGN (S1)\t{attempt.status}\t{exit_cell}\t-\t-\t-\n"
     Path(trace_path).write_text(header + row)
     (Path(trace_path).parent / "run.log").write_text(attempt.log_text)
     if qc_artifact is not None:
         _write_qc_artifact(Path(trace_path).parent, qc_artifact)
 
 
-def _scripted_executor(scenario: HealScenario) -> Callable[[list[str], Path], int]:
+def _scripted_executor(scenario: HealScenario) -> Callable[[list[str], Path], int | None]:
     """A closure over an attempt counter that plays back `scenario.attempts` in
     order, clamped to the last attempt if the loop retries beyond what was
-    declared (never IndexError)."""
+    declared (never IndexError).
+
+    Returns `int | None`: None is a killed task, passed faithfully through
+    `run_pipeline`'s `returncode != 0` path (None != 0), exactly as the trace's
+    blank exit cell represents it.
+    """
+
     state = {"n": 0}
 
-    def executor(cmd: list[str], trace_path: Path) -> int:
+    def executor(cmd: list[str], trace_path: Path) -> int | None:
         state["n"] += 1
         index = min(state["n"], len(scenario.attempts)) - 1
         attempt = scenario.attempts[index]

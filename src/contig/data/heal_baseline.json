@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-10-17T21:21:33.067575+00:00",
-  "scenario_count": 24,
-  "corpus_sha": "519743d457e1adb6632f6378d91a20eac1cb85efab16572ec55168acf748d719",
+  "timestamp": "2026-10-21T11:25:22.521337+00:00",
+  "scenario_count": 25,
+  "corpus_sha": "cd99943cc033b3f97399d511744c817ce72797ad4d1af25202041c3c1fdb1901",
   "outcome_match_rate": 1.0,
-  "recovery_rate": 0.5,
+  "recovery_rate": 0.48,
   "per_class": {
     "oom": {
       "matched": 1,
@@ -89,6 +89,11 @@
       "matched": 1,
       "total": 1,
       "rate": 1.0
+    },
+    "platform_unsupported": {
+      "matched": 1,
+      "total": 1,
+      "rate": 1.0
     }
   },
   "covered_classes": [
@@ -104,6 +109,7 @@
     "no_progress",
     "oom",
     "permission_denied",
+    "platform_unsupported",
     "qc_anomaly",
     "reference_mismatch",
     "reference_not_bgzf",

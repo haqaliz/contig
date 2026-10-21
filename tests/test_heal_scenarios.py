@@ -21,6 +21,18 @@ from contig.models import (
 # --- HealScenario + AttemptSpec --------------------------------------------
 
 
+def test_attempt_spec_exit_is_optional_for_a_killed_task():
+    # detect.py:393's platform_unsupported rule needs a FAILED event with
+    # `exit is None`; a required int made that shape unrepresentable.
+    assert AttemptSpec(status="FAILED").exit is None
+
+
+def test_attempt_spec_explicit_exit_keeps_its_value():
+    # Every pre-existing scenario states an exit, and must keep doing so.
+    assert AttemptSpec(status="FAILED", exit=137).exit == 137
+    assert AttemptSpec(status="COMPLETED", exit=0).exit == 0
+
+
 def test_heal_scenario_constructs_from_dict_with_defaults():
     scenario = HealScenario.model_validate(
         {
@@ -463,6 +475,41 @@ def test_run_heal_scenario_download_failed_patched_and_retried(tmp_path):
     assert result.recovered is True
 
 
+def test_run_heal_scenario_platform_unsupported_advisory_approved(tmp_path):
+    """An exit-less killed step plus a platform warning: the mechanical shape
+    that was previously unrepresentable (`AttemptSpec.exit` was required). The
+    driver must write a blank exit cell and pass None to the executor, so the
+    REAL detector reaches platform_unsupported; the advisory is then approved
+    by a human and the retry runs without anything being enacted.
+    """
+    scn = HealScenario(
+        scenario_id="platform-unsupported-advisory-approved",
+        description="amd64-only container killed on arm64; advisory acknowledged",
+        source="synthetic",
+        expected_class="platform_unsupported",
+        attempts=[
+            AttemptSpec(
+                status="FAILED",
+                log_text=(
+                    "WARNING: The requested image's platform (linux/amd64) does not "
+                    "match the detected host platform (linux/arm64/v8) and no "
+                    "specific platform was requested"
+                ),
+            ),
+            AttemptSpec(status="COMPLETED", exit=0, log_text="done"),
+        ],
+        poll_decision="approve",
+        expected_recovered=False,
+        expected_outcome="advisory_acknowledged_and_retried",
+        expected_patch_applied=False,
+    )
+    result = run_heal_scenario(scn, tmp_path)
+    assert result.matched is True, result.divergence
+    assert result.diagnosed_class == "platform_unsupported"
+    assert result.actual_outcome == "advisory_acknowledged_and_retried"
+    assert result.recovered is False
+
+
 def test_run_heal_scenario_missing_reference_rejected_by_user(tmp_path):
     """PRD R12: the refusal path for a gated `missing_reference` patch. This is
     the exact shape v0.49.0 fixed -- before it, a rejected patch was still
@@ -739,20 +786,16 @@ def test_shipped_heal_scenarios_all_reproduce_their_declared_outcomes():
     scenarios = load_heal_scenarios(default_heal_scenarios_path())
     report = evaluate_heal(scenarios)
 
-    assert report.total == 24
+    assert report.total == 25
     assert report.outcome_match_rate == 1.0, [
         (m.scenario_id, m.divergence) for m in report.mismatches
     ]
-    # 12 of 24, up from 11 of 23. This is a CORPUS-COMPOSITION change, not a
-    # behaviour change: the corrupt-STAR-index heal scenario added one more
-    # recovery (a real missing_index rebuild), and the ratio simply follows what
-    # was added. No pre-existing scenario
-    # changed its outcome. `recovery_rate` is informational-only and is never
-    # guarded (heal.py:413-414 compares only outcome_match_rate) -- the
-    # guarded number is `outcome_match_rate`, which stayed at 1.0 across the
-    # move.
+    # Still 12 recovered of a larger 25-scenario set: the new
+    # platform_unsupported scenario is an advisory-acknowledged retry, which
+    # enacts nothing and is deliberately not a recovery. `recovery_rate` is
+    # informational-only and is never guarded; `outcome_match_rate` stays 1.0.
     assert report.healed == 12
-    assert report.recovery_rate == pytest.approx(12 / 24)
+    assert report.recovery_rate == pytest.approx(12 / 25)
 
     covered = {s.expected_class for s in scenarios}
     assert covered >= {
@@ -781,13 +824,11 @@ def test_shipped_heal_baseline_matches_shipped_scenarios():
     baseline = load_heal_baseline(default_heal_baseline_path())
 
     assert baseline is not None
-    assert baseline.scenario_count == 24
+    assert baseline.scenario_count == 25
     assert baseline.outcome_match_rate == 1.0
-    # 12/24 since the corrupt-STAR-index heal refreeze; 11/23 before it.
-    # Again a CORPUS-COMPOSITION move -- one more recovering scenario
-    # (star-corrupt-index-heal, a real missing_index rebuild) was added --
-    # not a behaviour change, and never a guarded number.
-    assert baseline.recovery_rate == pytest.approx(12 / 24)
+    # 12/25: the platform_unsupported scenario is an advisory-acknowledged
+    # retry, which enacts nothing (recovered=False), so the numerator stays 12.
+    assert baseline.recovery_rate == pytest.approx(12 / 25)
     assert baseline.corpus_sha == sha256_file(scenarios_path)
     assert set(baseline.covered_classes) >= {
         "oom",
@@ -805,17 +846,13 @@ def test_shipped_heal_baseline_matches_shipped_scenarios():
         "container_unavailable",
         "alignment_format_mismatch",
         "reference_mismatch",
+        "platform_unsupported",
     }
-    # Seventeen covered classes exactly -- the sixteen the catalog-coverage
-    # slice and C2 left, plus the reference-mismatch give-up (Phase 3 of the
-    # runtime-reference-mismatch-detector plan). platform_unsupported stays
-    # uncovered: detect.py:355 requires a failed
-    # event with exit is None, but AttemptSpec.exit is a required int
-    # (models.py:543) used both as the trace column (heal.py:82) and the
-    # executor return code (:100) -- reaching it needs an additive
-    # model/driver change, which is out of scope here. A silent drop here
+    # Eighteen covered classes exactly: the seventeen the catalog-coverage and
+    # subsequent C2/C6 slices left, plus platform_unsupported now that
+    # AttemptSpec.exit can model an exit-less killed task. A silent drop here
     # would mean a class lost its scenario.
-    assert len(baseline.covered_classes) == 17
+    assert len(baseline.covered_classes) == 18
 
 
 def test_shipped_heal_report_does_not_regress_against_baseline():

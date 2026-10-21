@@ -587,10 +587,15 @@ class HoldoutGuardResult(BaseModel):
 
 
 class AttemptSpec(BaseModel):
-    """One attempt's single-task trace row + log; mirrors FailureCase's inputs."""
+    """One attempt's single-task trace row + log; mirrors FailureCase's inputs.
+
+    `exit` is optional because a killed task has no exit code: the
+    `platform_unsupported` detector rule requires a FAILED event with
+    `exit is None`. Every scenario that states an exit keeps it unchanged.
+    """
 
     status: str
-    exit: int
+    exit: int | None = None
     log_text: str = ""
 
 

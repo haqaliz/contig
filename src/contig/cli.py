@@ -4153,30 +4153,18 @@ def heal_guard(
     exits 0. With --snapshot the result is also appended to the committed
     self-heal trend; with --history the recorded trend is printed instead.
 
-    Honest scope: the number is over **24 SYNTHETIC scenarios**, not a field
-    recovery rate. **17 covered failure classes**: alignment_format_mismatch,
+    Honest scope: the number is over **25 SYNTHETIC scenarios**, not a field
+    recovery rate. **18 covered failure classes**: alignment_format_mismatch,
     bad_param, conda_solve_failed, container_pull_failed, container_unavailable,
     disk_full, download_failed, missing_index, missing_reference, no_progress,
-    oom, permission_denied, qc_anomaly, reference_mismatch, reference_not_bgzf,
-    time_limit, tool_crash. `covered` means the
+    oom, permission_denied, platform_unsupported, qc_anomaly, reference_mismatch,
+    reference_not_bgzf, time_limit, tool_crash. `covered` means the
     class has a frozen synthetic scenario whose declared outcome the loop still
     reproduces -- NOT that the engine handles that failure well in the field.
 
-    The remaining 3 of the 20 FailureClass literals are uncovered, and each is
+    The remaining 2 of the 20 FailureClass literals are uncovered, and each is
     uncovered for a DIFFERENT reason -- they are not one backlog:
 
-    - **Advisory, and reachable, but no scenario authored yet (1):**
-      platform_unsupported. Its `kind="advisory"` withdrawal (repair.py:105-120)
-      is as settled as the other four's -- `use_native_arch_backend` was
-      withdrawn because nothing in the codebase switches container
-      architectures. What keeps it out of this guard is narrower and purely
-      mechanical: reaching it needs a failed event with `exit is None`
-      (`detect.py:355`), but `AttemptSpec.exit` is a required `int`
-      (`models.py:543`) used both as the trace column (`heal.py:82`) and the
-      executor return code (`:100`). Giving a scenario an unset exit needs an
-      additive model/driver change, which is a mechanism change with its own
-      justification -- not something to work around here just to close this
-      count.
     - **Reproduce-local, structurally outside this loop (1):**
       missing_dependency, emitted only by `contig reproduce --allow-install`
       (verification/reproduce.py:1221) and by no detector rule, so this guard
@@ -4189,11 +4177,12 @@ def heal_guard(
     we made reachable -- evidence that a taxonomy gap closed, not that a user
     was helped. Its recovery accounting is also an artifact: the scenario is
     green by construction (every task exits 0, only the QC verdict FAILs), so
-    it counts toward the corpus-wide informational-only recovery count (12/24)
+    it counts toward the corpus-wide informational-only recovery count (12/25)
     even though nothing was recovered in that one scenario specifically.
-    platform_unsupported is reachable in production the same way (a real killed
-    task can carry `exit is None`) -- it is only this scenario CORPUS it cannot
-    reach yet, for the mechanical reason above.
+    platform_unsupported now has a scenario too: `AttemptSpec.exit` is optional,
+    so the driver can model a killed task with no exit code (the shape the
+    detector's rule requires). Its advisory enacts nothing, which is why it is
+    deliberately not counted as a recovery.
     """
     scenarios_path = Path(scenarios) if scenarios else default_heal_scenarios_path()
     baseline_path = Path(baseline) if baseline else default_heal_baseline_path()
