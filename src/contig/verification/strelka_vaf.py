@@ -14,8 +14,9 @@ This module is a pure, stdlib, streaming parser of that ratio from the
 literally named ``TUMOR`` on the ``#CHROM`` line, mirroring the "never guess"
 discipline of somatic_plausibility._tumor_column_index, though that sibling
 resolves by a ``##tumor_sample=`` header name rather than a literal column
-name). It has no verdict/gate coupling; it only turns SNV+indel VCFs into a
-pooled list of per-record tumor VAFs and a pooled median.
+name), plus the same ratio over the ``NORMAL`` column for the C4-4
+normal-column metric. It has no verdict/gate coupling; it only turns SNV+indel
+VCFs into a pooled list of per-record VAFs and a pooled median.
 """
 
 from __future__ import annotations
@@ -39,11 +40,11 @@ def _open_text(path: str | os.PathLike):
     return open(p)
 
 
-def _tumor_column_index(header_lines: list[str]) -> int | None:
-    """Find the column literally named ``TUMOR`` on the ``#CHROM`` line.
+def _column_index(header_lines: list[str], name: str) -> int | None:
+    """Find the sample column literally named ``name`` on the ``#CHROM`` line.
 
     Returns its index (>= 9) or None if the ``#CHROM`` line is absent or has no
-    column literally named ``TUMOR``. Never a positional guess.
+    column literally named ``name``. Never a positional guess.
     """
     chrom_cols: list[str] | None = None
     for line in header_lines:
@@ -53,7 +54,7 @@ def _tumor_column_index(header_lines: list[str]) -> int | None:
     if chrom_cols is None:
         return None
     for idx in range(9, len(chrom_cols)):
-        if chrom_cols[idx] == "TUMOR":
+        if chrom_cols[idx] == name:
             return idx
     return None
 
@@ -124,10 +125,12 @@ def _indel_vaf(fmt_keys: list[str], sample_fields: list[str]) -> float | None:
     return tir_count / denom
 
 
-def _read_one(vcf_path: str | os.PathLike, *, is_indel: bool) -> tuple[list[float], bool]:
-    """Stream one Strelka2 VCF; return (tumor VAFs, whether TUMOR col found)."""
+def _read_one(
+    vcf_path: str | os.PathLike, *, is_indel: bool, column: str = "TUMOR"
+) -> tuple[list[float], bool]:
+    """Stream one Strelka2 VCF; return (VAFs from `column`, whether it was found)."""
     header_lines: list[str] = []
-    tumor_idx: int | None = None
+    column_idx: int | None = None
     resolved = False
     vafs: list[float] = []
 
@@ -136,25 +139,25 @@ def _read_one(vcf_path: str | os.PathLike, *, is_indel: bool) -> tuple[list[floa
             if line.startswith("#"):
                 header_lines.append(line)
                 if line.startswith("#CHROM"):
-                    tumor_idx = _tumor_column_index(header_lines)
+                    column_idx = _column_index(header_lines, column)
                     resolved = True
                 continue
             if not resolved:
-                tumor_idx = _tumor_column_index(header_lines)
+                column_idx = _column_index(header_lines, column)
                 resolved = True
-            if tumor_idx is None:
+            if column_idx is None:
                 continue
             line = line.rstrip("\n")
             if not line:
                 continue
             cols = line.split("\t")
-            if len(cols) < 9 or tumor_idx >= len(cols):
+            if len(cols) < 9 or column_idx >= len(cols):
                 continue
             ref, alt = cols[3], cols[4]
             if "," in alt:
                 continue
             fmt_keys = cols[8].split(":")
-            sample_fields = cols[tumor_idx].split(":")
+            sample_fields = cols[column_idx].split(":")
             if is_indel:
                 vaf = _indel_vaf(fmt_keys, sample_fields)
             else:
@@ -162,33 +165,47 @@ def _read_one(vcf_path: str | os.PathLike, *, is_indel: bool) -> tuple[list[floa
             if vaf is not None:
                 vafs.append(vaf)
 
-    return vafs, tumor_idx is not None
+    return vafs, column_idx is not None
 
 
 def read_strelka_vafs(
     snv_path: str | os.PathLike | None = None,
     indel_path: str | os.PathLike | None = None,
+    *,
+    column: str = "TUMOR",
 ) -> tuple[list[float], bool]:
-    """Stream the provided Strelka2 SNV/indel VCFs into a pooled tumor VAF list.
+    """Stream the provided Strelka2 SNV/indel VCFs into a pooled VAF list.
 
-    Each provided file is read independently; a file whose ``TUMOR`` column is
-    absent contributes no VAFs. Returns (pooled VAFs, whether a ``TUMOR``
-    column was found in any read file).
+    Each provided file is read independently; a file whose `column` (default the
+    literal ``TUMOR``) is absent contributes no VAFs. Returns (pooled VAFs,
+    whether the column was found in any read file).
     """
     vafs: list[float] = []
-    tumor_found = False
+    column_found = False
 
     if snv_path is not None:
-        snv_vafs, snv_tumor_found = _read_one(snv_path, is_indel=False)
+        snv_vafs, snv_found = _read_one(snv_path, is_indel=False, column=column)
         vafs.extend(snv_vafs)
-        tumor_found = tumor_found or snv_tumor_found
+        column_found = column_found or snv_found
 
     if indel_path is not None:
-        indel_vafs, indel_tumor_found = _read_one(indel_path, is_indel=True)
+        indel_vafs, indel_found = _read_one(indel_path, is_indel=True, column=column)
         vafs.extend(indel_vafs)
-        tumor_found = tumor_found or indel_tumor_found
+        column_found = column_found or indel_found
 
-    return vafs, tumor_found
+    return vafs, column_found
+
+
+def read_strelka_normal_vafs(
+    snv_path: str | os.PathLike | None = None,
+    indel_path: str | os.PathLike | None = None,
+) -> tuple[list[float], bool]:
+    """Pooled NORMAL-column VAFs across the provided Strelka2 SNV/indel VCFs.
+
+    Same tier-count derivation as the tumor reader, just over the literal
+    ``NORMAL`` column (C4-4). Returns (pooled VAFs, whether NORMAL was found).
+    """
+    return read_strelka_vafs(snv_path, indel_path, column="NORMAL")
 
 
 def strelka_median_vaf(
@@ -203,6 +220,24 @@ def strelka_median_vaf(
     vafs, tumor_found = read_strelka_vafs(snv_path=snv_path, indel_path=indel_path)
     median = statistics.median(vafs) if vafs else None
     return median, tumor_found
+
+
+def strelka_normal_median_vaf(
+    snv_path: str | os.PathLike | None = None,
+    indel_path: str | os.PathLike | None = None,
+) -> tuple[float | None, bool]:
+    """Pooled median NORMAL-column VAF across the Strelka2 SNV/indel VCFs.
+
+    Same tier-count arithmetic as ``strelka_median_vaf`` (C4-4), just over the
+    literal ``NORMAL`` column. None when no record yielded a normal VAF (also
+    absent-counts / missing-column cases). Also returns whether a ``NORMAL``
+    column was found in any read file.
+    """
+    vafs, normal_found = read_strelka_normal_vafs(
+        snv_path=snv_path, indel_path=indel_path
+    )
+    median = statistics.median(vafs) if vafs else None
+    return median, normal_found
 
 
 def evaluate_strelka_vaf_plausibility(
@@ -269,6 +304,61 @@ def evaluate_strelka_vaf_plausibility(
                 message=(
                     f"Strelka2: {label}: strelka_median_vaf could not be computed "
                     "(no derivable tumor VAF)"
+                ),
+                value=None,
+                kind="metric",
+            )
+        )
+
+    return results
+
+
+def evaluate_strelka_normal_vaf_plausibility(
+    snv_vcf: str | os.PathLike | None = None,
+    indel_vcf: str | os.PathLike | None = None,
+    sample: str | None = None,
+    *,
+    capture_metrics: dict[str, dict[str, float]] | None = None,
+) -> list[QCResult]:
+    """Evaluate the Strelka2 NORMAL-column VAF metric, informational only.
+
+    Mirrors ``evaluate_strelka_vaf_plausibility``, but reads the literal
+    ``NORMAL`` column (C4-4) and carries NO band: a correctly-paired normal is
+    ~0 at somatic sites, yet its magnitude has no protocol-independent expected
+    value, so the rule asserts nothing and ``evaluate()`` marks it
+    ``informational=True``. The ``by_metric`` dict holds ONLY this key, so this
+    call never re-emits the pack's other rules.
+
+    A ``None`` median (no ``NORMAL`` column, absent/zero tier counts, or no
+    usable record) yields one explicit "unverified" QCResult, never a silent
+    skip and never a false pass.
+
+    The sample label is ``sample`` if given, else ``NORMAL`` when that column
+    was found, else ``"sample"``.
+    """
+    median, normal_found = strelka_normal_median_vaf(snv_vcf, indel_vcf)
+    label = sample or ("NORMAL" if normal_found else None) or "sample"
+
+    by_metric = {"strelka_normal_median_vaf": median}
+    computable = {
+        metric: value for metric, value in by_metric.items() if value is not None
+    }
+    if capture_metrics is not None:
+        capture_metrics[label] = computable
+
+    results = [
+        result.model_copy(update={"message": f"Strelka2: {result.message}"})
+        for result in evaluate({label: computable}, SOMATIC_PLAUSIBILITY_PACK)
+    ]
+
+    if median is None:
+        results.append(
+            QCResult(
+                check=f"strelka_normal_median_vaf:{label}",
+                status="unverified",
+                message=(
+                    f"Strelka2: {label}: strelka_normal_median_vaf could not be "
+                    "computed (no normal column, or no derivable normal VAF)"
                 ),
                 value=None,
                 kind="metric",

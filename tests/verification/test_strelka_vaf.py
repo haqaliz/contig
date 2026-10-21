@@ -17,9 +17,12 @@ import gzip
 import pytest
 
 from contig.verification.strelka_vaf import (
+    evaluate_strelka_normal_vaf_plausibility,
     evaluate_strelka_vaf_plausibility,
+    read_strelka_normal_vafs,
     read_strelka_vafs,
     strelka_median_vaf,
+    strelka_normal_median_vaf,
 )
 
 _TUMOR = "TUMOR"
@@ -277,3 +280,108 @@ def test_sample_label_override(tmp_path):
 
     assert len(results) == 1
     assert results[0].check == "strelka_median_vaf:patient42"
+
+
+# --- C4-4: Strelka2-native NORMAL-column VAF -----------------------------------
+
+
+def test_normal_median_vaf_from_tier_counts(tmp_path):
+    # NORMAL column counts: SNV C>A AU=6,7 CU=14,15 -> 6/(14+6)=0.30; indel
+    # TAR=18,20 TIR=2,3 -> 2/(18+2)=0.10. Pooled median of [0.10, 0.30] = 0.20.
+    snv = _write(
+        tmp_path / "snv.vcf",
+        _snv_header(),
+        [_snv_rec("chr1", 100, "C", "A", "6,7:14,15:0,0:0,0", "6,7:14,15:0,0:0,0")],
+    )
+    indel = _write(
+        tmp_path / "indel.vcf",
+        _indel_header(),
+        [_indel_rec("chr1", 300, "AT", "A", "18,20:2,3", "18,20:2,3")],
+    )
+
+    median, normal_found = strelka_normal_median_vaf(snv_path=snv, indel_path=indel)
+
+    assert normal_found is True
+    assert median == pytest.approx(0.20)
+
+
+def test_normal_metric_reads_normal_column_while_tumor_metric_is_unchanged(tmp_path):
+    # The tumor 0.30 and the normal 0.10 come from the SAME two-sample record:
+    # the tumor metric must still read TUMOR (0.30), the normal metric NORMAL
+    # (0.10) -- distinct columns, no cross-read.
+    recs = [_snv_rec("chr1", 100, "C", "A", "6,7:14,15:0,0:0,0", "2,7:18,15:0,0:0,0")]
+    vcf = _write(tmp_path / "snv.vcf", _snv_header(), recs)
+
+    tumor_median, _ = strelka_median_vaf(snv_path=vcf)
+    normal_median, _ = strelka_normal_median_vaf(snv_path=vcf)
+
+    assert tumor_median == pytest.approx(0.30)
+    assert normal_median == pytest.approx(0.10)
+
+
+def test_normal_median_vaf_none_without_normal_column(tmp_path):
+    # A header with only TUMOR -> the NORMAL column is never guessed -> no VAFs.
+    header = (
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tTUMOR\n"
+    )
+    recs = ["chr1\t100\t.\tC\tA\t.\tPASS\t.\tAU:CU:GU:TU\t6,7:14,15:0,0:0,0\n"]
+    vcf = _write(tmp_path / "snv.vcf", header, recs)
+
+    vafs, normal_found = read_strelka_normal_vafs(snv_path=vcf)
+    median, _ = strelka_normal_median_vaf(snv_path=vcf)
+
+    assert normal_found is False
+    assert vafs == []
+    assert median is None
+
+
+def test_normal_median_vaf_none_when_counts_absent(tmp_path):
+    # NORMAL column present but zero counts -> denominator 0 -> no VAF.
+    recs = [_snv_rec("chr1", 100, "C", "A", "6,7:14,15:0,0:0,0", "0,0:0,0:0,0:0,0")]
+    vcf = _write(tmp_path / "snv.vcf", _snv_header(), recs)
+
+    median, normal_found = strelka_normal_median_vaf(snv_path=vcf)
+
+    assert normal_found is True
+    assert median is None
+
+
+def test_normal_vaf_check_is_informational_and_verdict_neutral(tmp_path):
+    # No band: evaluate() marks it informational, so a passing result can never
+    # contribute a PASS to the verdict (an informational-only set is UNVERIFIED).
+    from contig.models import overall_verdict
+
+    recs = [_snv_rec("chr1", 100, "C", "A", "6,7:14,15:0,0:0,0", "2,7:18,15:0,0:0,0")]
+    vcf = _write(tmp_path / "snv.vcf", _snv_header(), recs)
+
+    results = evaluate_strelka_normal_vaf_plausibility(snv_vcf=vcf)
+
+    assert len(results) == 1
+    result = results[0]
+    assert result.check == "strelka_normal_median_vaf:NORMAL"
+    assert result.status == "pass"
+    assert result.value == pytest.approx(0.10)
+    assert result.informational is True
+    assert result.expected_range is None
+    assert overall_verdict(results) == "unverified"
+
+
+def test_normal_vaf_uncomputable_is_unverified(tmp_path):
+    # No literal NORMAL column -> one explicit UNVERIFIED, value None, never a
+    # false pass and never a Mutect2/tumor-named check.
+    header = (
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tTUMOR\n"
+    )
+    recs = ["chr1\t100\t.\tC\tA\t.\tPASS\t.\tAU:CU:GU:TU\t6,7:14,15:0,0:0,0\n"]
+    vcf = _write(tmp_path / "snv.vcf", header, recs)
+
+    results = evaluate_strelka_normal_vaf_plausibility(snv_vcf=vcf)
+
+    assert len(results) == 1
+    result = results[0]
+    assert result.check == "strelka_normal_median_vaf:sample"
+    assert result.status == "unverified"
+    assert result.value is None
+    assert "Strelka2" in result.message

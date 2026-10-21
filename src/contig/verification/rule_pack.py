@@ -427,6 +427,16 @@ SOMATIC_PLAUSIBILITY_PACK: list[dict] = [
         "metric": "tumor_normal_vaf_delta",
         "message": "median tumor VAF minus median normal VAF (informational; near-zero or negative => possible swap, mislabel, or contamination)",
     },
+    {   # Strelka2-native NORMAL-column VAF (C4-4): the same tier1 ratio as
+        # strelka_median_vaf, read from the literal NORMAL column. NO BAND --
+        # informational only (a correctly-paired normal is ~0, but the magnitude
+        # has no protocol-independent expected value). Emitted ONLY by
+        # evaluate_strelka_normal_vaf_plausibility over a by_metric dict with just
+        # this key, so it never re-emits the rules above.
+        "check": "strelka_normal_median_vaf",
+        "metric": "strelka_normal_median_vaf",
+        "message": "median normal-sample variant allele fraction (Strelka2 tier1 counts; informational)",
+    },
 ]
 
 

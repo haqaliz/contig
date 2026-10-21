@@ -927,4 +927,8 @@ def test_informational_check_set_is_exactly_five():
         # function of unobserved tumor purity/clonality, so no band can honestly
         # assert a verdict -- it is a second smell axis only, informational.
         "tumor_normal_vaf_delta",
+        # C4-4: the Strelka2-native NORMAL-column VAF. A correctly-paired normal
+        # is ~0, but the magnitude has no protocol-independent expected value, so
+        # the metric is surfaced informationally and asserts nothing.
+        "strelka_normal_median_vaf",
     }

@@ -84,7 +84,10 @@ from contig.verification.somatic_plausibility import (
     evaluate_somatic_plausibility,
     evaluate_swap_plausibility,
 )
-from contig.verification.strelka_vaf import evaluate_strelka_vaf_plausibility
+from contig.verification.strelka_vaf import (
+    evaluate_strelka_normal_vaf_plausibility,
+    evaluate_strelka_vaf_plausibility,
+)
 from contig.verification.run_qc import evaluate_run_qc
 from contig.verification.sex_plausibility import evaluate_sex_plausibility
 from contig.verification.structural import evaluate_structural, manifest_for
@@ -443,6 +446,7 @@ def _discover_qc(
             swap_capture: dict[str, dict[str, float]] = {}
             delta_capture: dict[str, dict[str, float]] = {}
             strelka_capture: dict[str, dict[str, float]] = {}
+            strelka_normal_capture: dict[str, dict[str, float]] = {}
             # Match "mutect2" as a path COMPONENT below the run dir (sarek writes the
             # VCF under a `mutect2/` directory), not as a substring of the absolute
             # path — otherwise a "mutect2" in an ancestor workspace/run-id name would
@@ -523,6 +527,14 @@ def _discover_qc(
                         snv, indel, capture_metrics=strelka_capture
                     )
                 )
+                # Strelka2-native NORMAL-column VAF (C4-4): the same tier1
+                # arithmetic over the NORMAL column, informational only (no
+                # band) and UNVERIFIED when that column or its counts are absent.
+                results.extend(
+                    evaluate_strelka_normal_vaf_plausibility(
+                        snv, indel, capture_metrics=strelka_normal_capture
+                    )
+                )
             elif strelka_reason is not None and any(
                 "strelka" in {part.lower() for part in p.relative_to(run_dir).parts}
                 for p in vcfs
@@ -546,7 +558,10 @@ def _discover_qc(
             # concordance family is only written when the concordance actually
             # ran (both callers present).
             if capture_inputs is not None:
-                for captured in (tumor_capture, swap_capture, delta_capture, strelka_capture):
+                for captured in (
+                    tumor_capture, swap_capture, delta_capture,
+                    strelka_capture, strelka_normal_capture,
+                ):
                     for sample, metrics in captured.items():
                         if metrics:
                             somatic_plausibility_capture.setdefault(sample, {}).update(
