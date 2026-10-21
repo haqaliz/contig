@@ -1,5 +1,9 @@
 # Contig — wrap-up backlog (all remaining capability items)
 
+**Status 2026-10-21:** 15 done / 51 todo / 13 blocked / 8 not-buildable-as-stated
+(4 declined, 2 gated on experiments, 2 need a signed-payload decision).
+Done items are merged to `master`; see `CHANGELOG.md` for what each one changed.
+
 Source of truth: `docs/technical/CAPABILITY_ROADMAP.md` (latest status resolved, 2026-10-21).
 Status legend: `todo` · `planning` · `in-progress` · `done` · `blocked` (needs real hardware/data/network) · `declined` (by design, not work).
 

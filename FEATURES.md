@@ -245,6 +245,15 @@ human, and widening what we can verify. That work has its own sequenced backlog 
 [`docs/technical/CAPABILITY_ROADMAP.md`](docs/technical/CAPABILITY_ROADMAP.md),
 built one capability at a time, test-first:
 
+**Recently closed (2026-10-21 wrap-up pass):** the C1 concordance dashboard line;
+C2's BAM `.csi` index kind, destructive-patch carve-out, advisory choice gate,
+container-wait trace, and corpus peak RSS; C3's missing-MultiQC UNVERIFIED gap,
+the dropped `rrna_contamination` slug, and its dashboard cards; C4's swap-signal
+surface; and C8's `flags` array, notebook size bound, regex/numeric table
+predicates, non-UTF-8 `results.json` crash, and opt-in checkout pruning. Details
+in [`CHANGELOG.md`](CHANGELOG.md); remaining items in
+[`docs/planning/_backlog/BACKLOG.md`](docs/planning/_backlog/BACKLOG.md).
+
 | ID | Capability | Window | What it adds |
 |----|-----------|--------|--------------|
 | **C1** | Cross-tool concordance verification | **Shipped v0.2.0 + RNA-seq slice (Unreleased) + somatic slice (Unreleased) + autorun input-derivation slice (Unreleased)** | A second independent tool corroborates the result; a verdict axis distinct from the shipped reference-run benchmark (germline slice via `contig verify --concordance-vcf`; RNA-seq slice via `contig verify --concordance-counts` — per-gene Spearman, fraction-agreeing, informational gene-overlap; somatic slice auto in the verdict — `somatic_site_overlap`, the PASS-site Jaccard of Mutect2 vs Strelka2 from one sarek run, no user input; autorun input auto-derivation SHIPPED (Unreleased): persisted-sheet `--reads` fallback (both axes, integrity-gated) + in-seam kallisto index build from `--transcriptome` (GTF-derived t2g.txt, explicit-GTF runs only); SC `--index` auto-build stays deferred) |

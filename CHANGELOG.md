@@ -6,6 +6,58 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Verification honesty
+- **A missing MultiQC report is recorded as UNVERIFIED instead of vanishing
+  (C3-12).** `_discover_qc`'s `multiqc is not None` gate skipped every metric
+  check silently, so a structurally-clean run could render as PASS with zero
+  metric coverage. One explicit UNVERIFIED `multiqc_report` check now records the
+  gap. It carries no severity, so verdicts are unchanged — the gap is simply
+  visible. Dedicated-metric assays (methylseq/ampliseq/mag) are untouched.
+- **The never-firing `rrna_contamination` check is dropped (C3-11).** Its
+  `percent_rRNA` slug never resolved against a real nf-core/rnaseq report and
+  there is no default machine-readable rRNA-biotype source to parse instead. The
+  RNA-seq plausibility pack is now `duplication_rate` only.
+
+### Self-heal
+- **`--auto-approve` never applies a `risk="destructive"` patch (C2-16).** The
+  risk tier was a field the engine never read; unattended runs now give up
+  honestly with the rationale instead of applying one. No shipped patch is
+  destructive today — this is the carve-out that must exist before one is.
+- **The choice gate omits `operation` for an advisory best option (C2-17),**
+  matching the single-gate contract that an advisory has no machine operation.
+- **A container-runtime wait is recorded in `RepairStep.detail` (C2-18),** so the
+  enacted fix is visible rather than looking like a bare retry that succeeded.
+- **A BAM's `.csi` is built with `samtools index -c`, not `bcftools index`
+  (C2-19).** `.csi` has two dialects; the source suffix picks the tool.
+- **The observed peak RSS is carried on `FailureCase` (C2-7)** as an optional
+  `observed_peak_rss_mb` (additive; old corpus JSONL loads unchanged), read from
+  the same peak ladder that sizes the OOM retry.
+
+### Reproduce
+- **A non-UTF-8 `results.json` degrades to UNVERIFIED instead of raising
+  `UnicodeDecodeError` (C8-13),** which `json.JSONDecodeError` does not cover.
+- **Named `flags` arrays on regex pattern claims (C8-6):** `IGNORECASE`,
+  `MULTILINE`, `DOTALL`; unknown names are refused pre-run, absent ⇒
+  byte-identical behaviour.
+- **The notebook size bound is 32 MiB (C8-9);** plain text/log/JSON/TSV stays at
+  8 MiB, and `resolve_match`'s ReDoS bound is unchanged.
+- **Regex and numeric row predicates for the table locator (C8-1):**
+  `{"key": {"regex": …}}` and `{"key": {"gt"|"gte"|"lt"|"lte": …}}` (plus `eq`),
+  ANDed with exact-string predicates; 0 or >1 matching rows stays UNVERIFIED.
+  Malformed predicates are refused pre-run.
+- **Opt-in `contig reproduce --prune-checkouts N` (C8-16):** after a successful
+  remote run, removes `source/` from the N oldest remote reproduce runs, never
+  the current run, never a local-path run.
+
+### Dashboard
+- **Cross-tool concordance is surfaced as a "corroborated by" line (C1-4),** with
+  UNVERIFIED rendered as UNVERIFIED, never as corroborated.
+- **Somatic swap signal card (C4-5):** renders the engine's `normal_median_vaf`
+  WARN and its message verbatim; nothing is re-derived in the browser.
+- **C3 plausibility cards (C3-5):** RNA-seq mapping composition, germline
+  sex-check, and germline variant count, each rendering only when the run
+  actually carries the checks.
+
 - **The corrupt/partial STAR genome-index failure is now detected and healed
   (`star-index-corrupt-heal`, C2 follow-on N1).** STAR's
   `EXITING because of FATAL GENOME INDEX FILE error: <file> is corrupt, or is
