@@ -14,7 +14,14 @@ from typer.testing import CliRunner
 
 from contig.bundle import write_bundle
 from contig.cli import app
-from contig.models import ExecutionTarget, RepairStep, RunRecord, TaskEvent
+from contig.models import (
+    ExecutionTarget,
+    RepairStatsSnapshot,
+    RepairStep,
+    RunRecord,
+    TaskEvent,
+)
+from contig.snapshot_history import append_jsonl, load_jsonl
 
 runner = CliRunner()
 
@@ -308,3 +315,152 @@ def test_two_invocations_over_one_fixture_render_identical_output(tmp_path):
     second = runner.invoke(app, args)
     assert first.exit_code == 0
     assert first.output == second.output
+
+
+# --- the snapshot/history trend (C2-14) ---------------------------------------
+
+
+def test_bare_report_writes_no_history(tmp_path):
+    _write_run(tmp_path, "r1")
+    history_path = tmp_path / "repair_stats_history.jsonl"
+    result = runner.invoke(
+        app,
+        ["repair-stats", "--runs-dir", str(tmp_path), "--history-file", str(history_path)],
+    )
+    assert result.exit_code == 0
+    assert not history_path.exists()
+
+
+def test_snapshot_appends_one_record_that_round_trips(tmp_path):
+    _write_run(tmp_path, "r1")
+    _write_run(tmp_path, "r2")
+    _write_run(tmp_path, "r3", raw_steps=[_raw_step("gave_up")], events=(_FAILED,))
+    history_path = tmp_path / "repair_stats_history.jsonl"
+
+    snapshotted = runner.invoke(
+        app,
+        [
+            "repair-stats",
+            "--runs-dir", str(tmp_path),
+            "--snapshot",
+            "--history-file", str(history_path),
+        ],
+    )
+    assert snapshotted.exit_code == 0
+
+    report = json.loads(
+        runner.invoke(app, ["repair-stats", "--runs-dir", str(tmp_path), "--json"]).output
+    )
+    snaps = load_jsonl(RepairStatsSnapshot, history_path)
+    assert len(snaps) == 1
+    snap = snaps[0]
+    assert snap.timestamp
+    assert snap.contig_version
+    assert snap.runs_total == report["runs"]["total"] == 3
+    assert snap.analyzable == report["runs"]["analyzable"] == 3
+    assert snap.not_analyzable == report["runs"]["not_analyzable"] == 0
+    assert snap.attendance_unknown == report["runs"]["attendance_unknown"] == 0
+    assert snap.rate_denominator == report["runs"]["rate_denominator"] == 3
+    assert snap.unattended_completed == report["runs"]["unattended_completed"] == 2
+    assert snap.unattended_completion_rate == report["runs"]["unattended_completion_rate"]
+    assert snap.steps_total == report["steps"]["total"] == 1
+
+
+def test_snapshot_appends_every_time_without_deduping(tmp_path):
+    # The other guards append unconditionally; a stricter rule here would be an
+    # invention, so two identical runs record two points.
+    _write_run(tmp_path, "r1")
+    history_path = tmp_path / "repair_stats_history.jsonl"
+    for _ in range(2):
+        result = runner.invoke(
+            app,
+            [
+                "repair-stats",
+                "--runs-dir", str(tmp_path),
+                "--snapshot",
+                "--history-file", str(history_path),
+            ],
+        )
+        assert result.exit_code == 0
+    assert len(load_jsonl(RepairStatsSnapshot, history_path)) == 2
+
+
+def _snapshot(rate: float | None, *, completed: int, denominator: int, runs: int = 3, steps: int = 1):
+    return RepairStatsSnapshot(
+        timestamp="2026-07-01T00:00:00+00:00",
+        contig_version="0.38.0",
+        runs_total=runs,
+        analyzable=runs,
+        not_analyzable=0,
+        attendance_unknown=0,
+        rate_denominator=denominator,
+        unattended_completed=completed,
+        unattended_completion_rate=rate,
+        steps_total=steps,
+    )
+
+
+def test_history_renders_the_trend_and_the_delta_from_the_previous_point(tmp_path):
+    history_path = tmp_path / "repair_stats_history.jsonl"
+    append_jsonl(_snapshot(0.50, completed=1, denominator=2), history_path)
+    old = _snapshot(0.75, completed=3, denominator=4)
+    old = old.model_copy(update={"timestamp": "2026-07-10T00:00:00+00:00", "contig_version": "0.39.0"})
+    append_jsonl(old, history_path)
+
+    result = runner.invoke(
+        app,
+        ["repair-stats", "--history", "--history-file", str(history_path)],
+    )
+    assert result.exit_code == 0
+    assert "unattended completion 50.0% (1/2 scored)" in result.output
+    assert "unattended completion 75.0% (3/4 scored)" in result.output
+    assert "+25.0pp" in result.output
+    assert "←latest" in result.output
+    # oldest first, so the trend reads left to right
+    assert result.output.index("50.0%") < result.output.index("75.0%")
+
+
+def test_history_handles_a_point_with_no_computable_rate(tmp_path):
+    history_path = tmp_path / "repair_stats_history.jsonl"
+    append_jsonl(_snapshot(None, completed=0, denominator=0), history_path)
+    append_jsonl(
+        _snapshot(1.0, completed=1, denominator=1).model_copy(
+            update={"timestamp": "2026-07-10T00:00:00+00:00"}
+        ),
+        history_path,
+    )
+    result = runner.invoke(
+        app,
+        ["repair-stats", "--history", "--history-file", str(history_path)],
+    )
+    assert result.exit_code == 0
+    assert "unattended completion not computable (0/0 scored)" in result.output
+    assert "nan" not in result.output.lower()
+
+
+def test_empty_history_prints_a_clear_no_snapshots_line(tmp_path):
+    history_path = tmp_path / "does_not_exist.jsonl"
+    result = runner.invoke(
+        app,
+        ["repair-stats", "--history", "--history-file", str(history_path)],
+    )
+    assert result.exit_code == 0
+    assert (
+        f"No repair-stats snapshots recorded yet in {history_path}." in result.output
+    )
+
+
+def test_history_json_emits_the_recorded_list(tmp_path):
+    history_path = tmp_path / "repair_stats_history.jsonl"
+    append_jsonl(_snapshot(0.5, completed=1, denominator=2), history_path)
+    append_jsonl(_snapshot(0.75, completed=3, denominator=4), history_path)
+    result = runner.invoke(
+        app,
+        ["repair-stats", "--history", "--json", "--history-file", str(history_path)],
+    )
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert isinstance(data, list)
+    assert len(data) == 2
+    assert data[0]["unattended_completion_rate"] == 0.5
+

@@ -30,7 +30,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from contig.models import RunRecord, RunSummary
+from contig.models import RepairStatsSnapshot, RunRecord, RunSummary
 from contig.workspace import (
     bundle_dir_for,
     list_run_ids,
@@ -374,9 +374,36 @@ def repair_stats_report(runs: list[LoadedRun]) -> dict:
     }
 
 
+def default_repair_stats_history_path() -> Path:
+    """Committed repair-stats trend (JSONL, one RepairStatsSnapshot per line)."""
+    return Path(__file__).parent / "data" / "repair_stats_history.jsonl"
+
+
+def snapshot_from_repair_stats_report(
+    report: dict, *, timestamp: str, contig_version: str | None
+) -> RepairStatsSnapshot:
+    """Project a repair-stats report onto its headline numbers.
+
+    Pure, like `snapshot_from_heal_report`: the clock and version are passed in
+    so the snapshot is a deterministic function of the report.
+    """
+    runs = report["runs"]
+    return RepairStatsSnapshot(
+        timestamp=timestamp,
+        contig_version=contig_version,
+        runs_total=runs["total"],
+        analyzable=runs["analyzable"],
+        not_analyzable=runs["not_analyzable"],
+        attendance_unknown=runs["attendance_unknown"],
+        rate_denominator=runs["rate_denominator"],
+        unattended_completed=runs["unattended_completed"],
+        unattended_completion_rate=runs["unattended_completion_rate"],
+        steps_total=report["steps"]["total"],
+    )
+
+
 def collect_runs(runs_dir: str | Path) -> list[LoadedRun]:
     """Load every bundled run under `runs_dir` as a `LoadedRun`.
-
     Reads each bundle TWICE, deliberately: once through `load_run` for the validated
     model, and once as raw JSON for `repair_history`. `RepairStep.patch_applied` is
     `bool = False` (`models.py:322`), so on the model an absent key and an explicit

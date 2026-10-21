@@ -123,6 +123,7 @@ from contig.models import (
     HealSnapshot,
     LaunchManifest,
     QCResult,
+    RepairStatsSnapshot,
     ReproduceSnapshot,
     RunRecord,
     RunSummary,
@@ -137,7 +138,12 @@ from contig.reference import ReferenceError, resolve_reference
 from contig.reference_check import check_reference_consistency, fasta_contigs, gtf_contigs
 from contig.reference_harmonize import harmonize_gtf, plan_harmonization
 from contig.registry import VARIANT_ASSAYS, UnknownAssayError, assay_for_pipeline, select_pipeline
-from contig.repair_stats import collect_runs, repair_stats_report
+from contig.repair_stats import (
+    collect_runs,
+    default_repair_stats_history_path,
+    repair_stats_report,
+    snapshot_from_repair_stats_report,
+)
 from contig.report import (
     render_explain,
     render_reproduction,
@@ -3885,12 +3891,18 @@ def _print_trend(rows, *, title):
 
     rows: list of (timestamp, value_float, detail_str, version_str). The delta is
     value vs the previous row's value, in percentage points; the first row shows a
-    dash and the last row is tagged so the current standing is obvious.
+    dash and the last row is tagged so the current standing is obvious. A `None`
+    value (a report with nothing to divide by) shows a dash for its delta rather
+    than inventing a number.
     """
     typer.echo(title)
     prev = None
     for i, (ts, value, detail, version) in enumerate(rows):
-        delta = "   —   " if prev is None else f"{(value - prev) * 100:+.1f}pp"
+        delta = (
+            "   —   "
+            if prev is None or value is None
+            else f"{(value - prev) * 100:+.1f}pp"
+        )
         latest = "  ←latest" if i == len(rows) - 1 else ""
         typer.echo(f"  {ts}  {detail}  Δ {delta}  [{version}]{latest}")
         prev = value
@@ -4703,15 +4715,63 @@ def coverage(
 def repair_stats(
     runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
     json_out: bool = typer.Option(False, "--json", help="Emit the report as JSON (for the dashboard)."),
+    snapshot: bool = typer.Option(False, "--snapshot", help="Append this report to the repair-stats trend (C2-14)."),
+    show_history: bool = typer.Option(False, "--history", help="Print the recorded repair-stats trend instead of reporting. Ignores --snapshot."),
+    history_file: str = typer.Option(None, "--history-file", help="Repair-stats history JSONL (defaults to the shipped one)."),
 ) -> None:
     """Report repair-step outcomes and unattended completion over a runs directory.
 
     Counts two axes per repair step (which outcome family, which failure class)
     and computes completion per run, over real runs rather than the frozen
-    synthetic scenarios `heal-guard` scores.
+    synthetic scenarios `heal-guard` scores. With --snapshot the report's
+    headline numbers are appended to the committed trend; with --history the
+    recorded trend is printed instead.
     """
+    history_path = Path(history_file) if history_file else default_repair_stats_history_path()
+
+    if show_history:
+        history = load_jsonl(RepairStatsSnapshot, history_path)
+        if json_out:
+            typer.echo("[" + ",".join(s.model_dump_json() for s in history) + "]")
+            return
+        if not history:
+            typer.echo(f"No repair-stats snapshots recorded yet in {history_path}.")
+            return
+        _print_trend(
+            [
+                (
+                    s.timestamp,
+                    s.unattended_completion_rate,
+                    # "not computable" rather than 0%: nothing scorable is not
+                    # the claim that no scorable run completed.
+                    "unattended completion "
+                    + (
+                        "not computable"
+                        if s.unattended_completion_rate is None
+                        else f"{s.unattended_completion_rate:.1%}"
+                    )
+                    + f" ({s.unattended_completed}/{s.rate_denominator} scored)"
+                    + f"  {s.runs_total} run(s), {s.steps_total} step(s)",
+                    s.contig_version or "unknown",
+                )
+                for s in history
+            ],
+            title="Repair-stats unattended completion over time:",
+        )
+        return
+
     runs = collect_runs(runs_dir)
     report = repair_stats_report(runs)
+
+    if snapshot:
+        append_jsonl(
+            snapshot_from_repair_stats_report(
+                report,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                contig_version=_pkg_version("contig"),
+            ),
+            history_path,
+        )
 
     if json_out:
         typer.echo(_json.dumps(report))

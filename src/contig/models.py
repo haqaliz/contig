@@ -712,6 +712,27 @@ class HealSnapshot(BaseModel):
     contig_version: str | None = None
 
 
+class RepairStatsSnapshot(BaseModel):
+    """One `repair-stats` result over a runs directory, for the trend (C2-14).
+
+    Mirrors `HealSnapshot`'s role but carries only the report's headline
+    numbers: the full per-class breakdown would pin a mutable runs directory's
+    composition into a committed trend. `unattended_completion_rate` is
+    `None` when nothing was scorable, exactly as the report says it.
+    """
+
+    timestamp: str
+    contig_version: str | None = None
+    runs_total: int
+    analyzable: int
+    not_analyzable: int
+    attendance_unknown: int
+    rate_denominator: int
+    unattended_completed: int
+    unattended_completion_rate: float | None
+    steps_total: int
+
+
 class HealGuardResult(BaseModel):
     """The result of scoring the self-heal loop against a frozen held-out
     scenario set and comparing it to a committed baseline; mirrors
