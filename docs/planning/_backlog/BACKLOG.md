@@ -109,6 +109,7 @@ masquerade, full-clone fallback, AWS Batch undiagnosability, `_applied_word`
 alignment, `--step annotate`, `gene_symbol_concordance` severity, default exit code).
 
 Blocked items: see `BLOCKED_RUNBOOK.md` for the evidence each one needs.
+Closing summary for v0.64.0: `WRAP_UP.md`.
 
 Execution order: dependency-first (C3-12, C8-13, C2-16 correctness fixes), then
 C5 → C2 → C3 → C4 → C1 → C8 → C6 → C7 → C9.
