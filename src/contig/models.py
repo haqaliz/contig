@@ -448,6 +448,13 @@ class LaunchManifest(BaseModel):
     # launch.json (written before these fields) stays valid.
     vep_cache: str | None = None
     snpeff_cache: str | None = None
+    # Mutect2 somatic reference inputs (--pon/--pon-tbi/--germline-resource/
+    # --germline-resource-tbi), replayed by rerun/resume like fasta/gtf. Defaults
+    # None so a legacy launch.json (written before these fields) stays valid.
+    pon: str | None = None
+    pon_tbi: str | None = None
+    germline_resource: str | None = None
+    germline_resource_tbi: str | None = None
     max_memory: str | None = None
     max_cpus: int | None = None
     max_attempts: int = 3
