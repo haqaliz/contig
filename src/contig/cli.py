@@ -2370,6 +2370,10 @@ def verify(
     ignored unless --concordance-sc-counts-auto is set.
 
     The six concordance flags are mutually exclusive.
+
+    A somatic run needs no flag: its `somatic_site_overlap` check is computed and
+    stored by the run itself, so verify echoes the stored check (text only) when no
+    concordance flag is given. That echo never changes the exit code or the JSON.
     """
     _validate_triage_flags(ctx, triage_active=triage_active, triage_threshold=triage_threshold)
     if not _is_safe_run_id(run_id):
@@ -2577,6 +2581,21 @@ def verify(
     if concordance:
         _capture_pending_concordance_case(record, runs_dir, concordance_family, capture_metrics)
 
+    # A somatic run stores its auto-computed check in the record (no second input),
+    # so verify echoes it unless an explicit concordance flag asked for a fresh run.
+    stored_somatic_concordance = (
+        None
+        if concordance_requested
+        else [
+            qc
+            for qc in record.qc_results
+            if qc.kind == "concordance" and qc.check == "somatic_site_overlap"
+        ]
+    )
+    echoed_concordance = (
+        concordance if concordance_requested else stored_somatic_concordance
+    )
+
     # A signed run carries a signature.json sidecar; a mismatch is a verification
     # failure (the record was tampered with), so it fails the verify just like drift.
     sig = _signature_status(runs_dir, run_id, record, record_text=record_text)
@@ -2595,15 +2614,15 @@ def verify(
             return
         if sig_bad:
             _echo_signature_mismatch(run_id, sig)
-            _echo_concordance(concordance)
+            _echo_concordance(echoed_concordance)
             raise typer.Exit(code=1)
         if verdict_fail:
             _echo_verdict_reason()
-            _echo_concordance(concordance)
+            _echo_concordance(echoed_concordance)
             raise typer.Exit(code=1)
         signed_note = " (signature verified)" if sig.get("signature_ok") else ""
         typer.echo(f"Nothing to verify for run {run_id}: no outputs were captured.{signed_note}")
-        _echo_concordance(concordance)
+        _echo_concordance(echoed_concordance)
         return
 
     result = verify_outputs(record, _results_dir_for(record, runs_dir, run_id))
@@ -2621,7 +2640,7 @@ def verify(
     if result["ok"] and not sig_bad and not verdict_fail:
         signed_note = " Signature verified." if sig.get("signature_ok") else ""
         typer.echo(f"Outputs verified for run {run_id}: all recorded outputs match.{signed_note}")
-        _echo_concordance(concordance)
+        _echo_concordance(echoed_concordance)
         return
     if sig_bad:
         _echo_signature_mismatch(run_id, sig)
@@ -2633,7 +2652,7 @@ def verify(
             typer.echo(f"  missing: {rel}", err=True)
     if verdict_fail:
         _echo_verdict_reason()
-    _echo_concordance(concordance)
+    _echo_concordance(echoed_concordance)
     raise typer.Exit(code=1)
 
 

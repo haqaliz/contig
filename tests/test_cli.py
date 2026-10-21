@@ -1774,6 +1774,64 @@ def test_verify_json_ok_when_clean(tmp_path):
     assert data == {"ok": True, "changed": [], "missing": []}
 
 
+def _write_somatic_run_with_concordance(runs_dir, run_id, status):
+    """A finished somatic run whose record already stores the run-time auto check."""
+    from contig.bundle import compute_output_checksums
+
+    run_dir = Path(runs_dir) / run_id
+    results = run_dir / "results"
+    results.mkdir(parents=True, exist_ok=True)
+    (results / "out.txt").write_text("verified output")
+    record = RunRecord(
+        run_id=run_id,
+        pipeline="nf-core/sarek",
+        pipeline_revision="3.5.1",
+        target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
+        input_checksums={},
+        events=[TaskEvent(process="X", status="COMPLETED", exit=0)],
+        qc_results=[
+            QCResult(
+                check="somatic_site_overlap",
+                status=status,
+                message="Jaccard overlap 0.95 of Mutect2/Strelka2 PASS sites",
+                value=0.95,
+                kind="concordance",
+            )
+        ],
+        output_checksums=compute_output_checksums(results),
+    )
+    write_bundle(record, run_dir)
+
+
+def test_verify_echoes_stored_somatic_concordance_without_flag(tmp_path):
+    # C1-6: the somatic check is computed and stored by the run itself, so there
+    # is no second input to pass at verify time -- verify echoes what the record
+    # already holds, with no flag.
+    _write_somatic_run_with_concordance(tmp_path, "som", "pass")
+    result = runner.invoke(app, ["verify", "som", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "somatic_site_overlap" in result.output
+    assert "Concordance (cross-tool corroboration)" in result.output
+
+
+def test_verify_stored_somatic_concordance_never_changes_exit_code(tmp_path):
+    # Corroboration is at most WARN and must stay verdict-neutral at verify time.
+    _write_somatic_run_with_concordance(tmp_path, "somwarn", "warn")
+    result = runner.invoke(app, ["verify", "somwarn", "--runs-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "somatic_site_overlap" in result.output
+
+
+def test_verify_stored_somatic_concordance_leaves_json_payload_unchanged(tmp_path):
+    # The echo is a text surface only; the verify JSON contract is untouched.
+    _write_somatic_run_with_concordance(tmp_path, "somjson", "pass")
+    result = runner.invoke(
+        app, ["verify", "somjson", "--runs-dir", str(tmp_path), "--json"]
+    )
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {"ok": True, "changed": [], "missing": []}
+
+
 # --- contig verify --concordance-vcf (PRD C1, slice 1) -------------------------
 # A minimal germline VCF: header line + sites carrying a GT for one sample.
 _VCF_HEADER = (
