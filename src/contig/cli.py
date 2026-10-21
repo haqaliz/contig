@@ -486,6 +486,10 @@ def run(
     dbsnp: str = typer.Option(None, "--dbsnp", help="dbSNP known-sites VCF (germline variant_calling only)."),
     known_indels: str = typer.Option(None, "--known-indels", help="Known-indels VCF (germline variant_calling only)."),
     known_snps: str = typer.Option(None, "--known-snps", help="Known-SNPs VCF (germline variant_calling only)."),
+    pon: str = typer.Option(None, "--pon", help="Mutect2 panel-of-normals VCF.gz (somatic_variant_calling only; requires --pon-tbi)."),
+    pon_tbi: str = typer.Option(None, "--pon-tbi", help="Index for --pon (somatic_variant_calling only)."),
+    germline_resource: str = typer.Option(None, "--germline-resource", help="Mutect2 germline-resource VCF.gz (somatic_variant_calling only; requires --germline-resource-tbi)."),
+    germline_resource_tbi: str = typer.Option(None, "--germline-resource-tbi", help="Index for --germline-resource (somatic_variant_calling only)."),
     vep_cache: str = typer.Option(None, "--vep-cache", help="User-supplied VEP annotation cache path or s3:// URL (variant assays only); overrides the auto-download."),
     snpeff_cache: str = typer.Option(None, "--snpeff-cache", help="User-supplied SnpEff annotation cache path or s3:// URL (variant assays only); overrides the auto-download."),
     outdir: str = typer.Option(None, "--outdir", help="Pipeline output directory (pipeline --outdir)."),
@@ -533,6 +537,10 @@ def run(
         dbsnp=dbsnp,
         known_indels=known_indels,
         known_snps=known_snps,
+        pon=pon,
+        pon_tbi=pon_tbi,
+        germline_resource=germline_resource,
+        germline_resource_tbi=germline_resource_tbi,
         vep_cache=vep_cache,
         snpeff_cache=snpeff_cache,
         outdir=outdir,
@@ -592,6 +600,52 @@ def _known_sites_params(
         )
         if value
     }
+
+
+_SOMATIC_REFERENCE_ROLES = (
+    ("pon", "--pon", "pon_tbi", "--pon-tbi"),
+    ("germline_resource", "--germline-resource", "germline_resource_tbi", "--germline-resource-tbi"),
+)
+
+
+def _somatic_reference_params(
+    *, pon: str | None, pon_tbi: str | None,
+    germline_resource: str | None, germline_resource_tbi: str | None,
+) -> dict[str, str]:
+    """Validate and collect the Mutect2 PON / germline-resource roles into params.
+
+    Each supplied path must exist and be readable BEFORE launch — a mistyped
+    reference would otherwise fail deep inside Nextflow. Each main file is paired
+    with its `.tbi` (sarek indexes both); the coupling is required symmetrically
+    because sarek's pinned revision carries no readable rule to follow instead.
+    """
+    values = {
+        "pon": pon,
+        "pon_tbi": pon_tbi,
+        "germline_resource": germline_resource,
+        "germline_resource_tbi": germline_resource_tbi,
+    }
+    supplied = {key: value for key, value in values.items() if value}
+
+    problems: list[str] = []
+    for main_key, main_flag, tbi_key, tbi_flag in _SOMATIC_REFERENCE_ROLES:
+        if supplied.get(main_key) and not supplied.get(tbi_key):
+            problems.append(
+                f"{main_flag} requires {tbi_flag}: sarek indexes the reference VCF."
+            )
+        if supplied.get(tbi_key) and not supplied.get(main_key):
+            problems.append(f"{tbi_flag} requires {main_flag}.")
+    for main_key, main_flag, tbi_key, tbi_flag in _SOMATIC_REFERENCE_ROLES:
+        for flag, key in ((main_flag, main_key), (tbi_flag, tbi_key)):
+            path = supplied.get(key)
+            if path and not (Path(path).is_file() and os.access(path, os.R_OK)):
+                problems.append(f"{flag} path is missing or unreadable: {path}")
+    if problems:
+        typer.echo("Cannot launch a somatic run:", err=True)
+        for problem in problems:
+            typer.echo(f"  - {problem}", err=True)
+        raise typer.Exit(code=1)
+    return supplied
 
 
 def _enable_annotation_cache(
@@ -678,6 +732,10 @@ def _dispatch_run(
     dbsnp: str | None = None,
     known_indels: str | None = None,
     known_snps: str | None = None,
+    pon: str | None = None,
+    pon_tbi: str | None = None,
+    germline_resource: str | None = None,
+    germline_resource_tbi: str | None = None,
     vep_cache: str | None = None,
     snpeff_cache: str | None = None,
     outdir: str | None,
@@ -798,6 +856,17 @@ def _dispatch_run(
     params: dict[str, object] = {}
     input_paths: list = []
     harmonized_direction: str | None = None
+    # Somatic-only Mutect2 reference inputs (PON / germline resource). Never
+    # silently forwarded to another assay, where the callers would ignore them.
+    if (
+        pon or pon_tbi or germline_resource or germline_resource_tbi
+    ) and resolved_assay != "somatic_variant_calling":
+        typer.echo(
+            "--pon/--pon-tbi/--germline-resource/--germline-resource-tbi are only "
+            f"valid for the somatic_variant_calling assay (resolved assay: {resolved_assay}).",
+            err=True,
+        )
+        raise typer.Exit(code=1)
     # The --input/reference/--outdir plumbing is nf-core specific (a samplesheet, a
     # reference, the pipeline --outdir flag). The snakemake foundation pass drives
     # its inputs and outputs from the Snakefile itself, so it skips this block.
@@ -918,6 +987,17 @@ def _dispatch_run(
             if not Path(path).is_file():
                 typer.echo(f"Warning: known-sites file does not exist: {path}", err=True)
         params.update(known_sites)
+    # Somatic Mutect2 reference inputs ride as params next to the known-sites
+    # roles. Unlike those, a supplied-but-broken path is refused pre-launch:
+    # Mutect2 without its configured PON silently produces an unfiltered call
+    # set, which is worse than a clear refusal.
+    params.update(
+        _somatic_reference_params(
+            pon=pon, pon_tbi=pon_tbi,
+            germline_resource=germline_resource,
+            germline_resource_tbi=germline_resource_tbi,
+        )
+    )
     selected_profiles = profiles or ("docker" if input else "test,docker")
 
     # Merge the resolved assay's declarative default_params into `params` BEFORE the
@@ -955,6 +1035,10 @@ def _dispatch_run(
         dbsnp=dbsnp,  # ORIGINAL explicit paths — reproduce re-enters dispatch and re-derives identity
         known_indels=known_indels,
         known_snps=known_snps,
+        pon=pon,  # raw CLI args, replayed on rerun/resume
+        pon_tbi=pon_tbi,
+        germline_resource=germline_resource,
+        germline_resource_tbi=germline_resource_tbi,
         vep_cache=vep_cache,  # raw CLI args, replayed on rerun/resume
         snpeff_cache=snpeff_cache,
         max_memory=max_memory,
@@ -1083,6 +1167,10 @@ def rerun(
         dbsnp=manifest.dbsnp,
         known_indels=manifest.known_indels,
         known_snps=manifest.known_snps,
+        pon=manifest.pon,
+        pon_tbi=manifest.pon_tbi,
+        germline_resource=manifest.germline_resource,
+        germline_resource_tbi=manifest.germline_resource_tbi,
         vep_cache=manifest.vep_cache,
         snpeff_cache=manifest.snpeff_cache,
         outdir=None,  # re-defaulted under the new run dir
@@ -3393,6 +3481,7 @@ def resume(
     _dispatch_run(
         run_id=run_id,  # the SAME run id, in the SAME run dir
         pipeline=manifest.pipeline,
+        assay=manifest.assay,  # replay the persisted assay (somatic vs germline sarek)
         revision=manifest.revision,
         profiles=",".join(manifest.profiles),
         runs_dir=runs_dir,
@@ -3408,6 +3497,10 @@ def resume(
         dbsnp=manifest.dbsnp,
         known_indels=manifest.known_indels,
         known_snps=manifest.known_snps,
+        pon=manifest.pon,
+        pon_tbi=manifest.pon_tbi,
+        germline_resource=manifest.germline_resource,
+        germline_resource_tbi=manifest.germline_resource_tbi,
         vep_cache=manifest.vep_cache,
         snpeff_cache=manifest.snpeff_cache,
         outdir=None,

@@ -12,9 +12,11 @@ import pytest
 from contig.verification.somatic_plausibility import (
     _normal_column_index,
     _normal_sample_name,
+    evaluate_delta_plausibility,
     evaluate_somatic_plausibility,
     evaluate_swap_plausibility,
     somatic_metrics,
+    tumor_normal_vaf_delta,
 )
 
 _TUMOR = "TUMOR"
@@ -539,3 +541,81 @@ def test_swap_check_band_boundary(tmp_path):
 
     assert _swap_check(at_results).status == "pass"
     assert _swap_check(above_results).status == "warn"
+
+
+# --- directional tumor-vs-normal VAF delta (C4-3) -------------------------------
+
+
+def _recs_with_both_af(tumor_af, normal_af, n, start_pos=100):
+    """n biallelic records; tumor/normal AF fixed, so both medians are exact."""
+    return [
+        _rec(
+            "chr1", start_pos + i, "A", "G", f"0/1:{tumor_af}:14,6:20",
+            normal_fmt=f"0/0:{normal_af}:10,0:10",
+        )
+        for i in range(n)
+    ]
+
+
+def test_delta_positive_when_tumor_vaf_exceeds_normal(tmp_path):
+    # The ordinary tumor-normal direction: median tumor VAF 0.40, median normal
+    # VAF 0.10 -> delta 0.30. Informational by construction (no band), so it
+    # passes but asserts nothing.
+    header = _header(normal_line=True)
+    vcf = _write(tmp_path / "a.vcf", header, _recs_with_both_af(0.40, 0.10, 12))
+
+    assert tumor_normal_vaf_delta(vcf) == pytest.approx(0.30)
+    results = evaluate_delta_plausibility(vcf)
+
+    assert {r.check for r in results} == {"tumor_normal_vaf_delta:TUMOR"}
+    result = results[0]
+    assert result.value == pytest.approx(0.30)
+    assert result.status == "pass"
+    assert result.informational is True
+    assert result.expected_range is None
+
+
+def test_delta_is_verdict_neutral(tmp_path):
+    # An informational-only result set reduces to UNVERIFIED, never PASS: the
+    # delta is a second smell axis, not a verdict.
+    from contig.models import overall_verdict
+
+    header = _header(normal_line=True)
+    vcf = _write(tmp_path / "a.vcf", header, _recs_with_both_af(0.40, 0.60, 12))
+
+    results = evaluate_delta_plausibility(vcf)
+
+    assert results[0].status == "pass"  # band-less
+    assert overall_verdict(results) == "unverified"
+
+
+def test_delta_unverified_when_normal_column_unresolvable(tmp_path):
+    # No ##normal_sample= header -> the normal column is never guessed -> the
+    # delta is uncomputable -> one explicit UNVERIFIED, value None.
+    header = _header(normal_line=False)
+    vcf = _write(tmp_path / "a.vcf", header, _recs_with_both_af(0.40, 0.10, 12))
+
+    results = evaluate_delta_plausibility(vcf)
+
+    assert {r.check for r in results} == {"tumor_normal_vaf_delta:TUMOR"}
+    result = results[0]
+    assert result.status == "unverified"
+    assert result.value is None
+    assert result.kind == "metric"
+
+
+def test_delta_unverified_when_tumor_vaf_uncomputable(tmp_path):
+    # Normal column resolves and yields a VAF, but the tumor column's AF is
+    # malformed with no AD/DP fallback -> either median uncomputable ->
+    # UNVERIFIED, never a fabricated delta.
+    header = _header(normal_line=True)
+    recs = [
+        _rec("chr1", 100, "A", "G", ".", normal_fmt="0.10", fmt="AF"),
+    ]
+    vcf = _write(tmp_path / "a.vcf", header, recs)
+
+    results = evaluate_delta_plausibility(vcf)
+
+    assert results[0].check == "tumor_normal_vaf_delta:TUMOR"
+    assert results[0].status == "unverified"
+    assert results[0].value is None

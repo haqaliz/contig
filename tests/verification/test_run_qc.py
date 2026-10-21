@@ -444,6 +444,28 @@ def test_discover_qc_includes_somatic_plausibility(tmp_path):
     assert any(c.startswith("pon_applied") for c in checks)
 
 
+def test_discover_qc_includes_somatic_vaf_delta(tmp_path):
+    # The directional tumor-vs-normal delta is wired beside the swap smell test,
+    # from the same Mutect2 VCF. Informational: no band, no verdict.
+    run_dir = tmp_path / "run"
+    header = (
+        "##fileformat=VCFv4.2\n"
+        "##tumor_sample=TUMOR\n"
+        "##normal_sample=NORMAL\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tNORMAL\tTUMOR\n"
+    )
+    vcf = run_dir / "results" / "variant_calling" / "mutect2" / "T_vs_N" / "x.vcf.gz"
+    _write_somatic_vcf_gz(vcf, header=header)
+
+    results = _discover_qc(run_dir, assay="somatic_variant_calling")
+
+    delta = [r for r in results if r.check.startswith("tumor_normal_vaf_delta")]
+    assert len(delta) == 1
+    assert delta[0].check == "tumor_normal_vaf_delta:TUMOR"
+    assert delta[0].value == pytest.approx(0.35 - 0.0)  # median(0.30, 0.40) - normal 0.0
+    assert delta[0].informational is True
+
+
 def test_somatic_plausibility_not_run_for_non_somatic_assay(tmp_path):
     # The same Mutect2 VCF under a germline (variant_calling) run does NOT get the
     # somatic checks — the gate is strictly keyed to somatic_variant_calling.
@@ -683,11 +705,11 @@ _STRELKA_HEADER = (
 )
 
 
-def _write_strelka_snv_vcf_gz(path, rows):
+def _write_strelka_snv_vcf_gz(path, rows, normal_fmt="0,0:0,0:0,0:0,0"):
     """rows: (chrom, pos, ref, alt, tumor_AU_CU_GU_TU) tuples -- real tier FORMAT
     (AU:CU:GU:TU) so strelka_median_vaf actually computes a VAF."""
     body = "".join(
-        f"{c}\t{p}\t.\t{r}\t{a}\t.\tPASS\t.\tAU:CU:GU:TU\t0,0:0,0:0,0:0,0\t{t}\n"
+        f"{c}\t{p}\t.\t{r}\t{a}\t.\tPASS\t.\tAU:CU:GU:TU\t{normal_fmt}\t{t}\n"
         for (c, p, r, a, t) in rows
     )
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -695,11 +717,11 @@ def _write_strelka_snv_vcf_gz(path, rows):
     return path
 
 
-def _write_strelka_indel_vcf_gz(path, rows):
+def _write_strelka_indel_vcf_gz(path, rows, normal_fmt="0,0:0,0"):
     """rows: (chrom, pos, ref, alt, tumor_TAR_TIR) tuples -- real tier FORMAT
     (TAR:TIR) so strelka_median_vaf actually computes a VAF."""
     body = "".join(
-        f"{c}\t{p}\t.\t{r}\t{a}\t.\tPASS\t.\tTAR:TIR\t0,0:0,0\t{t}\n"
+        f"{c}\t{p}\t.\t{r}\t{a}\t.\tPASS\t.\tTAR:TIR\t{normal_fmt}\t{t}\n"
         for (c, p, r, a, t) in rows
     )
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -742,6 +764,30 @@ def test_somatic_run_emits_both_vaf_metrics(tmp_path):
     assert strelka_result.status == "pass"
     # pooled median of [0.30 (snv), 0.10 (indel)] = 0.20
     assert strelka_result.value == pytest.approx(0.20)
+
+
+def test_somatic_run_emits_strelka_normal_vaf_metric(tmp_path):
+    # The same uniquely-resolved Strelka2 pair also yields the NORMAL-column
+    # metric (C4-4): informational, from the normal tier counts.
+    run_dir = tmp_path / "run"
+    _write_strelka_snv_vcf_gz(
+        run_dir
+        / "results"
+        / "variant_calling"
+        / "strelka"
+        / "T_vs_N"
+        / "T_vs_N.strelka.somatic_snvs.vcf.gz",
+        [("chr1", 100, "C", "A", "6,7:14,15:0,0:0,0")],
+        normal_fmt="2,7:18,15:0,0:0,0",  # normal 2/(18+2) = 0.10
+    )
+
+    results = _discover_qc(run_dir, assay="somatic_variant_calling")
+
+    normal = [r for r in results if r.check.startswith("strelka_normal_median_vaf")]
+    assert len(normal) == 1
+    assert normal[0].check == "strelka_normal_median_vaf:NORMAL"
+    assert normal[0].value == pytest.approx(0.10)
+    assert normal[0].informational is True
 
 
 def test_somatic_run_no_strelka_skips_silently(tmp_path):

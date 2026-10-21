@@ -889,7 +889,7 @@ def _all_rule_pack_lists():
     return packs
 
 
-def test_informational_check_set_is_exactly_four():
+def test_informational_check_set_is_exactly_five():
     """R7 enumeration guard.
 
     docs/technical/CAPABILITY_ROADMAP.md:663 said "decide before a second
@@ -923,4 +923,12 @@ def test_informational_check_set_is_exactly_four():
         "gene_symbol_concordance",
         "x_het_ratio",
         "gene_overlap",
+        # C4-3: the directional tumor-minus-normal VAF delta. Its magnitude is a
+        # function of unobserved tumor purity/clonality, so no band can honestly
+        # assert a verdict -- it is a second smell axis only, informational.
+        "tumor_normal_vaf_delta",
+        # C4-4: the Strelka2-native NORMAL-column VAF. A correctly-paired normal
+        # is ~0, but the magnitude has no protocol-independent expected value, so
+        # the metric is surfaced informationally and asserts nothing.
+        "strelka_normal_median_vaf",
     }
