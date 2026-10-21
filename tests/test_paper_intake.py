@@ -488,6 +488,111 @@ def test_default_paper_fetcher_urlopen_called_with_timeout(monkeypatch, tmp_path
     assert calls[0]["timeout"] == 30
 
 
+def test_default_paper_fetcher_against_a_real_loopback_server(monkeypatch, tmp_path):
+    """Drive the REAL default fetcher over real urllib against a loopback server.
+
+    Every other fetcher test patches `_urlopen`, so the actual urllib path (and
+    the HTTP response handling around it) was never exercised in CI. Here only
+    the resolver BASE is pointed at 127.0.0.1 -- `_DOI_URL_PREFIX` is a
+    module-level constant read at call time, so no production seam is added --
+    and `_urlopen` stays the real one. No external network, no sleeps; the
+    server is always shut down (with a bounded join) in the finally block.
+    """
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    seen: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 -- stdlib handler API
+            seen.append(self.path)
+            port = self.server.server_address[1]
+            if self.path == "/10.1/meta":
+                body = (
+                    "<html><head>"
+                    f'<meta name="citation_pdf_url" '
+                    f'content="http://127.0.0.1:{port}/pdf">'
+                    "</head></html>"
+                ).encode()
+                self._send(200, body, "text/html")
+            elif self.path == "/pdf":
+                self._send(200, _PDF_BODY, "application/pdf")
+            elif self.path == "/10.1/direct":
+                # No PDF Content-Type: only the %PDF magic can identify this.
+                self._send(200, _PDF_BODY, "application/octet-stream")
+            elif self.path == "/10.1/paywall":
+                self._send(200, b"<html><head></head></html>", "text/html")
+            elif self.path == "/10.1/dup":
+                body = (
+                    "<html><head>"
+                    f'<meta name="citation_pdf_url" '
+                    f'content="http://127.0.0.1:{port}/a.pdf">'
+                    f'<meta name="citation_pdf_url" '
+                    f'content="http://127.0.0.1:{port}/b.pdf">'
+                    "</head></html>"
+                ).encode()
+                self._send(200, body, "text/html")
+            else:
+                self._send(404, b"not found", "text/plain")
+
+        def _send(self, status: int, body: bytes, content_type: str) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args) -> None:
+            pass  # keep pytest output clean
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}/"
+        monkeypatch.setattr(paper_intake, "_DOI_URL_PREFIX", base)
+
+        # (1) landing page -> citation_pdf_url meta -> PDF download
+        meta_dest = tmp_path / "meta.pdf"
+        code, message = default_paper_fetcher("10.1/meta", meta_dest)
+        assert code == 0, message
+        assert meta_dest.read_bytes() == _PDF_BODY
+
+        # (2) PDF-first sniff on a response that is a PDF by magic only
+        direct_dest = tmp_path / "direct.pdf"
+        code, message = default_paper_fetcher("10.1/direct", direct_dest)
+        assert code == 0, message
+        assert direct_dest.read_bytes() == _PDF_BODY
+
+        # (3) paywall/refusal shape: no meta -> named refusal, nothing written
+        paywall_dest = tmp_path / "paywall.pdf"
+        code, message = default_paper_fetcher("10.1/paywall", paywall_dest)
+        assert code != 0
+        assert "paywalled" in message
+        assert not paywall_dest.exists()
+
+        # (4) duplicate metas -> refusal naming the count, never a guess
+        dup_dest = tmp_path / "dup.pdf"
+        code, message = default_paper_fetcher("10.1/dup", dup_dest)
+        assert code != 0
+        assert "2" in message
+        assert not dup_dest.exists()
+
+        # The real fetcher resolved each DOI against the injected base.
+        assert seen == [
+            "/10.1/meta",
+            "/pdf",
+            "/10.1/direct",
+            "/10.1/paywall",
+            "/10.1/dup",
+        ]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+
 # ---------------------------------------------------------------------------
 # pdf-text-seam: pdftotext PDF->text seam (injectable; never runs in CI)
 # ---------------------------------------------------------------------------
