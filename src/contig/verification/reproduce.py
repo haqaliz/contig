@@ -1040,6 +1040,8 @@ def run_reproduction(
     A located claim also records the exact fragment the locator extracted as
     `ClaimResult.matched_output` (capped at `_MAX_MATCHED_OUTPUT_CHARS`); an
     unlocated claim, or one whose locator resolved nothing, carries `None`.
+    `ClaimResult.stale` is True exactly when the freshness guard -- not a
+    missing/unreadable artifact -- is why a claim stayed unverified.
 
     When the first run fails (nonzero exit) and `allow_install` is True, this
     makes bounded env-resurrection attempts: detect a missing Python module
@@ -1540,6 +1542,7 @@ def run_reproduction(
                         tolerance=claim.tolerance,
                         delta=None,
                         message=fail_msg,
+                        stale=observation.stale,
                     )
                 )
                 continue
@@ -1557,6 +1560,7 @@ def run_reproduction(
                     delta=delta,
                     message=message,
                     matched_output=observation.matched,
+                    stale=observation.stale,
                 )
             )
             continue
@@ -1571,6 +1575,7 @@ def run_reproduction(
                     tolerance=claim.tolerance,
                     delta=None,
                     message=results_stale,
+                    stale=True,
                 )
             )
             continue

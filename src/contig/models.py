@@ -891,6 +891,9 @@ class ClaimResult(BaseModel):
     # The exact fragment a locator bound (value/cell/capture), capped; None
     # when the claim was unlocated or nothing resolved -- never fabricated.
     matched_output: str | None = None
+    # One bool, not a reason: the prose reason already lives in `message`, and
+    # a consumer only needs to tell stale from missing without parsing it.
+    stale: bool = False
 
 
 class ReproduceRecord(BaseModel):
