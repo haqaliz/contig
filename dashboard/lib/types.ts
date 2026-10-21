@@ -358,6 +358,23 @@ export interface VerifySnapshot {
   contig_version: string | null;
 }
 
+// One `repair-stats` snapshot (src/contig/data/repair_stats_history.jsonl,
+// C2-14). Headline numbers only: the full per-class breakdown would pin a
+// mutable runs directory's composition into a committed trend. The rate is
+// null when nothing was scorable, exactly as the CLI reports it.
+export interface RepairStatsSnapshot {
+  timestamp: string;
+  contig_version: string | null;
+  runs_total: number;
+  analyzable: number;
+  not_analyzable: number;
+  attendance_unknown: number;
+  rate_denominator: number;
+  unattended_completed: number;
+  unattended_completion_rate: number | null;
+  steps_total: number;
+}
+
 // One row of <runsDir>/triage-ledger.jsonl (C9 Jev triage calibration sidecar).
 // The engine appends one per triaged decision; only the counted fields are typed
 // here, and every field is optional because the ledger is user data.

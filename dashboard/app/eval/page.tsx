@@ -23,6 +23,7 @@ import { EvalHistory } from "@/components/eval/eval-history";
 import { HoldoutHistory } from "@/components/eval/holdout-history";
 import { HealHistory } from "@/components/eval/heal-history";
 import { VerifyHistory } from "@/components/eval/verify-history";
+import { RepairStatsHistory } from "@/components/eval/repair-stats-history";
 import { TriageLedger } from "@/components/eval/triage-ledger";
 import { CoveragePanel } from "@/components/eval/coverage-panel";
 import { ClustersView } from "@/components/eval/clusters-view";
@@ -34,6 +35,7 @@ import {
   getHealHistory,
   getTriageLedger,
   getVerifyHistory,
+  getRepairStatsHistory,
   isDetectorName,
 } from "@/lib/runs";
 
@@ -51,13 +53,14 @@ export default async function EvalPage({
   // else falls back to the default so the page never shells an unknown name.
   const selected = isDetectorName(detector) ? detector : "rules";
 
-  const [report, history, holdoutHistory, healHistory, verifyHistory, triage] =
+  const [report, history, holdoutHistory, healHistory, verifyHistory, repairStatsHistory, triage] =
     await Promise.all([
       getDetectorEval(selected),
       getEvalHistory(),
       getHoldoutHistory(),
       getHealHistory(),
       getVerifyHistory(),
+      getRepairStatsHistory(),
       getTriageLedger(),
     ]);
 
@@ -104,6 +107,7 @@ export default async function EvalPage({
         <HoldoutHistory history={holdoutHistory} />
         <HealHistory history={healHistory} />
         <VerifyHistory history={verifyHistory} />
+        <RepairStatsHistory history={repairStatsHistory} />
 
         {/* Corpus insights (PRD contracts B, C): coverage and recurring failure
             modes read the corpus directly, so they render even when the live
@@ -123,6 +127,7 @@ export default async function EvalPage({
       <HoldoutHistory history={holdoutHistory} />
       <HealHistory history={healHistory} />
       <VerifyHistory history={verifyHistory} />
+      <RepairStatsHistory history={repairStatsHistory} />
 
       {/* Corpus insights (PRD contracts B, C): per-class coverage with thin-coverage
           flags, and the recurring failure clusters worst first. */}

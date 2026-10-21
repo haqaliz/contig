@@ -26,6 +26,7 @@ import type {
   OutputVerification,
   PendingApproval,
   Plan,
+  RepairStatsSnapshot,
   RepairStepLite,
   RunOwner,
   RunProgress,
@@ -999,6 +1000,24 @@ function verifyHistoryPath(): string {
 /** Every verify snapshot on disk, oldest first; empty when the file is absent. */
 export async function getVerifyHistory(): Promise<VerifySnapshot[]> {
   return readJsonl<VerifySnapshot>(verifyHistoryPath());
+}
+
+// --- Repair-stats trend (C2-14) ------------------------------------------------
+// `contig repair-stats --snapshot` appends one snapshot per line to
+// src/contig/data/repair_stats_history.jsonl, over whatever runs directory it
+// was pointed at. This is a real-runs trend, not a frozen-corpus guard: its
+// points are not reproducible from committed data, and the card says so.
+
+/** Absolute path to the committed repair-stats history (CONTIG_REPAIR_STATS_HISTORY). */
+function repairStatsHistoryPath(): string {
+  return process.env.CONTIG_REPAIR_STATS_HISTORY
+    ? path.resolve(process.env.CONTIG_REPAIR_STATS_HISTORY)
+    : path.resolve(repoRoot(), "src", "contig", "data", "repair_stats_history.jsonl");
+}
+
+/** Every repair-stats snapshot on disk, oldest first; empty when absent. */
+export async function getRepairStatsHistory(): Promise<RepairStatsSnapshot[]> {
+  return readJsonl<RepairStatsSnapshot>(repairStatsHistoryPath());
 }
 
 // --- Jev triage ledger (C9) ----------------------------------------------------

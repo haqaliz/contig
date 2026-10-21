@@ -5,6 +5,7 @@ import type {
   AnnotationProvenance,
   QCResult,
   QCStatus,
+  RepairStatsSnapshot,
   RunRecord,
   TaskEvent,
   TriageLedgerRow,
@@ -424,6 +425,24 @@ export function triageLedgerSummary(
     if (row.actual === "skipped") skipped += 1;
   }
   return { total: rows.length, bySurface, byMode, skipped, skippedLines };
+}
+
+/**
+ * The repair-stats trend points, chronologically: a non-computable rate is
+ * omitted from the sparkline rather than plotted as 0% (which would claim
+ * every scorable run failed). The table still shows every snapshot.
+ */
+export function repairStatsRateSeries(history: RepairStatsSnapshot[]): number[] {
+  return history.flatMap((snap) =>
+    snap.unattended_completion_rate === null
+      ? []
+      : [snap.unattended_completion_rate],
+  );
+}
+
+/** A repair-stats rate as the report words it; null means nothing scorable. */
+export function repairStatsRateLabel(rate: number | null): string {
+  return rate === null ? "not computable" : `${Math.round(rate * 100)}%`;
 }
 
 // The detector's failure classes (mirror of FailureClass in src/contig/models.py).
