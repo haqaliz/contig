@@ -917,6 +917,9 @@ class ReproduceRecord(BaseModel):
     repair_history: list[RepairStep] = []
     source_url: str | None = None
     source_commit: str | None = None
+    # Local only: was the working tree dirty when the run started? None when
+    # git or the repository is unavailable -- an honest gap, not a failure.
+    source_dirty: bool | None = None
     source_tree_sha256: str | None = None
     # Remote only: the checkout's digest AFTER the run; None for a local run
     # (there is no Contig-owned source/ copy to re-hash).

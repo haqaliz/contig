@@ -15,6 +15,7 @@ import os
 import re as _re
 import shlex
 import shutil
+import subprocess
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -1228,6 +1229,30 @@ def rerun(
     )
 
 
+def _local_git_state(repo_path: Path) -> tuple[str | None, bool | None]:
+    """(HEAD commit, dirty?) for a local repo, or (None, None) when git or the
+    repository is unusable: provenance capture must never fail the run."""
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(repo_path), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+        )
+        if head.returncode != 0:
+            return None, None
+        status = subprocess.run(
+            ["git", "-C", str(repo_path), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None, None
+    commit = head.stdout.strip() or None
+    if status.returncode != 0:
+        return commit, None
+    return commit, bool(status.stdout.strip())
+
+
 @app.command()
 def reproduce(
     repo: str = typer.Argument(
@@ -1305,7 +1330,10 @@ def reproduce(
     checkout, with the URL and the resolved HEAD commit recorded on the
     bundle as `source_url`/`source_commit` -- the pin that says which
     revision produced this verdict. The record's `repo` stays the URL; the
-    local checkout path never enters the portable manifest. With
+    local checkout path never enters the portable manifest. A local path
+    instead records its `HEAD` commit and whether the tree was dirty when the
+    run started (`source_commit`/`source_dirty`), both inert and `None` when
+    git or the repository is unavailable. With
     --prune-checkouts N, a successful remote run also removes the `source/`
     checkouts of the N oldest remote runs (never the current run, and never a
     local-path run). The freshness requirement below applies to a fetched
@@ -1480,6 +1508,7 @@ def reproduce(
     # (real published repos) where it matters most. A failed fetch leaves no
     # directory behind (see fetch_repo).
     source_commit: str | None = None
+    source_dirty: bool | None = None
     source_tree_sha256: str | None = None
     # Contig's own runs directory must never be folded into the digest it
     # attests. --runs-dir resolves against CWD (default "runs"), so the
@@ -1507,6 +1536,9 @@ def reproduce(
         # at the same pre-stamp moment the remote branch hashes its checkout --
         # before the executor runs, so anything the run writes into the repo
         # (the executor's cwd IS the repo) can never change the recorded value.
+        # The git state describes the input tree the same pre-run way; a
+        # non-repo or a missing git binary is inert, never an error.
+        source_commit, source_dirty = _local_git_state(repo_path)
         source_tree_sha256 = compute_tree_sha256(
             repo_path,
             exclude=(
@@ -1558,12 +1590,15 @@ def reproduce(
                 "source_tree_sha256_post_run": source_tree_sha256_post_run,
             }
         )
-    elif source_tree_sha256 is not None:
-        # Local: `repo` is already the user's path string and the commit/url
-        # stay None -- only the tree hash is populated. A None digest (honest
-        # degradation) is left as-is and never changes the record shape.
+    else:
+        # Local: `repo` is already the user's path string; commit/dirty are
+        # pre-run git facts that stay None when git cannot answer.
         record = record.model_copy(
-            update={"source_tree_sha256": source_tree_sha256}
+            update={
+                "source_commit": source_commit,
+                "source_dirty": source_dirty,
+                "source_tree_sha256": source_tree_sha256,
+            }
         )
 
     write_reproduce_bundle(record, Path(runs_dir) / reproduce_id, requested_rev=rev)
