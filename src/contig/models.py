@@ -874,7 +874,12 @@ ClaimStatus = Literal["reproduced", "within_tolerance", "diverged", "unverified"
 
 
 class ClaimResult(BaseModel):
-    """One claim's outcome: the paper's number vs. what Contig observed."""
+    """One claim's outcome: the paper's number vs. what Contig observed.
+
+    Adding a field here changes the signed canonical payload: a pre-batch
+    signature no longer verifies against a re-serialized record (the accepted,
+    deliberate signature break). Old bundle JSON still loads via the defaults.
+    """
 
     id: str
     status: ClaimStatus
@@ -883,6 +888,9 @@ class ClaimResult(BaseModel):
     tolerance: float
     delta: float | None = None  # None when uncomputable; relative delta otherwise
     message: str
+    # The exact fragment a locator bound (value/cell/capture), capped; None
+    # when the claim was unlocated or nothing resolved -- never fabricated.
+    matched_output: str | None = None
 
 
 class ReproduceRecord(BaseModel):

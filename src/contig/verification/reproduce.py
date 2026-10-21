@@ -56,6 +56,18 @@ _MAX_MATCH_BYTES = 8 * 1024 * 1024
 # real `.ipynb` well past 8 MiB, while the text a pattern is run over stays small.
 _MAX_NOTEBOOK_BYTES = 32 * 1024 * 1024
 
+# Cap on `ClaimResult.matched_output`: enough to show the matched cell/value,
+# never the whole file. The marker makes the cut explicit to a reader.
+_MAX_MATCHED_OUTPUT_CHARS = 512
+_MATCHED_OUTPUT_TRUNCATED = "...[truncated]"
+
+
+def _matched_output(text: str) -> str:
+    """Cap a locator's matched fragment at `_MAX_MATCHED_OUTPUT_CHARS` chars."""
+    if len(text) <= _MAX_MATCHED_OUTPUT_CHARS:
+        return text
+    return text[:_MAX_MATCHED_OUTPUT_CHARS] + _MATCHED_OUTPUT_TRUNCATED
+
 # The named flags a claim's optional `"flags": [...]` array may carry. Anything
 # else is refused by `load_claims` pre-run rather than silently ignored.
 _REGEX_FLAGS = {
@@ -238,6 +250,17 @@ class NotebookLocator:
     cell: int | dict[str, str]
     pattern: str
     flags: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _Observation:
+    """One locator read: the parsed value, the exact matched fragment (None
+    when unverified -- never fabricated), and whether the freshness guard --
+    not a missing/unreadable artifact -- is why it stayed unverified."""
+
+    value: float | None = None
+    matched: str | None = None
+    stale: bool = False
 
 
 def _resolve_delimiter(source: str, explicit: str | None) -> str | None:
@@ -1014,6 +1037,10 @@ def run_reproduction(
     names are ignored. `created_at`/`reproduce_id` are passed in, never
     generated here, so the record stays deterministic.
 
+    A located claim also records the exact fragment the locator extracted as
+    `ClaimResult.matched_output` (capped at `_MAX_MATCHED_OUTPUT_CHARS`); an
+    unlocated claim, or one whose locator resolved nothing, carries `None`.
+
     When the first run fails (nonzero exit) and `allow_install` is True, this
     makes bounded env-resurrection attempts: detect a missing Python module
     in the run's output (`detect_missing_module`), resolve its PyPI package
@@ -1075,26 +1102,26 @@ def run_reproduction(
             return f"{noun} {label} was not rewritten by this run (mtime predates run start)"
         return None
 
-    def _observe_located(loc: Locator) -> tuple[float | None, str]:
+    def _observe_located(loc: Locator) -> tuple[_Observation, str]:
         """Bind one located claim's observed value from its own repo-relative
         JSON file at `loc.path`. Never reads outside the repo (containment
-        guard below); every resolution failure returns `(None, message)`
-        rather than raising -- the caller always maps that to `unverified`.
-        Requires the file to have been rewritten by this run (freshness
-        guard) before it is ever parsed.
+        guard below); every resolution failure returns an unverified
+        `_Observation` rather than raising -- the caller always maps that to
+        `unverified`. Requires the file to have been rewritten by this run
+        (freshness guard) before it is ever parsed.
         """
         resolved = (repo_path / loc.source).resolve()
         try:
             resolved.relative_to(repo_root)  # defense-in-depth: never read outside repo
         except ValueError:
-            return None, f"locator 'from' {loc.source!r} escapes the repo"
+            return _Observation(), f"locator 'from' {loc.source!r} escapes the repo"
 
         # The guard fires before the file is parsed and before the parse
         # enters the per-run cache, so a stale artifact is never read for
         # content.
         stale = _require_fresh(resolved, "locator file", repr(loc.source))
         if stale is not None:
-            return None, stale
+            return _Observation(stale=True), stale
 
         key = str(resolved)
         if key not in _json_cache:
@@ -1111,35 +1138,35 @@ def run_reproduction(
             _json_cache[key] = parsed
 
         if not resolved.exists():
-            return None, f"locator file {loc.source!r} is missing"
+            return _Observation(), f"locator file {loc.source!r} is missing"
 
         parsed = _json_cache[key]
         if parsed is None:
-            return None, f"locator file {loc.source!r} is not valid JSON"
+            return _Observation(), f"locator file {loc.source!r} is not valid JSON"
 
         target = resolve_pointer(parsed, loc.path)
         if target is None:
-            return None, f"locator path {loc.path!r} did not resolve in {loc.source!r}"
+            return _Observation(), f"locator path {loc.path!r} did not resolve in {loc.source!r}"
 
         if isinstance(target, bool) or not isinstance(target, (int, float)):
-            return None, (
+            return _Observation(), (
                 f"locator value at {loc.path!r} in {loc.source!r} is not a number: {target!r}"
             )
 
         if math.isnan(target) or math.isinf(target):
-            return None, (
+            return _Observation(), (
                 f"locator value at {loc.path!r} in {loc.source!r} is not finite: {target!r}"
             )
 
-        return float(target), ""
+        return _Observation(float(target), _matched_output(json.dumps(target))), ""
 
-    def _observe_table_located(loc: TableLocator) -> tuple[float | None, str]:
+    def _observe_table_located(loc: TableLocator) -> tuple[_Observation, str]:
         """Bind one located claim's observed value from a cell in its own
         repo-relative TSV/CSV file. Sibling of `_observe_located`: same
         containment guard (never reads outside the repo), same "parse once,
         cache by resolved absolute path" shape (`_table_cache` in place of
-        `_json_cache`), same "any resolution failure -> (None, message)"
-        contract the caller always maps to `unverified`.
+        `_json_cache`), same "any resolution failure -> unverified" contract
+        the caller always maps to `unverified`.
 
         Unlike the JSON reader, a numeric-looking cell STRING (e.g. "30.4")
         is the normal, valid case here -- every table cell is a string, so
@@ -1153,11 +1180,11 @@ def run_reproduction(
         try:
             resolved.relative_to(repo_root)  # defense-in-depth: never read outside repo
         except ValueError:
-            return None, f"locator 'from' {loc.source!r} escapes the repo"
+            return _Observation(), f"locator 'from' {loc.source!r} escapes the repo"
 
         stale = _require_fresh(resolved, "table", repr(loc.source))
         if stale is not None:
-            return None, stale
+            return _Observation(stale=True), stale
 
         key = str(resolved)
         if key not in _table_cache:
@@ -1165,33 +1192,33 @@ def run_reproduction(
 
         rows = _table_cache[key]
         if rows is None:
-            return None, f"locator file {loc.source!r} is missing or unreadable"
+            return _Observation(), f"locator file {loc.source!r} is missing or unreadable"
 
         cell, reason = resolve_cell(rows, loc.column, loc.row, loc.header)
         if cell is None:
-            return None, f"locator cell in {loc.source!r} did not resolve: {reason}"
+            return _Observation(), f"locator cell in {loc.source!r} did not resolve: {reason}"
 
         try:
             value = float(cell)
         except ValueError:
-            return None, (
+            return _Observation(), (
                 f"locator cell {cell!r} in {loc.source!r} is not a finite number"
             )
 
         if math.isnan(value) or math.isinf(value):
-            return None, (
+            return _Observation(), (
                 f"locator cell {cell!r} in {loc.source!r} is not finite: {value!r}"
             )
 
-        return value, ""
+        return _Observation(value, _matched_output(cell)), ""
 
-    def _observe_pattern_located(loc: PatternLocator) -> tuple[float | None, str]:
+    def _observe_pattern_located(loc: PatternLocator) -> tuple[_Observation, str]:
         """Bind one located claim's observed value by matching a user-authored
         regex against free text. Sibling of `_observe_table_located`: same
         containment guard for the file case (never reads outside the repo),
         same "read once, cache by resolved absolute path" shape (`_text_cache`
         in place of `_table_cache`), same "any resolution failure ->
-        (None, message)" contract the caller always maps to `unverified`.
+        unverified" contract the caller always maps to `unverified`.
 
         Two addressing modes. With `loc.source is None` the text is the run's
         own captured combined stdout+stderr -- `run_output` from the enclosing
@@ -1222,11 +1249,11 @@ def run_reproduction(
             try:
                 resolved.relative_to(repo_root)  # defense-in-depth: never read outside repo
             except ValueError:
-                return None, f"locator 'from' {loc.source!r} escapes the repo"
+                return _Observation(), f"locator 'from' {loc.source!r} escapes the repo"
 
             stale = _require_fresh(resolved, "locator file", repr(loc.source))
             if stale is not None:
-                return None, stale
+                return _Observation(stale=True), stale
 
             key = str(resolved)
             if key not in _text_cache:
@@ -1239,7 +1266,7 @@ def run_reproduction(
                     # None text, which reads back as "missing or unreadable"
                     # and would lose the size in the message. A repeat stat()
                     # is cheap and still never reads the file.
-                    return None, (
+                    return _Observation(), (
                         f"locator file {loc.source!r} is {size} bytes, "
                         f"over the {_MAX_MATCH_BYTES}-byte match limit"
                     )
@@ -1258,25 +1285,25 @@ def run_reproduction(
             where = repr(loc.source)
 
         if text is None:
-            return None, f"locator file {loc.source!r} is missing or unreadable"
+            return _Observation(), f"locator file {loc.source!r} is missing or unreadable"
 
         captured, reason = resolve_match(text, loc.pattern, loc.flags)
         if captured is None:
-            return None, f"locator pattern in {where} did not resolve: {reason}"
+            return _Observation(), f"locator pattern in {where} did not resolve: {reason}"
 
         try:
             value = float(captured.strip())
         except ValueError:
-            return None, (
+            return _Observation(), (
                 f"locator capture {captured!r} in {where} is not a finite number"
             )
 
         if math.isnan(value) or math.isinf(value):
-            return None, (
+            return _Observation(), (
                 f"locator capture {captured!r} in {where} is not finite: {value!r}"
             )
 
-        return value, ""
+        return _Observation(value, _matched_output(captured)), ""
 
     def _observe_notebook_located(loc: NotebookLocator) -> tuple[float | None, str]:
         """Bind one located claim's observed value out of a Jupyter notebook
@@ -1295,7 +1322,7 @@ def run_reproduction(
 
         Same containment guard, same "parse once, cache by resolved absolute
         path" shape (`_notebook_cache`), and same "any resolution failure ->
-        (None, message)" contract the caller maps to `unverified` as the other
+        unverified" contract the caller maps to `unverified` as the other
         observers. Like the table/pattern readers, a numeric-looking capture
         STRING is the normal valid case, so it is stripped, float-parsed and,
         if finite, returned.
@@ -1307,15 +1334,15 @@ def run_reproduction(
         try:
             resolved.relative_to(repo_root)  # defense-in-depth: never read outside repo
         except ValueError:
-            return None, f"locator 'from' {loc.source!r} escapes the repo"
+            return _Observation(), f"locator 'from' {loc.source!r} escapes the repo"
 
         try:
             stat = resolved.stat()  # one stat() gives both size and mtime
         except OSError:
-            return None, f"notebook {loc.source!r} is missing or unreadable"
+            return _Observation(), f"notebook {loc.source!r} is missing or unreadable"
 
         if stat.st_size > _MAX_NOTEBOOK_BYTES:
-            return None, (
+            return _Observation(), (
                 f"notebook {loc.source!r} is {stat.st_size} bytes, "
                 f"over the {_MAX_NOTEBOOK_BYTES}-byte match limit"
             )
@@ -1328,7 +1355,7 @@ def run_reproduction(
             resolved, "notebook", repr(loc.source), mtime=stat.st_mtime
         )
         if stale is not None:
-            return None, stale
+            return _Observation(stale=True), stale
 
         key = str(resolved)
         if key not in _notebook_cache:
@@ -1344,29 +1371,29 @@ def run_reproduction(
 
         doc = _notebook_cache[key]
         if doc is None:
-            return None, f"notebook {loc.source!r} is not valid JSON"
+            return _Observation(), f"notebook {loc.source!r} is not valid JSON"
 
         text, reason = resolve_notebook_cell_text(doc, loc.cell)
         if text is None:
-            return None, f"notebook cell in {loc.source!r} did not resolve: {reason}"
+            return _Observation(), f"notebook cell in {loc.source!r} did not resolve: {reason}"
 
         captured, reason = resolve_match(text, loc.pattern, loc.flags)
         if captured is None:
-            return None, f"notebook pattern in {loc.source!r} did not resolve: {reason}"
+            return _Observation(), f"notebook pattern in {loc.source!r} did not resolve: {reason}"
 
         try:
             value = float(captured.strip())
         except ValueError:
-            return None, (
+            return _Observation(), (
                 f"notebook capture {captured!r} in {loc.source!r} is not a finite number"
             )
 
         if math.isnan(value) or math.isinf(value):
-            return None, (
+            return _Observation(), (
                 f"notebook capture {captured!r} in {loc.source!r} is not finite: {value!r}"
             )
 
-        return value, ""
+        return _Observation(value, _matched_output(captured)), ""
 
     exit_code, run_output = executor(shlex.split(run_command), repo_path)
     repair_history: list[RepairStep] = []
@@ -1496,14 +1523,14 @@ def run_reproduction(
             # PatternLocator dropping into the JSON reader would raise
             # AttributeError on the missing `.path`.
             if isinstance(claim.locator, NotebookLocator):
-                observed, fail_msg = _observe_notebook_located(claim.locator)
+                observation, fail_msg = _observe_notebook_located(claim.locator)
             elif isinstance(claim.locator, TableLocator):
-                observed, fail_msg = _observe_table_located(claim.locator)
+                observation, fail_msg = _observe_table_located(claim.locator)
             elif isinstance(claim.locator, PatternLocator):
-                observed, fail_msg = _observe_pattern_located(claim.locator)
+                observation, fail_msg = _observe_pattern_located(claim.locator)
             else:
-                observed, fail_msg = _observe_located(claim.locator)
-            if observed is None:
+                observation, fail_msg = _observe_located(claim.locator)
+            if observation.value is None:
                 claim_results.append(
                     ClaimResult(
                         id=claim.id,
@@ -1517,16 +1544,19 @@ def run_reproduction(
                 )
                 continue
 
-            status, delta, message = classify(claim.value, observed, claim.tolerance)
+            status, delta, message = classify(
+                claim.value, observation.value, claim.tolerance
+            )
             claim_results.append(
                 ClaimResult(
                     id=claim.id,
                     status=status,
                     claimed=claim.value,
-                    observed=observed,
+                    observed=observation.value,
                     tolerance=claim.tolerance,
                     delta=delta,
                     message=message,
+                    matched_output=observation.matched,
                 )
             )
             continue
