@@ -144,6 +144,82 @@ def starsolo_command(
     ]
 
 
+def star_genome_generate_command(
+    fasta: str, index_dir: str | Path, gtf: str | None = None
+) -> list[str]:
+    """Build the `STAR --runMode genomeGenerate` argv as a single list (pure).
+
+    `--genomeFastaFiles` takes the genome FASTA (not a transcript FASTA) and
+    `--sjdbGTFfile` is added only when a GTF is recorded -- STARsolo's
+    `--soloFeatures Gene` needs the annotation it supplies.
+    """
+    argv = [
+        _STAR,
+        "--runMode",
+        "genomeGenerate",
+        "--genomeDir",
+        str(index_dir),
+        "--genomeFastaFiles",
+        str(fasta),
+    ]
+    if gtf:
+        argv += ["--sjdbGTFfile", str(gtf)]
+    return argv
+
+
+def _run_star_genome_generate(argv: list[str]) -> int:
+    """Default index builder: run STAR genomeGenerate; return its exit code.
+
+    A nonzero exit carries the tool's stderr detail into a
+    SecondScQuantifierError. This subprocess success path is intentionally NEVER
+    exercised in CI (STAR is not installed there); tests inject a fake builder.
+    """
+    result = subprocess.run(argv, capture_output=True)
+    if result.returncode != 0:
+        detail = result.stderr.decode(errors="replace").strip() if result.stderr else ""
+        raise SecondScQuantifierError(
+            f"STAR genomeGenerate exited nonzero ({result.returncode}): {detail}"
+        )
+    return result.returncode
+
+
+def build_star_index(
+    fasta: str,
+    index_dir: Path,
+    gtf: str | None = None,
+    builder: Callable[[list[str]], int] | None = None,
+) -> Path:
+    """Build a STAR genome index for `fasta`; return the index dir.
+
+    The verify-time counterpart of `build_kallisto_index`. The self-heal loop's
+    `_build_star_index` is not reusable here (it is coupled to ExecutionTarget /
+    params / redirect state), so this mirrors its genomeGenerate argv instead.
+
+    Validates the FASTA exists BEFORE any spawn, then runs
+    `STAR --runMode genomeGenerate --genomeDir <index_dir> --genomeFastaFiles
+    <fasta> [--sjdbGTFfile <gtf>]` through the injectable `builder` (default
+    `_run_star_genome_generate`). A missing binary or a nonzero exit is folded
+    into SecondScQuantifierError, never leaked.
+    """
+    if not Path(fasta).is_file():
+        raise SecondScQuantifierError(f"genome FASTA not found: {fasta}")
+
+    index_path = Path(index_dir)
+    index_path.mkdir(parents=True, exist_ok=True)
+    argv = star_genome_generate_command(fasta, index_path, gtf)
+
+    run = builder if builder is not None else _run_star_genome_generate
+    try:
+        returncode = run(argv)
+    except FileNotFoundError as exc:
+        raise SecondScQuantifierError(
+            f"STAR not found (is the '{_STAR}' binary on PATH?): {exc}"
+        ) from exc
+    if returncode != 0:
+        raise SecondScQuantifierError(f"STAR genomeGenerate exited nonzero ({returncode})")
+    return index_path
+
+
 def run_starsolo_quantifier(
     reads: str,
     index: str,

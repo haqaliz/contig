@@ -186,6 +186,7 @@ from contig.verification.count_quantifier import (
 )
 from contig.verification.sc_count_quantifier import (
     SecondScQuantifierError,
+    build_star_index,
     run_starsolo_quantifier,
 )
 from contig.verification.claim_extraction import (
@@ -2372,7 +2373,8 @@ def verify(
         help=(
             "Prebuilt index for the auto second quantifier: a kallisto index for "
             "--concordance-counts-auto, or a STAR genome directory for "
-            "--concordance-sc-counts-auto."
+            "--concordance-sc-counts-auto (omitted there, one is built in-seam "
+            "from the run record's genome FASTA)."
         ),
     ),
     transcriptome: str = typer.Option(
@@ -2447,13 +2449,15 @@ def verify(
     TSV; PRD C1, scrnaseq): both are collapsed to per-gene pseudobulk totals and fed to
     the same concordance core, under the same at-most-WARN, never-changes-exit contract.
 
-    With --concordance-sc-counts-auto (plus --index and --whitelist; --reads is
-    optional and, when omitted, derived from the run record's persisted sample sheet,
+    With --concordance-sc-counts-auto (plus --whitelist; --reads is optional and,
+    when omitted, derived from the run record's persisted sample sheet,
     integrity-gated against its recorded input checksums), Contig produces that
     second single-cell matrix itself by running a second quantifier (STARsolo) and
     corroborates the run against it; the same at-most-WARN, never-changes-exit
     contract applies. --index is the STAR genome directory here (a kallisto index
-    for --concordance-counts-auto). --reads, --index, --whitelist and --chemistry are
+    for --concordance-counts-auto); when it is omitted, a STAR index is built
+    in-seam from the run record's genome FASTA/GTF (STAR absent or a failed build
+    is an honest UNVERIFIED). --reads, --index, --whitelist and --chemistry are
     ignored unless --concordance-sc-counts-auto is set.
 
     The six concordance flags are mutually exclusive.
@@ -3228,14 +3232,19 @@ def _evaluate_run_sc_counts_concordance_auto(
     Like `_evaluate_run_sc_counts_concordance`, but Contig produces the second
     single-cell matrix itself: it gates to scrnaseq, resolves the same primary matrix,
     derives --reads from the run record's persisted sample sheet when not given
-    (integrity-gated against the recorded input checksums), validates that --index
-    (STAR genome dir) and --whitelist were given and exist, then runs the second
-    quantifier (STARsolo by default; injectable via
-    `quantifier` and monkeypatchable as the module-level `run_starsolo_quantifier`). A
-    missing primary matrix skips BEFORE any spawn; a missing input or any
-    SecondScQuantifierError prints a clear skip note and yields no checks (never a
-    crash, never a false pass). Returns the QCResult list so the caller surfaces it
-    without changing the exit code.
+    (integrity-gated against the recorded input checksums), requires --whitelist, then
+    runs the second quantifier (STARsolo by default; injectable via
+    `quantifier` and monkeypatchable as the module-level `run_starsolo_quantifier`).
+
+    --index is the STAR genome dir. When it is absent, one is built in-seam inside
+    the shared tempdir from the run record's `parameters["fasta"]` (and optional
+    `["gtf"]`) via `build_star_index` (monkeypatchable as the module-level
+    `build_star_index`) -- never from a transcript FASTA, and never twice: a
+    supplied --index is used as-is. A missing primary matrix skips BEFORE any
+    spawn; a missing input prints a clear skip note; a failed build is an honest
+    UNVERIFIED naming the failure (e.g. STAR absent), never a crash and never a
+    false pass. Returns the QCResult list so the caller surfaces it without
+    changing the exit code.
 
     `capture_metrics`, when passed, is handed to the evaluator's out-param so the
     caller (the verify-time capture hook) reads the pre-band metrics of a run that
@@ -3252,17 +3261,52 @@ def _evaluate_run_sc_counts_concordance_auto(
             return []
 
     for label, value in (("--index", index), ("--whitelist", whitelist)):
-        if not value:
+        if value and not Path(value).exists():
+            typer.echo(f"Skipping concordance: {label} path not found: {value}.")
+            return []
+    if not whitelist:
+        typer.echo(
+            "Skipping concordance: --whitelist is required for --concordance-sc-counts-auto."
+        )
+        return []
+    genome_fasta = None
+    if not index:
+        fasta = record.parameters.get("fasta")
+        if not fasta:
             typer.echo(
-                f"Skipping concordance: {label} is required for --concordance-sc-counts-auto."
+                "Skipping concordance: --index is required for "
+                "--concordance-sc-counts-auto unless the run record has a genome "
+                "FASTA to build one from."
             )
             return []
-        if not Path(value).exists():
-            typer.echo(f"Skipping concordance: {label} path not found: {value}.")
+        genome_fasta = str(fasta)
+        if not Path(genome_fasta).is_file():
+            typer.echo(
+                f"Skipping concordance: recorded genome FASTA not found: {genome_fasta}."
+            )
             return []
 
     run_q = quantifier if quantifier is not None else run_starsolo_quantifier
     with tempfile.TemporaryDirectory() as out_dir:
+        if not index:
+            gtf = record.parameters.get("gtf")
+            try:
+                build_star_index(
+                    genome_fasta, Path(out_dir) / "star_index", str(gtf) if gtf else None
+                )
+            except SecondScQuantifierError as exc:
+                return [
+                    QCResult(
+                        check="sc_count_concordance",
+                        kind="concordance",
+                        status="unverified",
+                        message=(
+                            "Skipping concordance: could not build the STAR index "
+                            f"({exc})."
+                        ),
+                    )
+                ]
+            index = str(Path(out_dir) / "star_index")
         try:
             second = run_q(reads, index, whitelist, chemistry, out_dir)
         except SecondScQuantifierError as exc:

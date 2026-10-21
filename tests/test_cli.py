@@ -2175,7 +2175,9 @@ def _write_triplet(directory, counts, cells=2):
     return directory / "matrix.mtx"
 
 
-def _write_scrnaseq_run_with_matrix(runs_dir, run_id, counts, subpath="filtered"):
+def _write_scrnaseq_run_with_matrix(
+    runs_dir, run_id, counts, subpath="filtered", parameters=None
+):
     """An scrnaseq run whose results/ holds a primary STARsolo count-matrix triplet."""
     from contig.bundle import compute_output_checksums
 
@@ -2189,6 +2191,7 @@ def _write_scrnaseq_run_with_matrix(runs_dir, run_id, counts, subpath="filtered"
         pipeline_revision="4.1.0",
         target=ExecutionTarget(backend="local", container_runtime="docker", work_dir="w"),
         input_checksums={},
+        parameters=parameters or {},
         events=[TaskEvent(process="X", status="COMPLETED", exit=0)],
         output_checksums=compute_output_checksums(results),
     )
@@ -4660,6 +4663,188 @@ def test_detect_stalls_and_stall_timeout_are_not_persisted_to_launch_json(tmp_pa
     raw = (tmp_path / "runs" / "lj" / "launch.json").read_text()
     assert "detect_stalls" not in raw
     assert "stall_timeout" not in raw
+
+
+# --- contig verify --concordance-sc-counts-auto --index auto-build (C1-5) ------
+# No prebuilt --index: the CLI builds a STAR genome index in-seam from the run
+# record's parameters["fasta"]/["gtf"] inside the shared tempdir, then hands the
+# built dir to STARsolo. The build seam is bound to the real build_star_index
+# with an injected fake builder (no real STAR in CI).
+
+
+def _make_sc_reference(tmp_path):
+    fasta = tmp_path / "genome.fa"
+    fasta.write_text(">chr1\nACGT\n")
+    gtf = tmp_path / "genes.gtf"
+    gtf.write_text(
+        'chr1\tsrc\texon\t1\t10\t.\t+\t.\tgene_id "geneA"; transcript_id "tx1";\n'
+    )
+    return fasta, gtf
+
+
+def test_sc_counts_auto_supplied_index_never_builds(tmp_path, monkeypatch):
+    # A supplied --index means no build at all, even when the record carries a
+    # buildable FASTA: the user's index wins and the builder is never reached.
+    fasta, gtf = _make_sc_reference(tmp_path)
+    _write_scrnaseq_run_with_matrix(
+        tmp_path,
+        "scb1",
+        _SC_PRIMARY,
+        parameters={"fasta": str(fasta), "gtf": str(gtf)},
+    )
+    reads, index, whitelist = _write_sc_autorun_inputs(tmp_path)
+
+    def boom(*args, **kwargs):
+        raise AssertionError("STAR index built despite --index")
+
+    monkeypatch.setattr("contig.cli.build_star_index", boom)
+    seen = {}
+
+    def fake_quantifier(reads, index, whitelist, chemistry, out_dir):
+        seen["index"] = index
+        return _fake_sc_quantifier_writing(_SC_CONCORDANT)(
+            reads, index, whitelist, chemistry, out_dir
+        )
+
+    monkeypatch.setattr("contig.cli.run_starsolo_quantifier", fake_quantifier)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "scb1",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-sc-counts-auto",
+            "--reads",
+            str(reads),
+            "--index",
+            str(index),
+            "--whitelist",
+            str(whitelist),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert seen["index"] == str(index)
+    assert "spearman_concordance" in result.output.lower()
+
+
+def test_sc_counts_auto_builds_star_index_from_record(tmp_path, monkeypatch):
+    # No --index: one build call with the genomeGenerate argv, and the built dir
+    # (not the record's FASTA) is what STARsolo receives.
+    from functools import partial
+
+    from contig.verification.sc_count_quantifier import build_star_index
+
+    fasta, gtf = _make_sc_reference(tmp_path)
+    _write_scrnaseq_run_with_matrix(
+        tmp_path,
+        "scb2",
+        _SC_PRIMARY,
+        parameters={"fasta": str(fasta), "gtf": str(gtf)},
+    )
+    reads, _index, whitelist = _write_sc_autorun_inputs(tmp_path)
+    builder_calls = []
+
+    def fake_builder(argv):
+        builder_calls.append(argv)
+        genome_dir = Path(argv[argv.index("--genomeDir") + 1])
+        (genome_dir / "Genome").write_bytes(b"STAR_INDEX")
+        return 0
+
+    monkeypatch.setattr(
+        "contig.cli.build_star_index",
+        partial(build_star_index, builder=fake_builder),
+    )
+    seen = {}
+
+    def fake_quantifier(reads, index, whitelist, chemistry, out_dir):
+        index_dir = Path(index)
+        assert (index_dir / "Genome").is_file(), "quantifier did not get the built index"
+        seen["index"] = str(index_dir)
+        return _fake_sc_quantifier_writing(_SC_CONCORDANT)(
+            reads, index, whitelist, chemistry, out_dir
+        )
+
+    monkeypatch.setattr("contig.cli.run_starsolo_quantifier", fake_quantifier)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "scb2",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-sc-counts-auto",
+            "--reads",
+            str(reads),
+            "--whitelist",
+            str(whitelist),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "spearman_concordance" in result.output.lower()
+    assert "skipping concordance" not in result.output.lower()
+    assert builder_calls == [
+        [
+            "STAR",
+            "--runMode",
+            "genomeGenerate",
+            "--genomeDir",
+            seen["index"],
+            "--genomeFastaFiles",
+            str(fasta),
+            "--sjdbGTFfile",
+            str(gtf),
+        ]
+    ]
+
+
+def test_sc_counts_auto_star_missing_degrades_unverified(tmp_path, monkeypatch):
+    # The build cannot run (STAR not on PATH): one honest UNVERIFIED naming the
+    # missing install, no crash, no PASS, exit unchanged.
+    from functools import partial
+
+    from contig.verification.sc_count_quantifier import build_star_index
+
+    fasta, gtf = _make_sc_reference(tmp_path)
+    _write_scrnaseq_run_with_matrix(
+        tmp_path,
+        "scb3",
+        _SC_PRIMARY,
+        parameters={"fasta": str(fasta), "gtf": str(gtf)},
+    )
+    reads, _index, whitelist = _write_sc_autorun_inputs(tmp_path)
+
+    def no_star(argv):
+        raise FileNotFoundError("No such file or directory: 'STAR'")
+
+    monkeypatch.setattr(
+        "contig.cli.build_star_index",
+        partial(build_star_index, builder=no_star),
+    )
+
+    def boom(*args, **kwargs):
+        raise AssertionError("quantifier invoked although the index build failed")
+
+    monkeypatch.setattr("contig.cli.run_starsolo_quantifier", boom)
+    result = runner.invoke(
+        app,
+        [
+            "verify",
+            "scb3",
+            "--runs-dir",
+            str(tmp_path),
+            "--concordance-sc-counts-auto",
+            "--reads",
+            str(reads),
+            "--whitelist",
+            str(whitelist),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    out = result.output.lower()
+    assert "star not found" in out
+    assert "unverified" in out
+    assert "spearman_concordance" not in out
 
 
 # --- verify: signature failures on a run WITH output_checksums (drift-check branch) ---

@@ -11,9 +11,11 @@ import pytest
 
 from contig.verification.sc_count_quantifier import (
     SecondScQuantifierError,
+    build_star_index,
     chemistry_geometry,
     readfiles_order,
     run_starsolo_quantifier,
+    star_genome_generate_command,
     starsolo_command,
 )
 
@@ -218,3 +220,87 @@ def test_malformed_reads_sheet_raises(tmp_path):
         run_starsolo_quantifier(
             str(reads), str(index), str(whitelist), "10xv3", str(out_dir)
         )
+
+
+# --- C1-5: in-seam STAR genome index build ---------------------------------
+
+
+def test_star_genome_generate_command_includes_gtf_only_when_given():
+    assert star_genome_generate_command("/ref/genome.fa", "/scratch/star") == [
+        "STAR",
+        "--runMode",
+        "genomeGenerate",
+        "--genomeDir",
+        "/scratch/star",
+        "--genomeFastaFiles",
+        "/ref/genome.fa",
+    ]
+    assert star_genome_generate_command(
+        "/ref/genome.fa", "/scratch/star", "/ref/genes.gtf"
+    )[-2:] == ["--sjdbGTFfile", "/ref/genes.gtf"]
+
+
+def test_build_star_index_argv_and_returns_dir(tmp_path):
+    fasta = tmp_path / "genome.fa"
+    fasta.write_text(">chr1\nACGT\n")
+    index_dir = tmp_path / "star_index"
+    calls = []
+
+    def fake_builder(argv):
+        calls.append(argv)
+        return 0
+
+    result = build_star_index(str(fasta), index_dir, builder=fake_builder)
+
+    assert result == index_dir
+    assert index_dir.is_dir()
+    assert calls == [
+        [
+            "STAR",
+            "--runMode",
+            "genomeGenerate",
+            "--genomeDir",
+            str(index_dir),
+            "--genomeFastaFiles",
+            str(fasta),
+        ]
+    ]
+
+
+def test_build_star_index_missing_fasta_raises_before_spawn(tmp_path):
+    index_dir = tmp_path / "star"
+    calls = []
+
+    def fake_builder(argv):
+        calls.append(argv)
+        return 0
+
+    with pytest.raises(SecondScQuantifierError) as excinfo:
+        build_star_index(
+            str(tmp_path / "missing.fa"), index_dir, builder=fake_builder
+        )
+
+    assert "genome fasta" in str(excinfo.value).lower()
+    assert calls == []
+    assert not index_dir.exists()
+
+
+def test_build_star_index_missing_binary_names_the_install(tmp_path):
+    fasta = tmp_path / "genome.fa"
+    fasta.write_text(">chr1\nACGT\n")
+
+    def no_star(argv):
+        raise FileNotFoundError("No such file or directory: STAR")
+
+    with pytest.raises(SecondScQuantifierError) as excinfo:
+        build_star_index(str(fasta), tmp_path / "star", builder=no_star)
+
+    assert "STAR not found" in str(excinfo.value)
+
+
+def test_build_star_index_nonzero_exit_raises(tmp_path):
+    fasta = tmp_path / "genome.fa"
+    fasta.write_text(">chr1\nACGT\n")
+
+    with pytest.raises(SecondScQuantifierError):
+        build_star_index(str(fasta), tmp_path / "star", builder=lambda argv: 1)
