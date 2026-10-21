@@ -1539,7 +1539,13 @@ def reproduce(
         installer=default_installer,
         run_started_at=run_started_at,
     )
+    source_tree_sha256_post_run: str | None = None
     if repo_argument.kind == "remote":
+        # Post-run, after any --allow-install retry: the state the kept
+        # source/ copy is actually in, never a substitute for the pre-run pin.
+        source_tree_sha256_post_run = compute_tree_sha256(
+            repo_path, exclude=resolved_runs_dir
+        )
         # `repo` on the record is the URL, never the local scratch checkout:
         # the checkout is a per-run path that means nothing to anyone else,
         # while the URL + commit is the pin that makes the bundle portable.
@@ -1549,6 +1555,7 @@ def reproduce(
                 "source_url": repo_argument.url,
                 "source_commit": source_commit,
                 "source_tree_sha256": source_tree_sha256,
+                "source_tree_sha256_post_run": source_tree_sha256_post_run,
             }
         )
     elif source_tree_sha256 is not None:

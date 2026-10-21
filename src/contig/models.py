@@ -901,6 +901,8 @@ class ReproduceRecord(BaseModel):
 
     `created_at` is passed in, never computed with wall-clock inside the model:
     determinism matters for reproduce records the same way it does for RunRecord.
+    Adding a field here also changes the signed canonical payload -- the same
+    deliberate batch signature break disclosed on `ClaimResult`; old JSON loads.
     """
 
     reproduce_id: str
@@ -916,6 +918,9 @@ class ReproduceRecord(BaseModel):
     source_url: str | None = None
     source_commit: str | None = None
     source_tree_sha256: str | None = None
+    # Remote only: the checkout's digest AFTER the run; None for a local run
+    # (there is no Contig-owned source/ copy to re-hash).
+    source_tree_sha256_post_run: str | None = None
 
 
 # --- Reproduce-eval guard (C6 fold-in: reproduce-guard) ------------------------
