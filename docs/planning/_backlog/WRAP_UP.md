@@ -1,9 +1,10 @@
 # Wrap-up: where Contig stands at v0.64.0
 
-**Released 2026-10-21.** `v0.64.0` closes 34 of the 87 items in the engine
-capability backlog. The other 53 are **not open work in the ordinary sense** —
-each one names what it waits on. This file is the closing summary; `BACKLOG.md`
-is the row-level ledger and `BLOCKED_RUNBOOK.md` is the evidence list.
+**Released 2026-10-21 as v1.0.0.** 40 of the 87 capability-backlog items are
+built. The other 47 are terminal: 16 closed by decision, 6 gated, 4 declined, 21
+blocked on owner evidence. **No row is open** — see `DECISIONS.md` for the calls
+and `BLOCKED_RUNBOOK.md` for the evidence list. This file is the narrative
+summary; `BACKLOG.md` is the row-level ledger.
 
 ## Shipped in v0.64.0
 

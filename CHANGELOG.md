@@ -6,6 +6,40 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-21
+
+Feature-complete release. 40 of the 87 capability-backlog items are built; the
+other 47 are closed with a recorded decision, gated by the roadmap's own
+triggers, or blocked on owner evidence (`docs/planning/_backlog/DECISIONS.md`).
+No row is open, and no known defect remains.
+
+### Added
+- **Single-cell STAR index auto-build (C1-5):** the SC concordance autorun builds
+  a STAR index in-seam from the run's own FASTA/GTF when `--index` is absent,
+  bounded to one build, with an honest UNVERIFIED when STAR is unavailable.
+- **Traced tool versions (C8-24):** `versions.yml` files under the run's work dir
+  are parsed into the unsigned launch manifest and rendered in `contig methods`;
+  duplicate tools keep every distinct version rather than collapsing.
+- **Matched output on claims (C8-8):** each located claim records the exact
+  matched fragment (truncated at 512 chars), never the whole file.
+- **Structured staleness (C8-12):** `ClaimResult.stale` separates
+  "UNVERIFIED because stale" from "UNVERIFIED because missing" without parsing
+  prose.
+- **Post-run checkout hash (C8-17)** and **local git state (C8-18):** remote runs
+  record the post-run tree hash; local runs record `source_commit` and whether the
+  tree was dirty.
+
+### Changed
+- **Signed-payload break, disclosed:** the four fields above extend
+  `ReproduceRecord`/`ClaimResult`, so a signature over a pre-1.0.0 canonical
+  payload no longer verifies. Old bundle files still load and still verify by
+  stored text; a pre-1.0.0 signed reproducer should re-sign. This is the single
+  deliberate batch the roadmap deferred.
+
+### Closed
+- 16 items closed by decision, 6 gated, 4 declined, 21 blocked on owner
+  evidence. See `DECISIONS.md` and `BLOCKED_RUNBOOK.md`.
+
 ## [0.64.0] - 2026-10-21
 
 A wrap-up release: 34 items closed from the engine capability backlog, in two
