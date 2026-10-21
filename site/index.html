@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contig — an agentic bioinformatics analyst</title>
+<meta name="description" content="Contig runs the analysis, fixes what breaks, and proves the result: goal to vetted pipeline, self-healing runs, verified outputs, reproducible by default.">
+<meta name="theme-color" content="#06110d">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-head">
+  <div class="wrap head-inner">
+    <a class="brand" href="#top">
+      <img class="brand-mark" src="assets/contig-logo.svg" alt="" width="34" height="26">
+      <span>Contig</span>
+    </a>
+    <nav aria-label="Primary">
+      <ul class="nav">
+        <li><a href="#why">Why</a></li>
+        <li><a href="#features">Features</a></li>
+        <li><a href="#verdict">Verdict</a></li>
+        <li><a href="#status">Status</a></li>
+        <li><a href="https://github.com/haqaliz/contig">GitHub</a></li>
+        <li><a href="https://github.com/haqaliz/contig/releases/latest">Releases</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="hero" id="top" aria-labelledby="hero-title">
+    <div class="track" aria-hidden="true"></div>
+    <div class="wrap hero-inner">
+      <img class="hero-mark" src="assets/contig-logo.svg" alt="Contig" width="88" height="66">
+      <p class="chip">MVP · early access</p>
+      <h1 id="hero-title">Contig</h1>
+      <p class="tagline">An agentic bioinformatics analyst: it runs the analysis, fixes what breaks, and proves the result.</p>
+      <p class="lede">Contig takes raw sequencing data all the way to a <em>verified, reproducible</em> answer: it selects and runs the right pipeline on your own compute, diagnoses and <strong>self-heals</strong> failures, <strong>verifies</strong> the output, and writes a portable record anyone can reproduce.</p>
+
+      <div class="actions">
+        <a class="btn btn-primary" href="https://github.com/haqaliz/contig">View on GitHub</a>
+        <a class="btn" href="https://github.com/haqaliz/contig/releases/latest">Latest release</a>
+      </div>
+
+      <div class="terminal">
+        <p class="terminal-bar"><span class="tick" aria-hidden="true"></span>quickstart</p>
+        <pre tabindex="0" aria-label="Install and quickstart commands"><code><span class="c"># Python, any OS with Python 3.12+</span>
+pipx install contig
+
+<span class="c"># run → self-heal → verify → reproduce</span>
+contig run --run-id smoke
+
+<span class="c"># verdict + provenance + repair chain</span>
+contig show smoke</code></pre>
+      </div>
+      <p class="fine">No data of your own needed — the smoke run uses nf-core/rnaseq's bundled test profile. From a source checkout, prefix each command with <code>uv run</code>.</p>
+    </div>
+  </section>
+
+  <section id="why" aria-labelledby="why-title">
+    <div class="wrap">
+      <p class="step"><span class="step-num">01</span> Why</p>
+      <h2 id="why-title">The hard part isn't turning English into a workflow.</h2>
+      <p class="body">Producing an end-to-end analysis from raw sequencing data needs a rare pairing of domain biology <strong>and</strong> computational engineering.</p>
+
+      <div class="stats">
+        <article class="stat">
+          <p class="stat-num">74%</p>
+          <blockquote><p>Roughly 74% of wet-lab scientists have no programming experience</p></blockquote>
+          <p class="source"><a href="https://arxiv.org/html/2507.20122v1">arXiv 2507.20122</a></p>
+        </article>
+        <article class="stat">
+          <p class="stat-num">~17%</p>
+          <blockquote><p>frontier models still reach only ~17% on real bioinformatics analysis</p></blockquote>
+          <p class="source"><a href="https://arxiv.org/abs/2503.00096">BixBench, arXiv 2503.00096</a></p>
+        </article>
+      </div>
+
+      <p class="thesis">Turning English into a workflow is the easy, crowded part. <strong>Running it, fixing it, and proving it is the unsolved part</strong>, and that's Contig.</p>
+    </div>
+  </section>
+
+  <section id="features" aria-labelledby="features-title">
+    <div class="wrap">
+      <p class="step"><span class="step-num">02</span> What it does</p>
+      <h2 id="features-title">Four things no incumbent does, on your own compute.</h2>
+
+      <ol class="features">
+        <li class="feature">
+          <span class="feature-num" aria-hidden="true">01</span>
+          <h3>Goal → pipeline, vetted</h3>
+          <p>Describe your goal in plain language; Contig proposes a curated pipeline and params to approve, and flags problems (no replicates, single-end, missing reference) <em>before</em> a multi-hour run.</p>
+        </li>
+        <li class="feature">
+          <span class="feature-num" aria-hidden="true">02</span>
+          <h3>Self-healing runs, with an approval gate</h3>
+          <p>When a step fails (OOM, a missing index it can build, version mismatch, malformed input), Contig diagnoses it, applies a safe patch and retries, showing you the repair chain. A risky fix pauses the run for your approval instead of guessing.</p>
+        </li>
+        <li class="feature">
+          <span class="feature-num" aria-hidden="true">03</span>
+          <h3>Verified outputs, per assay</h3>
+          <p>Every run ends in an honest verdict — <code>PASS</code>, <code>WARN</code>, <code>FAIL</code> or <code>UNVERIFIED</code> — backed by real checks, never a bare “done”. <code>contig show --explain</code> names the exact checks that drove it.</p>
+        </li>
+        <li class="feature">
+          <span class="feature-num" aria-hidden="true">04</span>
+          <h3>Reproducible by default</h3>
+          <p>Each run pins inputs (checksums), pipeline revision, params and tool versions into a portable record. Your reads never leave your machine; only hashes are recorded.</p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="screenshots" aria-labelledby="shots-title">
+    <div class="wrap">
+      <p class="step"><span class="step-num">03</span> A closer look</p>
+      <h2 id="shots-title">Real commands, real terminal output.</h2>
+
+      <div class="shots">
+        <figure>
+          <img src="assets/contig-selfheal.svg" alt="Contig self-heals a stale aligner index: STAR_ALIGN fails, Contig diagnoses missing_index, rebuilds the index and retries, returning PASS." width="880" height="372" loading="lazy">
+          <figcaption>Self-heal a broken step — diagnose, patch, retry, unattended.</figcaption>
+        </figure>
+        <figure>
+          <img src="assets/contig-verify.svg" alt="Contig verify's layered verdict: QC thresholds, structural checks, cross-tool concordance, biological plausibility and output-integrity re-hashing all passing." width="880" height="372" loading="lazy">
+          <figcaption>A verdict you can trust — independent checks, honestly scoped per assay.</figcaption>
+        </figure>
+      </div>
+
+      <figure class="demo">
+        <img src="assets/contig-demo.gif" alt="A real terminal capture: a run hits an out-of-memory failure, self-heals, passes QC to a PASS verdict, and produces a signed, reproducible record." width="1200" height="760" loading="lazy">
+        <figcaption>One run: OOM → self-heal → PASS verdict → signed, verified record.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="verdict" aria-labelledby="verdict-title">
+    <div class="wrap">
+      <p class="step"><span class="step-num">04</span> The verdict</p>
+      <h2 id="verdict-title">Never a bare “done”.</h2>
+      <p class="body">Every run ends in one of four verdicts, drawn from QC-metric thresholds, structural and integrity checks on the output files, cross-tool concordance, and biological-plausibility checks.</p>
+
+      <ul class="verdicts">
+        <li class="verdict verdict-pass">
+          <span class="verdict-name">PASS</span>
+          <p>Ran to completion and every QC check passed.</p>
+        </li>
+        <li class="verdict verdict-warn">
+          <span class="verdict-name">WARN</span>
+          <p>Completed, but a QC check is borderline; look before you trust it.</p>
+        </li>
+        <li class="verdict verdict-fail">
+          <span class="verdict-name">FAIL</span>
+          <p>A task or QC check failed; do not trust the output.</p>
+        </li>
+        <li class="verdict verdict-unknown">
+          <span class="verdict-name">UNVERIFIED</span>
+          <p>Completed, but nothing checked it, so we won't claim it's correct.</p>
+        </li>
+      </ul>
+
+      <div class="scoping">
+        <h3>The scoping rule</h3>
+        <blockquote>
+          <p>Verification is scoped honestly per assay and never over-claims: a check earns a <code>FAIL</code> band only where a grossly-wrong value is distinguishable from unusual-but-real science — so an empty call set <code>FAIL</code>s, while a low-purity tumour's VAF stays a <code>WARN</code>, and <code>UNVERIFIED</code> never masquerades as either.</p>
+        </blockquote>
+      </div>
+    </div>
+  </section>
+
+  <section id="status" aria-labelledby="status-title">
+    <div class="wrap">
+      <p class="step"><span class="step-num">05</span> Status &amp; limits</p>
+      <h2 id="status-title">MVP engine built; in early access.</h2>
+
+      <div class="limits">
+        <article>
+          <h3>What works today</h3>
+          <p>The Layer-2 core — run → capture → self-heal → verify → reproduce — works end-to-end on <code>nf-core/rnaseq</code>, as a CLI and a local dashboard. The other assays ship a curated pipeline plus an assay-aware QC pack and are being hardened toward the same bar.</p>
+        </article>
+        <article>
+          <h3>Verification scope varies by assay</h3>
+          <p><code>nf-core/rnaseq</code> is exercised end-to-end, including the self-heal loop, in CI. For other assays the checks are scoped to what that assay makes distinguishable — no verdict claims more than its checks support.</p>
+        </article>
+        <article>
+          <h3>Laptop or cloud</h3>
+          <p>One command lands unchanged on Docker locally or AWS Batch in your own account, via Nextflow's native executors. The dashboard is localhost-only today.</p>
+        </article>
+        <article>
+          <h3>License</h3>
+          <p>Apache License 2.0 — permissive, with an explicit patent and trademark grant. Use, modify and redistribute Contig, including commercially, under its terms. Third-party pipelines keep their own licenses.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-foot">
+  <div class="wrap foot-inner">
+    <p><a href="https://github.com/haqaliz/contig">github.com/haqaliz/contig</a> · <a href="https://github.com/haqaliz/contig/blob/master/LICENSE">Apache-2.0</a> · <a href="https://nowpayments.io/donation?api_key=52f38854-167a-4828-a00f-0424ab7dcc1e" target="_blank" rel="noreferrer noopener">Crypto donation</a></p>
+    <p class="fine">No analytics, no cookies. This page loads nothing from a third party.</p>
+  </div>
+</footer>
+
+</body>
+</html>
