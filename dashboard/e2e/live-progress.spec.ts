@@ -26,7 +26,10 @@ test("the live view shows progress, running steps, and a self-heal attempt", asy
   // The repair_progress.jsonl line surfaces as a live self-heal attempt.
   await expect(page.getByText(/Self-healing in progress/)).toBeVisible();
   await expect(page.getByText("Attempt 1")).toBeVisible();
-  await expect(page.getByText("Out of memory")).toBeVisible();
+  // exact: the diagnosis evidence block now also renders the log line
+  // "Command exited with status 137 (out of memory).", which a substring
+  // match would hit too.
+  await expect(page.getByText("Out of memory", { exact: true })).toBeVisible();
 });
 
 test("the log tail is collapsible: a handle opens and closes it", async ({
