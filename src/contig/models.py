@@ -476,6 +476,10 @@ class LaunchManifest(BaseModel):
     # the pipeline string. Defaults None so a legacy launch.json (written before
     # this field) stays valid and falls back to the pipeline-derived assay.
     assay: str | None = None
+    # Tool versions traced from the run's work dir after execution (C8-24).
+    # launch.json is unsigned invocation metadata, so this is not a signed-payload
+    # change; legacy manifests load with the empty default.
+    tool_versions: dict[str, str] = {}
     created_at: str
 
     @computed_field  # serialized so the dashboard reads it without re-deriving

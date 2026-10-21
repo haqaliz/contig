@@ -4665,6 +4665,52 @@ def test_detect_stalls_and_stall_timeout_are_not_persisted_to_launch_json(tmp_pa
     assert "stall_timeout" not in raw
 
 
+def test_run_records_traced_tool_versions_on_launch_json(tmp_path, monkeypatch):
+    # C8-24: the per-task versions.yml under the run's work dir is parsed after
+    # execution and pinned on the UNSIGNED launch manifest (no record change).
+    def executor(cmd, trace_path):
+        Path(trace_path).write_text(TRACE_OK)
+        results = Path(trace_path).parent / "results" / "multiqc"
+        results.mkdir(parents=True, exist_ok=True)
+        (results / "multiqc_data.json").write_text(GOOD_MQC)
+        task = Path(trace_path).parent / "work" / "ab" / "cdef"
+        task.mkdir(parents=True)
+        (task / "versions.yml").write_text(
+            '"NFCORE_RNASEQ:RNASEQ:SAMTOOLS":\n    samtools: 1.19.2\n'
+        )
+        return 0
+
+    monkeypatch.setattr("contig.cli.default_executor", executor)
+    result = runner.invoke(
+        app, ["run", "--run-id", "tv", "--runs-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, result.output
+    manifest = json.loads((tmp_path / "tv" / "launch.json").read_text())
+    assert manifest["tool_versions"] == {"samtools": "1.19.2"}
+
+
+def test_methods_renders_traced_tool_versions_from_launch_json(tmp_path):
+    from contig.models import LaunchManifest
+
+    _write_run(tmp_path, "mv", [TaskEvent(process="X", status="COMPLETED", exit=0)])
+    manifest = LaunchManifest(
+        run_id="mv",
+        pipeline="nf-core/rnaseq",
+        revision="3.26.0",
+        profiles=["docker"],
+        backend="local",
+        container_runtime="docker",
+        created_at="2026-10-21T00:00:00Z",
+        tool_versions={"samtools": "1.19.2"},
+    )
+    (tmp_path / "mv" / "launch.json").write_text(manifest.model_dump_json())
+
+    result = runner.invoke(app, ["methods", "mv", "--runs-dir", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "traced tool versions (samtools 1.19.2)" in result.output
+
+
 # --- contig verify --concordance-sc-counts-auto --index auto-build (C1-5) ------
 # No prebuilt --index: the CLI builds a STAR genome index in-seam from the run
 # record's parameters["fasta"]/["gtf"] inside the shared tempdir, then hands the

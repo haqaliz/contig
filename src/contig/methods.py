@@ -37,8 +37,10 @@ def _params_clause(record: RunRecord) -> str:
     return f" Key parameters: {rendered}."
 
 
-def _provenance_clause(record: RunRecord) -> str:
-    """The Nextflow version and container digests that pin the run, if recorded."""
+def _provenance_clause(
+    record: RunRecord, tool_versions: dict[str, str] | None = None
+) -> str:
+    """The Nextflow version, container digests and traced tool versions, if recorded."""
     parts: list[str] = []
     if record.nextflow_version:
         parts.append(f"Nextflow {record.nextflow_version}")
@@ -48,6 +50,11 @@ def _provenance_clause(record: RunRecord) -> str:
             for name, digest in sorted(record.container_digests.items())
         )
         parts.append(f"pinned containers {digests}")
+    if tool_versions:
+        tools = ", ".join(
+            f"{name} {version}" for name, version in sorted(tool_versions.items())
+        )
+        parts.append(f"traced tool versions ({tools})")
     if not parts:
         return ""
     return " Execution was pinned to " + " and ".join(parts) + "."
@@ -213,11 +220,13 @@ def _qc_clause(record: RunRecord) -> str:
     )
 
 
-def render_methods(record: RunRecord) -> str:
+def render_methods(record: RunRecord, tool_versions: dict[str, str] | None = None) -> str:
     """Render a citation-ready methods paragraph for a finished run.
 
     The wording is fixed and derived only from the record, so two runs with the
     same provenance produce the same paragraph (a stable, auditable artifact).
+    `tool_versions` is the unsigned traced-tool map from launch.json (C8-24); it
+    is optional so every existing caller and record renders unchanged.
     """
     # Prefer the explicit assay carried on the record (it disambiguates assays
     # that share a pipeline, e.g. somatic vs germline nf-core/sarek); fall back
@@ -243,7 +252,7 @@ def render_methods(record: RunRecord) -> str:
         + _annotation_clause(record)
         + _corroboration_clause(record)
         + _sex_inference_clause(record)
-        + _provenance_clause(record)
+        + _provenance_clause(record, tool_versions)
         + _qc_clause(record)
     )
     return paragraph

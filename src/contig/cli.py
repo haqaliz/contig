@@ -237,7 +237,14 @@ from contig.lifecycle import (
     write_approval,
 )
 from contig.self_heal import self_heal_run
-from contig.workspace import RunNotFoundError, list_run_ids, load_run, load_run_with_text
+from contig.versions import collect_tool_versions
+from contig.workspace import (
+    RunNotFoundError,
+    list_run_ids,
+    load_launch_manifest,
+    load_run,
+    load_run_with_text,
+)
 
 app = typer.Typer(help="Contig: agentic bioinformatics analyst.")
 
@@ -1143,6 +1150,14 @@ def _dispatch_run(
     except PipelineExecutionError as exc:
         typer.echo(f"Run failed before producing any output (Nextflow exit {exc.returncode}).", err=True)
         raise typer.Exit(code=1)
+
+    # C8-24: pin what the traced execution actually reported. The work dir is the
+    # configured target work dir (remote/absent yields {}), and launch.json is
+    # unsigned invocation metadata -- no signed-payload change.
+    tool_versions = collect_tool_versions(record.target.work_dir)
+    if tool_versions:
+        manifest.tool_versions = tool_versions
+        (manifest_dir / "launch.json").write_text(manifest.model_dump_json(indent=2))
 
     typer.echo(render_run_report(record))
     if not RunSummary.from_events(record.events).succeeded:
@@ -3474,8 +3489,9 @@ def methods(
     """Render a citation-ready methods paragraph for a finished run.
 
     Templates the pipeline plus revision, the assay, key params, container
-    digests, and the verdict plus QC summary into a deterministic paragraph a
-    researcher can paste into a manuscript. Offline and rule based (PRD contract C).
+    digests, the traced tool versions (from the unsigned launch.json), and the
+    verdict plus QC summary into a deterministic paragraph a researcher can paste
+    into a manuscript. Offline and rule based (PRD contract C).
     """
     if not _is_safe_run_id(run_id):
         typer.echo(f"Invalid run id: {run_id!r}", err=True)
@@ -3486,7 +3502,10 @@ def methods(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
 
-    paragraph = render_methods(record)
+    manifest = load_launch_manifest(runs_dir, run_id)
+    paragraph = render_methods(
+        record, tool_versions=manifest.tool_versions if manifest else None
+    )
     if output:
         Path(output).write_text(paragraph)
         typer.echo(f"Wrote methods to {output}")
