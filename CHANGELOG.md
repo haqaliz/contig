@@ -6,6 +6,13 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.64.0] - 2026-10-21
+
+A wrap-up release: 34 items closed from the engine capability backlog, in two
+passes. Every entry below is test-first and covered by the suite; the remaining
+backlog (blocked on real-run data, gated by the roadmap's own revisit triggers,
+or awaiting a policy decision) is tracked in `docs/planning/_backlog/BACKLOG.md`.
+
 ### Verification honesty
 - **A missing MultiQC report is recorded as UNVERIFIED instead of vanishing
   (C3-12).** `_discover_qc`'s `multiqc is not None` gate skipped every metric
