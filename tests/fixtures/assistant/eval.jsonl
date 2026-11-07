@@ -1,0 +1,9 @@
+{"question": "what is the verdict?", "expected_intent": "verdict", "expected_source_kind": "run_record"}
+{"question": "how did the QC checks do?", "expected_intent": "qc", "expected_source_kind": "run_record"}
+{"question": "why did it repair?", "expected_intent": "repairs", "expected_source_kind": "run_record"}
+{"question": "show me the provenance", "expected_intent": "provenance", "expected_source_kind": "run_record"}
+{"question": "what methods should I cite?", "expected_intent": "methods", "expected_source_kind": "run_record"}
+{"question": "tell me about BRCA1", "expected_intent": "variants", "expected_source_kind": "variants"}
+{"question": "is GENE3 ready?", "expected_intent": "readiness", "expected_source_kind": "readiness"}
+{"question": "how do I share this?", "expected_intent": "report", "expected_source_kind": "run_record"}
+{"question": "what is the weather?", "expected_intent": "unknown", "expected_source_kind": ""}

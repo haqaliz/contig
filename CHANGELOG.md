@@ -32,6 +32,13 @@ All notable changes to Contig are recorded here. The format follows
   checksum and metadata. `panel-list`/`panel-show` inspect the registry. The BED
   plugs into `contig variants` and `contig readiness`. Research-use interval
   definitions only.
+- **Grounded ask-your-run assistant (M5):** `contig ask` answers questions from
+  the run bundle and optional M1/M2 tables (verdict, QC, repairs, provenance,
+  methods, variants, readiness, report next steps), citing each source path and
+  SHA-256 and refusing anything outside the bundle. `ask-eval` runs a frozen
+  question/citation set against the deterministic router. `--llm` optionally
+  paraphrases the grounded answer via an OpenAI-compatible endpoint; no model is
+  required. Research-use only.
 
 ## [1.0.0] - 2026-10-21
 

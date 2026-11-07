@@ -256,6 +256,8 @@ from contig.panels.build import (
     load_panel as load_panel_registry,
     write_panel as write_panel_registry,
 )
+from contig.assistant.command import run_ask as run_grounded_ask
+from contig.assistant.command import run_ask_eval as run_grounded_ask_eval
 
 app = typer.Typer(help="Contig: agentic bioinformatics analyst.")
 
@@ -4998,6 +5000,61 @@ def repair_stats(
         "  note: over real runs -- not `heal-guard`'s recovery_rate,"
         " which scores synthetic scenarios."
     )
+
+
+@app.command()
+def ask(
+    run_id: str = typer.Argument(..., help="The run to ask about."),
+    question: str = typer.Argument(..., help="Question about the run or attached tables."),
+    runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+    variants: str = typer.Option(None, "--variants", help="M1 variants JSON from `contig variants --json`."),
+    readiness: str = typer.Option(None, "--readiness", help="M2 readiness JSON from `contig readiness --json`."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the answer as JSON."),
+    llm: bool = typer.Option(False, "--llm", help="Paraphrase the grounded answer with a configured LLM."),
+) -> None:
+    """Answer a question from the run bundle and optional M1/M2 tables.
+
+    Answers are grounded in the bundle and cite the source file + SHA-256. The
+    optional --llm only paraphrases the grounded answer; it does not retrieve or
+    decide. Research-use only: no diagnosis or clinical classification.
+    """
+    try:
+        run_grounded_ask(
+            run_id,
+            question,
+            runs_dir=runs_dir,
+            variants=variants,
+            readiness=readiness,
+            json_out=json_out,
+            llm=llm,
+        )
+    except (FileNotFoundError, ValueError, OSError, RunNotFoundError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="ask-eval")
+def ask_eval(
+    run_id: str = typer.Argument(..., help="The run to evaluate against."),
+    runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+    variants: str = typer.Option(None, "--variants", help="M1 variants JSON."),
+    readiness: str = typer.Option(None, "--readiness", help="M2 readiness JSON."),
+    cases: str = typer.Option(..., "--cases", help="Frozen JSONL eval cases."),
+    min_accuracy: float = typer.Option(0.90, "--min-accuracy", help="Exit non-zero below this accuracy."),
+) -> None:
+    """Run the frozen ask-your-run eval set against the deterministic router."""
+    try:
+        run_grounded_ask_eval(
+            run_id,
+            runs_dir=runs_dir,
+            variants=variants,
+            readiness=readiness,
+            cases=cases,
+            min_accuracy=min_accuracy,
+        )
+    except (FileNotFoundError, ValueError, OSError, RunNotFoundError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
 
 
 @app.command(name="panel-build")
