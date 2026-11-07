@@ -50,6 +50,7 @@ The CLI and the test suite work **without** Nextflow/Java/Docker; only live runs
 | `contig export <id> --rocrate` | Export the run's provenance as an RO-Crate (ro-crate-metadata.json) |
 | `contig methods <id>` | A deterministic, citation-ready methods paragraph from the bundle |
 | `contig variants <vcf>` | Research-use variant table: join a call set to ClinVar, Iranome, and a population-frequency TSV, filter deterministically, and export TSV/JSON. `--spec` replays a saved filter; `--json` includes provenance |
+| `contig readiness --depth <tsv>` | Per-target coverage and interpretation readiness: mean depth, % ≥20x/50x/100x, zero-coverage bases, homology/pseudogene caveats, and a `ready`/`caution`/`not-interpretable` state |
 | `contig approve <id>` | Approve (or `--reject`) the patch a paused self-heal run is waiting on; `--choose N` picks a ranked fix on a choice gate |
 | `contig benchmark <id>` | Compare a run's QC against a designated reference (`benchmark set <id>` to record one) within a tolerance |
 | `contig clusters` | Group failure-corpus cases by class and a normalized log signature (recurring failure modes) |
@@ -248,6 +249,42 @@ this first slice). The v1 table is built in memory, so it is intended for one
 sample's call set, not a population catalogue; subset by region first if needed.
 See `docs/planning/beyond-genomist/DATA_SOURCES.md` for the source license table
 and the `data/README.md` for the starter data.
+
+---
+
+## Coverage & interpretation readiness (research use)
+
+Before interpreting a gene, check whether the data can support it:
+
+```bash
+samtools depth -a -b panel.bed sample.bam > depth.tsv
+
+contig readiness \
+  --depth depth.tsv \
+  --bed panel.bed \
+  --caveats homology_caveats_GRCh38.bed \
+  --out readiness.tsv
+```
+
+- **Input:** a `samtools depth -a` TSV (`chrom pos depth`, 1-based) plus a target
+  BED (`chrom start end [name]`) or a GTF with `--genes`.
+- **Metrics:** bases, covered bases, mean depth, % ≥20x/50x/100x, and
+  zero-coverage bases per target.
+- **Readiness:** `ready` when the target meets the depth and fraction thresholds
+  with no caveat; `caution` when a homology/pseudogene caveat overlaps, the
+  covered fraction is below the ready floor, or the mean depth is below the
+  threshold; `not-interpretable` when the covered fraction is below the caution
+  floor or the target has no bases. Every row carries the reason.
+- **Thresholds:** `--depth-threshold` (default 20), `--ready-fraction` (0.90),
+  `--caution-fraction` (0.50).
+- **Output:** TSV by default; `--json` includes source paths, SHA-256,
+  thresholds, and the Contig version. `--out` writes to a file.
+
+The homology BED is deliberately a separate input: use
+`data/homology/homology_caveats_GRCh38.bed` for SMN1/SMN2, PMS2/PMS2CL, and
+HBA1/HBA2, or supply your own BED4. A readiness state is a data-sufficiency
+statement, not a clinical guarantee. The v1 input is a depth TSV; direct
+BAM/CRAM ingestion is a follow-up.
 
 ---
 

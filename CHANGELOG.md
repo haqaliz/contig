@@ -14,6 +14,12 @@ All notable changes to Contig are recorded here. The format follows
   replayable filter spec. No ACMG classification or clinical claim is emitted;
   ClinVar significance is attributed, never re-owned. Iranome is GRCh37 and is
   skipped with a recorded note on other builds.
+- **Coverage and interpretation-readiness workbench (M2):** `contig readiness`
+  consumes `samtools depth -a` output plus a target BED or GTF and reports
+  per-target mean depth, % ≥20x/50x/100x, zero-coverage bases, and a
+  deterministic `ready` / `caution` / `not-interpretable` state. An optional
+  homology/pseudogene BED downgrades overlapping targets to `caution` with the
+  caveat named. Research-use only; no clinical guarantee.
 
 ## [1.0.0] - 2026-10-21
 
