@@ -260,6 +260,7 @@ from contig.assistant.command import run_ask as run_grounded_ask
 from contig.assistant.command import run_ask_eval as run_grounded_ask_eval
 from contig.family.command import run_family as run_family_analysis
 from contig.biomarkers.command import run_biomarkers as run_biomarker_verification
+from contig.cohort.command import run_cohort_build, run_cohort_query
 
 app = typer.Typer(help="Contig: agentic bioinformatics analyst.")
 
@@ -5002,6 +5003,45 @@ def repair_stats(
         "  note: over real runs -- not `heal-guard`'s recovery_rate,"
         " which scores synthetic scenarios."
     )
+
+
+@app.command(name="cohort-build")
+def cohort_build(
+    name: str = typer.Option(..., "--name", help="Cohort name."),
+    variants: str = typer.Option(..., "--variants", help="Comma-separated M1 variants JSON files."),
+    anonymize: bool = typer.Option(False, "--anonymize", help="Hash run labels and omit paths."),
+    out: str = typer.Option("cohort.json", "--out", help="Cohort JSON output path."),
+) -> None:
+    """Build a local-only cohort index from M1 variant tables."""
+    try:
+        run_cohort_build(name, variants=variants, anonymize=anonymize, out=out)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="cohort-query")
+def cohort_query(
+    cohort: str = typer.Option(..., "--cohort", help="Cohort JSON from cohort-build."),
+    gene: str = typer.Option(None, "--gene", help="Gene symbol to filter by."),
+    variant: str = typer.Option(None, "--variant", help="CHROM-POS-REF-ALT to look up."),
+    min_runs: int = typer.Option(None, "--min-runs", help="Minimum seen-run count."),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of TSV."),
+    out: str = typer.Option(None, "--out", help="Write the result to this path."),
+) -> None:
+    """Query a local cohort index."""
+    try:
+        run_cohort_query(
+            cohort,
+            gene=gene,
+            variant=variant,
+            min_runs=min_runs,
+            out=out,
+            json_out=json_out,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
 
 
 @app.command()

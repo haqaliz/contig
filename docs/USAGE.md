@@ -57,6 +57,8 @@ The CLI and the test suite work **without** Nextflow/Java/Docker; only live runs
 | `contig report-check <sidecar>` | Recompute the report inputs’ SHA-256 and report current/stale/missing |
 | `contig family --vcf <vcf> --ped <ped>` | Research-use trio/family analysis: per-child inheritance, Mendelian consistency, de novo candidates, and pairwise sample concordance. Autosomal only in v1 |
 | `contig biomarkers --vcf <vcf> --callable-bed <bed>` | Research-use TMB verification from PASS variants in callable regions; compares a reported TMB within tolerance. MSI/LOH/CNV are `not_verified` in v1 |
+| `contig cohort-build --name <n> --variants <json,...>` | Build a local-only cohort index from M1 variant tables: per-variant seen-run counts/frequencies and per-gene summaries. No network, no sample IDs |
+| `contig cohort-query --cohort <json>` | Query a local cohort by gene, variant, or minimum run count |
 | `contig ask <id> "question"` | Grounded answers from the run bundle and optional M1/M2 tables, with source citations and suggested actions. `--llm` paraphrases the grounded answer; no model is required |
 | `contig ask-eval <id> --cases <jsonl>` | Run the frozen question/citation eval set against the deterministic router |
 | `contig approve <id>` | Approve (or `--reject`) the patch a paused self-heal run is waiting on; `--choose N` picks a ranked fix on a choice gate |
@@ -408,6 +410,29 @@ contig biomarkers \
   independent caller/truth set is wired yet, so this never claims a pass.
 - **Boundary:** research reproducibility check only; no NCCN, drug, or treatment
   recommendation.
+
+---
+
+## Local cohort frequency (research use)
+
+```bash
+contig cohort-build --name "Lab cohort" \
+  --variants run1.json,run2.json,run3.json \
+  --out cohort.json
+
+contig cohort-query --cohort cohort.json --gene BRCA1
+contig cohort-query --cohort cohort.json --variant 17-43057063-C-CT
+contig cohort-query --cohort cohort.json --min-runs 2
+```
+
+- **Local only:** aggregates the M1 `contig variants --json` tables already on
+  this machine. No network, no central service, no sample IDs.
+- **Per variant:** seen-run count, frequency, genes, consequences, and ClinVar
+  significance strings.
+- **Per gene:** unique variant count and runs with the gene.
+- **Anonymize:** `--anonymize` hashes run labels and omits paths.
+- **Federated sharing is not part of v1.** Cross-lab aggregation still needs
+  consent, privacy design, and legal review.
 
 ---
 
