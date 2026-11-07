@@ -44,6 +44,7 @@ echo "== M7 biomarkers (SEQC2 truth set + callable BED)"
 uv run contig biomarkers \
   --vcf data/seqc2/high-confidence_sSNV_in_HC_regions_v1.2.1.vcf.gz \
   --callable-bed data/seqc2/High-Confidence_Regions_v1.2.bed \
+  --msi-output data/msi/example.paired.output --reported-msi MSI \
   --out "$OUT/biomarkers.tsv"
 
 echo "== M8 local cohort (three M1 fixture tables)"

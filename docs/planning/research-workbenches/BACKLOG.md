@@ -38,7 +38,8 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | M6-3 | M6 | Carrier/couple views + recessive panels | deferred |
 | M6-4 | M6 | Real trio validation + swap-threshold calibration (real GIAB trio subset available) | blocked |
 | M7-0 | M7 | `contig biomarkers` TMB verification | done |
-| M7-1 | M7 | Independent MSI caller + MSI-H/MSS validation (MSIsensor example data + TCGA baseline available) | blocked |
+| M7-1a | M7 | MSI caller seam: parse MSIsensor output or run tumor/normal BAMs; threshold + reported-status comparison | done |
+| M7-1b | M7 | Real MSI-H/MSS pair validation + threshold calibration (MSIsensor example data + TCGA baseline available) | blocked |
 | M7-2 | M7 | LOH/CNV verification (COLO829 CNV segments available; real FACETS/CNVkit run needed) | blocked |
 | M7-3 | M7 | TMB tolerance/band calibration (SEQC2 TMB computed; reviewer needed) | blocked |
 | M8-0 | M8 | `contig cohort-build`/`cohort-query` local-only | done |
@@ -50,6 +51,6 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | X-4 | Cross | Release 1.1.0 (version bump + release notes) | deferred |
 | X-5 | Cross | Clinical diagnosis / ACMG adjudication / drug recs | decision |
 
-**Totals:** 8 built · 18 deferred · 12 blocked · 1 decision (39 rows). No row is
+**Totals:** 9 built · 18 deferred · 12 blocked · 1 decision (40 rows). No row is
 an unfinished code task; every blocked row names its evidence in
 `BLOCKED_RUNBOOK.md`.

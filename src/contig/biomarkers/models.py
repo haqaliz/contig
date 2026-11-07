@@ -27,6 +27,7 @@ class BiomarkerMeta(BaseModel):
     sources: list[SourceProvenance] = Field(default_factory=list)
     definition: str = ""
     tolerance: float = 0.20
+    msi_threshold: float | None = None
     generated_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
     )

@@ -362,13 +362,15 @@ nf-core CRAM + target BED, HGNC, a generated exon BED.
 **Have:** Lancet2 COLO829/HCC1143 small-variant truth sets, COLO829 SV truth set,
 SEQC2 high-confidence SNV/INDEL truth set + high-confidence regions, CIViC,
 ClinVar, ClinGen, MSIsensor example tumor/normal BAMs + microsatellite sites +
-score/status list + GRCh38 TCGA baseline, and COLO829 copy-number segments. TMB
-was computed on the SEQC2 truth set (15.87 mut/Mb over 2,485 Mb callable).
+example BED/output + score/status list + GRCh38 TCGA baseline, and COLO829
+copy-number segments. TMB was computed on the SEQC2 truth set (15.87 mut/Mb over
+2,485 Mb callable). The MSI caller seam is implemented (`--msi-output` parse or
+`msisensor msi` run); the 2-site example output reports 100% unstable.
 
 **Missing:**
-- An MSI caller binary/seam (MSIsensor/MSIsensor-pro or a small verified Python
-  caller) and a real MSI-H/MSS validation pair.
-- A real tumor-normal/tumor-only run with the pipeline's MSI/TMB/LOH/CNV outputs.
+- A real MSI-H/MSS pair to calibrate the MSI-H threshold (default 10% unstable
+  sites).
+- A real tumor-normal/tumor-only run with the pipeline's LOH/CNV outputs.
 - A domain reviewer to set honest sanity bands.
 - Licensing review for any cancer evidence source.
 

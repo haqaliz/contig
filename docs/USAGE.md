@@ -399,15 +399,29 @@ contig biomarkers \
   --callable-bed high_confidence_regions.bed \
   --reported-tmb 12.4 \
   --out biomarkers.tsv
+
+# MSI from an existing MSIsensor output:
+contig biomarkers --vcf somatic.vcf --callable-bed regions.bed \
+  --msi-output example.paired.output --reported-msi MSI \
+  --out biomarkers.tsv
 ```
+
+MSI can also be run from BAMs with `--msi-tumor-bam`, `--msi-normal-bam`,
+`--msi-sites`, `--msi-bed` and `--msisensor <binary>`; `--msi-threshold`
+(default 10% unstable sites) sets the MSI-H boundary.
 
 - **TMB:** PASS variants inside the callable BED divided by callable Mb. The
   output names the definition; `--coding-only` counts only variants with a
   coding VEP/SnpEff consequence and reports the unannotated count.
 - **Reported comparison:** `--reported-tmb` compares the computed value within
   `--tmb-tolerance` (default 20% relative) and labels `match` or `divergent`.
-- **MSI/LOH/CNV:** recorded as `not_verified` in v1, with the reason. No
-  independent caller/truth set is wired yet, so this never claims a pass.
+- **MSI:** when an MSIsensor output or BAM set is supplied, the unstable-site
+  percentage and `MSI-H`/`MSS` status are reported and compared to
+  `--reported-msi` (`match`/`divergent`). Threshold defaults to 10% and is
+  exposed as `--msi-threshold`; it is not yet calibrated on a real MSI-H/MSS
+  pair.
+- **LOH/CNV:** still `not_verified` in v1, with the reason. No independent
+  segment caller/truth set is wired yet, so this never claims a pass.
 - **Boundary:** research reproducibility check only; no NCCN, drug, or treatment
   recommendation.
 
