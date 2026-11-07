@@ -185,6 +185,9 @@ each row — without Contig claiming what is pathogenic.
 
 ## M2 — Coverage & interpretation-readiness workbench
 
+**Status:** v1 implemented 2026-11-07 — `contig readiness`, with PRD and task plan
+in `docs/planning/readiness-workbench/`.
+
 **Goal.** Show whether the data can support interpretation at all: per-gene and
 per-exon coverage, target uniformity, homology/pseudogene caveats, sample
 identity, and sex/relatedness checks. Gate "ready to interpret" and record the

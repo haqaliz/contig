@@ -246,6 +246,7 @@ from contig.workspace import (
     load_run_with_text,
 )
 from contig.variants.command import run_variants as run_variant_workbench
+from contig.readiness.command import run_readiness as run_readiness_workbench
 
 app = typer.Typer(help="Contig: agentic bioinformatics analyst.")
 
@@ -4988,6 +4989,44 @@ def repair_stats(
         "  note: over real runs -- not `heal-guard`'s recovery_rate,"
         " which scores synthetic scenarios."
     )
+
+
+@app.command()
+def readiness(
+    depth: str = typer.Option(..., "--depth", help="Depth TSV from `samtools depth -a` (chrom pos depth)."),
+    bed: str = typer.Option(None, "--bed", help="Target BED (chrom start end [name])."),
+    gtf: str = typer.Option(None, "--gtf", help="GTF annotation; requires --genes."),
+    genes: str = typer.Option(None, "--genes", help="Comma-separated gene symbols for --gtf."),
+    caveats: str = typer.Option(None, "--caveats", help="Homology/pseudogene BED (BED4 or the 8-column caveat BED)."),
+    depth_threshold: int = typer.Option(20, "--depth-threshold", help="Depth threshold for readiness (default 20)."),
+    ready_fraction: float = typer.Option(0.90, "--ready-fraction", help="Fraction at threshold needed for ready (default 0.90)."),
+    caution_fraction: float = typer.Option(0.50, "--caution-fraction", help="Fraction at threshold below which a target is not interpretable (default 0.50)."),
+    out: str = typer.Option(None, "--out", help="Write the table to this path instead of stdout."),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of TSV."),
+) -> None:
+    """Per-gene/per-exon coverage and interpretation readiness.
+
+    Consumes `samtools depth -a` output plus a target BED or GTF, and reports
+    mean depth, % at 20x/50x/100x, zero-coverage bases, homology/pseudogene
+    caveats, and a deterministic ready/caution/not-interpretable state. This is
+    a data-sufficiency check, not a clinical guarantee.
+    """
+    try:
+        run_readiness_workbench(
+            depth,
+            bed=bed,
+            gtf=gtf,
+            genes=genes,
+            caveats=caveats,
+            depth_threshold=depth_threshold,
+            ready_fraction=ready_fraction,
+            caution_fraction=caution_fraction,
+            out=out,
+            json_out=json_out,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
 
 
 @app.command()
