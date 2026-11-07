@@ -1,0 +1,12 @@
+{
+  "title": "BRCA1 panel review",
+  "subtitle": "Research summary",
+  "author": "A. Researcher",
+  "institution": "Example Lab",
+  "summary": "A short research summary.",
+  "notes": "Internal note for the team.",
+  "limitations": "Small panel; research use only.",
+  "template": "publication",
+  "reviewer": {"name": "Dr. Reviewer", "role": "PI", "reviewed_at": "2026-11-07", "statement": "Reviewed for research use."},
+  "max_rows": 2
+}

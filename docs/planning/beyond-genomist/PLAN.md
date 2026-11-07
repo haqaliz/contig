@@ -316,6 +316,9 @@ it against the reference, version it, and reuse it across runs and reports.
 
 ## M4 — Research report builder ("the self-proving report")
 
+**Status:** v1 implemented 2026-11-07 — `contig report` + `contig report-check`,
+with PRD and task plan in `docs/planning/report-builder/`.
+
 **Goal.** Turn a verified run into an editable, shareable research report whose
 every number is traceable to the signed bundle and which can be regenerated.
 

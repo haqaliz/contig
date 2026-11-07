@@ -1,0 +1,84 @@
+{
+  "run_id": "r1",
+  "pipeline": "nf-core/rnaseq",
+  "pipeline_revision": "3.14.0",
+  "target": {
+    "backend": "local",
+    "container_runtime": "docker",
+    "work_dir": "/tmp/work",
+    "engine": "nextflow",
+    "credentials_ref": null,
+    "backend_options": {},
+    "resource_limits": {}
+  },
+  "input_checksums": {
+    "samplesheet.csv": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "parameters": {},
+  "container_digests": {},
+  "nextflow_version": null,
+  "contig_version": "1.0.0",
+  "events": [
+    {
+      "process": "STAR_ALIGN",
+      "status": "COMPLETED",
+      "exit": 0,
+      "task_id": null,
+      "name": null
+    }
+  ],
+  "qc_results": [
+    {
+      "check": "mapping_rate",
+      "status": "pass",
+      "message": "Mapping rate 95.0%",
+      "value": 0.95,
+      "expected_range": null,
+      "kind": "metric",
+      "informational": false
+    },
+    {
+      "check": "library_size_skew",
+      "status": "warn",
+      "message": "Skew 2.1",
+      "value": 2.1,
+      "expected_range": null,
+      "kind": "metric",
+      "informational": false
+    }
+  ],
+  "output_checksums": {
+    "multiqc/multiqc_report.html": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "repair_history": [
+    {
+      "attempt": 1,
+      "diagnosis": {
+        "failure_class": "oom",
+        "root_cause": "STAR ran out of memory",
+        "evidence": [],
+        "confidence": 0.9
+      },
+      "patch": {
+        "kind": "resource",
+        "operation": {
+          "memory": "32 GB"
+        },
+        "rationale": "Double the memory",
+        "risk": "safe",
+        "expected_signal": "task exits 0"
+      },
+      "outcome": "repaired",
+      "detail": null,
+      "patch_applied": true
+    }
+  ],
+  "resource_usage": [],
+  "reference_identity": null,
+  "annotation_identity": [],
+  "harmonized_reference_direction": null,
+  "assay": null,
+  "sex_inference": null,
+  "verification_inputs": null,
+  "verdict": "warn"
+}

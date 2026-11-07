@@ -51,6 +51,8 @@ The CLI and the test suite work **without** Nextflow/Java/Docker; only live runs
 | `contig methods <id>` | A deterministic, citation-ready methods paragraph from the bundle |
 | `contig variants <vcf>` | Research-use variant table: join a call set to ClinVar, Iranome, and a population-frequency TSV, filter deterministically, and export TSV/JSON. `--spec` replays a saved filter; `--json` includes provenance |
 | `contig readiness --depth <tsv>` | Per-target coverage and interpretation readiness: mean depth, % ≥20x/50x/100x, zero-coverage bases, homology/pseudogene caveats, and a `ready`/`caution`/`not-interpretable` state |
+| `contig report <id>` | Build a self-contained research report from a run bundle, optionally attaching M1 variants and M2 readiness; writes HTML + a JSON sidecar with input hashes. `--template publication\|internal\|audit` |
+| `contig report-check <sidecar>` | Recompute the report inputs’ SHA-256 and report current/stale/missing |
 | `contig approve <id>` | Approve (or `--reject`) the patch a paused self-heal run is waiting on; `--choose N` picks a ranked fix on a choice gate |
 | `contig benchmark <id>` | Compare a run's QC against a designated reference (`benchmark set <id>` to record one) within a tolerance |
 | `contig clusters` | Group failure-corpus cases by class and a normalized log signature (recurring failure modes) |
@@ -285,6 +287,45 @@ The homology BED is deliberately a separate input: use
 HBA1/HBA2, or supply your own BED4. A readiness state is a data-sufficiency
 statement, not a clinical guarantee. The v1 input is a depth TSV; direct
 BAM/CRAM ingestion is a follow-up.
+
+---
+
+## Research report (HTML + sidecar)
+
+Turn a verified run, the M1 variant table, and the M2 readiness table into one
+self-contained research report:
+
+```bash
+contig variants sample.vcf --clinvar clinvar.vcf.gz --json --out variants.json
+contig readiness --depth depth.tsv --bed panel.bed --json --out readiness.json
+
+contig report r1 \
+  --variants variants.json \
+  --readiness readiness.json \
+  --spec report-spec.json \
+  --out report.html \
+  --meta report.json
+
+contig report-check report.json
+```
+
+- **Run bundle:** the report renders the pipeline/revision, verdict, deciding QC
+  checks, methods paragraph, provenance, and signature status.
+- **Attached tables:** M1 variants and M2 readiness are optional; each section
+  names its source file and SHA-256. Tables are capped (`max_rows`, default 100)
+  with a note; the full data stays in the attached JSON.
+- **Spec:** `--spec` accepts a JSON narrative/template:
+  `title`, `subtitle`, `author`, `institution`, `summary`, `notes`,
+  `limitations`, `template` (`publication`, `internal`, `audit`), `reviewer`
+  (`name`, `role`, `reviewed_at`, `statement`), and `max_rows`.
+- **Sidecar:** `report.json` records every input path + SHA-256, the spec, the
+  Contig version, the generated timestamp, and the HTML hash.
+  `contig report-check` recomputes the inputs and exits non-zero if any is stale
+  or missing.
+- **Research-use boundary:** the report carries a research-use banner, never a
+  diagnosis, ACMG classification, treatment recommendation, or medical sign-off.
+  PDF is produced by opening the self-contained HTML and printing to PDF; a
+  native PDF export is a follow-up.
 
 ---
 
