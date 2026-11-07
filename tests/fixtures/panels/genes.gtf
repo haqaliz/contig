@@ -1,0 +1,5 @@
+chr17	test	exon	43044295	43044500	.	+	.	gene_id "G1"; gene_name "BRCA1"; transcript_id "ENST1"; transcript_type "protein_coding"; exon_number "1"; tag "MANE_Select";
+chr17	test	exon	43045000	43045200	.	+	.	gene_id "G1"; gene_name "BRCA1"; transcript_id "ENST1"; transcript_type "protein_coding"; exon_number "2"; tag "MANE_Select";
+chr17	test	exon	43044295	43045200	.	+	.	gene_id "G1"; gene_name "BRCA1"; transcript_id "ENST2"; transcript_type "protein_coding"; exon_number "1";
+chr13	test	exon	32315000	32315500	.	+	.	gene_id "G2"; gene_name "BRCA2"; transcript_id "ENST3"; transcript_type "protein_coding"; exon_number "1"; tag "MANE_Select";
+chr1	test	exon	100	200	.	+	.	gene_id "G3"; gene_name "GENE1"; transcript_id "ENST4"; transcript_type "protein_coding"; exon_number "1";

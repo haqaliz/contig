@@ -255,6 +255,9 @@ gate in the bundle.
 
 ## M3 — Panel builder + panel registry
 
+**Status:** v1 implemented 2026-11-07 — `contig panel-build`, `panel-list`,
+`panel-show`, with PRD and task plan in `docs/planning/panel-registry/`.
+
 **Goal.** Let a lab define a gene panel (gene name, gene list, or BED), validate
 it against the reference, version it, and reuse it across runs and reports.
 
