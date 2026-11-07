@@ -1,0 +1,6 @@
+gene	chrom	pos	ref	alt	allele_freq	allele_count	allele_num
+BRCA1	17	43057063	C	CT	0.001	2	2404
+GJB2	13	20189547	G	A	0.008	19	2404
+EGFR	7	55191822	T	G	0.0001	1	2404
+GENE1	1	200	C	T	0.01	24	2404
+GENE1	1	200	C	G	0.02	48	2404

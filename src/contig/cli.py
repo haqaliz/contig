@@ -245,6 +245,7 @@ from contig.workspace import (
     load_run,
     load_run_with_text,
 )
+from contig.variants.command import run_variants as run_variant_workbench
 
 app = typer.Typer(help="Contig: agentic bioinformatics analyst.")
 
@@ -4987,6 +4988,60 @@ def repair_stats(
         "  note: over real runs -- not `heal-guard`'s recovery_rate,"
         " which scores synthetic scenarios."
     )
+
+
+@app.command()
+def variants(
+    vcf: str = typer.Argument(..., help="Text VCF to inspect (plain or .gz)."),
+    clinvar: str = typer.Option(None, "--clinvar", help="ClinVar VCF used for the evidence join."),
+    iranome: str = typer.Option(None, "--iranome", help="Iranome TSV (GRCh37; skipped on other builds)."),
+    frequencies: str = typer.Option(None, "--frequencies", help="Population-frequency TSV: CHROM POS REF ALT AF [AN]."),
+    build: str = typer.Option(None, "--build", help="GRCh37 or GRCh38; inferred from the VCF header when omitted."),
+    gene: str = typer.Option(None, "--gene", help="Comma-separated gene symbols to keep."),
+    consequence: str = typer.Option(None, "--consequence", help="Comma-separated consequence substrings to keep."),
+    max_af: float = typer.Option(None, "--max-af", help="Keep variants at or below this population AF (0-1)."),
+    clinvar_significance: str = typer.Option(None, "--clinvar-significance", help="Comma-separated ClinVar significance substrings to keep."),
+    pass_only: bool = typer.Option(False, "--pass-only", help="Keep only PASS/unfiltered records."),
+    min_depth: int = typer.Option(None, "--min-depth", help="Minimum read depth."),
+    min_vaf: float = typer.Option(None, "--min-vaf", help="Minimum variant allele fraction (0-1)."),
+    zygosity: str = typer.Option(None, "--zygosity", help="het, hom, or hemi."),
+    region: str = typer.Option(None, "--region", help="CHROM:START-END region to keep."),
+    spec: str = typer.Option(None, "--spec", help="Replay a saved filter spec (JSON)."),
+    save_spec: str = typer.Option(None, "--save-spec", help="Write the effective filter spec as JSON."),
+    out: str = typer.Option(None, "--out", help="Write the table to this path instead of stdout."),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of TSV."),
+) -> None:
+    """Build a research-use variant table from a VCF and open evidence sources.
+
+    This is a deterministic filtering surface, not a clinical interpretation:
+    ClinVar is shown as "ClinVar reports ...", never restated as Contig's own
+    pathogenicity call. Use --spec to replay a filter, --out to write a table,
+    and --json for a machine-readable table plus provenance.
+    """
+    try:
+        run_variant_workbench(
+            vcf,
+            clinvar=clinvar,
+            iranome=iranome,
+            frequencies=frequencies,
+            build=build,
+            genes=gene,
+            consequences=consequence,
+            max_af=max_af,
+            clinvar_significance=clinvar_significance,
+            pass_only=pass_only,
+            min_depth=min_depth,
+            min_vaf=min_vaf,
+            zygosity=zygosity,
+            region=region,
+            spec_path=spec,
+            save_spec=save_spec,
+            out=out,
+            json_out=json_out,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
 
 
 @app.command(name="triage-stats")

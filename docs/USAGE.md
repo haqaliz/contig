@@ -49,6 +49,7 @@ The CLI and the test suite work **without** Nextflow/Java/Docker; only live runs
 | `contig estimate --pipeline <p> --input <sheet>` | Pre-run runtime and cost estimate, data-driven from past runs of that pipeline with a sample-count heuristic fallback |
 | `contig export <id> --rocrate` | Export the run's provenance as an RO-Crate (ro-crate-metadata.json) |
 | `contig methods <id>` | A deterministic, citation-ready methods paragraph from the bundle |
+| `contig variants <vcf>` | Research-use variant table: join a call set to ClinVar, Iranome, and a population-frequency TSV, filter deterministically, and export TSV/JSON. `--spec` replays a saved filter; `--json` includes provenance |
 | `contig approve <id>` | Approve (or `--reject`) the patch a paused self-heal run is waiting on; `--choose N` picks a ranked fix on a choice gate |
 | `contig benchmark <id>` | Compare a run's QC against a designated reference (`benchmark set <id>` to record one) within a tolerance |
 | `contig clusters` | Group failure-corpus cases by class and a normalized log signature (recurring failure modes) |
@@ -199,6 +200,54 @@ reject good science. See `docs/technical/CAPABILITY_ROADMAP.md` (C3/C4) for the
 full reasoning.
 
 Concordance never affects the exit code: it is corroboration, not ground truth.
+
+---
+
+## Variant workbench (research use)
+
+After a verified germline or somatic call set, `contig variants` turns the VCF
+into a deterministic, filterable table. It joins the calls to open evidence
+sources and never makes a clinical call: ClinVar is shown as "ClinVar reports …",
+not restated as Contig's own pathogenicity judgement.
+
+```bash
+contig variants sample.vcf \
+  --clinvar clinvar.vcf.gz \
+  --iranome iranome_panel.tsv \
+  --frequencies gnomad_frequencies.tsv \
+  --build GRCh38 \
+  --gene BRCA1,BRCA2 \
+  --consequence missense,frameshift \
+  --max-af 0.01 \
+  --pass-only \
+  --out table.tsv
+
+# Same filters, replayable:
+contig variants sample.vcf --clinvar clinvar.vcf.gz --spec table.spec.json --out again.tsv
+```
+
+- **Input:** a plain or `.gz` text VCF with one sample column. VEP `CSQ` and
+  SnpEff `ANN` annotations are read when present; a variant without either is
+  shown as `unannotated`, never dropped.
+- **Evidence:** ClinVar (`CLNSIG`, `CLNREVSTAT`, `CLNDN`, `CLNVC`, `CLNHGVS`),
+  Iranome GRCh37 frequencies, and a `CHROM POS REF ALT AF [AN]` frequency TSV.
+  A source that cannot be joined (wrong build, missing file, zero matches) is
+  recorded honestly in the metadata.
+- **Filters:** gene, consequence substring, max population AF, ClinVar
+  significance substring, PASS-only, minimum depth, minimum VAF, zygosity, and
+  region. All filters combine with AND.
+- **Output:** TSV by default; `--json` emits the table plus metadata (source
+  paths, SHA-256, build, filter spec, Contig version, notes). `--out` writes to a
+  file; `--save-spec` writes the effective filter spec.
+- **Research-use boundary:** no ACMG classification, diagnosis, prognosis,
+  screening, or treatment recommendation is emitted by Contig. ClinVar
+  significance is attributed, not re-owned.
+
+Iranome is GRCh37; a GRCh38 input skips it with a recorded note (no liftoff in
+this first slice). The v1 table is built in memory, so it is intended for one
+sample's call set, not a population catalogue; subset by region first if needed.
+See `docs/planning/beyond-genomist/DATA_SOURCES.md` for the source license table
+and the `data/README.md` for the starter data.
 
 ---
 

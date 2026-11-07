@@ -1,0 +1,15 @@
+##fileformat=VCFv4.2
+##fileDate=20261101
+##reference=GRCh37
+##INFO=<ID=CLNSIG,Number=.,Type=String,Description="Aggregate germline classification">
+##INFO=<ID=CLNREVSTAT,Number=.,Type=String,Description="Review status">
+##INFO=<ID=CLNDN,Number=.,Type=String,Description="Condition">
+##INFO=<ID=CLNVC,Number=1,Type=String,Description="Variant type">
+##INFO=<ID=CLNHGVS,Number=.,Type=String,Description="HGVS expression">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
+17	43057063	.	C	CT	.	.	CLNSIG=Pathogenic;CLNREVSTAT=criteria_provided,_multiple_submitters,_no_conflicts;CLNDN=Breast-ovarian_cancer,_familial;CLNVC=Duplication;CLNHGVS=NC_000017.10:g.43057063dup
+13	20189547	.	G	A	.	.	CLNSIG=Likely_pathogenic;CLNREVSTAT=criteria_provided,_single_submitter;CLNDN=Nonsyndromic_hearing_loss;CLNVC=Single_nucleotide_variant;CLNHGVS=NC_000013.10:g.20189547G>A
+7	55191822	.	T	G	.	.	CLNSIG=Uncertain_significance;CLNREVSTAT=criteria_provided,_conflicting_classifications;CLNDN=Lung_cancer;CLNVC=Single_nucleotide_variant;CLNHGVS=NC_000007.13:g.55191822T>G
+1	200	.	C	T	.	.	CLNSIG=Likely_pathogenic;CLNREVSTAT=criteria_provided,_single_submitter;CLNDN=Example_condition;CLNVC=Single_nucleotide_variant;CLNHGVS=NC_000001.10:g.200C>T
+1	200	.	C	G	.	.	CLNSIG=Benign;CLNREVSTAT=criteria_provided,_multiple_submitters,_no_conflicts;CLNDN=Example_condition;CLNVC=Single_nucleotide_variant;CLNHGVS=NC_000001.10:g.200C>G
+1	999	.	A	G	.	.	CLNSIG=Benign;CLNREVSTAT=criteria_provided,_single_submitter;CLNDN=Other;CLNVC=Single_nucleotide_variant;CLNHGVS=NC_000001.10:g.999A>G
