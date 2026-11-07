@@ -11,36 +11,38 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | ID | Milestone | Item | Status |
 |---|---|---|---|
 | M1-0 | M1 | `contig variants` workbench (ClinVar/Iranome/frequency, filters, TSV/JSON, spec replay) | done |
-| M1-1 | M1 | gnomAD GraphQL client + local cache | deferred |
+| M1-1 | M1 | gnomAD GraphQL client + local cache (`--gnomad-api`, 1000-site cap) | done |
 | M1-2 | M1 | Real annotated VCF from a design partner (VEP/SnpEff) | blocked |
 | M1-3 | M1 | Iranome GRCh37 → GRCh38 liftover | deferred |
 | M1-4 | M1 | Dashboard variant table | deferred |
 | M1-5 | M1 | Filter/sort semantics review with a researcher | blocked |
 | M2-0 | M2 | `contig readiness` per-target coverage/readiness | done |
-| M2-1 | M2 | Direct BAM/CRAM ingestion (`samtools depth` seam) | deferred |
+| M2-1 | M2 | Direct BAM/CRAM ingestion (`contig readiness --bam`) | done |
 | M2-2 | M2 | Sex check / sample-swap readiness caveats | deferred |
 | M2-3 | M2 | Threshold calibration (20x, 90%, 50%) on real panels (nf-core CRAM + BED available) | blocked |
 | M2-4 | M2 | Homology/pseudogene list expansion | deferred |
 | M3-0 | M3 | `contig panel-build`/`panel-list`/`panel-show` | done |
-| M3-1 | M3 | Panel versioning/archival + diff | deferred |
+| M3-1a | M3 | Panel version label (`--version`, listed in the registry) | done |
+| M3-1b | M3 | Panel archival + diff | deferred |
 | M3-2 | M3 | Real lab panel validation | blocked |
 | M4-0 | M4 | `contig report` + `report-check` (HTML, sidecar, templates) | done |
 | M4-1 | M4 | Native PDF export | deferred |
-| M4-2 | M4 | Report diff between sidecars | deferred |
+| M4-2 | M4 | Report diff between sidecars (`contig report-diff`) | done |
 | M4-3 | M4 | Reviewer workflow feedback / report examples | blocked |
 | M5-0 | M5 | `contig ask` + `ask-eval` (deterministic, citations, optional LLM) | done |
 | M5-1 | M5 | Live LLM eval + provider/privacy decision | blocked |
 | M5-2 | M5 | Action execution behind the approval gate | deferred |
 | M5-3 | M5 | Dashboard chat panel | deferred |
 | M6-0 | M6 | `contig family` inheritance/Mendelian/de novo/concordance | done |
-| M6-1 | M6 | X-linked/sex-aware Mendelian rules | deferred |
+| M6-1 | M6 | X/Y/MT sex-aware Mendelian rules (basic; unknown sex not_evaluated) | done |
 | M6-2 | M6 | Multiple families/quads per PED | deferred |
 | M6-3 | M6 | Carrier/couple views + recessive panels | deferred |
 | M6-4 | M6 | Real trio validation + swap-threshold calibration (real GIAB trio subset available) | blocked |
 | M7-0 | M7 | `contig biomarkers` TMB verification | done |
 | M7-1a | M7 | MSI caller seam: parse MSIsensor output or run tumor/normal BAMs; threshold + reported-status comparison | done |
 | M7-1b | M7 | Real MSI-H/MSS pair validation + threshold calibration (MSIsensor example data + TCGA baseline available) | blocked |
-| M7-2 | M7 | LOH/CNV verification (COLO829 CNV segments available; real FACETS/CNVkit run needed) | blocked |
+| M7-2a | M7 | CNV segment concordance (`--cnv-segments/--cnv-truth`) | done |
+| M7-2b | M7 | LOH verification (needs allele-specific data, not just segments) | blocked |
 | M7-3 | M7 | TMB tolerance/band calibration (SEQC2 TMB computed; reviewer needed) | blocked |
 | M8-0 | M8 | `contig cohort-build`/`cohort-query` local-only | done |
 | M8-1 | M8 | Federated/cross-lab frequency layer | blocked |
@@ -51,6 +53,6 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | X-4 | Cross | Release 1.1.0 (version bump + release notes) | deferred |
 | X-5 | Cross | Clinical diagnosis / ACMG adjudication / drug recs | decision |
 
-**Totals:** 9 built · 18 deferred · 12 blocked · 1 decision (40 rows). No row is
+**Totals:** 15 built · 14 deferred · 12 blocked · 1 decision (42 rows). No row is
 an unfinished code task; every blocked row names its evidence in
 `BLOCKED_RUNBOOK.md`.

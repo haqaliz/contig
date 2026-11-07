@@ -12,10 +12,8 @@ uv run contig variants data/kaggle/gse131027/variants.vcf \
   --clinvar data/clinvar/clinvar.vcf.gz --build GRCh38 \
   --out "$OUT/variants.tsv"
 
-echo "== M2 readiness (nf-core CRAM + chr20 BED)"
-samtools depth -a -b data/nfcore/target_chr20.bed \
-  data/nfcore/NA12878_sorted_chrM_chr20_rehead_60pdown.cram > "$OUT/depth.tsv"
-uv run contig readiness --depth "$OUT/depth.tsv" \
+echo "== M2 readiness (nf-core CRAM + chr20 BED, via samtools)"
+uv run contig readiness --bam data/nfcore/NA12878_sorted_chrM_chr20_rehead_60pdown.cram \
   --bed data/nfcore/target_chr20.bed \
   --caveats data/homology/homology_caveats_GRCh38.bed \
   --out "$OUT/readiness.tsv"
@@ -32,6 +30,7 @@ uv run contig report r1 --runs-dir tests/fixtures/reporting/runs \
   --readiness tests/fixtures/reporting/readiness.json \
   --out "$OUT/report.html" --meta "$OUT/report.json"
 uv run contig report-check "$OUT/report.json"
+uv run contig report-diff "$OUT/report.json" "$OUT/report.json"
 uv run contig ask r1 "is GENE3 ready?" --runs-dir tests/fixtures/reporting/runs \
   --readiness tests/fixtures/reporting/readiness.json
 

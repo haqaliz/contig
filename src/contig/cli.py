@@ -249,6 +249,7 @@ from contig.variants.command import run_variants as run_variant_workbench
 from contig.readiness.command import run_readiness as run_readiness_workbench
 from contig.reporting.command import run_report as run_report_builder
 from contig.reporting.command import run_report_check as run_report_staleness_check
+from contig.reporting.diff import diff_reports, render_diff
 from contig.panels.build import (
     build_from_bed as build_panel_from_bed,
     build_from_genes as build_panel_from_genes,
@@ -5061,6 +5062,11 @@ def biomarkers(
     msi_output: str = typer.Option(None, "--msi-output", help="Existing MSIsensor output to parse, or the run output path."),
     msi_threshold: float = typer.Option(10.0, "--msi-threshold", help="MSI-H threshold on the unstable-site percentage (default 10)."),
     msisensor_bin: str = typer.Option("msisensor", "--msisensor", help="MSIsensor binary path."),
+    cnv_segments: str = typer.Option(None, "--cnv-segments", help="CNV segment TSV to verify."),
+    cnv_truth: str = typer.Option(None, "--cnv-truth", help="CNV truth segment TSV."),
+    cnv_value_column: str = typer.Option(None, "--cnv-value-column", help="Segment value column (auto-detected by default)."),
+    cnv_tolerance: float = typer.Option(0.2, "--cnv-tolerance", help="Absolute segment-value tolerance."),
+    cnv_min_concordance: float = typer.Option(0.90, "--cnv-min-concordance", help="Concordant-base fraction for a match."),
     out: str = typer.Option(None, "--out", help="Write the report to this path instead of stdout."),
     json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of TSV."),
 ) -> None:
@@ -5087,6 +5093,11 @@ def biomarkers(
             msi_output=msi_output,
             msi_threshold=msi_threshold,
             msisensor_bin=msisensor_bin,
+            cnv_segments=cnv_segments,
+            cnv_truth=cnv_truth,
+            cnv_value_column=cnv_value_column,
+            cnv_tolerance=cnv_tolerance,
+            cnv_min_concordance=cnv_min_concordance,
             out=out,
             json_out=json_out,
         )
@@ -5178,6 +5189,7 @@ def panel_build(
     gtf: str = typer.Option(None, "--gtf", help="GTF annotation; required with --genes."),
     hgnc: str = typer.Option(None, "--hgnc", help="HGNC complete set TSV for symbol normalization."),
     build: str = typer.Option("GRCh38", "--build", help="Reference build label."),
+    version: str = typer.Option("1", "--version", help="Panel version label."),
     transcripts: str = typer.Option("mane", "--transcripts", help="mane or all."),
     out_dir: str = typer.Option("panels", "--out-dir", help="Panel registry directory."),
 ) -> None:
@@ -5190,7 +5202,7 @@ def panel_build(
         raise typer.Exit(code=1)
     try:
         if bed:
-            panel = build_panel_from_bed(bed, name, build)
+            panel = build_panel_from_bed(bed, name, build, version)
         else:
             panel = build_panel_from_genes(
                 [part.strip() for part in (genes or "").split(",") if part.strip()],
@@ -5199,6 +5211,7 @@ def panel_build(
                 build=build,
                 hgnc_path=hgnc,
                 transcripts=transcripts,
+                version=version,
             )
         bed_path, meta_path = write_panel_registry(panel, out_dir)
     except (FileNotFoundError, ValueError, OSError) as exc:
@@ -5221,7 +5234,7 @@ def panel_list(
         return
     for meta in panels:
         genes = ",".join(meta.genes) if meta.genes else "-"
-        typer.echo(f"{meta.id}\t{meta.name}\t{meta.source}\t{genes}\t{meta.build}")
+        typer.echo(f"{meta.id}\t{meta.version}\t{meta.name}\t{meta.source}\t{genes}\t{meta.build}")
 
 
 @app.command(name="panel-show")
@@ -5284,9 +5297,30 @@ def report_check(
         raise typer.Exit(code=1)
 
 
+@app.command(name="report-diff")
+def report_diff(
+    a: str = typer.Argument(..., help="First report sidecar JSON."),
+    b: str = typer.Argument(..., help="Second report sidecar JSON."),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of text."),
+) -> None:
+    """Diff two report sidecars (spec, inputs, hashes, notes)."""
+    try:
+        result = diff_reports(a, b)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    if json_out:
+        typer.echo(_json.dumps(result, indent=2))
+    else:
+        typer.echo(render_diff(result), nl=False)
+
+
 @app.command()
 def readiness(
-    depth: str = typer.Option(..., "--depth", help="Depth TSV from `samtools depth -a` (chrom pos depth)."),
+    depth: str = typer.Option(None, "--depth", help="Depth TSV from `samtools depth -a` (chrom pos depth)."),
+    bam: str = typer.Option(None, "--bam", help="BAM/CRAM to depth with samtools (requires --bed)."),
+    reference: str = typer.Option(None, "--reference", help="Reference FASTA for CRAM decoding."),
+    samtools_bin: str = typer.Option("samtools", "--samtools", help="samtools binary path."),
     bed: str = typer.Option(None, "--bed", help="Target BED (chrom start end [name])."),
     gtf: str = typer.Option(None, "--gtf", help="GTF annotation; requires --genes."),
     genes: str = typer.Option(None, "--genes", help="Comma-separated gene symbols for --gtf."),
@@ -5307,6 +5341,9 @@ def readiness(
     try:
         run_readiness_workbench(
             depth,
+            bam=bam,
+            reference=reference,
+            samtools_bin=samtools_bin,
             bed=bed,
             gtf=gtf,
             genes=genes,
@@ -5328,6 +5365,9 @@ def variants(
     clinvar: str = typer.Option(None, "--clinvar", help="ClinVar VCF used for the evidence join."),
     iranome: str = typer.Option(None, "--iranome", help="Iranome TSV (GRCh37; skipped on other builds)."),
     frequencies: str = typer.Option(None, "--frequencies", help="Population-frequency TSV: CHROM POS REF ALT AF [AN]."),
+    gnomad_api: bool = typer.Option(False, "--gnomad-api", help="Fetch gnomAD v4 frequencies for the input sites (max 1000)."),
+    gnomad_cache: str = typer.Option(None, "--gnomad-cache", help="Local JSON cache for gnomAD API results."),
+    gnomad_dataset: str = typer.Option("gnomad_r4", "--gnomad-dataset", help="gnomAD dataset id."),
     build: str = typer.Option(None, "--build", help="GRCh37 or GRCh38; inferred from the VCF header when omitted."),
     gene: str = typer.Option(None, "--gene", help="Comma-separated gene symbols to keep."),
     consequence: str = typer.Option(None, "--consequence", help="Comma-separated consequence substrings to keep."),
@@ -5356,6 +5396,9 @@ def variants(
             clinvar=clinvar,
             iranome=iranome,
             frequencies=frequencies,
+            gnomad_api=gnomad_api,
+            gnomad_cache=gnomad_cache,
+            gnomad_dataset=gnomad_dataset,
             build=build,
             genes=gene,
             consequences=consequence,

@@ -52,19 +52,20 @@ def panel_id(name: str, bed_text: str) -> str:
     return f"{slug}-{digest}"
 
 
-def _meta(name: str, build: str, source: str, bed_text: str, **kwargs) -> PanelMeta:
+def _meta(name: str, build: str, source: str, bed_text: str, version: str = "1", **kwargs) -> PanelMeta:
     return PanelMeta(
         id=panel_id(name, bed_text),
         name=name,
         build=build,
         source=source,
+        version=version,
         checksum=hashlib.sha256(bed_text.encode("utf-8")).hexdigest(),
         contig_version=_contig_version(),
         **kwargs,
     )
 
 
-def build_from_bed(path: str | Path, name: str, build: str = "GRCh38") -> Panel:
+def build_from_bed(path: str | Path, name: str, build: str = "GRCh38", version: str = "1") -> Panel:
     path = Path(path)
     if not path.is_file():
         raise FileNotFoundError(f"panel BED not found: {path}")
@@ -98,6 +99,7 @@ def build_from_bed(path: str | Path, name: str, build: str = "GRCh38") -> Panel:
             build,
             "bed",
             bed_text,
+            version=version,
             method="canonicalized BED",
             notes=[f"Source BED: {path}"],
         ),
@@ -161,6 +163,7 @@ def build_from_genes(
     build: str = "GRCh38",
     hgnc_path: str | Path | None = None,
     transcripts: str = "mane",
+    version: str = "1",
 ) -> Panel:
     if transcripts not in {"mane", "all"}:
         raise ValueError("transcripts must be 'mane' or 'all'")
@@ -194,6 +197,7 @@ def build_from_genes(
             build,
             "genes",
             bed_text,
+            version=version,
             genes=approved,
             transcripts=transcript_ids,
             method=method,

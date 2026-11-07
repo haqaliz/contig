@@ -45,6 +45,17 @@ def test_build_from_genes_list_and_show(tmp_path):
     assert "BRCA1" in shown.output
 
 
+def test_version_label_is_listed(tmp_path):
+    out = tmp_path / "panels"
+    built = _invoke([
+        "panel-build", "--name", "Versioned", "--genes", "BRCA1",
+        "--gtf", GTF, "--hgnc", HGNC, "--version", "2", "--out-dir", str(out),
+    ])
+    assert built.exit_code == 0, built.output
+    listed = _invoke(["panel-list", "--dir", str(out)])
+    assert "\t2\t" in listed.output
+
+
 def test_build_from_bed(tmp_path):
     out = tmp_path / "panels"
     result = _invoke(["panel-build", "--name", "Existing", "--bed", BED, "--out-dir", str(out)])

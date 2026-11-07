@@ -11,13 +11,13 @@ names the evidence each blocked row needs.
 
 | Milestone | Command | What it does | Tests | Honest limit |
 |---|---|---|---|---|
-| M1 | `contig variants` | ClinVar/Iranome/frequency join, deterministic filters, TSV/JSON + provenance, spec replay | 52 | In-memory table; gnomAD via TSV; Iranome GRCh37 only |
-| M2 | `contig readiness` | Per-target depth, %≥20x/50x/100x, homology caveats, ready/caution/not-interpretable | 35 | Depth TSV input; thresholds uncalibrated |
-| M3 | `contig panel-build`/`panel-list`/`panel-show` | HGNC-resolved, MANE-preferred, checksummed panel BED registry | 22 | No versioning/archive; no real lab panel |
-| M4 | `contig report`/`report-check` | Self-contained HTML report, sidecar hashes, templates, reviewer block, staleness check | 33 | HTML only; no PDF/diff/dashboard |
+| M1 | `contig variants` | ClinVar/Iranome/frequency/gnomAD-API join, deterministic filters, TSV/JSON + provenance, spec replay | 56 | In-memory table; gnomAD API capped at 1000 sites; Iranome GRCh37 only |
+| M2 | `contig readiness` | Per-target depth from a TSV or BAM/CRAM, %≥20x/50x/100x, homology caveats, ready/caution/not-interpretable | 39 | Thresholds uncalibrated |
+| M3 | `contig panel-build`/`panel-list`/`panel-show` | HGNC-resolved, MANE-preferred, checksummed panel BED registry with version labels | 24 | No archival/diff; no real lab panel |
+| M4 | `contig report`/`report-check`/`report-diff` | Self-contained HTML report, sidecar hashes, templates, reviewer block, staleness check, sidecar diff | 37 | HTML only; no PDF/dashboard |
 | M5 | `contig ask`/`ask-eval` | Grounded Q&A over the bundle + M1/M2, citations, suggested actions, optional LLM paraphrase | 31 | No live LLM eval; deterministic router only |
-| M6 | `contig family` | Inheritance, autosomal Mendelian consistency, de novo candidates, pairwise concordance | 25 | Autosomal only; one family; swap threshold uncalibrated |
-| M7 | `contig biomarkers` | TMB from PASS variants in a callable BED; MSI from MSIsensor output/BAMs; reported-vs-computed match/divergent | 23 | LOH/CNV are `not_verified`; MSI threshold needs a real MSI-H/MSS pair |
+| M6 | `contig family` | Inheritance, autosomal + basic X/Y/MT Mendelian consistency, de novo candidates, pairwise concordance | 25 | One family; swap threshold uncalibrated |
+| M7 | `contig biomarkers` | TMB from PASS variants in a callable BED; MSI from MSIsensor output/BAMs; CNV segment concordance | 32 | LOH is `not_verified`; MSI/CNV thresholds need real validation |
 | M8 | `contig cohort-build`/`cohort-query` | Local-only per-variant/gene cohort counts and frequencies | 16 | No federated/cross-lab layer |
 
 All merged to `origin/master`; the full test suite is green. Docs are in
@@ -30,12 +30,15 @@ and the `CHANGELOG.md` Unreleased section.
 all eight surfaces over the downloaded data (not CI). It exercises:
 
 - M1: 32,736-row table from the Kaggle sample VCF + ClinVar.
-- M2: 200 nf-core chr20 targets (3 ready, 4 caution, 193 not-interpretable).
+- M2: 200 nf-core chr20 targets from the CRAM via samtools (3 ready, 4 caution,
+  193 not-interpretable).
 - M3: 322-exon BRCA1/BRCA2 panel from real HGNC + GENCODE.
-- M4/M5: report + `report-check` current; grounded `ask` answer for GENE3.
+- M4/M5: report + `report-check` current + `report-diff` no differences;
+  grounded `ask` answer for GENE3.
 - M6: real GIAB Ashkenazim trio subset, 399 rows, 217 evaluated, 0 Mendelian
   inconsistencies, 0 de novo candidates.
-- M7: TMB 15.87 mut/Mb on the SEQC2 truth set; MSI/LOH/CNV `not_verified`.
+- M7: TMB 15.87 mut/Mb on the SEQC2 truth set; MSI 100.00% (match) from the
+  MSIsensor example; CNV verification available; LOH `not_verified`.
 - M8: local cohort across three M1 tables, 3 variants / 3 genes / 3 runs.
 
 This is the closest thing to validation we can do without a design partner; it
@@ -62,16 +65,17 @@ proves the plumbing, not that the defaults are scientifically right.
 | M4 report feedback | 2–3 redacted report examples + reviewer workflow |
 | M5 live LLM eval | Provider/privacy decision + a real eval run |
 | M6 real trio/swap threshold | A real multi-sample trio VCF + expected inheritance |
-| M7 MSI/LOH/CNV | MSI-H/MSS reference data + an independent MSI caller; FACETS/CNVkit segments + truth set |
+| M7 MSI/CNV calibration + LOH | A real MSI-H/MSS pair + threshold; a real CNV segment file + expected calls; LOH needs allele-specific data |
 | M7 TMB band | A domain reviewer and real tumor-normal TMB values |
 | M8 federated layer | 2+ labs, consent/IRB, privacy design, legal review |
 | Cross-cutting validation | A design partner running their own data through M1–M8 |
 
 ## What I recommend next
 
-1. **Design-partner validation (P0).** Pick 3–5 researchers/labs. Have them run
-   their own data through the commands. Measure time-to-result, trust, which
-   filters/thresholds they challenge, and willingness to pay. This is the
+1. **Design-partner validation (P0).** Use
+   `docs/validation/DESIGN_PARTNER_KIT.md`. Pick 3–5 researchers/labs, have them
+   run their own data through the commands, and measure time-to-result, trust,
+   which filters/thresholds they challenge, and willingness to pay. This is the
    roadmap's own gate.
 2. **Dashboard/auto-discovery integration (P1).** Make the new surfaces usable
    without manually passing `--variants`/`--readiness`/`--vcf`: auto-discover

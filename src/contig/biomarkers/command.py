@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import typer
 
+from contig.biomarkers.cnv import compare_files
 from contig.biomarkers.msi import parse_msi_output, run_msisensor
 from contig.biomarkers.report import (
     RESEARCH_USE_NOTICE,
@@ -31,11 +32,26 @@ def run_biomarkers(
     msi_output: str | None = None,
     msi_threshold: float = 10.0,
     msisensor_bin: str = "msisensor",
+    cnv_segments: str | None = None,
+    cnv_truth: str | None = None,
+    cnv_value_column: str | None = None,
+    cnv_tolerance: float = 0.2,
+    cnv_min_concordance: float = 0.90,
     out: str | None = None,
     json_out: bool = False,
 ) -> None:
     if not 0.0 <= msi_threshold <= 100.0:
         raise ValueError("msi_threshold must be between 0 and 100")
+    if bool(cnv_segments) != bool(cnv_truth):
+        raise ValueError("CNV comparison requires both --cnv-segments and --cnv-truth")
+    cnv_result = None
+    if cnv_segments and cnv_truth:
+        cnv_result = compare_files(
+            cnv_segments, cnv_truth,
+            value_column=cnv_value_column,
+            tolerance=cnv_tolerance,
+            min_concordance=cnv_min_concordance,
+        )
     msi_result = None
     if any((msi_tumor_bam, msi_normal_bam, msi_sites, msi_bed)):
         if not all((msi_tumor_bam, msi_normal_bam, msi_sites, msi_bed)):
@@ -59,12 +75,14 @@ def run_biomarkers(
         reported_cnv=reported_cnv,
         coding_only=coding_only,
         msi_result=msi_result,
+        cnv_result=cnv_result,
     )
     tmb = next(entry for entry in report.entries if entry.name == "TMB computed")
     msi = next(entry for entry in report.entries if entry.name == "MSI")
+    cnv = next(entry for entry in report.entries if entry.name == "CNV")
     typer.echo(f"TMB: {tmb.value} mut/Mb ({tmb.status})", err=True)
     typer.echo(f"MSI: {msi.value or 'not attached'} ({msi.status})", err=True)
-    typer.echo("LOH/CNV: not_verified in v1", err=True)
+    typer.echo(f"CNV: {cnv.value or 'not attached'} ({cnv.status})", err=True)
 
     if out:
         write_report(report, out, as_json=json_out)

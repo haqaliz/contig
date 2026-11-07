@@ -10,6 +10,7 @@ from pathlib import Path
 
 from contig.models import sha256_file
 from contig.variants.filters import apply_filters, sort_rows
+from contig.variants.gnomad import GnomadClient, GraphQLGnomadClient, load_gnomad
 from contig.variants.models import (
     FilterSpec,
     SourceProvenance,
@@ -52,6 +53,10 @@ def build_table(
     clinvar: str | Path | None = None,
     iranome: str | Path | None = None,
     frequencies: str | Path | None = None,
+    gnomad_api: bool = False,
+    gnomad_client: GnomadClient | None = None,
+    gnomad_cache: str | Path | None = None,
+    gnomad_dataset: str = "gnomad_r4",
     build: str | None = None,
     spec: FilterSpec | None = None,
 ) -> VariantTable:
@@ -123,6 +128,24 @@ def build_table(
 
     if frequencies:
         evidence, provenance = load_frequencies(frequencies, sites)
+        sources.append(provenance)
+        notes.append(provenance.note or "")
+        rows = [
+            dataclasses.replace(
+                row,
+                gnomad_af=(evidence.get(row.key).af if evidence.get(row.key) else None),
+                gnomad_an=(evidence.get(row.key).an if evidence.get(row.key) else None),
+            )
+            for row in rows
+        ]
+
+    if gnomad_api:
+        if frequencies:
+            raise ValueError("use either --frequencies or --gnomad-api, not both")
+        client = gnomad_client or GraphQLGnomadClient(dataset=gnomad_dataset)
+        evidence, provenance = load_gnomad(
+            sites, client, cache_path=gnomad_cache, dataset=gnomad_dataset
+        )
         sources.append(provenance)
         notes.append(provenance.note or "")
         rows = [

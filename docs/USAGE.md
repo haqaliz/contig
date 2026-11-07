@@ -235,15 +235,19 @@ contig variants sample.vcf \
 
 # Same filters, replayable:
 contig variants sample.vcf --clinvar clinvar.vcf.gz --spec table.spec.json --out again.tsv
+
+# gnomAD v4 API for a filtered panel (max 1000 sites; local cache optional)
+contig variants sample.vcf --gnomad-api --gnomad-cache gnomad-cache.json --out table.tsv
 ```
 
 - **Input:** a plain or `.gz` text VCF with one sample column. VEP `CSQ` and
   SnpEff `ANN` annotations are read when present; a variant without either is
   shown as `unannotated`, never dropped.
 - **Evidence:** ClinVar (`CLNSIG`, `CLNREVSTAT`, `CLNDN`, `CLNVC`, `CLNHGVS`),
-  Iranome GRCh37 frequencies, and a `CHROM POS REF ALT AF [AN]` frequency TSV.
-  A source that cannot be joined (wrong build, missing file, zero matches) is
-  recorded honestly in the metadata.
+  Iranome GRCh37 frequencies, a `CHROM POS REF ALT AF [AN]` frequency TSV, or
+  the gnomAD v4 GraphQL API (`--gnomad-api`, optional `--gnomad-cache`; capped
+  at 1000 sites). A source that cannot be joined (wrong build, missing file,
+  zero matches) is recorded honestly in the metadata.
 - **Filters:** gene, consequence substring, max population AF, ClinVar
   significance substring, PASS-only, minimum depth, minimum VAF, zygosity, and
   region. All filters combine with AND.
@@ -274,10 +278,16 @@ contig readiness \
   --bed panel.bed \
   --caveats homology_caveats_GRCh38.bed \
   --out readiness.tsv
+
+# Or let Contig run samtools depth on a BAM/CRAM:
+contig readiness --bam sample.cram --reference GRCh38.fa \
+  --bed panel.bed --out readiness.tsv
 ```
 
-- **Input:** a `samtools depth -a` TSV (`chrom pos depth`, 1-based) plus a target
-  BED (`chrom start end [name]`) or a GTF with `--genes`.
+- **Input:** a `samtools depth -a` TSV (`chrom pos depth`, 1-based), or a
+  BAM/CRAM plus `--bam` (Contig runs `samtools depth -a -b` behind an injectable
+  seam; `--reference` is passed for CRAM decoding). Targets are a BED
+  (`chrom start end [name]`) or a GTF with `--genes`.
 - **Metrics:** bases, covered bases, mean depth, % ≥20x/50x/100x, and
   zero-coverage bases per target.
 - **Readiness:** `ready` when the target meets the depth and fraction thresholds
@@ -293,8 +303,7 @@ contig readiness \
 The homology BED is deliberately a separate input: use
 `data/homology/homology_caveats_GRCh38.bed` for SMN1/SMN2, PMS2/PMS2CL, and
 HBA1/HBA2, or supply your own BED4. A readiness state is a data-sufficiency
-statement, not a clinical guarantee. The v1 input is a depth TSV; direct
-BAM/CRAM ingestion is a follow-up.
+statement, not a clinical guarantee.
 
 ---
 
@@ -307,6 +316,7 @@ contig panel-build --name "Hereditary cancer" \
   --genes BRCA1,BRCA2 \
   --gtf Homo_sapiens.GRCh38.113.gtf.gz \
   --hgnc hgnc_complete_set.txt \
+  --version 1 \
   --out-dir panels
 
 contig panel-list --dir panels
@@ -321,7 +331,7 @@ contig panel-show hereditary-cancer-a3d15b1d --dir panels
 - **Existing BED:** `--bed panel.bed` normalizes `chr` prefixes, sorts, dedupes,
   and checksums.
 - **Registry:** `<id>.bed` + `<id>.json` with name, source, genes, transcripts,
-  build, method, checksum, creation time, and Contig version. The id is a slug
+  build, version, method, checksum, creation time, and Contig version. The id is a slug
   plus a short SHA-256 of the canonical BED.
 - **Reuse:** the BED works directly as `--bed` for `contig variants` and
   `contig readiness`.
@@ -348,6 +358,9 @@ contig report r1 \
   --meta report.json
 
 contig report-check report.json
+
+# Compare two report sidecars:
+contig report-diff report-a.json report-b.json
 ```
 
 - **Run bundle:** the report renders the pipeline/revision, verdict, deciding QC
@@ -362,7 +375,8 @@ contig report-check report.json
 - **Sidecar:** `report.json` records every input path + SHA-256, the spec, the
   Contig version, the generated timestamp, and the HTML hash.
   `contig report-check` recomputes the inputs and exits non-zero if any is stale
-  or missing.
+  or missing. `contig report-diff` compares two sidecars (spec, inputs, hashes,
+  notes) as text or JSON.
 - **Research-use boundary:** the report carries a research-use banner, never a
   diagnosis, ACMG classification, treatment recommendation, or medical sign-off.
   PDF is produced by opening the self-contained HTML and printing to PDF; a
@@ -381,13 +395,14 @@ contig family --vcf family.vcf --ped family.ped --out family.tsv
 - **Per row:** child, chrom/pos/ref/alt, gene/consequence, the three genotypes,
   inheritance (`paternal`, `maternal`, `biparental`, `de_novo`, `not_carried`,
   `unknown`, `not_evaluated`), Mendelian consistency, and a de novo candidate
-  flag.
+  flag. X/Y/MT use basic sex-aware rules when the PED supplies sex; unknown sex
+  stays `not_evaluated`.
 - **Summary:** evaluated sites, Mendelian-inconsistent sites (excluding de novo
   candidates), de novo candidate count, error rate, inheritance counts, and
   pairwise same-genotype/opposite-homozygote rates with a possible-swap flag.
-- **Boundary:** autosomal only in v1; X/Y/MT are `not_evaluated`. A de novo
-  candidate is not a validated event. This is a research calculation, not
-  clinical counselling, diagnosis, or PGT-M.
+- **Boundary:** autosomal plus basic X/Y/MT rules; unknown sex is
+  `not_evaluated`. A de novo candidate is not a validated event. This is a
+  research calculation, not clinical counselling, diagnosis, or PGT-M.
 
 ---
 
@@ -420,8 +435,12 @@ MSI can also be run from BAMs with `--msi-tumor-bam`, `--msi-normal-bam`,
   `--reported-msi` (`match`/`divergent`). Threshold defaults to 10% and is
   exposed as `--msi-threshold`; it is not yet calibrated on a real MSI-H/MSS
   pair.
-- **LOH/CNV:** still `not_verified` in v1, with the reason. No independent
-  segment caller/truth set is wired yet, so this never claims a pass.
+- **CNV:** when `--cnv-segments` and `--cnv-truth` are supplied, the
+  overlap-weighted segment concordance and mean absolute delta are reported as
+  `match`/`divergent`/`unverified` (`--cnv-tolerance` default 0.2,
+  `--cnv-min-concordance` default 0.90).
+- **LOH:** still `not_verified`; it needs allele-specific data, not just
+  segments.
 - **Boundary:** research reproducibility check only; no NCCN, drug, or treatment
   recommendation.
 

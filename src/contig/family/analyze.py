@@ -26,9 +26,17 @@ def has_alt(values: list[int] | None) -> bool:
     return bool(values) and any(value > 0 for value in values)
 
 
-def inheritance(child_gt: str | None, father_gt: str | None, mother_gt: str | None, chrom: str) -> str:
-    if normalize_chrom(chrom) in SEX_CHROMS:
-        return "not_evaluated"
+def inheritance(
+    child_gt: str | None,
+    father_gt: str | None,
+    mother_gt: str | None,
+    chrom: str,
+    *,
+    child_sex: str = "0",
+    father_sex: str = "0",
+    mother_sex: str = "0",
+) -> str:
+    chrom = normalize_chrom(chrom)
     child = alleles(child_gt)
     father = alleles(father_gt)
     mother = alleles(mother_gt)
@@ -38,6 +46,29 @@ def inheritance(child_gt: str | None, father_gt: str | None, mother_gt: str | No
         return "not_carried"
     father_alt = has_alt(father)
     mother_alt = has_alt(mother)
+
+    if chrom == "X":
+        if child_sex == "1":
+            return "maternal" if mother_alt else "de_novo"
+        if child_sex == "2":
+            pass
+        else:
+            return "not_evaluated"
+    elif chrom == "Y":
+        if child_sex == "1":
+            return "paternal" if father_alt else "de_novo"
+        return "not_evaluated"
+    elif chrom == "MT":
+        return "maternal" if mother_alt else "de_novo"
+    else:
+        if not father_alt and not mother_alt:
+            return "de_novo"
+        if father_alt and not mother_alt:
+            return "paternal"
+        if mother_alt and not father_alt:
+            return "maternal"
+        return "biparental"
+
     if not father_alt and not mother_alt:
         return "de_novo"
     if father_alt and not mother_alt:
@@ -52,13 +83,31 @@ def mendelian_consistent(
     father_gt: str | None,
     mother_gt: str | None,
     chrom: str,
+    *,
+    child_sex: str = "0",
+    father_sex: str = "0",
+    mother_sex: str = "0",
 ) -> bool | None:
-    if normalize_chrom(chrom) in SEX_CHROMS:
-        return None
+    chrom = normalize_chrom(chrom)
     child = alleles(child_gt)
     father = alleles(father_gt)
     mother = alleles(mother_gt)
-    if child is None or father is None or mother is None or len(child) < 2:
+    if child is None or father is None or mother is None:
+        return None
+
+    if chrom == "X":
+        if child_sex == "1":
+            return all(allele in mother for allele in child)
+        if child_sex != "2":
+            return None
+    elif chrom == "Y":
+        if child_sex == "1":
+            return all(allele in father for allele in child)
+        return None
+    elif chrom == "MT":
+        return all(allele in mother for allele in child)
+
+    if len(child) < 2:
         return None
     a, b = child[0], child[1]
     return (a in father and b in mother) or (a in mother and b in father)
@@ -70,8 +119,16 @@ def analyze_variant(family: Family, variant: FamilyVariant) -> list[FamilyRow]:
         child_gt = variant.genotypes.get(child.sample_id)
         father_gt = variant.genotypes.get(child.father_id)
         mother_gt = variant.genotypes.get(child.mother_id)
-        state = inheritance(child_gt, father_gt, mother_gt, variant.key.chrom)
-        consistent = mendelian_consistent(child_gt, father_gt, mother_gt, variant.key.chrom)
+        state = inheritance(
+            child_gt, father_gt, mother_gt, variant.key.chrom,
+            child_sex=child.sex, father_sex=family.members[child.father_id].sex,
+            mother_sex=family.members[child.mother_id].sex,
+        )
+        consistent = mendelian_consistent(
+            child_gt, father_gt, mother_gt, variant.key.chrom,
+            child_sex=child.sex, father_sex=family.members[child.father_id].sex,
+            mother_sex=family.members[child.mother_id].sex,
+        )
         rows.append(FamilyRow(
             family_id=family.family_id,
             child=child.sample_id,

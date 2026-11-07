@@ -80,14 +80,15 @@ Remaining:
 - Calibrate the MSI-H threshold (default 10% unstable sites).
 Then: report `match`/`divergent` with a research-use note.
 
-### M7-2: LOH/CNV
+### M7-2b: LOH
 Data acquired: COLO829 copy-number segments
-(`data/cnv/COLO829/copynumber/`).
+(`data/cnv/COLO829/copynumber/`). CNV segment concordance is implemented
+(`--cnv-segments/--cnv-truth`).
 Remaining:
-- FACETS/CNVkit segment output from a real tumor-normal run.
-- Expected LOH/CNV calls for the run.
-Then: verify segment counts/ploidy/LOH regions against the truth set; keep the
-no-drug-recommendation rule.
+- A real FACETS/CNVkit segment file with allele-specific data (BAF/LOH).
+- Expected LOH calls for the run.
+Then: verify LOH regions against the truth set; keep the no-drug-recommendation
+rule. LOH remains `not_verified` until then.
 
 ### M7-3: TMB band
 Data acquired: SEQC2 truth set + callable BED; TMB computed at 15.87 mut/Mb.

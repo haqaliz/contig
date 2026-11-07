@@ -198,6 +198,7 @@ wrap-up and remaining evidence gates are in
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Phased plan from validation to MVP and beyond |
 | [docs/product/PRODUCT_SPEC.md](docs/product/PRODUCT_SPEC.md) | Product surface, flows, and behavior |
 | [docs/technical/ARCHITECTURE.md](docs/technical/ARCHITECTURE.md) | The agentic execution/verification system design |
+| [docs/validation/DESIGN_PARTNER_KIT.md](docs/validation/DESIGN_PARTNER_KIT.md) | The design-partner validation protocol, scorecard, and decision gate |
 | [docs/business/](docs/business/) | Market analysis, business model, go-to-market |
 
 > Some documents are placeholders being filled in during the validation phase.

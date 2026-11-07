@@ -190,8 +190,9 @@ each row — without Contig claiming what is pathogenic.
 
 ## M2 — Coverage & interpretation-readiness workbench
 
-**Status:** v1 implemented 2026-11-07 — `contig readiness`, with PRD and task plan
-in `docs/planning/readiness-workbench/`.
+**Status:** v1 implemented 2026-11-08 — `contig readiness` (depth TSV or
+BAM/CRAM via samtools), with PRD and task plan in
+`docs/planning/readiness-workbench/`.
 
 **Goal.** Show whether the data can support interpretation at all: per-gene and
 per-exon coverage, target uniformity, homology/pseudogene caveats, sample
@@ -466,10 +467,10 @@ the existing approval gate.
 
 ## M6 — Family analysis (trio / carrier / couple)
 
-**Status:** v1 implemented 2026-11-07 — `contig family` (inheritance, Mendelian
-consistency, de novo candidates, concordance), with PRD and task plan in
-`docs/planning/family-trio/`. Carrier/couple views and X-linked rules remain
-follow-ups.
+**Status:** v1 implemented 2026-11-08 — `contig family` (inheritance,
+autosomal + basic X/Y/MT Mendelian consistency, de novo candidates,
+concordance), with PRD and task plan in `docs/planning/family-trio/`.
+Carrier/couple views and multi-family support remain follow-ups.
 
 **Goal.** Support research-use family analysis: inheritance-aware filtering,
 Mendelian consistency, de novo candidates, carrier status, and couple

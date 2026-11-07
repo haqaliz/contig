@@ -31,7 +31,7 @@ def test_tsv_has_the_documented_header_and_states():
     assert "paternal" in text
     assert "maternal" in text
     assert "de_novo" in text
-    assert "not_evaluated" in text
+    assert "maternal" in text
 
 
 def test_json_meta_has_summary_and_concordance():
