@@ -596,6 +596,11 @@ recommendations.
 
 ## M8 — Cohort / federated frequency layer (later)
 
+**Status:** local-only v1 implemented 2026-11-08 — `contig cohort-build` /
+`cohort-query`, with PRD and task plan in `docs/planning/local-cohort/`. The
+federated/cross-lab layer remains gated on multi-lab demand, consent, privacy,
+and legal review.
+
 **Goal.** Give labs cohort context — "this variant has been seen N times in your
 lab / across participating labs" — without centralizing raw data, by default.
 

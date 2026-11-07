@@ -49,6 +49,12 @@ All notable changes to Contig are recorded here. The format follows
   a configurable relative tolerance, and records MSI/LOH/CNV as `not_verified`
   with the reason. `--coding-only` filters to coding consequences. No NCCN/drug/
   treatment recommendation. MSI/LOH/CNV verification is a follow-up.
+- **Local cohort frequency layer (M8 v1):** `contig cohort-build` aggregates
+  multiple M1 variant tables into a local-only cohort JSON with per-variant
+  seen-run counts/frequencies and per-gene summaries; `cohort-query` filters by
+  gene, variant, or minimum run count. No network, no sample IDs; `--anonymize`
+  hashes run labels and omits paths. Federated/cross-lab sharing remains a
+  separate consent/legal design.
 
 ## [1.0.0] - 2026-10-21
 
