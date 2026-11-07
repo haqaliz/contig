@@ -70,13 +70,14 @@ X-linked rules only if the partner needs them.
 
 ## M7 — biomarkers
 
-### M7-1: MSI
+### M7-1b: real MSI-H/MSS validation
 Data acquired: MSIsensor example tumor/normal BAMs + BAI, microsatellite sites,
-score/status list, and the GRCh38 TCGA baseline (`data/msi/`).
+example BED/output, score/status list, and the GRCh38 TCGA baseline
+(`data/msi/`). The caller seam is implemented: `contig biomarkers` parses an
+existing MSIsensor output or runs `msisensor msi` on tumor/normal BAMs.
 Remaining:
-- Build or install MSIsensor/MSIsensor-pro (OpenMP) or implement a small verified
-  caller seam.
-- Validate a known MSI-H/MSS pair and compare the score/status to the expected.
+- A known real MSI-H/MSS pair (not just the 2-site demo) and the expected status.
+- Calibrate the MSI-H threshold (default 10% unstable sites).
 Then: report `match`/`divergent` with a research-use note.
 
 ### M7-2: LOH/CNV

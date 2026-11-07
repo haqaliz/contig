@@ -35,6 +35,8 @@ OUT=/tmp/contig-research-smoke bash scripts/smoke_research_workbenches.sh
 | `seqc2/High-Confidence_Regions_v1.2.bed` | SEQC2 high-confidence regions | 16 MB | Public; cite SEQC2 |
 | `msi/example.tumor.bam` + `example.normal.bam` | MSIsensor tumor/normal example BAMs | 44 MB | Public example data; cite MSIsensor |
 | `msi/example.microsate.sites` | MSIsensor microsatellite sites | 238 B | Public example data |
+| `msi/example.bed` | MSIsensor target BED for the example BAMs | 514 KB | Public example data |
+| `msi/example.paired.output*` | MSIsensor example run output (2/2 somatic sites) | 1 KB | Derived by MSIsensor |
 | `msi/msi_score_and_status_list` | MSIsensor example score/status distribution | 1.1 KB | Public example data |
 | `msi/GRCh38.baseline_TCGA-v1.3.tsv` | MSIsensor TCGA baseline sites | 869 KB | Public; cite MSIsensor |
 | `cnv/COLO829/copynumber/*` | COLO829 copy-number segments | 2.9k rows | CC BY 4.0 (Zenodo) |

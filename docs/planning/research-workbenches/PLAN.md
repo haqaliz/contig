@@ -533,10 +533,10 @@ compatibility — all as evidence, not diagnosis.
 
 ## M7 — Oncology biomarker verification (MSI / TMB / LOH / CNV)
 
-**Status:** v1 implemented 2026-11-07 — `contig biomarkers` verifies TMB against
-a callable BED and records MSI/LOH/CNV as `not_verified`; PRD and task plan in
-`docs/planning/biomarker-verification/`. MSI/LOH/CNV callers and reference data
-remain follow-ups.
+**Status:** v1 implemented 2026-11-08 — `contig biomarkers` verifies TMB against
+a callable BED, parses or runs MSIsensor for MSI, and records LOH/CNV as
+`not_verified`; PRD and task plan in `docs/planning/biomarker-verification/`.
+Real MSI-H/MSS calibration and a LOH/CNV segment verifier remain follow-ups.
 
 **Goal.** Verify that the somatic pipeline's oncology biomarkers were computed
 correctly and reproducibly, and surface them with provenance — no drug

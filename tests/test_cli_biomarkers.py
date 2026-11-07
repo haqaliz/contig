@@ -22,6 +22,7 @@ def test_help_lists_options():
     assert "--vcf" in result.output
     assert "--callable-bed" in result.output
     assert "--reported-tmb" in result.output
+    assert "--msi-output" in result.output
 
 
 def test_writes_tsv_and_summary(tmp_path):
@@ -48,6 +49,29 @@ def test_reported_tmb_match(tmp_path):
     result = _invoke(["--vcf", VCF, "--callable-bed", BED, "--reported-tmb", "5.5", "--out", str(out)])
     assert result.exit_code == 0, result.output
     assert "match" in out.read_text()
+
+
+def test_msi_output_is_parsed_and_compared(tmp_path):
+    msi_output = FIX / "msisensor.output"
+    out = tmp_path / "biomarkers.tsv"
+    result = _invoke([
+        "--vcf", VCF, "--callable-bed", BED, "--msi-output", str(msi_output),
+        "--reported-msi", "MSI", "--out", str(out),
+    ])
+    assert result.exit_code == 0, result.output
+    text = out.read_text()
+    assert "100.00" in text
+    assert "match" in text
+
+
+def test_msi_divergent_status(tmp_path):
+    out = tmp_path / "biomarkers.tsv"
+    result = _invoke([
+        "--vcf", VCF, "--callable-bed", BED, "--msi-output", str(FIX / "msisensor.output"),
+        "--reported-msi", "MSS", "--out", str(out),
+    ])
+    assert result.exit_code == 0, result.output
+    assert "divergent" in out.read_text()
 
 
 def test_missing_vcf_exits_nonzero():

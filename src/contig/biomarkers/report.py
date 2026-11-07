@@ -12,6 +12,7 @@ from contig.biomarkers.models import (
     BiomarkerReport,
     SourceProvenance,
 )
+from contig.biomarkers.msi import MsiResult, msi_status
 from contig.biomarkers.tmb import compute_tmb
 from contig.models import sha256_file
 
@@ -53,6 +54,7 @@ def build_report(
     reported_loh: str | None = None,
     reported_cnv: str | None = None,
     coding_only: bool = False,
+    msi_result: MsiResult | None = None,
 ) -> BiomarkerReport:
     if not 0.0 <= tmb_tolerance <= 1.0:
         raise ValueError("tmb_tolerance must be between 0 and 1")
@@ -84,13 +86,23 @@ def build_report(
             ),
         ))
 
-    entries.extend([
-        BiomarkerEntry(
+    if msi_result:
+        entries.append(BiomarkerEntry(
+            name="MSI",
+            value=f"{msi_result.score:.2f}",
+            unit="% unstable sites",
+            status=msi_status(msi_result.status, reported_msi),
+            detail=msi_result.detail,
+        ))
+    else:
+        entries.append(BiomarkerEntry(
             name="MSI",
             value=reported_msi or "",
             status="not_verified",
-            detail="no independent MSI caller or truth set in v1",
-        ),
+            detail="no independent MSI caller or truth set attached",
+        ))
+
+    entries.extend([
         BiomarkerEntry(
             name="LOH",
             value=reported_loh or "",
@@ -105,13 +117,25 @@ def build_report(
         ),
     ])
 
+    sources = [
+        _source("vcf", vcf_path, f"{result['records']} records"),
+        _source("callable_bed", bed_path, f"{result['callable_mb']:.3f} Mb callable"),
+    ]
+    if msi_result:
+        for kind, path in (
+            ("msi_output", msi_result.output_path),
+            ("msi_tumor_bam", msi_result.tumor_bam),
+            ("msi_normal_bam", msi_result.normal_bam),
+            ("msi_sites", msi_result.sites),
+            ("msi_bed", msi_result.bed),
+        ):
+            if path and Path(path).is_file():
+                sources.append(_source(kind, path, "MSI verification input"))
     meta = BiomarkerMeta(
-        sources=[
-            _source("vcf", vcf_path, f"{result['records']} records"),
-            _source("callable_bed", bed_path, f"{result['callable_mb']:.3f} Mb callable"),
-        ],
+        sources=sources,
         definition=str(result["definition"]),
         tolerance=tmb_tolerance,
+        msi_threshold=msi_result.threshold if msi_result else None,
         contig_version=_contig_version(),
         notes=[
             f"{result['outside_count']} PASS variant(s) outside the callable BED",

@@ -90,7 +90,7 @@ if [[ ! -d "$DATA/cnv/COLO829" ]]; then
 fi
 
 MSI='https://raw.githubusercontent.com/mskcc/msisensor/master/test'
-for f in example.tumor.bam example.tumor.bam.bai example.normal.bam example.normal.bam.bai example.microsate.sites msi_score_only_list msi_score_and_status_list run.sh; do
+for f in example.tumor.bam example.tumor.bam.bai example.normal.bam example.normal.bam.bai example.microsate.sites example.bed msi_score_only_list msi_score_and_status_list run.sh; do
   get "$MSI/$f" "$DATA/msi/$f"
 done
 get 'https://raw.githubusercontent.com/xjtu-omics/msisensor-pro/master/data/GRCh38.baseline_TCGA-v1.3.tsv' "$DATA/msi/GRCh38.baseline_TCGA-v1.3.tsv"

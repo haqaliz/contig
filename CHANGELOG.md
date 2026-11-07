@@ -45,10 +45,13 @@ All notable changes to Contig are recorded here. The format follows
   same-genotype/opposite-homozygote concordance with a possible-swap flag.
   Autosomal only in v1; X/Y/MT are `not_evaluated`. Research-use only.
 - **Oncology biomarker verification (M7, v1):** `contig biomarkers` computes TMB
-  from PASS variants in a required callable BED, compares a reported TMB within
-  a configurable relative tolerance, and records MSI/LOH/CNV as `not_verified`
-  with the reason. `--coding-only` filters to coding consequences. No NCCN/drug/
-  treatment recommendation. MSI/LOH/CNV verification is a follow-up.
+  from PASS variants in a required callable BED and compares a reported TMB
+  within a configurable relative tolerance. MSI can be parsed from an existing
+  MSIsensor output or run from tumor/normal BAMs (`--msi-output` /
+  `--msi-tumor-bam` + `--msi-normal-bam` + sites/BED), with a configurable
+  MSI-H threshold and reported-status comparison. LOH/CNV remain
+  `not_verified`. `--coding-only` filters to coding consequences. No NCCN/drug/
+  treatment recommendation.
 - **Local cohort frequency layer (M8 v1):** `contig cohort-build` aggregates
   multiple M1 variant tables into a local-only cohort JSON with per-variant
   seen-run counts/frequencies and per-gene summaries; `cohort-query` filters by

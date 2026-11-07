@@ -583,6 +583,15 @@
       "note": "MSI tumor/normal example BAMs, sites, scores, TCGA baseline"
     },
     {
+      "path": "data/msi/example.bed",
+      "bytes": 526206,
+      "sha256": "f88fee1f1ec4cff6588086274984bd2de82ee3f70f71ba06501c01a50b294009",
+      "source_url": "https://github.com/mskcc/msisensor/tree/master/test",
+      "license": "Public example data; cite MSIsensor",
+      "milestone": "M7",
+      "note": "MSI tumor/normal example BAMs, sites, scores, TCGA baseline"
+    },
+    {
       "path": "data/msi/example.microsate.sites",
       "bytes": 238,
       "sha256": "31dda45877f3938bbf44c5b9eec0f166373037ca91b1e0465e9afd20fa81b065",
@@ -604,6 +613,42 @@
       "path": "data/msi/example.normal.bam.bai",
       "bytes": 10856,
       "sha256": "82762169439a4818e728137f629f93fcbfc4de05f9fb34498dc473e1b02efeaf",
+      "source_url": "https://github.com/mskcc/msisensor/tree/master/test",
+      "license": "Public example data; cite MSIsensor",
+      "milestone": "M7",
+      "note": "MSI tumor/normal example BAMs, sites, scores, TCGA baseline"
+    },
+    {
+      "path": "data/msi/example.paired.output",
+      "bytes": 59,
+      "sha256": "badd9d969e15d84bd94082916edd517dc15f2bf86d10c9ab8d521d3420fa3a50",
+      "source_url": "https://github.com/mskcc/msisensor/tree/master/test",
+      "license": "Public example data; cite MSIsensor",
+      "milestone": "M7",
+      "note": "MSI tumor/normal example BAMs, sites, scores, TCGA baseline"
+    },
+    {
+      "path": "data/msi/example.paired.output_dis",
+      "bytes": 884,
+      "sha256": "bb68ceefc6b080cd9228f4cb830a6aaec6173d53bd1a15c4aa2a1b6ef6b8d4a8",
+      "source_url": "https://github.com/mskcc/msisensor/tree/master/test",
+      "license": "Public example data; cite MSIsensor",
+      "milestone": "M7",
+      "note": "MSI tumor/normal example BAMs, sites, scores, TCGA baseline"
+    },
+    {
+      "path": "data/msi/example.paired.output_germline",
+      "bytes": 68,
+      "sha256": "77e5ed19db5364d860a225a724bbfc6676716557867815de059babbd276eafb3",
+      "source_url": "https://github.com/mskcc/msisensor/tree/master/test",
+      "license": "Public example data; cite MSIsensor",
+      "milestone": "M7",
+      "note": "MSI tumor/normal example BAMs, sites, scores, TCGA baseline"
+    },
+    {
+      "path": "data/msi/example.paired.output_somatic",
+      "bytes": 116,
+      "sha256": "353f4f88856939d4880fb126ce2f5a3210840dc3bd17d6ac7e250934192d80df",
       "source_url": "https://github.com/mskcc/msisensor/tree/master/test",
       "license": "Public example data; cite MSIsensor",
       "milestone": "M7",
