@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from dataclasses import asdict
 from importlib.metadata import PackageNotFoundError, version as pkg_version
 from pathlib import Path
 
 from contig.models import sha256_file
 from contig.readiness.caveats import load_caveats
-from contig.readiness.depth import load_depth
+from contig.readiness.depth import load_depth, run_samtools_depth
 from contig.readiness.evaluate import evaluate_targets
 from contig.readiness.models import (
     ReadinessMeta,
@@ -44,29 +45,58 @@ def _source(kind: str, path: str | Path, note: str) -> SourceProvenance:
 
 
 def build_readiness(
-    depth: str | Path,
+    depth: str | Path | None = None,
     *,
+    bam: str | Path | None = None,
+    reference: str | Path | None = None,
+    samtools_bin: str = "samtools",
     bed: str | Path | None = None,
     gtf: str | Path | None = None,
     genes: set[str] | list[str] = (),
     caveats: str | Path | None = None,
     thresholds: ReadinessThresholds | None = None,
 ) -> ReadinessTable:
+    if (depth is None) == (bam is None):
+        raise ValueError("provide exactly one of --depth or --bam")
     if (bed is None) == (gtf is None):
         raise ValueError("provide exactly one of --bed or --gtf")
+    if bam is not None and bed is None:
+        raise ValueError("--bam requires --bed (samtools depth needs target intervals)")
     thresholds = thresholds or ReadinessThresholds()
 
-    depths, depth_stats = load_depth(depth)
-    sources = [
-        _source(
-            "depth",
-            depth,
-            f"{depth_stats.positions} positions"
-            + (f"; {depth_stats.skipped} malformed lines skipped" if depth_stats.skipped else "")
-            + (f"; {depth_stats.duplicates} duplicate positions" if depth_stats.duplicates else ""),
-        )
-    ]
     notes: list[str] = []
+    if bam is not None:
+        with tempfile.TemporaryDirectory(prefix="contig-depth-") as tmp:
+            depth_path = Path(tmp) / "depth.tsv"
+            run_samtools_depth(
+                bam, bed, depth_path,
+                reference=reference,
+                samtools_bin=samtools_bin,
+            )
+            depths, depth_stats = load_depth(depth_path)
+        sources = [
+            _source("bam", bam, "samtools depth -a -b")
+        ]
+        if reference is not None:
+            sources.append(_source("reference", reference, "samtools depth reference"))
+        notes.append("depth computed with samtools depth")
+    else:
+        depths, depth_stats = load_depth(depth)
+        sources = [
+            _source(
+                "depth",
+                depth,
+                f"{depth_stats.positions} positions"
+                + (f"; {depth_stats.skipped} malformed lines skipped" if depth_stats.skipped else "")
+                + (f"; {depth_stats.duplicates} duplicate positions" if depth_stats.duplicates else ""),
+            )
+        ]
+    sources[0].note = (
+        (sources[0].note or "")
+        + f"; {depth_stats.positions} positions"
+        + (f"; {depth_stats.skipped} malformed lines skipped" if depth_stats.skipped else "")
+        + (f"; {depth_stats.duplicates} duplicate positions" if depth_stats.duplicates else "")
+    ).strip("; ")
 
     if bed is not None:
         targets = load_bed_targets(bed)

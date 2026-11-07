@@ -43,15 +43,31 @@ All notable changes to Contig are recorded here. The format follows
   reports per-child inheritance (paternal/maternal/biparental/de novo/not
   carried), autosomal Mendelian consistency, de novo candidates, and pairwise
   same-genotype/opposite-homozygote concordance with a possible-swap flag.
-  Autosomal only in v1; X/Y/MT are `not_evaluated`. Research-use only.
+  Basic sex-aware X/Y/MT rules apply when the PED supplies sex. Research-use
+  only.
 - **Oncology biomarker verification (M7, v1):** `contig biomarkers` computes TMB
   from PASS variants in a required callable BED and compares a reported TMB
   within a configurable relative tolerance. MSI can be parsed from an existing
   MSIsensor output or run from tumor/normal BAMs (`--msi-output` /
   `--msi-tumor-bam` + `--msi-normal-bam` + sites/BED), with a configurable
-  MSI-H threshold and reported-status comparison. LOH/CNV remain
-  `not_verified`. `--coding-only` filters to coding consequences. No NCCN/drug/
-  treatment recommendation.
+  MSI-H threshold and reported-status comparison. CNV segment concordance can be
+  verified with `--cnv-segments/--cnv-truth`; LOH remains `not_verified`.
+  `--coding-only` filters to coding consequences. No NCCN/drug/treatment
+  recommendation.
+- **Readiness from BAM/CRAM:** `contig readiness --bam` runs `samtools depth`
+  behind an injectable seam (optional `--reference` for CRAM); the depth TSV
+  path remains supported.
+- **gnomAD v4 API:** `contig variants --gnomad-api` fetches per-site frequencies
+  with an optional local cache, capped at 1000 sites; a frequency TSV remains the
+  bulk path.
+- **Report diff:** `contig report-diff A.json B.json` compares report sidecars
+  (spec, inputs, hashes, notes) as text or JSON.
+- **X/Y/MT family rules:** `contig family` now uses basic sex-aware inheritance
+  and Mendelian checks for X/Y/MT when the PED supplies sex; unknown sex stays
+  `not_evaluated`.
+- **CNV segment verification:** `contig biomarkers --cnv-segments/--cnv-truth`
+  compares overlap-weighted segment values and reports
+  `match`/`divergent`/`unverified`; LOH remains `not_verified`.
 - **Local cohort frequency layer (M8 v1):** `contig cohort-build` aggregates
   multiple M1 variant tables into a local-only cohort JSON with per-variant
   seen-run counts/frequencies and per-gene summaries; `cohort-query` filters by

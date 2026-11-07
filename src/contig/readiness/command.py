@@ -22,8 +22,11 @@ def _genes(value: str | None) -> set[str]:
 
 
 def run_readiness(
-    depth: str,
+    depth: str | None = None,
     *,
+    bam: str | None = None,
+    reference: str | None = None,
+    samtools_bin: str = "samtools",
     bed: str | None = None,
     gtf: str | None = None,
     genes: str | None = None,
@@ -43,6 +46,9 @@ def run_readiness(
     typer.echo(RESEARCH_USE_NOTICE, err=True)
     table = build_readiness(
         depth,
+        bam=bam,
+        reference=reference,
+        samtools_bin=samtools_bin,
         bed=bed,
         gtf=gtf,
         genes=_genes(genes),

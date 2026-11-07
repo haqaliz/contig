@@ -74,6 +74,29 @@ def test_msi_divergent_status(tmp_path):
     assert "divergent" in out.read_text()
 
 
+def test_cnv_match(tmp_path):
+    out = tmp_path / "biomarkers.tsv"
+    result = _invoke([
+        "--vcf", VCF, "--callable-bed", BED,
+        "--cnv-segments", str(FIX / "cnv_call_match.tsv"),
+        "--cnv-truth", str(FIX / "cnv_truth.tsv"),
+        "--out", str(out),
+    ])
+    assert result.exit_code == 0, result.output
+    text = out.read_text()
+    assert "100.00%" in text
+    assert "match" in text
+
+
+def test_cnv_requires_both_inputs():
+    result = _invoke([
+        "--vcf", VCF, "--callable-bed", BED,
+        "--cnv-segments", str(FIX / "cnv_call_match.tsv"),
+    ])
+    assert result.exit_code == 1
+    assert "both" in result.output.lower()
+
+
 def test_missing_vcf_exits_nonzero():
     result = _invoke(["--vcf", str(FIX / "missing.vcf"), "--callable-bed", BED])
     assert result.exit_code == 1

@@ -6,6 +6,8 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from contig.cli import app
+from contig.reporting.build import build_report, write_report
+from contig.reporting.models import ReportSpec
 
 FIX = Path(__file__).parent / "fixtures" / "reporting"
 RUNS = str(FIX / "runs")
@@ -76,3 +78,20 @@ def test_audit_template_omits_variant_evidence(tmp_path):
     assert result.exit_code == 0, result.output
     assert "Variant evidence" not in out.read_text()
     assert "Provenance" in out.read_text()
+
+
+def test_report_diff_command(tmp_path):
+    one = tmp_path / "one"
+    two = tmp_path / "two"
+    html, meta = build_report(RUNS, "r1", ReportSpec(title="One"), variants_path=VARIANTS)
+    write_report(html, meta, one.with_suffix(".html"), one.with_suffix(".json"))
+    html, meta = build_report(RUNS, "r1", ReportSpec(title="Two"), variants_path=VARIANTS)
+    write_report(html, meta, two.with_suffix(".html"), two.with_suffix(".json"))
+    result = CliRunner().invoke(app, ["report-diff", str(one.with_suffix(".json")), str(two.with_suffix(".json"))])
+    assert result.exit_code == 0, result.output
+    assert "spec.title" in result.output
+    json_result = CliRunner().invoke(app, [
+        "report-diff", str(one.with_suffix(".json")), str(two.with_suffix(".json")), "--json",
+    ])
+    assert json_result.exit_code == 0
+    assert '"same": false' in json_result.output

@@ -72,3 +72,8 @@ def test_canonical_bed_dedupes_rows():
         ("1", 10, 20, "B", "", ""),
     ]
     assert canonical_bed(rows) == "1\t0\t10\tA\t\t\n1\t10\t20\tB\t\t\n"
+
+
+def test_gene_build_keeps_a_version_label():
+    panel = build_from_genes(["BRCA1"], GTF, name="Versioned", version="2")
+    assert panel.meta.version == "2"

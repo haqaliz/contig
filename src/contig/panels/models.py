@@ -13,6 +13,7 @@ class PanelMeta(BaseModel):
     name: str
     build: str
     source: str
+    version: str = "1"
     genes: list[str] = Field(default_factory=list)
     transcripts: list[str] = Field(default_factory=list)
     method: str = ""

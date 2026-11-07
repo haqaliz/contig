@@ -41,6 +41,11 @@ def test_inheritance_classes():
     assert inheritance("0/0", "0/1", "0/0", "1") == "not_carried"
     assert inheritance("0/1", "0/0", "0/0", "1") == "de_novo"
     assert inheritance("0/1", "0/1", "0/1", "X") == "not_evaluated"
+    assert inheritance("0/1", "0/0", "0/1", "X", child_sex="1") == "maternal"
+    assert inheritance("0/1", "0/1", "0/0", "X", child_sex="1") == "de_novo"
+    assert inheritance("0/1", "0/1", "0/1", "X", child_sex="2") == "biparental"
+    assert inheritance("0/1", "0/1", "0/0", "Y", child_sex="1") == "paternal"
+    assert inheritance("0/1", "0/0", "0/1", "MT") == "maternal"
 
 
 def test_mendelian_consistency():
@@ -49,6 +54,9 @@ def test_mendelian_consistency():
     assert mendelian_consistent("1/1", "0/1", "0/0", "1") is False
     assert mendelian_consistent("0/1", "0/0", "0/0", "1") is False
     assert mendelian_consistent("0/1", "0/0", "0/1", "X") is None
+    assert mendelian_consistent("0/1", "0/0", "0/1", "X", child_sex="1") is True
+    assert mendelian_consistent("0/1", "0/0", "0/0", "X", child_sex="1") is False
+    assert mendelian_consistent("0/1", "0/1", "0/0", "Y", child_sex="1") is True
 
 
 def test_analyze_variant_rows_and_summary():
@@ -56,15 +64,15 @@ def test_analyze_variant_rows_and_summary():
     assert len(rows) == 8
     summary = summarize(rows)
     assert summary["rows"] == 8
-    assert summary["evaluated"] == 7
+    assert summary["evaluated"] == 8
     assert summary["de_novo_candidates"] == 1
     assert summary["mendelian_inconsistent"] == 1
-    assert abs(summary["mendelian_error_rate"] - 1 / 7) < 1e-9
+    assert abs(summary["mendelian_error_rate"] - 1 / 8) < 1e-9
     assert summary["inheritance_counts"]["paternal"] == 2
-    assert summary["inheritance_counts"]["maternal"] == 1
+    assert summary["inheritance_counts"]["maternal"] == 2
     assert summary["inheritance_counts"]["biparental"] == 2
     assert summary["inheritance_counts"]["de_novo"] == 1
-    assert summary["inheritance_counts"]["not_evaluated"] == 1
+    assert summary["inheritance_counts"].get("not_evaluated", 0) == 0
 
 
 def test_de_novo_is_not_counted_as_a_mendelian_error():
