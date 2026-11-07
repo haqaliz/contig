@@ -20,6 +20,12 @@ All notable changes to Contig are recorded here. The format follows
   deterministic `ready` / `caution` / `not-interpretable` state. An optional
   homology/pseudogene BED downgrades overlapping targets to `caution` with the
   caveat named. Research-use only; no clinical guarantee.
+- **Research report builder (M4):** `contig report` builds a self-contained HTML
+  research report from a run bundle, optionally attaching the M1 variant table
+  and M2 readiness table, with a JSON narrative spec and `publication` /
+  `internal` / `audit` templates. `contig report-check` recomputes input hashes
+  and reports current/stale/missing. The sidecar records source paths, SHA-256,
+  spec, Contig version, and the HTML hash. No clinical claims.
 
 ## [1.0.0] - 2026-10-21
 

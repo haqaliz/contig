@@ -247,6 +247,8 @@ from contig.workspace import (
 )
 from contig.variants.command import run_variants as run_variant_workbench
 from contig.readiness.command import run_readiness as run_readiness_workbench
+from contig.reporting.command import run_report as run_report_builder
+from contig.reporting.command import run_report_check as run_report_staleness_check
 
 app = typer.Typer(help="Contig: agentic bioinformatics analyst.")
 
@@ -4989,6 +4991,52 @@ def repair_stats(
         "  note: over real runs -- not `heal-guard`'s recovery_rate,"
         " which scores synthetic scenarios."
     )
+
+
+@app.command()
+def report(
+    run_id: str = typer.Argument(..., help="The run to report on."),
+    runs_dir: str = typer.Option("runs", "--runs-dir", help="Directory holding run bundles."),
+    variants: str = typer.Option(None, "--variants", help="M1 variants JSON from `contig variants --json`."),
+    readiness: str = typer.Option(None, "--readiness", help="M2 readiness JSON from `contig readiness --json`."),
+    spec: str = typer.Option(None, "--spec", help="Narrative/template JSON spec."),
+    template: str = typer.Option(None, "--template", help="publication, internal, or audit."),
+    out: str = typer.Option(None, "--out", help="HTML output path (default: runs/<id>/report.html)."),
+    meta: str = typer.Option(None, "--meta", help="Sidecar JSON path (default: runs/<id>/report.json)."),
+) -> None:
+    """Build a self-contained research report from a run bundle.
+
+    Optionally attaches the M1 variant table and M2 readiness table. Every
+    attached input and its SHA-256 is recorded in the sidecar; use
+    `contig report-check` to detect stale inputs. Research-use only: no
+    diagnosis, clinical classification, or treatment recommendation.
+    """
+    try:
+        run_report_builder(
+            run_id,
+            runs_dir=runs_dir,
+            variants=variants,
+            readiness=readiness,
+            spec_path=spec,
+            template=template,
+            out=out,
+            meta_path=meta,
+        )
+    except (FileNotFoundError, ValueError, OSError, RunNotFoundError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="report-check")
+def report_check(
+    meta: str = typer.Argument(..., help="The report sidecar JSON to check."),
+) -> None:
+    """Check whether a report's inputs are still current (by SHA-256)."""
+    try:
+        run_report_staleness_check(meta)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
 
 
 @app.command()
