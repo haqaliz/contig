@@ -6,6 +6,15 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Research-use variant workbench (M1):** `contig variants` joins a VCF to
+  ClinVar, Iranome, and a population-frequency TSV, applies deterministic filters
+  (gene, consequence, AF, ClinVar significance, PASS, depth, VAF, zygosity,
+  region), and exports a reproducible TSV/JSON table with source checksums and a
+  replayable filter spec. No ACMG classification or clinical claim is emitted;
+  ClinVar significance is attributed, never re-owned. Iranome is GRCh37 and is
+  skipped with a recorded note on other builds.
+
 ## [1.0.0] - 2026-10-21
 
 Feature-complete release. 40 of the 87 capability-backlog items are built; the

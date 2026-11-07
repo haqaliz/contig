@@ -1,0 +1,606 @@
+{
+  "generated": "2026-11-07",
+  "note": "Research-use starter data; see docs/planning/beyond-genomist/DATA_SOURCES.md",
+  "files": [
+    {
+      "path": "data/1000g/integrated_call_samples_v3.20130502.ALL.panel",
+      "bytes": 55156,
+      "sha256": "b4023dc6ee2d62ee89c8d4d347db4d348e65518d66d346574cdae7a4bbd76858",
+      "source_url": "https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502/",
+      "license": "Open (IGSR)",
+      "milestone": "M6",
+      "note": "1000 Genomes sample panel"
+    },
+    {
+      "path": "data/civic/nightly-VariantSummaries.tsv",
+      "bytes": 598786,
+      "sha256": "003678a5b64fbac3a168e4d01e759c7b29e0f3c7843e485de5032f50359cdb7f",
+      "source_url": "https://civicdb.org/releases",
+      "license": "CC0",
+      "milestone": "M1/M7",
+      "note": "CIViC nightly release"
+    },
+    {
+      "path": "data/civic/nightly-civic_accepted.vcf",
+      "bytes": 1456131,
+      "sha256": "fe0ff32a0dde6d17f2019465264bf3445e4107788af00e1fbd5d98ccd59930f0",
+      "source_url": "https://civicdb.org/releases",
+      "license": "CC0",
+      "milestone": "M1/M7",
+      "note": "CIViC nightly release",
+      "vcf_records": 888
+    },
+    {
+      "path": "data/clingen/ClinGen_haploinsufficiency_gene_GRCh38.bed",
+      "bytes": 49627,
+      "sha256": "c99ca74d44611f5e267a4138a716d79cb824860926d488e391373c3d5cbd0a9c",
+      "source_url": "https://search.clinicalgenome.org/kb/downloads",
+      "license": "CC0",
+      "milestone": "M2/M7",
+      "note": "ClinGen dosage sensitivity"
+    },
+    {
+      "path": "data/clingen/ClinGen_triplosensitivity_gene_GRCh38.bed",
+      "bytes": 42436,
+      "sha256": "346e0d6e586ba687f12b0b8e4b8e77e3ce6f6419c7be6f643ac9271feaa041b7",
+      "source_url": "https://search.clinicalgenome.org/kb/downloads",
+      "license": "CC0",
+      "milestone": "M2/M7",
+      "note": "ClinGen dosage sensitivity"
+    },
+    {
+      "path": "data/clinvar/clinvar.vcf.gz",
+      "bytes": 201346922,
+      "sha256": "0f0f848b8c23c3d994f572c91d84674aec5d8206269aec6605dc09ca88b4a3b4",
+      "source_url": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/",
+      "license": "Public domain (US)",
+      "milestone": "M1",
+      "note": "ClinVar GRCh38 VCF",
+      "vcf_records": 4616247
+    },
+    {
+      "path": "data/clinvar/clinvar.vcf.gz.tbi",
+      "bytes": 612003,
+      "sha256": "c40894dc0c880d1318ae60386b66185cb6e80fccbe7dfea2b9766cd4861fb396",
+      "source_url": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/",
+      "license": "Public domain (US)",
+      "milestone": "M1",
+      "note": "ClinVar GRCh38 VCF"
+    },
+    {
+      "path": "data/ensembl/Homo_sapiens.GRCh38.113.gtf.gz",
+      "bytes": 64141785,
+      "sha256": "62f1709b40e083ce9d4cdc64a86b5ffec2c5d5371434bb7095c74dc89079c466",
+      "source_url": "https://ftp.ensembl.org/pub/release-113/gtf/homo_sapiens/",
+      "license": "Open (Ensembl/GENCODE)",
+      "milestone": "M2",
+      "note": "GENCODE/Ensembl GTF"
+    },
+    {
+      "path": "data/ensembl/homo_sapiens_incl_consequences-chr22.vcf.gz",
+      "bytes": 255717650,
+      "sha256": "80526e36a361a90fcd7eceb531e4ffe2dbbc068281bde1e29d665ec3d8c82b44",
+      "source_url": "https://ftp.ensembl.org/pub/release-113/variation/vcf/homo_sapiens/",
+      "license": "Open (Ensembl)",
+      "milestone": "M1",
+      "note": "VEP-consequence VCF (catalogue, not a sample)",
+      "vcf_records": 14912994
+    },
+    {
+      "path": "data/ensembl/homo_sapiens_incl_consequences-chr22.vcf.gz.csi",
+      "bytes": 31591,
+      "sha256": "9575fd19e9f3d80936faf1e22c4ed6ae3f5412540d7864176093bf1736ed88c8",
+      "source_url": "https://ftp.ensembl.org/pub/release-113/variation/vcf/homo_sapiens/",
+      "license": "Open (Ensembl)",
+      "milestone": "M1",
+      "note": "VEP-consequence VCF (catalogue, not a sample)"
+    },
+    {
+      "path": "data/giab/AshkenazimTrio.ped",
+      "bytes": 235,
+      "sha256": "5b1a90b80ac76b59573c45d477e8289a4494f724cef4cc05697ef20b29c1a7bc",
+      "source_url": "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/",
+      "license": "Public (NIST/GIAB)",
+      "milestone": "M2/M6",
+      "note": "GIAB truth set"
+    },
+    {
+      "path": "data/giab/HG002_GRCh38_1_22_v4.2.1_benchmark.vcf.gz",
+      "bytes": 156252944,
+      "sha256": "adb4d4a50048aa13353a06b84fcfcbca09a5d17525efaa4cea44f8822e81175c",
+      "source_url": "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/",
+      "license": "Public (NIST/GIAB)",
+      "milestone": "M2/M6",
+      "note": "GIAB truth set",
+      "vcf_records": 4048342
+    },
+    {
+      "path": "data/giab/HG002_GRCh38_1_22_v4.2.1_benchmark_noinconsistent.bed",
+      "bytes": 11494021,
+      "sha256": "fba9a57c36ec88e5d14ea3e259c8866c7935f4998d3ec0fa2d6c3962da5b5575",
+      "source_url": "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/",
+      "license": "Public (NIST/GIAB)",
+      "milestone": "M2/M6",
+      "note": "GIAB truth set"
+    },
+    {
+      "path": "data/giab/HG002_GRCh38_v5.0q_smvar.benchmark.bed",
+      "bytes": 685544,
+      "sha256": "ef7d898dd421ea357bb9db915894ab3e5c6c1689e36ccf619befda4bbf1cef5b",
+      "source_url": "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/",
+      "license": "Public (NIST/GIAB)",
+      "milestone": "M2/M6",
+      "note": "GIAB truth set"
+    },
+    {
+      "path": "data/giab/HG002_GRCh38_v5.0q_smvar.vcf.gz",
+      "bytes": 42067644,
+      "sha256": "c7f9d7a4781f1f0a8a42ec54b051d6b95db1935c5e12318bae219740f9c50dc8",
+      "source_url": "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/",
+      "license": "Public (NIST/GIAB)",
+      "milestone": "M2/M6",
+      "note": "GIAB truth set",
+      "vcf_records": 5945525
+    },
+    {
+      "path": "data/giab/HG002_GRCh38_v5.0q_smvar.vcf.gz.tbi",
+      "bytes": 1547524,
+      "sha256": "4d77f6eb74eebf676572c70d13a0b353e3e8c81468f250739c91ad1343102eb2",
+      "source_url": "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/",
+      "license": "Public (NIST/GIAB)",
+      "milestone": "M2/M6",
+      "note": "GIAB truth set"
+    },
+    {
+      "path": "data/giab/HG003_GRCh38_1_22_v4.2.1_benchmark.vcf.gz",
+      "bytes": 147212428,
+      "sha256": "a4f8fefa826f8d2c9457eacf6f4b2f6bfa29daef429d570ce04254c5e7b1121e",
+      "source_url": "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/",
+      "license": "Public (NIST/GIAB)",
+      "milestone": "M2/M6",
+      "note": "GIAB truth set",
+      "vcf_records": 4000097
+    },
+    {
+      "path": "data/giab/HG003_GRCh38_1_22_v4.2.1_benchmark_noinconsistent.bed",
+      "bytes": 13219856,
+      "sha256": "652afd3046705af3200f9c87c255fef11bb212dd76c75a19999c9b2df8a3180c",
+      "source_url": "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/",
+      "license": "Public (NIST/GIAB)",
+      "milestone": "M2/M6",
+      "note": "GIAB truth set"
+    },
+    {
+      "path": "data/giab/HG004_GRCh38_1_22_v4.2.1_benchmark.vcf.gz",
+      "bytes": 148948118,
+      "sha256": "13c113d93eb2884ebb97573cbe558554d3fb0a8748a6d2263cf4616312ac14ff",
+      "source_url": "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/",
+      "license": "Public (NIST/GIAB)",
+      "milestone": "M2/M6",
+      "note": "GIAB truth set",
+      "vcf_records": 4031346
+    },
+    {
+      "path": "data/giab/HG004_GRCh38_1_22_v4.2.1_benchmark.vcf.gz.tbi",
+      "bytes": 1653057,
+      "sha256": "05925a6b43cd6894b65a47a3b9612fee634d6a7164fdd02b5f4890f40e36cb9a",
+      "source_url": "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/",
+      "license": "Public (NIST/GIAB)",
+      "milestone": "M2/M6",
+      "note": "GIAB truth set"
+    },
+    {
+      "path": "data/giab/HG004_GRCh38_1_22_v4.2.1_benchmark_noinconsistent.bed",
+      "bytes": 13081043,
+      "sha256": "88d1c926fdc8abd9c39b3e9fe2af3fc43dd67d284690a3dc6127b369d96bccad",
+      "source_url": "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/",
+      "license": "Public (NIST/GIAB)",
+      "milestone": "M2/M6",
+      "note": "GIAB truth set"
+    },
+    {
+      "path": "data/homology/genomicSuperDups_hg38.txt.gz",
+      "bytes": 4202400,
+      "sha256": "3f4388ed3eb7462034e89c1f45314160bdb14558502092326063105c095061df",
+      "source_url": "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/genomicSuperDups.txt.gz",
+      "license": "Open (UCSC)",
+      "milestone": "M2",
+      "note": "Segmental duplications"
+    },
+    {
+      "path": "data/homology/homology_caveats_GRCh38.bed",
+      "bytes": 86182,
+      "sha256": "42a6d8a88d13647ea46f0418de99f475f40c945201eb056760c9d38f29bea493",
+      "source_url": "Derived from GENCODE GRCh38.113",
+      "license": "Derived; GENCODE terms",
+      "milestone": "M2",
+      "note": "SMN1/SMN2, PMS2/PMS2CL, HBA1/HBA2 caveat BED"
+    },
+    {
+      "path": "data/hpo/genes_to_phenotype.txt",
+      "bytes": 20821704,
+      "sha256": "507a17bff9c49e6329fbd88b1f91734fa7e9fdea5c06304044c0892eb6ab248c",
+      "source_url": "https://purl.obolibrary.org/obo/hp/hpoa/",
+      "license": "HPO license; cite",
+      "milestone": "M6",
+      "note": "HPO annotations"
+    },
+    {
+      "path": "data/hpo/phenotype.hpoa",
+      "bytes": 35816037,
+      "sha256": "e89aa39c8f97bf5a52c5d160f9250a603681d630ade8ec2679d84ac5aece1f72",
+      "source_url": "https://purl.obolibrary.org/obo/hp/hpoa/",
+      "license": "HPO license; cite",
+      "milestone": "M6",
+      "note": "HPO annotations"
+    },
+    {
+      "path": "data/iranome/iranome_panel.tsv",
+      "bytes": 3368610,
+      "sha256": "203375f0059227aa8bb5192acf4735257d2d2a6b33e4567de2e96b27e88b941d",
+      "source_url": "https://www.iranome.com/",
+      "license": "Free with citation (Iranome)",
+      "milestone": "M1",
+      "note": "Iranian allele frequencies; cite Fattahi 2019"
+    },
+    {
+      "path": "data/iranome/raw/ATM.json",
+      "bytes": 2831569,
+      "sha256": "7d2b4d627fcfafd78e4be099ffa70b0d64916d8d022ffa2d0e207df703ef2f71",
+      "source_url": "https://www.iranome.com/",
+      "license": "Free with citation (Iranome)",
+      "milestone": "M1",
+      "note": "Iranian allele frequencies; cite Fattahi 2019"
+    },
+    {
+      "path": "data/iranome/raw/BRCA1.json",
+      "bytes": 2527195,
+      "sha256": "6246e351a592a69acc1a1f63ab15bb118a56c19437a1c10be94feb632f5d3266",
+      "source_url": "https://www.iranome.com/",
+      "license": "Free with citation (Iranome)",
+      "milestone": "M1",
+      "note": "Iranian allele frequencies; cite Fattahi 2019"
+    },
+    {
+      "path": "data/iranome/raw/BRCA2.json",
+      "bytes": 1943704,
+      "sha256": "e8795d186bb40768d8bad8b9f6d68d9e283cb6264e0f2f43ec054cbbff686c15",
+      "source_url": "https://www.iranome.com/",
+      "license": "Free with citation (Iranome)",
+      "milestone": "M1",
+      "note": "Iranian allele frequencies; cite Fattahi 2019"
+    },
+    {
+      "path": "data/iranome/raw/CFTR.json",
+      "bytes": 2323863,
+      "sha256": "8fb801a3cc3a4f1b9ecf244b7d3bb60a988a8f40798d9cafbd81b665efad921c",
+      "source_url": "https://www.iranome.com/",
+      "license": "Free with citation (Iranome)",
+      "milestone": "M1",
+      "note": "Iranian allele frequencies; cite Fattahi 2019"
+    },
+    {
+      "path": "data/iranome/raw/CHEK2.json",
+      "bytes": 1895998,
+      "sha256": "c12a26311bdaf4f90598712f1eb21b8fbc21e85d46aef2f0765e562549feda85",
+      "source_url": "https://www.iranome.com/",
+      "license": "Free with citation (Iranome)",
+      "milestone": "M1",
+      "note": "Iranian allele frequencies; cite Fattahi 2019"
+    },
+    {
+      "path": "data/iranome/raw/EGFR.json",
+      "bytes": 4461281,
+      "sha256": "d11a52fffbac2da34843e9e3a1169aba75f6dae8610454044efdca0fc07b80cd",
+      "source_url": "https://www.iranome.com/",
+      "license": "Free with citation (Iranome)",
+      "milestone": "M1",
+      "note": "Iranian allele frequencies; cite Fattahi 2019"
+    },
+    {
+      "path": "data/iranome/raw/GJB2.json",
+      "bytes": 154106,
+      "sha256": "46c1b2b66b3370358aed8bab4a298811f20817b6f318b26032d8f4c22d917766",
+      "source_url": "https://www.iranome.com/",
+      "license": "Free with citation (Iranome)",
+      "milestone": "M1",
+      "note": "Iranian allele frequencies; cite Fattahi 2019"
+    },
+    {
+      "path": "data/iranome/raw/MLH1.json",
+      "bytes": 1656840,
+      "sha256": "e04c796edf991911fbacdc07f86809009ec85f1ca558069b7769650fdc440017",
+      "source_url": "https://www.iranome.com/",
+      "license": "Free with citation (Iranome)",
+      "milestone": "M1",
+      "note": "Iranian allele frequencies; cite Fattahi 2019"
+    },
+    {
+      "path": "data/iranome/raw/MSH2.json",
+      "bytes": 3324991,
+      "sha256": "aa632f1422a122fe754edbb19255ade90126d1df2acc1511ef56129bc55d9df4",
+      "source_url": "https://www.iranome.com/",
+      "license": "Free with citation (Iranome)",
+      "milestone": "M1",
+      "note": "Iranian allele frequencies; cite Fattahi 2019"
+    },
+    {
+      "path": "data/iranome/raw/MSH6.json",
+      "bytes": 1001681,
+      "sha256": "053c2426267ae05f049497d7c630c3980c0179048a07903d968007fc7b913d25",
+      "source_url": "https://www.iranome.com/",
+      "license": "Free with citation (Iranome)",
+      "milestone": "M1",
+      "note": "Iranian allele frequencies; cite Fattahi 2019"
+    },
+    {
+      "path": "data/iranome/raw/MYBPC3.json",
+      "bytes": 947338,
+      "sha256": "03acf8788cb03b4c3e5a1614d0ad5c39799aa937dd31d192c696a9d1d8cb10aa",
+      "source_url": "https://www.iranome.com/",
+      "license": "Free with citation (Iranome)",
+      "milestone": "M1",
+      "note": "Iranian allele frequencies; cite Fattahi 2019"
+    },
+    {
+      "path": "data/iranome/raw/PALB2.json",
+      "bytes": 1133833,
+      "sha256": "506692d3370aa05dc39713ad87299494215001919461f0826163ee237c7dab14",
+      "source_url": "https://www.iranome.com/",
+      "license": "Free with citation (Iranome)",
+      "milestone": "M1",
+      "note": "Iranian allele frequencies; cite Fattahi 2019"
+    },
+    {
+      "path": "data/iranome/raw/PMS2.json",
+      "bytes": 1362057,
+      "sha256": "fd53737a3b9e84b2e21ff08dbc197fb8fc9db40b0a4926c217cafa5e7d2e96a0",
+      "source_url": "https://www.iranome.com/",
+      "license": "Free with citation (Iranome)",
+      "milestone": "M1",
+      "note": "Iranian allele frequencies; cite Fattahi 2019"
+    },
+    {
+      "path": "data/iranome/raw/PTEN.json",
+      "bytes": 1304337,
+      "sha256": "95deab86d3aaf49e245321daa252cb0a4be5d10aec829f5700631e3eb04be213",
+      "source_url": "https://www.iranome.com/",
+      "license": "Free with citation (Iranome)",
+      "milestone": "M1",
+      "note": "Iranian allele frequencies; cite Fattahi 2019"
+    },
+    {
+      "path": "data/iranome/raw/SMN1.json",
+      "bytes": 98888,
+      "sha256": "7f44654115c06cd662eacd3170e0492a31e02c21b73e6ea2a950560b3fc33c78",
+      "source_url": "https://www.iranome.com/",
+      "license": "Free with citation (Iranome)",
+      "milestone": "M1",
+      "note": "Iranian allele frequencies; cite Fattahi 2019"
+    },
+    {
+      "path": "data/iranome/raw/TP53.json",
+      "bytes": 831708,
+      "sha256": "fc4365902aeae92373fc874c903dad22e8a2e6153e50cb885aa81f999ff10071",
+      "source_url": "https://www.iranome.com/",
+      "license": "Free with citation (Iranome)",
+      "milestone": "M1",
+      "note": "Iranian allele frequencies; cite Fattahi 2019"
+    },
+    {
+      "path": "data/kaggle/clinvar-conflicting/clinvar_conflicting.csv",
+      "bytes": 30723812,
+      "sha256": "53061e207d437af397028760be5bc566d216f6932e21db5a10322b843c41689a",
+      "source_url": "https://www.kaggle.com/datasets/kevinarvai/clinvar-conflicting",
+      "license": "CC0",
+      "milestone": "M1",
+      "note": "Kaggle ClinVar table"
+    },
+    {
+      "path": "data/kaggle/clinvar-conflicting.zip",
+      "bytes": 3761083,
+      "sha256": "41ff11166cc9ab0fa783541f8b5d2cecad7f57c212f52f0c978cab67e50153eb",
+      "source_url": "",
+      "license": "",
+      "milestone": "",
+      "note": ""
+    },
+    {
+      "path": "data/kaggle/gse131027/SRR9200893_1_fastqc.html",
+      "bytes": 673951,
+      "sha256": "7d385af10184d612487037f460bcf11c1710217af5fb9914010e94e7a97ea112",
+      "source_url": "https://www.kaggle.com/datasets/mannekuntanagendra/variant-calling-human-genome-analysis-gse131027",
+      "license": "MIT",
+      "milestone": "M1",
+      "note": "Small sample VCF fixture"
+    },
+    {
+      "path": "data/kaggle/gse131027/SRR9200893_2_fastqc.html",
+      "bytes": 661411,
+      "sha256": "4e5dad9843d07a55093c57724b59bea4315ae0c984fc0ba9608525e85f9e6768",
+      "source_url": "https://www.kaggle.com/datasets/mannekuntanagendra/variant-calling-human-genome-analysis-gse131027",
+      "license": "MIT",
+      "milestone": "M1",
+      "note": "Small sample VCF fixture"
+    },
+    {
+      "path": "data/kaggle/gse131027/Variant Calling Human Genome Analysis GSE131027 readme.md",
+      "bytes": 3633,
+      "sha256": "583dacffc25e99d67c9d000cf445c0f6d469e9f37dd728bb6450d6f34597f717",
+      "source_url": "https://www.kaggle.com/datasets/mannekuntanagendra/variant-calling-human-genome-analysis-gse131027",
+      "license": "MIT",
+      "milestone": "M1",
+      "note": "Small sample VCF fixture"
+    },
+    {
+      "path": "data/kaggle/gse131027/Variant Calling Pipeline for Human Genome Analysis Using GSE131027.ipynb",
+      "bytes": 121605,
+      "sha256": "0dd9bd5cc307949f0d2e755a9ce2c14310e3d704064a71fdc17b75e1116e831b",
+      "source_url": "https://www.kaggle.com/datasets/mannekuntanagendra/variant-calling-human-genome-analysis-gse131027",
+      "license": "MIT",
+      "milestone": "M1",
+      "note": "Small sample VCF fixture"
+    },
+    {
+      "path": "data/kaggle/gse131027/variants.vcf",
+      "bytes": 4237134,
+      "sha256": "c993196c89f93126a567144b61cc9f2d74a7f52b2e71e0af70169181f486b2db",
+      "source_url": "https://www.kaggle.com/datasets/mannekuntanagendra/variant-calling-human-genome-analysis-gse131027",
+      "license": "MIT",
+      "milestone": "M1",
+      "note": "Small sample VCF fixture",
+      "vcf_records": 32685
+    },
+    {
+      "path": "data/kaggle/gse131027.zip",
+      "bytes": 1346614,
+      "sha256": "b225c6acc1e6a3bd54e17ebc2688e08fd540ee382e688c36141e539a918ebc05",
+      "source_url": "",
+      "license": "",
+      "milestone": "",
+      "note": ""
+    },
+    {
+      "path": "data/lancet2/COLO829.TwoTechTruth.final.vcf.gz",
+      "bytes": 2004678,
+      "sha256": "83c46de1a48a205cc5bb676b70d0ba979ba882e07ec69cdc3a34ea8be8d624c9",
+      "source_url": "https://storage.googleapis.com/lancet2-paper/truths/COLO829/",
+      "license": "Public; cite Lancet2",
+      "milestone": "M7",
+      "note": "COLO829 somatic small-variant truth set",
+      "vcf_records": 38850
+    },
+    {
+      "path": "data/lancet2/HCC1143.TwoTechTruth.final.vcf.gz",
+      "bytes": 1131194,
+      "sha256": "958b6793045c141113a3ba72ebe2b145ba0d97082a305818cfa419c5c9b0ceab",
+      "source_url": "https://storage.googleapis.com/lancet2-paper/truths/HCC1143/",
+      "license": "Public; cite Lancet2",
+      "milestone": "M7",
+      "note": "HCC1143 somatic small-variant truth set",
+      "vcf_records": 21869
+    },
+    {
+      "path": "data/lancet2/truthset_somaticSVs_COLO829.vcf",
+      "bytes": 24631,
+      "sha256": "4ff9b8cb6b521e2c546529238e55cdbb07f4cb69281a3cb7483d79c7bcc16cf1",
+      "source_url": "https://zenodo.org/records/7515830",
+      "license": "CC BY 4.0",
+      "milestone": "M7",
+      "note": "COLO829 somatic SV truth set",
+      "vcf_records": 134
+    },
+    {
+      "path": "data/lancet2/truthset_somaticSVs_COLO829_hg38lifted.vcf",
+      "bytes": 82821,
+      "sha256": "365488808a9228b16d575fabaf7561c4669b9e3122a188f572865c3813f46643",
+      "source_url": "https://zenodo.org/records/7515830",
+      "license": "CC BY 4.0",
+      "milestone": "M7",
+      "note": "COLO829 somatic SV truth set",
+      "vcf_records": 134
+    },
+    {
+      "path": "data/mane/MANE.GRCh38.v1.4.summary.txt.gz",
+      "bytes": 1113014,
+      "sha256": "4b3992457556e302a5e47e18a305bb4763718377696ca37d5a6b34df7db630d2",
+      "source_url": "https://ftp.ncbi.nlm.nih.gov/refseq/MANE/",
+      "license": "Public (NCBI)",
+      "milestone": "M1/M3",
+      "note": "MANE Select summary"
+    },
+    {
+      "path": "data/mane/hgnc_complete_set.txt",
+      "bytes": 16994064,
+      "sha256": "3944cdad7affce5bc2c7d63d7079d7e68762ed28ef414fc287cc0f57c4b0d78f",
+      "source_url": "https://www.genenames.org/download/",
+      "license": "Free with attribution",
+      "milestone": "M1/M3",
+      "note": "HGNC complete set"
+    },
+    {
+      "path": "data/nfcore/NA12878_sorted_chrM_chr20_rehead_60pdown.cram",
+      "bytes": 23023737,
+      "sha256": "dbfcf5935003cf6fb9d80b23ccc1b49f20678240471097f59fffcb0b1cd56591",
+      "source_url": "https://github.com/nf-core/test-datasets/tree/Sarek/testdata",
+      "license": "MIT",
+      "milestone": "M2",
+      "note": "nf-core/sarek test data"
+    },
+    {
+      "path": "data/nfcore/grch38_gnomad_reformated_-r3.1.1-.vcf.gz",
+      "bytes": 7282,
+      "sha256": "d268b0369a6f89ae5203b1ca6378cf57ce694e47882cc8756c501c2de37b1a1b",
+      "source_url": "https://github.com/nf-core/test-datasets/tree/Sarek/testdata",
+      "license": "MIT",
+      "milestone": "M2",
+      "note": "nf-core/sarek test data",
+      "vcf_records": 366
+    },
+    {
+      "path": "data/nfcore/samplesheet_MT.csv",
+      "bytes": 1683,
+      "sha256": "27ba235073d560762376c76559576f2bdaf970eb84296ccbfeb94e745c864518",
+      "source_url": "https://github.com/nf-core/test-datasets/tree/Sarek/testdata",
+      "license": "MIT",
+      "milestone": "M2",
+      "note": "nf-core/sarek test data"
+    },
+    {
+      "path": "data/nfcore/target_chr20.bed",
+      "bytes": 4190,
+      "sha256": "14ea53eaa372952f5a86d11aa94c120683e3c4b109edbc6f5a60c378b31268c5",
+      "source_url": "https://github.com/nf-core/test-datasets/tree/Sarek/testdata",
+      "license": "MIT",
+      "milestone": "M2",
+      "note": "nf-core/sarek test data"
+    },
+    {
+      "path": "data/panels_iranome_genes_GRCh38.bed",
+      "bytes": 14442,
+      "sha256": "c0533f651d32e84566bdd8a4a771ba8a33fb128d3bfd72cc8abea04aed945d07",
+      "source_url": "Derived from GENCODE GRCh38.113",
+      "license": "Derived; GENCODE terms",
+      "milestone": "M3",
+      "note": "Exon BED for the 16 Iranome genes"
+    },
+    {
+      "path": "data/seqc2/High-Confidence_Regions_v1.2.bed",
+      "bytes": 16879606,
+      "sha256": "dedaa36a956d6121fb8fccd9ae1891a4fefd608ff31ab277cb55d7c96bb4a6c4",
+      "source_url": "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/seqc/Somatic_Mutation_WG/release/latest/",
+      "license": "Public; cite SEQC2",
+      "milestone": "M7",
+      "note": "SEQC2 high-confidence somatic truth set"
+    },
+    {
+      "path": "data/seqc2/README.md",
+      "bytes": 985,
+      "sha256": "9b5ebabb9401f8198779aaca3fb6e9c6f80e353c48a115e6c81f8a14a5f7165f",
+      "source_url": "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/seqc/Somatic_Mutation_WG/release/latest/",
+      "license": "Public; cite SEQC2",
+      "milestone": "M7",
+      "note": "SEQC2 high-confidence somatic truth set"
+    },
+    {
+      "path": "data/seqc2/high-confidence_sINDEL_in_HC_regions_v1.2.1.vcf.gz",
+      "bytes": 269761,
+      "sha256": "db7dc8be2ec04bab830ff1411146c7d538c217ff684e874b85d98a3dbbda91cf",
+      "source_url": "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/seqc/Somatic_Mutation_WG/release/latest/",
+      "license": "Public; cite SEQC2",
+      "milestone": "M7",
+      "note": "SEQC2 high-confidence somatic truth set",
+      "vcf_records": 1625
+    },
+    {
+      "path": "data/seqc2/high-confidence_sSNV_in_HC_regions_v1.2.1.vcf.gz",
+      "bytes": 4818105,
+      "sha256": "0c49f7e1519fc7860b773f79bdcf07453fe4def8303707f34542471d92494c9d",
+      "source_url": "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/seqc/Somatic_Mutation_WG/release/latest/",
+      "license": "Public; cite SEQC2",
+      "milestone": "M7",
+      "note": "SEQC2 high-confidence somatic truth set",
+      "vcf_records": 39447
+    }
+  ]
+}

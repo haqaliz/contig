@@ -16,4 +16,9 @@ dist/
 # SDD scratch ledger (not part of the deliverable)
 .superpowers/
 
+# Downloaded research data (see docs/planning/beyond-genomist/DATA_SOURCES.md)
+/data/*
+!/data/README.md
+!/data/manifest.json
+
 .serena/

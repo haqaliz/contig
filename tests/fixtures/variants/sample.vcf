@@ -1,0 +1,13 @@
+##fileformat=VCFv4.2
+##INFO=<ID=CSQ,Number=.,Type=String,Description="Consequence annotations from Ensembl VEP. Format: Allele|Consequence|IMPACT|SYMBOL|Gene|Feature|HGVSc|HGVSp">
+##INFO=<ID=ANN,Number=.,Type=String,Description="Functional annotations: 'Allele | Annotation | Annotation_Impact | Gene_Name | Gene_ID | Feature_Type | Feature_ID | HGVS.c | HGVS.p'">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Depth">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	S1
+17	43057063	rs80357906	C	CT	100	PASS	CSQ=CT|frameshift_variant|HIGH|BRCA1|ENSG00000012048|ENST00000357654|c.5266dupC|p.Gln1756Profs*74	GT:AD:DP	0/1:100,50:150
+13	20189547	rs72474224	G	A	80	PASS	CSQ=A|missense_variant|MODERATE|GJB2|ENSG00000165474|ENST00000378486|c.35G>A|p.Gly12Asp	GT:AD:DP	1/1:0,80:80
+7	55191822	rs121434568	T	G	90	q10	ANN=G|missense_variant|MODERATE|EGFR|ENSG00000146648|transcript|ENST00000275493|protein_coding|1|c.2573T>G|p.Leu858Arg	GT:AD:DP	0/1:60,40:100
+1	100	.	A	G	50	PASS	.	GT:DP	./.:10
+1	200	.	C	T,G	60	PASS	CSQ=T|missense_variant|MODERATE|GENE1|ENSG00000000001|ENST00000000001|c.1C>T|p.Pro1Ser,G|synonymous_variant|LOW|GENE1|ENSG00000000001|ENST00000000001|c.2C>G|p.Pro1Pro	GT:AD:DP	1/2:30,20,10:60
+X	300	.	A	G	50	PASS	.	GT:DP	1:5
