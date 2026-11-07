@@ -461,6 +461,11 @@ the existing approval gate.
 
 ## M6 — Family analysis (trio / carrier / couple)
 
+**Status:** v1 implemented 2026-11-07 — `contig family` (inheritance, Mendelian
+consistency, de novo candidates, concordance), with PRD and task plan in
+`docs/planning/family-trio/`. Carrier/couple views and X-linked rules remain
+follow-ups.
+
 **Goal.** Support research-use family analysis: inheritance-aware filtering,
 Mendelian consistency, de novo candidates, carrier status, and couple
 compatibility — all as evidence, not diagnosis.
