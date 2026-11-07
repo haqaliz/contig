@@ -259,6 +259,7 @@ from contig.panels.build import (
 from contig.assistant.command import run_ask as run_grounded_ask
 from contig.assistant.command import run_ask_eval as run_grounded_ask_eval
 from contig.family.command import run_family as run_family_analysis
+from contig.biomarkers.command import run_biomarkers as run_biomarker_verification
 
 app = typer.Typer(help="Contig: agentic bioinformatics analyst.")
 
@@ -5001,6 +5002,43 @@ def repair_stats(
         "  note: over real runs -- not `heal-guard`'s recovery_rate,"
         " which scores synthetic scenarios."
     )
+
+
+@app.command()
+def biomarkers(
+    vcf: str = typer.Option(..., "--vcf", help="Somatic VCF (Mutect2/Strelka2 or similar)."),
+    callable_bed: str = typer.Option(..., "--callable-bed", help="Callable-region BED for TMB."),
+    reported_tmb: float = typer.Option(None, "--reported-tmb", help="Reported TMB to compare against."),
+    tmb_tolerance: float = typer.Option(0.20, "--tmb-tolerance", help="Relative tolerance for a TMB match."),
+    reported_msi: str = typer.Option(None, "--reported-msi", help="Reported MSI status/score (recorded, not verified in v1)."),
+    reported_loh: str = typer.Option(None, "--reported-loh", help="Reported LOH status (recorded, not verified in v1)."),
+    reported_cnv: str = typer.Option(None, "--reported-cnv", help="Reported CNV status (recorded, not verified in v1)."),
+    coding_only: bool = typer.Option(False, "--coding-only", help="Count only variants with a coding consequence."),
+    out: str = typer.Option(None, "--out", help="Write the report to this path instead of stdout."),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of TSV."),
+) -> None:
+    """Research-use TMB verification from a somatic VCF + callable BED.
+
+    Computes TMB from PASS variants in callable regions and compares a reported
+    value within tolerance. MSI/LOH/CNV are recorded as not_verified in v1. No
+    drug or treatment recommendation is emitted.
+    """
+    try:
+        run_biomarker_verification(
+            vcf,
+            callable_bed,
+            reported_tmb=reported_tmb,
+            tmb_tolerance=tmb_tolerance,
+            reported_msi=reported_msi,
+            reported_loh=reported_loh,
+            reported_cnv=reported_cnv,
+            coding_only=coding_only,
+            out=out,
+            json_out=json_out,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
 
 
 @app.command()

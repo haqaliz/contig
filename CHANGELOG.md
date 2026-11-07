@@ -44,6 +44,11 @@ All notable changes to Contig are recorded here. The format follows
   carried), autosomal Mendelian consistency, de novo candidates, and pairwise
   same-genotype/opposite-homozygote concordance with a possible-swap flag.
   Autosomal only in v1; X/Y/MT are `not_evaluated`. Research-use only.
+- **Oncology biomarker verification (M7, v1):** `contig biomarkers` computes TMB
+  from PASS variants in a required callable BED, compares a reported TMB within
+  a configurable relative tolerance, and records MSI/LOH/CNV as `not_verified`
+  with the reason. `--coding-only` filters to coding consequences. No NCCN/drug/
+  treatment recommendation. MSI/LOH/CNV verification is a follow-up.
 
 ## [1.0.0] - 2026-10-21
 
