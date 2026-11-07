@@ -1,7 +1,7 @@
 # PRD — Research-use variant workbench (M1)
 
 Feature slug: `variant-workbench` · Type: feat · Owner: aliz
-Branch: `feat/variant-workbench/aliz` · Capability: **M1 (Beyond Genomist)**
+Branch: `feat/variant-workbench/aliz` · Capability: **M1 (variant workbench)**
 Status: drafted 2026-11-07 (planning → PRD)
 
 ## Problem Statement
@@ -157,7 +157,7 @@ usable result. It needs no model and no clinical claims.
 ## Data
 
 Use the sources documented in
-`docs/planning/beyond-genomist/DATA_SOURCES.md`:
+`docs/planning/research-workbenches/DATA_SOURCES.md`:
 
 - ClinVar GRCh38 VCF (`data/clinvar/clinvar.vcf.gz`).
 - Iranome panel (`data/iranome/iranome_panel.tsv`, GRCh37).

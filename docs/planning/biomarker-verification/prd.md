@@ -1,7 +1,7 @@
 # PRD — Oncology biomarker verification (M7)
 
 Feature slug: `biomarker-verification` · Type: feat · Owner: aliz
-Branch: `feat/biomarker-verification/aliz` · Capability: **M7 (Beyond Genomist)**
+Branch: `feat/biomarker-verification/aliz` · Capability: **M7 (biomarker verification)**
 Status: drafted 2026-11-07
 
 ## Problem Statement

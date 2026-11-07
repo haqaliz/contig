@@ -1,7 +1,7 @@
 # PRD — Family/trio analysis (M6)
 
 Feature slug: `family-trio` · Type: feat · Owner: aliz
-Branch: `feat/family-trio/aliz` · Capability: **M6 (Beyond Genomist)**
+Branch: `feat/family-trio/aliz` · Capability: **M6 (family analysis)**
 Status: drafted 2026-11-07
 
 ## Problem Statement

@@ -1,7 +1,7 @@
 # PRD — Research report builder (M4)
 
 Feature slug: `report-builder` · Type: feat · Owner: aliz
-Branch: `feat/report-builder/aliz` · Capability: **M4 (Beyond Genomist)**
+Branch: `feat/report-builder/aliz` · Capability: **M4 (report builder)**
 Status: drafted 2026-11-07
 
 ## Problem Statement

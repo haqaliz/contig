@@ -257,7 +257,7 @@ contig variants sample.vcf --clinvar clinvar.vcf.gz --spec table.spec.json --out
 Iranome is GRCh37; a GRCh38 input skips it with a recorded note (no liftoff in
 this first slice). The v1 table is built in memory, so it is intended for one
 sample's call set, not a population catalogue; subset by region first if needed.
-See `docs/planning/beyond-genomist/DATA_SOURCES.md` for the source license table
+See `docs/planning/research-workbenches/DATA_SOURCES.md` for the source license table
 and the `data/README.md` for the starter data.
 
 ---

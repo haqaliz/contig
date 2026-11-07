@@ -1,13 +1,17 @@
-# Beyond Genomist: milestone plan and required context
+# Research workbenches: milestone plan and required context
 
-Status: planning only. Nothing here is committed or scheduled.
-Purpose: turn the Genomist gap analysis into a sequenced set of milestones, and
+Status: **all eight milestones have a v1** (2026-11-08). The remaining work is
+validation, integration, and the deliberately deferred parts. See `WRAP_UP.md`
+for the narrative, `BACKLOG.md` for the row-level ledger, and
+`BLOCKED_RUNBOOK.md` for the evidence each blocked row needs.
+
+Purpose: turn the product-gap analysis into a sequenced set of milestones, and
 record for each one **what we must know, obtain, or decide before a build session
 can start** — data, models, licenses, code to reuse, and open questions.
 
 Read first, every session:
 
-- `docs/planning/beyond-genomist/DATA_SOURCES.md` — the verified data inventory,
+- `docs/planning/research-workbenches/DATA_SOURCES.md` — the verified data inventory,
   licenses, Persian/Iranian sources, and what is already downloaded in `data/`.
 - `CLAUDE.md` — the wedge and the four strategic constraints.
 - `docs/technical/USE_CASE_UNIVERSE.md` — the research-use bright line.
@@ -24,7 +28,7 @@ Read first, every session:
 Contig stays **Layer 2**: run, verify, reproduce, and surface evidence. It does
 not diagnose, adjudicate pathogenicity, recommend treatment, or sign a clinical
 report. Every milestone below is framed as **research-use verification and
-evidence presentation**, even where the inspiration (Genomist) is clinical.
+evidence presentation**, even where the inspiration is clinical.
 
 If a milestone cannot be built without crossing that line, it is either
 re-scoped or dropped. That is a feature, not a limitation: it is the moat.
@@ -103,9 +107,10 @@ network-effect play and should wait for real multi-lab demand.
    page or a static report first.
 4. **Workspaces/auth.** M8 needs multi-user; today the dashboard is
    localhost-only. Do not build auth before a design partner needs it.
-5. **Persian/RTL.** Genomist's local advantage is Persian. Contig does not need
-   it to win the engineering layer, but if the Iranian market matters, RTL and
-   Persian report templates are a small, separate frontend slice. Decide later.
+5. **Persian/RTL.** Persian-language support is a market-specific frontend
+   concern. Contig does not need it to win the engineering layer, but if the
+   Iranian market matters, RTL and Persian report templates are a small,
+   separate frontend slice. Decide later.
 6. **Review/sign-off semantics.** Research-use "reviewed by" is a workflow and
    audit feature, not a medical act. Keep the wording explicit.
 

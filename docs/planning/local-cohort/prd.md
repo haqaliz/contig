@@ -1,7 +1,7 @@
 # PRD — Local cohort frequency layer (M8 v1)
 
 Feature slug: `local-cohort` · Type: feat · Owner: aliz
-Branch: `feat/local-cohort/aliz` · Capability: **M8 (Beyond Genomist)**
+Branch: `feat/local-cohort/aliz` · Capability: **M8 (local cohort)**
 Status: drafted 2026-11-08
 
 ## Problem Statement

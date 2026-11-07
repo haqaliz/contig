@@ -164,6 +164,29 @@ Contig is built around **Layer 2** (the run-and-verify engine) and consumes Laye
 
 ---
 
+## 🧪 Research workbenches
+
+Beyond run → self-heal → verify, Contig ships deterministic, research-use
+surfaces over the verified data. They never diagnose, adjudicate pathogenicity,
+or recommend treatment.
+
+| Command | What it does |
+|---|---|
+| `contig variants` | Join a call set to ClinVar, Iranome, and population frequencies; filter deterministically; export TSV/JSON with provenance |
+| `contig readiness` | Per-gene/per-exon coverage and `ready`/`caution`/`not-interpretable` states with homology caveats |
+| `contig panel-build` | Build a canonical, checksummed panel BED from genes or an existing BED |
+| `contig report` | Build a self-contained research report (HTML + hashed sidecar) and check it for stale inputs |
+| `contig ask` | Ask the run bundle a grounded question; every answer cites its source and SHA-256 |
+| `contig family` | Trio/family inheritance, autosomal Mendelian consistency, de novo candidates, sample concordance |
+| `contig biomarkers` | TMB verification from a somatic VCF + callable BED; MSI/LOH/CNV are honestly `not_verified` |
+| `contig cohort-build` / `cohort-query` | Local-only cohort frequency index; no network, no sample IDs |
+
+Full details are in [docs/USAGE.md](docs/USAGE.md#commands). The milestone
+wrap-up and remaining evidence gates are in
+[`docs/planning/research-workbenches/WRAP_UP.md`](docs/planning/research-workbenches/WRAP_UP.md).
+
+---
+
 ## 📚 Documentation
 
 | Document | What's in it |

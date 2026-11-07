@@ -1,9 +1,9 @@
-# Starter data for the Beyond-Genomist milestones
+# Starter data for the research-workbench milestones
 
 This directory holds **downloaded, research-use data** for M1–M7 of
-`docs/planning/beyond-genomist/PLAN.md`. It is not part of the shipped package
+`docs/planning/research-workbenches/PLAN.md`. It is not part of the shipped package
 and should not be committed (see `.gitignore`). The inventory, licenses, and
-source URLs are in `docs/planning/beyond-genomist/DATA_SOURCES.md`.
+source URLs are in `docs/planning/research-workbenches/DATA_SOURCES.md`.
 
 Refresh with:
 

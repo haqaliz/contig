@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Fetch the starter data for docs/planning/beyond-genomist/PLAN.md.
+# Fetch the starter data for docs/planning/research-workbenches/PLAN.md.
 #
 # Research-use only. Every source is public or free-with-citation; see
-# docs/planning/beyond-genomist/DATA_SOURCES.md for the license table.
+# docs/planning/research-workbenches/DATA_SOURCES.md for the license table.
 # Large files are resumable; rerunning the script is safe.
 set -euo pipefail
 
