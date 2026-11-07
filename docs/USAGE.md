@@ -56,6 +56,7 @@ The CLI and the test suite work **without** Nextflow/Java/Docker; only live runs
 | `contig report <id>` | Build a self-contained research report from a run bundle, optionally attaching M1 variants and M2 readiness; writes HTML + a JSON sidecar with input hashes. `--template publication\|internal\|audit` |
 | `contig report-check <sidecar>` | Recompute the report inputs’ SHA-256 and report current/stale/missing |
 | `contig family --vcf <vcf> --ped <ped>` | Research-use trio/family analysis: per-child inheritance, Mendelian consistency, de novo candidates, and pairwise sample concordance. Autosomal only in v1 |
+| `contig biomarkers --vcf <vcf> --callable-bed <bed>` | Research-use TMB verification from PASS variants in callable regions; compares a reported TMB within tolerance. MSI/LOH/CNV are `not_verified` in v1 |
 | `contig ask <id> "question"` | Grounded answers from the run bundle and optional M1/M2 tables, with source citations and suggested actions. `--llm` paraphrases the grounded answer; no model is required |
 | `contig ask-eval <id> --cases <jsonl>` | Run the frozen question/citation eval set against the deterministic router |
 | `contig approve <id>` | Approve (or `--reject`) the patch a paused self-heal run is waiting on; `--choose N` picks a ranked fix on a choice gate |
@@ -385,6 +386,28 @@ contig family --vcf family.vcf --ped family.ped --out family.tsv
 - **Boundary:** autosomal only in v1; X/Y/MT are `not_evaluated`. A de novo
   candidate is not a validated event. This is a research calculation, not
   clinical counselling, diagnosis, or PGT-M.
+
+---
+
+## Oncology biomarkers (research use)
+
+```bash
+contig biomarkers \
+  --vcf somatic.vcf \
+  --callable-bed high_confidence_regions.bed \
+  --reported-tmb 12.4 \
+  --out biomarkers.tsv
+```
+
+- **TMB:** PASS variants inside the callable BED divided by callable Mb. The
+  output names the definition; `--coding-only` counts only variants with a
+  coding VEP/SnpEff consequence and reports the unannotated count.
+- **Reported comparison:** `--reported-tmb` compares the computed value within
+  `--tmb-tolerance` (default 20% relative) and labels `match` or `divergent`.
+- **MSI/LOH/CNV:** recorded as `not_verified` in v1, with the reason. No
+  independent caller/truth set is wired yet, so this never claims a pass.
+- **Boundary:** research reproducibility check only; no NCCN, drug, or treatment
+  recommendation.
 
 ---
 

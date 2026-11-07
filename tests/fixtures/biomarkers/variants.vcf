@@ -1,0 +1,11 @@
+##fileformat=VCFv4.2
+##INFO=<ID=CSQ,Number=.,Type=String,Description="Consequence annotations from Ensembl VEP. Format: Allele|Consequence|IMPACT|SYMBOL|Gene|Feature|HGVSc|HGVSp">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
+1	100	.	A	G	50	PASS	CSQ=G|missense_variant|MODERATE|GENE1|ENSG1|ENST1|c.1A>G|p.Lys1Glu
+1	200	.	C	T	50	PASS	CSQ=T|synonymous_variant|LOW|GENE2|ENSG2|ENST2|c.2C>T|p.Pro2=
+1	300	.	G	A	50	PASS;HighConf	.
+1	400	.	T	C	50	q10	CSQ=C|missense_variant|MODERATE|GENE3|ENSG3|ENST3|c.4T>C|p.Leu2Pro
+1	500	.	A	C	50	PASS	CSQ=C|stop_gained|HIGH|GENE4|ENSG4|ENST4|c.5A>C|p.Lys2Ter
+1	600	.	C	G	50	PASS	.
+1	1500000	.	A	G	50	PASS	CSQ=G|missense_variant|MODERATE|GENE5|ENSG5|ENST5|c.6A>G|p.Lys3Glu
+2	500	.	A	G	50	PASS	CSQ=G|missense_variant|MODERATE|GENE6|ENSG6|ENST6|c.7A>G|p.Lys4Glu
