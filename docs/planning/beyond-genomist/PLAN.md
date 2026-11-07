@@ -388,6 +388,10 @@ every number is traceable to the signed bundle and which can be regenerated.
 
 ## M5 — Ask-your-run assistant (grounded, action-taking)
 
+**Status:** v1 implemented 2026-11-07 — `contig ask` + `ask-eval`, with PRD and
+task plan in `docs/planning/ask-your-run/`. The deterministic router is the
+product; the LLM is an optional paraphrase layer.
+
 **Goal.** Let a user ask questions about a run and get answers that cite the
 bundle, plus proposed actions (re-run, filter change, patch approval) behind
 the existing approval gate.

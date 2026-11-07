@@ -55,6 +55,8 @@ The CLI and the test suite work **without** Nextflow/Java/Docker; only live runs
 | `contig panel-list` / `contig panel-show <id>` | List or inspect panels in the registry |
 | `contig report <id>` | Build a self-contained research report from a run bundle, optionally attaching M1 variants and M2 readiness; writes HTML + a JSON sidecar with input hashes. `--template publication\|internal\|audit` |
 | `contig report-check <sidecar>` | Recompute the report inputs’ SHA-256 and report current/stale/missing |
+| `contig ask <id> "question"` | Grounded answers from the run bundle and optional M1/M2 tables, with source citations and suggested actions. `--llm` paraphrases the grounded answer; no model is required |
+| `contig ask-eval <id> --cases <jsonl>` | Run the frozen question/citation eval set against the deterministic router |
 | `contig approve <id>` | Approve (or `--reject`) the patch a paused self-heal run is waiting on; `--choose N` picks a ranked fix on a choice gate |
 | `contig benchmark <id>` | Compare a run's QC against a designated reference (`benchmark set <id>` to record one) within a tolerance |
 | `contig clusters` | Group failure-corpus cases by class and a normalized log signature (recurring failure modes) |
@@ -361,6 +363,35 @@ contig report-check report.json
   diagnosis, ACMG classification, treatment recommendation, or medical sign-off.
   PDF is produced by opening the self-contained HTML and printing to PDF; a
   native PDF export is a follow-up.
+
+---
+
+## Ask your run (research use)
+
+Ask the bundle a question instead of opening JSON:
+
+```bash
+contig ask r1 "what is the verdict?"
+contig ask r1 "why did it repair?"
+contig ask r1 "is BRCA1 ready?" --readiness readiness.json
+contig ask r1 "tell me about BRCA1" --variants variants.json
+contig ask r1 "what is the verdict?" --json
+```
+
+- **Grounded:** answers come from `run_record.json` and the optional M1/M2
+  tables; every answer lists the source path and SHA-256.
+- **Intents:** verdict, QC, repairs, provenance/reproducibility, methods,
+  attached variants (including gene queries), attached readiness, report next
+  steps, and help. Anything else is refused with “I won’t guess.”
+- **Actions:** answers suggest the next command (`contig show --explain`,
+  `contig verify`, `contig report`, etc.) but never execute it.
+- **Optional LLM:** `--llm` paraphrases the already-grounded answer using an
+  OpenAI-compatible endpoint configured with `CONTIG_LLM_URL`,
+  `CONTIG_LLM_MODEL`, and optional `CONTIG_LLM_API_KEY`. The model is told to
+  rephrase only and to keep the citations; the deterministic answer is the
+  fallback when no model is configured.
+- **Eval:** `contig ask-eval r1 --cases eval.jsonl --min-accuracy 0.9` runs the
+  frozen question/citation set against the deterministic router.
 
 ---
 
