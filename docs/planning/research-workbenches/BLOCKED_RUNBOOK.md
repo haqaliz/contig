@@ -71,21 +71,26 @@ X-linked rules only if the partner needs them.
 ## M7 — biomarkers
 
 ### M7-1: MSI
-Collect:
-- HCT116 (MSI-H) and an MSS control (SW480/COLO829) data.
-- The pipeline's MSI output (MSIsensor/MSIpro) and the expected status.
-Then: wire an independent MSI caller or a verified truth set; report
-`match`/`divergent` with a research-use note.
+Data acquired: MSIsensor example tumor/normal BAMs + BAI, microsatellite sites,
+score/status list, and the GRCh38 TCGA baseline (`data/msi/`).
+Remaining:
+- Build or install MSIsensor/MSIsensor-pro (OpenMP) or implement a small verified
+  caller seam.
+- Validate a known MSI-H/MSS pair and compare the score/status to the expected.
+Then: report `match`/`divergent` with a research-use note.
 
 ### M7-2: LOH/CNV
-Collect:
-- FACETS/CNVkit segments or a CNV truth set (e.g. COLO829 SV/CNV).
-- Expected LOH/CNV calls.
+Data acquired: COLO829 copy-number segments
+(`data/cnv/COLO829/copynumber/`).
+Remaining:
+- FACETS/CNVkit segment output from a real tumor-normal run.
+- Expected LOH/CNV calls for the run.
 Then: verify segment counts/ploidy/LOH regions against the truth set; keep the
 no-drug-recommendation rule.
 
 ### M7-3: TMB band
-Collect:
+Data acquired: SEQC2 truth set + callable BED; TMB computed at 15.87 mut/Mb.
+Remaining:
 - Real tumor-normal TMB values from a reviewer.
 - Whether their TMB definition is coding-only or all-pass.
 Then: calibrate the tolerance/definition; keep the definition explicit in output.

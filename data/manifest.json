@@ -68,6 +68,33 @@
       "note": "ClinVar GRCh38 VCF"
     },
     {
+      "path": "data/cnv/COLO829/copynumber/COLO829.somatic.bicseq.cna",
+      "bytes": 7701,
+      "sha256": "72478065474b888e185c986e17ca62834112e07a23f5b0bdd03927feafe6a887",
+      "source_url": "https://zenodo.org/records/7515830",
+      "license": "CC BY 4.0",
+      "milestone": "M7",
+      "note": "COLO829 copy-number segments"
+    },
+    {
+      "path": "data/cnv/COLO829/copynumber/mergedCNA.tsv",
+      "bytes": 98157,
+      "sha256": "47c4a2b54fb4a35ffd0cfc168cfcdcee9e2838d467eb9873b711fec66dc3f9cf",
+      "source_url": "https://zenodo.org/records/7515830",
+      "license": "CC BY 4.0",
+      "milestone": "M7",
+      "note": "COLO829 copy-number segments"
+    },
+    {
+      "path": "data/cnv/COLO829_somaticSV_copynumber.zip",
+      "bytes": 15044,
+      "sha256": "a5e0c7b50dbc7f74a7fc18cfd357f886f43d86730d46ea54fa5412b834a5c160",
+      "source_url": "https://zenodo.org/records/7515830",
+      "license": "CC BY 4.0",
+      "milestone": "M7",
+      "note": "COLO829 copy-number segments"
+    },
+    {
       "path": "data/ensembl/Homo_sapiens.GRCh38.113.gtf.gz",
       "bytes": 64141785,
       "sha256": "62f1709b40e083ce9d4cdc64a86b5ffec2c5d5371434bb7095c74dc89079c466",
@@ -105,6 +132,16 @@
       "note": "GIAB truth set"
     },
     {
+      "path": "data/giab/AshkenazimTrio_chr20_subset.vcf",
+      "bytes": 16686,
+      "sha256": "653a703b8ccd76b9aad509bf78dc64f20b35fd212bbb98fb82cb77d939d4fe2e",
+      "source_url": "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/",
+      "license": "Public (NIST/GIAB)",
+      "milestone": "M2/M6",
+      "note": "GIAB truth set",
+      "vcf_records": 399
+    },
+    {
       "path": "data/giab/HG002_GRCh38_1_22_v4.2.1_benchmark.vcf.gz",
       "bytes": 156252944,
       "sha256": "adb4d4a50048aa13353a06b84fcfcbca09a5d17525efaa4cea44f8822e81175c",
@@ -113,6 +150,15 @@
       "milestone": "M2/M6",
       "note": "GIAB truth set",
       "vcf_records": 4048342
+    },
+    {
+      "path": "data/giab/HG002_GRCh38_1_22_v4.2.1_benchmark.vcf.gz.tbi",
+      "bytes": 1657747,
+      "sha256": "23162712553413b10f88916c28bd1238deb703a7237be2910440773beea71894",
+      "source_url": "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/",
+      "license": "Public (NIST/GIAB)",
+      "milestone": "M2/M6",
+      "note": "GIAB truth set"
     },
     {
       "path": "data/giab/HG002_GRCh38_1_22_v4.2.1_benchmark_noinconsistent.bed",
@@ -160,6 +206,15 @@
       "milestone": "M2/M6",
       "note": "GIAB truth set",
       "vcf_records": 4000097
+    },
+    {
+      "path": "data/giab/HG003_GRCh38_1_22_v4.2.1_benchmark.vcf.gz.tbi",
+      "bytes": 1651307,
+      "sha256": "989305947e5af2e81ca8ad1087262a12cc87499b36163c49a7878dc9e18fcaa5",
+      "source_url": "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/",
+      "license": "Public (NIST/GIAB)",
+      "milestone": "M2/M6",
+      "note": "GIAB truth set"
     },
     {
       "path": "data/giab/HG003_GRCh38_1_22_v4.2.1_benchmark_noinconsistent.bed",
@@ -517,6 +572,87 @@
       "license": "Free with attribution",
       "milestone": "M1/M3",
       "note": "HGNC complete set"
+    },
+    {
+      "path": "data/msi/GRCh38.baseline_TCGA-v1.3.tsv",
+      "bytes": 889492,
+      "sha256": "57c0524be798f77c569e020fc395e73cace597b47444c05d738998cea6c6451d",
+      "source_url": "https://github.com/mskcc/msisensor/tree/master/test",
+      "license": "Public example data; cite MSIsensor",
+      "milestone": "M7",
+      "note": "MSI tumor/normal example BAMs, sites, scores, TCGA baseline"
+    },
+    {
+      "path": "data/msi/example.microsate.sites",
+      "bytes": 238,
+      "sha256": "31dda45877f3938bbf44c5b9eec0f166373037ca91b1e0465e9afd20fa81b065",
+      "source_url": "https://github.com/mskcc/msisensor/tree/master/test",
+      "license": "Public example data; cite MSIsensor",
+      "milestone": "M7",
+      "note": "MSI tumor/normal example BAMs, sites, scores, TCGA baseline"
+    },
+    {
+      "path": "data/msi/example.normal.bam",
+      "bytes": 16015780,
+      "sha256": "8b22263996db740fd7092a9f558ddef2eb8a734545eb7ad8a38e45255f918cf2",
+      "source_url": "https://github.com/mskcc/msisensor/tree/master/test",
+      "license": "Public example data; cite MSIsensor",
+      "milestone": "M7",
+      "note": "MSI tumor/normal example BAMs, sites, scores, TCGA baseline"
+    },
+    {
+      "path": "data/msi/example.normal.bam.bai",
+      "bytes": 10856,
+      "sha256": "82762169439a4818e728137f629f93fcbfc4de05f9fb34498dc473e1b02efeaf",
+      "source_url": "https://github.com/mskcc/msisensor/tree/master/test",
+      "license": "Public example data; cite MSIsensor",
+      "milestone": "M7",
+      "note": "MSI tumor/normal example BAMs, sites, scores, TCGA baseline"
+    },
+    {
+      "path": "data/msi/example.tumor.bam",
+      "bytes": 30147875,
+      "sha256": "d7b90e764406c27618a92cdf269835e39ad7f3c74d51682868aead260cbff42e",
+      "source_url": "https://github.com/mskcc/msisensor/tree/master/test",
+      "license": "Public example data; cite MSIsensor",
+      "milestone": "M7",
+      "note": "MSI tumor/normal example BAMs, sites, scores, TCGA baseline"
+    },
+    {
+      "path": "data/msi/example.tumor.bam.bai",
+      "bytes": 11184,
+      "sha256": "13b97b54641a411b7d59630033148d3c6a6f02d301036960cd6c6a86cd8392f6",
+      "source_url": "https://github.com/mskcc/msisensor/tree/master/test",
+      "license": "Public example data; cite MSIsensor",
+      "milestone": "M7",
+      "note": "MSI tumor/normal example BAMs, sites, scores, TCGA baseline"
+    },
+    {
+      "path": "data/msi/msi_score_and_status_list",
+      "bytes": 1095,
+      "sha256": "7b8d6d936040cde7f48e28f4509f11c535c0791d7094c72c44cc604a90f127f5",
+      "source_url": "https://github.com/mskcc/msisensor/tree/master/test",
+      "license": "Public example data; cite MSIsensor",
+      "milestone": "M7",
+      "note": "MSI tumor/normal example BAMs, sites, scores, TCGA baseline"
+    },
+    {
+      "path": "data/msi/msi_score_only_list",
+      "bytes": 619,
+      "sha256": "38a7e3e90146d7d9079c14e534dfa2b23b20ebd5dc215d9576102099bf8fb356",
+      "source_url": "https://github.com/mskcc/msisensor/tree/master/test",
+      "license": "Public example data; cite MSIsensor",
+      "milestone": "M7",
+      "note": "MSI tumor/normal example BAMs, sites, scores, TCGA baseline"
+    },
+    {
+      "path": "data/msi/run.sh",
+      "bytes": 187,
+      "sha256": "50cfc6836b52f20ddff8dca998f1d4fee7e674f137aad0481745e0b8dffd4887",
+      "source_url": "https://github.com/mskcc/msisensor/tree/master/test",
+      "license": "Public example data; cite MSIsensor",
+      "milestone": "M7",
+      "note": "MSI tumor/normal example BAMs, sites, scores, TCGA baseline"
     },
     {
       "path": "data/nfcore/NA12878_sorted_chrM_chr20_rehead_60pdown.cram",

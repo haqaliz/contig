@@ -64,6 +64,7 @@ get "$GIAB/HG002_NA24385_son/v5.0q/HG002_GRCh38_v5.0q_smvar.benchmark.bed" "$DAT
 for s in HG002_NA24385_son HG003_NA24149_father HG004_NA24143_mother; do
   g="${s%%_*}"
   get "$GIAB/$s/NISTv4.2.1/GRCh38/${g}_GRCh38_1_22_v4.2.1_benchmark.vcf.gz" "$DATA/giab/${g}_GRCh38_1_22_v4.2.1_benchmark.vcf.gz"
+  get "$GIAB/$s/NISTv4.2.1/GRCh38/${g}_GRCh38_1_22_v4.2.1_benchmark.vcf.gz.tbi" "$DATA/giab/${g}_GRCh38_1_22_v4.2.1_benchmark.vcf.gz.tbi"
   get "$GIAB/$s/NISTv4.2.1/GRCh38/${g}_GRCh38_1_22_v4.2.1_benchmark_noinconsistent.bed" "$DATA/giab/${g}_GRCh38_1_22_v4.2.1_benchmark_noinconsistent.bed"
 done
 cat > "$DATA/giab/AshkenazimTrio.ped" <<'PED'
@@ -83,6 +84,16 @@ get 'https://purl.obolibrary.org/obo/hp/hpoa/genes_to_phenotype.txt' "$DATA/hpo/
 get 'https://storage.googleapis.com/lancet2-paper/truths/COLO829/two-tech_truth/COLO829.TwoTechTruth.final.vcf.gz' "$DATA/lancet2/COLO829.TwoTechTruth.final.vcf.gz"
 get 'https://storage.googleapis.com/lancet2-paper/truths/HCC1143/two-tech_truth/HCC1143.TwoTechTruth.final.vcf.gz' "$DATA/lancet2/HCC1143.TwoTechTruth.final.vcf.gz"
 get 'https://zenodo.org/api/records/7515830/files/truthset_somaticSVs_COLO829_hg38lifted.vcf/content' "$DATA/lancet2/truthset_somaticSVs_COLO829_hg38lifted.vcf"
+get 'https://zenodo.org/api/records/7515830/files/COLO829_somaticSV_copynumber.zip/content' "$DATA/cnv/COLO829_somaticSV_copynumber.zip"
+if [[ ! -d "$DATA/cnv/COLO829" ]]; then
+  unzip -oq "$DATA/cnv/COLO829_somaticSV_copynumber.zip" -d "$DATA/cnv/COLO829"
+fi
+
+MSI='https://raw.githubusercontent.com/mskcc/msisensor/master/test'
+for f in example.tumor.bam example.tumor.bam.bai example.normal.bam example.normal.bam.bai example.microsate.sites msi_score_only_list msi_score_and_status_list run.sh; do
+  get "$MSI/$f" "$DATA/msi/$f"
+done
+get 'https://raw.githubusercontent.com/xjtu-omics/msisensor-pro/master/data/GRCh38.baseline_TCGA-v1.3.tsv' "$DATA/msi/GRCh38.baseline_TCGA-v1.3.tsv"
 
 SEQC2='https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/seqc/Somatic_Mutation_WG/release/latest'
 get "$SEQC2/High-Confidence_Regions_v1.2.bed" "$DATA/seqc2/High-Confidence_Regions_v1.2.bed"
@@ -92,6 +103,7 @@ get "$SEQC2/README.md" "$DATA/seqc2/README.md"
 
 # --- Derived fixtures ---------------------------------------------------------
 python3 scripts/build_derived_data.py
+python3 scripts/build_trio_subset.py
 
 # --- Persian-specific ---------------------------------------------------------
 python3 scripts/fetch_iranome_panel.py --out "$DATA/iranome"

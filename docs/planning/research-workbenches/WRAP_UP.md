@@ -17,12 +17,29 @@ names the evidence each blocked row needs.
 | M4 | `contig report`/`report-check` | Self-contained HTML report, sidecar hashes, templates, reviewer block, staleness check | 33 | HTML only; no PDF/diff/dashboard |
 | M5 | `contig ask`/`ask-eval` | Grounded Q&A over the bundle + M1/M2, citations, suggested actions, optional LLM paraphrase | 31 | No live LLM eval; deterministic router only |
 | M6 | `contig family` | Inheritance, autosomal Mendelian consistency, de novo candidates, pairwise concordance | 25 | Autosomal only; one family; swap threshold uncalibrated |
-| M7 | `contig biomarkers` | TMB from PASS variants in a callable BED; reported-vs-computed match/divergent | 16 | MSI/LOH/CNV are `not_verified`; TMB tolerance uncalibrated |
+| M7 | `contig biomarkers` | TMB from PASS variants in a callable BED; reported-vs-computed match/divergent | 16 | MSI/LOH/CNV are `not_verified`; MSI/CNV data acquired, caller/calibration remains |
 | M8 | `contig cohort-build`/`cohort-query` | Local-only per-variant/gene cohort counts and frequencies | 16 | No federated/cross-lab layer |
 
 All merged to `origin/master`; the full test suite is green. Docs are in
 `docs/USAGE.md`, each milestone's `docs/planning/<slug>/prd.md` + `plan-m1.md`,
 and the `CHANGELOG.md` Unreleased section.
+
+### Manual real-data smoke
+
+`OUT=/tmp/contig-research-smoke bash scripts/smoke_research_workbenches.sh` runs
+all eight surfaces over the downloaded data (not CI). It exercises:
+
+- M1: 32,736-row table from the Kaggle sample VCF + ClinVar.
+- M2: 200 nf-core chr20 targets (3 ready, 4 caution, 193 not-interpretable).
+- M3: 322-exon BRCA1/BRCA2 panel from real HGNC + GENCODE.
+- M4/M5: report + `report-check` current; grounded `ask` answer for GENE3.
+- M6: real GIAB Ashkenazim trio subset, 399 rows, 217 evaluated, 0 Mendelian
+  inconsistencies, 0 de novo candidates.
+- M7: TMB 15.87 mut/Mb on the SEQC2 truth set; MSI/LOH/CNV `not_verified`.
+- M8: local cohort across three M1 tables, 3 variants / 3 genes / 3 runs.
+
+This is the closest thing to validation we can do without a design partner; it
+proves the plumbing, not that the defaults are scientifically right.
 
 ## What is deliberately not built
 

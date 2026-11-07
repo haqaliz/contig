@@ -35,6 +35,8 @@ META: dict[str, tuple[str, str, str, str]] = {
     "lancet2/truthset_somaticSVs": ("https://zenodo.org/records/7515830", "CC BY 4.0", "M7", "COLO829 somatic SV truth set"),
     "nfcore/": ("https://github.com/nf-core/test-datasets/tree/Sarek/testdata", "MIT", "M2", "nf-core/sarek test data"),
     "seqc2/": ("https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/seqc/Somatic_Mutation_WG/release/latest/", "Public; cite SEQC2", "M7", "SEQC2 high-confidence somatic truth set"),
+    "msi/": ("https://github.com/mskcc/msisensor/tree/master/test", "Public example data; cite MSIsensor", "M7", "MSI tumor/normal example BAMs, sites, scores, TCGA baseline"),
+    "cnv/": ("https://zenodo.org/records/7515830", "CC BY 4.0", "M7", "COLO829 copy-number segments"),
     "1000g/": ("https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502/", "Open (IGSR)", "M6", "1000 Genomes sample panel"),
     "panels_iranome_genes_GRCh38.bed": ("Derived from GENCODE GRCh38.113", "Derived; GENCODE terms", "M3", "Exon BED for the 16 Iranome genes"),
 }
