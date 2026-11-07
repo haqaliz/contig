@@ -1,0 +1,5 @@
+hgnc_id	symbol	alias_symbol	prev_symbol
+HGNC:1100	BRCA1	RNF53	
+HGNC:1101	BRCA2	FANCD1	-
+HGNC:1884	GJB2	-	DFNB1
+HGNC:3236	EGFR	ERBB1	

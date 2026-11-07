@@ -1,0 +1,30 @@
+"""Contracts for the panel builder and registry (M3)."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+
+from pydantic import BaseModel, Field
+
+
+class PanelMeta(BaseModel):
+    id: str
+    name: str
+    build: str
+    source: str
+    genes: list[str] = Field(default_factory=list)
+    transcripts: list[str] = Field(default_factory=list)
+    method: str = ""
+    checksum: str = ""
+    created_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
+    )
+    contig_version: str = ""
+    notes: list[str] = Field(default_factory=list)
+
+
+@dataclass
+class Panel:
+    meta: PanelMeta
+    bed_text: str

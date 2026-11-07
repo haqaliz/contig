@@ -249,6 +249,13 @@ from contig.variants.command import run_variants as run_variant_workbench
 from contig.readiness.command import run_readiness as run_readiness_workbench
 from contig.reporting.command import run_report as run_report_builder
 from contig.reporting.command import run_report_check as run_report_staleness_check
+from contig.panels.build import (
+    build_from_bed as build_panel_from_bed,
+    build_from_genes as build_panel_from_genes,
+    list_panels as list_panel_registry,
+    load_panel as load_panel_registry,
+    write_panel as write_panel_registry,
+)
 
 app = typer.Typer(help="Contig: agentic bioinformatics analyst.")
 
@@ -4991,6 +4998,74 @@ def repair_stats(
         "  note: over real runs -- not `heal-guard`'s recovery_rate,"
         " which scores synthetic scenarios."
     )
+
+
+@app.command(name="panel-build")
+def panel_build(
+    name: str = typer.Option(..., "--name", help="Human-readable panel name."),
+    genes: str = typer.Option(None, "--genes", help="Comma-separated gene symbols."),
+    bed: str = typer.Option(None, "--bed", help="Existing BED to canonicalize."),
+    gtf: str = typer.Option(None, "--gtf", help="GTF annotation; required with --genes."),
+    hgnc: str = typer.Option(None, "--hgnc", help="HGNC complete set TSV for symbol normalization."),
+    build: str = typer.Option("GRCh38", "--build", help="Reference build label."),
+    transcripts: str = typer.Option("mane", "--transcripts", help="mane or all."),
+    out_dir: str = typer.Option("panels", "--out-dir", help="Panel registry directory."),
+) -> None:
+    """Build a canonical panel BED from a gene list or an existing BED."""
+    if (genes is None) == (bed is None):
+        typer.echo("provide exactly one of --genes or --bed", err=True)
+        raise typer.Exit(code=1)
+    if genes and not gtf:
+        typer.echo("--genes requires --gtf", err=True)
+        raise typer.Exit(code=1)
+    try:
+        if bed:
+            panel = build_panel_from_bed(bed, name, build)
+        else:
+            panel = build_panel_from_genes(
+                [part.strip() for part in (genes or "").split(",") if part.strip()],
+                gtf,
+                name=name,
+                build=build,
+                hgnc_path=hgnc,
+                transcripts=transcripts,
+            )
+        bed_path, meta_path = write_panel_registry(panel, out_dir)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"Panel {panel.meta.id}")
+    typer.echo(f"  BED:  {bed_path}")
+    typer.echo(f"  Meta: {meta_path}")
+    typer.echo(f"  SHA-256: {panel.meta.checksum}")
+
+
+@app.command(name="panel-list")
+def panel_list(
+    directory: str = typer.Option("panels", "--dir", help="Panel registry directory."),
+) -> None:
+    """List panels in the registry."""
+    panels = list_panel_registry(directory)
+    if not panels:
+        typer.echo(f"No panels in {directory}.")
+        return
+    for meta in panels:
+        genes = ",".join(meta.genes) if meta.genes else "-"
+        typer.echo(f"{meta.id}\t{meta.name}\t{meta.source}\t{genes}\t{meta.build}")
+
+
+@app.command(name="panel-show")
+def panel_show(
+    panel_id: str = typer.Argument(..., help="Panel id."),
+    directory: str = typer.Option("panels", "--dir", help="Panel registry directory."),
+) -> None:
+    """Show a panel's metadata as JSON."""
+    try:
+        panel = load_panel_registry(directory, panel_id)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(panel.meta.model_dump_json(indent=2))
 
 
 @app.command()

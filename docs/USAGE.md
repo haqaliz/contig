@@ -51,6 +51,8 @@ The CLI and the test suite work **without** Nextflow/Java/Docker; only live runs
 | `contig methods <id>` | A deterministic, citation-ready methods paragraph from the bundle |
 | `contig variants <vcf>` | Research-use variant table: join a call set to ClinVar, Iranome, and a population-frequency TSV, filter deterministically, and export TSV/JSON. `--spec` replays a saved filter; `--json` includes provenance |
 | `contig readiness --depth <tsv>` | Per-target coverage and interpretation readiness: mean depth, % ≥20x/50x/100x, zero-coverage bases, homology/pseudogene caveats, and a `ready`/`caution`/`not-interpretable` state |
+| `contig panel-build --name <n>` | Build a canonical, checksummed panel BED from a gene list + GTF (optional HGNC normalization) or an existing BED; writes `<id>.bed` + `<id>.json` to the registry |
+| `contig panel-list` / `contig panel-show <id>` | List or inspect panels in the registry |
 | `contig report <id>` | Build a self-contained research report from a run bundle, optionally attaching M1 variants and M2 readiness; writes HTML + a JSON sidecar with input hashes. `--template publication\|internal\|audit` |
 | `contig report-check <sidecar>` | Recompute the report inputs’ SHA-256 and report current/stale/missing |
 | `contig approve <id>` | Approve (or `--reject`) the patch a paused self-heal run is waiting on; `--choose N` picks a ranked fix on a choice gate |
@@ -287,6 +289,39 @@ The homology BED is deliberately a separate input: use
 HBA1/HBA2, or supply your own BED4. A readiness state is a data-sufficiency
 statement, not a clinical guarantee. The v1 input is a depth TSV; direct
 BAM/CRAM ingestion is a follow-up.
+
+---
+
+## Panel builder & registry
+
+Define a reusable, checksummed BED from genes or an existing BED:
+
+```bash
+contig panel-build --name "Hereditary cancer" \
+  --genes BRCA1,BRCA2 \
+  --gtf Homo_sapiens.GRCh38.113.gtf.gz \
+  --hgnc hgnc_complete_set.txt \
+  --out-dir panels
+
+contig panel-list --dir panels
+contig panel-show hereditary-cancer-a3d15b1d --dir panels
+```
+
+- **Gene list:** symbols are resolved against HGNC when `--hgnc` is supplied
+  (approved symbol, alias, or previous symbol); unknown symbols fail with a
+  clear list. Without HGNC, symbols are kept uppercase with a note.
+- **Exons:** built from the GTF, preferring MANE Select when tagged;
+  `--transcripts all` keeps all protein-coding transcripts.
+- **Existing BED:** `--bed panel.bed` normalizes `chr` prefixes, sorts, dedupes,
+  and checksums.
+- **Registry:** `<id>.bed` + `<id>.json` with name, source, genes, transcripts,
+  build, method, checksum, creation time, and Contig version. The id is a slug
+  plus a short SHA-256 of the canonical BED.
+- **Reuse:** the BED works directly as `--bed` for `contig variants` and
+  `contig readiness`.
+
+Panels are research-use interval definitions, not clinical panel
+certifications.
 
 ---
 

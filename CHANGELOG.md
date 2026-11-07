@@ -26,6 +26,12 @@ All notable changes to Contig are recorded here. The format follows
   `internal` / `audit` templates. `contig report-check` recomputes input hashes
   and reports current/stale/missing. The sidecar records source paths, SHA-256,
   spec, Contig version, and the HTML hash. No clinical claims.
+- **Panel builder and registry (M3):** `contig panel-build` resolves HGNC symbols
+  (approved/alias/previous), builds a canonical MANE-preferred exon BED from a
+  GTF or canonicalizes an existing BED, and writes `<id>.bed` + `<id>.json` with
+  checksum and metadata. `panel-list`/`panel-show` inspect the registry. The BED
+  plugs into `contig variants` and `contig readiness`. Research-use interval
+  definitions only.
 
 ## [1.0.0] - 2026-10-21
 
