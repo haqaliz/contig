@@ -10,6 +10,9 @@ Refresh with:
 ```bash
 bash scripts/fetch_data.sh          # public downloads (idempotent, resumable)
 python scripts/fetch_iranome_panel.py
+
+# Manual real-data smoke across all eight commands (needs samtools/tabix)
+OUT=/tmp/contig-research-smoke bash scripts/smoke_research_workbenches.sh
 ```
 
 ## What is here
@@ -30,6 +33,12 @@ python scripts/fetch_iranome_panel.py
 | `lancet2/truthset_somaticSVs_COLO829_hg38lifted.vcf` | COLO829 somatic SV truth set (GRCh38) | 81 KB | CC BY 4.0 (Zenodo) |
 | `seqc2/high-confidence_s{SNV,INDEL}_in_HC_regions_v1.2.1.vcf.gz` | SEQC2 high-confidence somatic truth set | 4.6 MB + 263 KB | Public; cite SEQC2 |
 | `seqc2/High-Confidence_Regions_v1.2.bed` | SEQC2 high-confidence regions | 16 MB | Public; cite SEQC2 |
+| `msi/example.tumor.bam` + `example.normal.bam` | MSIsensor tumor/normal example BAMs | 44 MB | Public example data; cite MSIsensor |
+| `msi/example.microsate.sites` | MSIsensor microsatellite sites | 238 B | Public example data |
+| `msi/msi_score_and_status_list` | MSIsensor example score/status distribution | 1.1 KB | Public example data |
+| `msi/GRCh38.baseline_TCGA-v1.3.tsv` | MSIsensor TCGA baseline sites | 869 KB | Public; cite MSIsensor |
+| `cnv/COLO829/copynumber/*` | COLO829 copy-number segments | 2.9k rows | CC BY 4.0 (Zenodo) |
+| `giab/AshkenazimTrio_chr20_subset.vcf` | Real multi-sample GIAB trio subset (chr20) | 399 ALT rows | Public (NIST/GIAB) |
 | `civic/nightly-VariantSummaries.tsv` | CIViC cancer variant summaries | 585 KB | CC0 |
 | `civic/nightly-civic_accepted.vcf` | CIViC accepted cancer variants | 1.4 MB | CC0 |
 | `clingen/ClinGen_haploinsufficiency_gene_GRCh38.bed` | ClinGen dosage sensitivity (haploinsufficiency) | 48 KB | CC0 |

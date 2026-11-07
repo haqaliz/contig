@@ -39,6 +39,11 @@ commands are in `scripts/fetch_data.sh` and `scripts/fetch_iranome_panel.py`.
 | M7 | `lancet2/truthset_somaticSVs_COLO829_hg38lifted.vcf` | Zenodo 7515830 | CC BY 4.0 | 81 KB |
 | M7 | `seqc2/high-confidence_s{SNV,INDEL}_in_HC_regions_v1.2.1.vcf.gz` | NCBI SEQC2 FTP | Public; cite SEQC2 | 4.9 MB |
 | M7 | `seqc2/High-Confidence_Regions_v1.2.bed` | NCBI SEQC2 FTP | Public; cite SEQC2 | 16 MB |
+| M7 | `msi/example.tumor.bam`, `example.normal.bam` + BAI | MSIsensor example data | Public; cite MSIsensor | 44 MB |
+| M7 | `msi/example.microsate.sites`, `msi_score_and_status_list` | MSIsensor example data | Public; cite MSIsensor | small |
+| M7 | `msi/GRCh38.baseline_TCGA-v1.3.tsv` | MSIsensor-pro | Public; cite MSIsensor | 869 KB |
+| M7 | `cnv/COLO829/copynumber/*` | Zenodo 7515830 | CC BY 4.0 | 2.9k rows |
+| M6 | `giab/AshkenazimTrio_chr20_subset.vcf` | Built from GIAB trio VCFs | Public (NIST/GIAB) | 399 ALT rows |
 
 The manifest (`data/manifest.json`) records the exact URL, byte size, and SHA-256
 for each file.
@@ -356,13 +361,14 @@ nf-core CRAM + target BED, HGNC, a generated exon BED.
 
 **Have:** Lancet2 COLO829/HCC1143 small-variant truth sets, COLO829 SV truth set,
 SEQC2 high-confidence SNV/INDEL truth set + high-confidence regions, CIViC,
-ClinVar, ClinGen.
+ClinVar, ClinGen, MSIsensor example tumor/normal BAMs + microsatellite sites +
+score/status list + GRCh38 TCGA baseline, and COLO829 copy-number segments. TMB
+was computed on the SEQC2 truth set (15.87 mut/Mb over 2,485 Mb callable).
 
 **Missing:**
-- MSI/TMB reference data: HCT116 (MSI-H) and an MSS control (SW480/COLO829),
-  from SRA/CCLE or a public benchmark.
-- A real tumor-normal and tumor-only run with the pipeline's MSI/TMB/LOH/CNV
-  outputs.
+- An MSI caller binary/seam (MSIsensor/MSIsensor-pro or a small verified Python
+  caller) and a real MSI-H/MSS validation pair.
+- A real tumor-normal/tumor-only run with the pipeline's MSI/TMB/LOH/CNV outputs.
 - A domain reviewer to set honest sanity bands.
 - Licensing review for any cancer evidence source.
 

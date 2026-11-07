@@ -19,7 +19,7 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | M2-0 | M2 | `contig readiness` per-target coverage/readiness | done |
 | M2-1 | M2 | Direct BAM/CRAM ingestion (`samtools depth` seam) | deferred |
 | M2-2 | M2 | Sex check / sample-swap readiness caveats | deferred |
-| M2-3 | M2 | Threshold calibration (20x, 90%, 50%) on real panels | blocked |
+| M2-3 | M2 | Threshold calibration (20x, 90%, 50%) on real panels (nf-core CRAM + BED available) | blocked |
 | M2-4 | M2 | Homology/pseudogene list expansion | deferred |
 | M3-0 | M3 | `contig panel-build`/`panel-list`/`panel-show` | done |
 | M3-1 | M3 | Panel versioning/archival + diff | deferred |
@@ -36,11 +36,11 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | M6-1 | M6 | X-linked/sex-aware Mendelian rules | deferred |
 | M6-2 | M6 | Multiple families/quads per PED | deferred |
 | M6-3 | M6 | Carrier/couple views + recessive panels | deferred |
-| M6-4 | M6 | Real trio validation + swap-threshold calibration | blocked |
+| M6-4 | M6 | Real trio validation + swap-threshold calibration (real GIAB trio subset available) | blocked |
 | M7-0 | M7 | `contig biomarkers` TMB verification | done |
-| M7-1 | M7 | Independent MSI caller + MSI-H/MSS reference data | blocked |
-| M7-2 | M7 | LOH/CNV verification (FACETS/CNVkit + truth set) | blocked |
-| M7-3 | M7 | TMB tolerance/band calibration | blocked |
+| M7-1 | M7 | Independent MSI caller + MSI-H/MSS validation (MSIsensor example data + TCGA baseline available) | blocked |
+| M7-2 | M7 | LOH/CNV verification (COLO829 CNV segments available; real FACETS/CNVkit run needed) | blocked |
+| M7-3 | M7 | TMB tolerance/band calibration (SEQC2 TMB computed; reviewer needed) | blocked |
 | M8-0 | M8 | `contig cohort-build`/`cohort-query` local-only | done |
 | M8-1 | M8 | Federated/cross-lab frequency layer | blocked |
 | M8-2 | M8 | Dashboard cohort view | deferred |
