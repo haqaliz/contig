@@ -1,6 +1,6 @@
 {
   "generated": "2026-11-07",
-  "note": "Research-use starter data; see docs/planning/beyond-genomist/DATA_SOURCES.md",
+  "note": "Research-use starter data; see docs/planning/research-workbenches/DATA_SOURCES.md",
   "files": [
     {
       "path": "data/1000g/integrated_call_samples_v3.20130502.ALL.panel",

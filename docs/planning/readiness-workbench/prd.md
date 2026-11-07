@@ -1,7 +1,7 @@
 # PRD — Coverage and interpretation-readiness workbench (M2)
 
 Feature slug: `readiness-workbench` · Type: feat · Owner: aliz
-Branch: `feat/readiness-workbench/aliz` · Capability: **M2 (Beyond Genomist)**
+Branch: `feat/readiness-workbench/aliz` · Capability: **M2 (readiness workbench)**
 Status: drafted 2026-11-07
 
 ## Problem Statement

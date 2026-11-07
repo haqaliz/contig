@@ -87,7 +87,7 @@ def main() -> None:
 
     manifest = {
         "generated": "2026-11-07",
-        "note": "Research-use starter data; see docs/planning/beyond-genomist/DATA_SOURCES.md",
+        "note": "Research-use starter data; see docs/planning/research-workbenches/DATA_SOURCES.md",
         "files": rows,
     }
     (DATA / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")

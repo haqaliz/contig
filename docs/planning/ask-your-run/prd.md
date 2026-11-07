@@ -1,7 +1,7 @@
 # PRD — Ask-your-run assistant (M5)
 
 Feature slug: `ask-your-run` · Type: feat · Owner: aliz
-Branch: `feat/ask-your-run/aliz` · Capability: **M5 (Beyond Genomist)**
+Branch: `feat/ask-your-run/aliz` · Capability: **M5 (ask-your-run)**
 Status: drafted 2026-11-07
 
 ## Problem Statement

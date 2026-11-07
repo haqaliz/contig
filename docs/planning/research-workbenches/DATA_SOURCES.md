@@ -1,4 +1,4 @@
-# Data sources for the Beyond-Genomist milestones
+# Data sources for the Research workbenches milestones
 
 Status: research complete for the first pass; starter data downloaded on
 2026-11-07. This is the **data** companion to `PLAN.md`. It answers: for each
@@ -50,8 +50,8 @@ for each file.
 ### 2.1 ClinVar — the clinical assertion backbone
 
 - **What:** 4.6M variant records with clinical significance, condition, review
-  status, and submitter evidence. This is the closest open equivalent to the
-  clinical interpretation layer Genomist sells.
+  status, and submitter evidence. This is the closest open equivalent to a
+  clinical interpretation layer.
 - **Where:** `https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/` (VCF),
   `/xml/` (full submissions), `/tab_delimited/` (summary tables).
 - **License:** ClinVar is a work of the US Government and is in the public domain

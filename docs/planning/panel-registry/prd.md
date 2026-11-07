@@ -1,7 +1,7 @@
 # PRD — Panel builder and registry (M3)
 
 Feature slug: `panel-registry` · Type: feat · Owner: aliz
-Branch: `feat/panel-registry/aliz` · Capability: **M3 (Beyond Genomist)**
+Branch: `feat/panel-registry/aliz` · Capability: **M3 (panel registry)**
 Status: drafted 2026-11-07
 
 ## Problem Statement
