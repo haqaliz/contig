@@ -258,6 +258,7 @@ from contig.panels.build import (
 )
 from contig.assistant.command import run_ask as run_grounded_ask
 from contig.assistant.command import run_ask_eval as run_grounded_ask_eval
+from contig.family.command import run_family as run_family_analysis
 
 app = typer.Typer(help="Contig: agentic bioinformatics analyst.")
 
@@ -5000,6 +5001,26 @@ def repair_stats(
         "  note: over real runs -- not `heal-guard`'s recovery_rate,"
         " which scores synthetic scenarios."
     )
+
+
+@app.command()
+def family(
+    vcf: str = typer.Option(..., "--vcf", help="Multi-sample VCF with the family genotypes."),
+    ped: str = typer.Option(..., "--ped", help="PED file for one family."),
+    out: str = typer.Option(None, "--out", help="Write the table to this path instead of stdout."),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of TSV."),
+) -> None:
+    """Research-use inheritance and Mendelian checks for a trio/family.
+
+    Reads a multi-sample VCF + PED and reports per-child inheritance, Mendelian
+    consistency, de novo candidates, and pairwise sample concordance. Autosomal
+    only in v1; X/Y/MT are marked not_evaluated. No clinical interpretation.
+    """
+    try:
+        run_family_analysis(vcf, ped, out=out, json_out=json_out)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
 
 
 @app.command()

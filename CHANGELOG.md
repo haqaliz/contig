@@ -39,6 +39,11 @@ All notable changes to Contig are recorded here. The format follows
   question/citation set against the deterministic router. `--llm` optionally
   paraphrases the grounded answer via an OpenAI-compatible endpoint; no model is
   required. Research-use only.
+- **Family/trio analysis (M6):** `contig family` reads a multi-sample VCF + PED,
+  reports per-child inheritance (paternal/maternal/biparental/de novo/not
+  carried), autosomal Mendelian consistency, de novo candidates, and pairwise
+  same-genotype/opposite-homozygote concordance with a possible-swap flag.
+  Autosomal only in v1; X/Y/MT are `not_evaluated`. Research-use only.
 
 ## [1.0.0] - 2026-10-21
 

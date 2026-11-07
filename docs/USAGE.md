@@ -55,6 +55,7 @@ The CLI and the test suite work **without** Nextflow/Java/Docker; only live runs
 | `contig panel-list` / `contig panel-show <id>` | List or inspect panels in the registry |
 | `contig report <id>` | Build a self-contained research report from a run bundle, optionally attaching M1 variants and M2 readiness; writes HTML + a JSON sidecar with input hashes. `--template publication\|internal\|audit` |
 | `contig report-check <sidecar>` | Recompute the report inputs’ SHA-256 and report current/stale/missing |
+| `contig family --vcf <vcf> --ped <ped>` | Research-use trio/family analysis: per-child inheritance, Mendelian consistency, de novo candidates, and pairwise sample concordance. Autosomal only in v1 |
 | `contig ask <id> "question"` | Grounded answers from the run bundle and optional M1/M2 tables, with source citations and suggested actions. `--llm` paraphrases the grounded answer; no model is required |
 | `contig ask-eval <id> --cases <jsonl>` | Run the frozen question/citation eval set against the deterministic router |
 | `contig approve <id>` | Approve (or `--reject`) the patch a paused self-heal run is waiting on; `--choose N` picks a ranked fix on a choice gate |
@@ -363,6 +364,27 @@ contig report-check report.json
   diagnosis, ACMG classification, treatment recommendation, or medical sign-off.
   PDF is produced by opening the self-contained HTML and printing to PDF; a
   native PDF export is a follow-up.
+
+---
+
+## Family / trio analysis (research use)
+
+```bash
+contig family --vcf family.vcf --ped family.ped --out family.tsv
+```
+
+- **Input:** one multi-sample VCF containing the child and parents, plus a PED
+  with one family. Separate per-sample VCFs must be merged first.
+- **Per row:** child, chrom/pos/ref/alt, gene/consequence, the three genotypes,
+  inheritance (`paternal`, `maternal`, `biparental`, `de_novo`, `not_carried`,
+  `unknown`, `not_evaluated`), Mendelian consistency, and a de novo candidate
+  flag.
+- **Summary:** evaluated sites, Mendelian-inconsistent sites (excluding de novo
+  candidates), de novo candidate count, error rate, inheritance counts, and
+  pairwise same-genotype/opposite-homozygote rates with a possible-swap flag.
+- **Boundary:** autosomal only in v1; X/Y/MT are `not_evaluated`. A de novo
+  candidate is not a validated event. This is a research calculation, not
+  clinical counselling, diagnosis, or PGT-M.
 
 ---
 
