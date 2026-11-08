@@ -10,7 +10,7 @@ from contig.variants.vcf import normalize_chrom
 
 COLUMNS = [
     "chrom", "pos", "ref", "alt", "genes", "consequences",
-    "clinvar_significance", "seen_runs", "frequency",
+    "clinvar_significance", "seen_runs", "frequency", "run_labels",
 ]
 
 
@@ -58,7 +58,15 @@ def render_tsv(rows: list[CohortVariant]) -> str:
             row.chrom, row.pos, row.ref, row.alt,
             ",".join(row.genes), ",".join(row.consequences),
             ",".join(row.clinvar_significance), row.seen_runs, f"{row.frequency:.4f}",
+            ",".join(row.run_labels),
         ]))
+    return "\n".join(lines) + "\n"
+
+
+def render_runs(cohort: Cohort) -> str:
+    lines = ["label\tsha256\tpath"]
+    for run in cohort.meta.runs:
+        lines.append(f"{run.label}\t{run.sha256}\t{run.path or '-'}")
     return "\n".join(lines) + "\n"
 
 

@@ -17,6 +17,7 @@ class CohortVariant(BaseModel):
     genes: list[str] = Field(default_factory=list)
     consequences: list[str] = Field(default_factory=list)
     clinvar_significance: list[str] = Field(default_factory=list)
+    run_labels: list[str] = Field(default_factory=list)
 
 
 class GeneSummary(BaseModel):
@@ -40,6 +41,7 @@ class CohortMeta(BaseModel):
     )
     contig_version: str = ""
     anonymized: bool = False
+    traced: bool = False
     notes: list[str] = Field(default_factory=list)
 
 

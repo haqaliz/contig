@@ -54,4 +54,5 @@ class ReportMeta(BaseModel):
     inputs: list[ReportInput] = Field(default_factory=list)
     html_path: str = ""
     html_sha256: str = ""
+    warnings: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)

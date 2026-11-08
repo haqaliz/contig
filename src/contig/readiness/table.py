@@ -54,6 +54,7 @@ def build_readiness(
     gtf: str | Path | None = None,
     genes: set[str] | list[str] = (),
     caveats: str | Path | None = None,
+    build: str | None = None,
     thresholds: ReadinessThresholds | None = None,
 ) -> ReadinessTable:
     if (depth is None) == (bam is None):
@@ -116,13 +117,29 @@ def build_readiness(
         notes.append("caveats not checked")
 
     if targets and not any(target.gene for target in targets):
-        notes.append("target BED has no gene names; gene/transcript/exon columns are empty")
+        notes.append(
+            "target BED has no gene names (BED3); gene-level summaries are "
+            "unavailable; add a 4th-column gene symbol or use --gtf --genes"
+        )
+
+    target_chroms = {target.chrom for target in targets}
+    depth_chroms = {chrom for chrom, _pos in depths}
+    if target_chroms and depth_chroms and target_chroms.isdisjoint(depth_chroms):
+        notes.append(
+            "no chromosome names shared between the targets and the depth input; "
+            "check the build and contig naming"
+        )
+    if build:
+        notes.append(f"build: {build}")
 
     rows = evaluate_targets(targets, depths, thresholds, caveat_regions)
     genes = summarize_by_gene(rows)
     meta = ReadinessMeta(
         sources=sources,
         thresholds=thresholds,
+        build=build,
+        caveats_checked=caveats is not None,
+        caveat_regions=len(caveat_regions),
         contig_version=_contig_version(),
         notes=notes,
     )

@@ -69,10 +69,21 @@ milestone totals above.
   rejects unsigned reports.
 - `report-check --outputs --sources --base-dir`; recurse into M1/M2 sources —
   **shipped (Unreleased);** unrecorded sets are `unverified`, never a false pass.
-- Report compatibility preflight for assay/build/gene mismatch.
-- Portable report bundle (HTML + sidecar + attached tables).
-- Panel archival/diff and GTF/HGNC source hashes in panel metadata.
-- Cohort append/list/merge and opt-in contributing-run labels.
-- Batch report/check and a project/workspace manifest.
-- Readiness build matching, caveat coverage, and BED3 gene-annotation guidance.
-- WGS region/gene guard and explicit record cap.
+- Report compatibility preflight for assay/build/gene mismatch —
+  **shipped (Unreleased);** HTML, sidecar, and stderr warnings, never blocking.
+- Portable report bundle (HTML + sidecar + attached tables) —
+  **shipped (Unreleased):** `contig report-bundle` writes relative paths and
+  keeps every table row.
+- Panel archival/diff and GTF/HGNC source hashes in panel metadata —
+  **shipped (Unreleased):** `panel-diff`, `panel-archive`, and `meta.sources`.
+- Cohort append/list/merge and opt-in contributing-run labels —
+  **shipped (Unreleased):** `--trace`, `cohort-list`, `cohort-append`,
+  `cohort-merge`, and the query `run_labels` column.
+- Batch report/check and a project/workspace manifest —
+  **shipped (Unreleased):** `report-batch`, `report-check-batch`, and
+  manifest-relative path resolution.
+- Readiness build matching, caveat coverage, and BED3 gene-annotation guidance —
+  **shipped (Unreleased):** `--build`, explicit caveat meta, and preflight notes.
+- WGS region/gene guard and explicit record cap —
+  **shipped (Unreleased):** streaming `--region`/`--gene` bound plus a
+  1,000,000-record default cap that names the flags.

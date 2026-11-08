@@ -76,15 +76,23 @@ the metadata note `caveats checked` / `caveats not checked`).
 | `contig estimate --pipeline <p> --input <sheet>` | Pre-run runtime and cost estimate, data-driven from past runs of that pipeline with a sample-count heuristic fallback |
 | `contig export <id> --rocrate` | Export the run's provenance as an RO-Crate (ro-crate-metadata.json) |
 | `contig methods <id>` | A deterministic, citation-ready methods paragraph from the bundle |
-| `contig variants <vcf>` | Research-use variant table: join a call set to ClinVar, Iranome, and a population-frequency TSV, filter deterministically, and export TSV/JSON. `--spec` replays a saved filter; `--json` includes provenance |
-| `contig readiness --depth <tsv>` | Per-target coverage and interpretation readiness: mean depth, % ≥20x/50x/100x, zero-coverage bases, homology/pseudogene caveats, and a `ready`/`caution`/`not-interpretable` state |
+| `contig variants <vcf>` | Research-use variant table: join a call set to ClinVar, Iranome, and a population-frequency TSV, filter deterministically, and export TSV/JSON. `--spec` replays a saved filter; `--json` includes provenance; `--max-records` bounds a WGS input (default 1,000,000) |
+| `contig readiness --depth <tsv>` | Per-target coverage and interpretation readiness: mean depth, % ≥20x/50x/100x, zero-coverage bases, homology/pseudogene caveats, explicit caveat coverage, build label, and a `ready`/`caution`/`not-interpretable` state |
 | `contig panel-build --name <n>` | Build a canonical, checksummed panel BED from a gene list + GTF (optional HGNC normalization) or an existing BED; writes `<id>.bed` + `<id>.json` to the registry |
 | `contig panel-list` / `contig panel-show <id>` | List or inspect panels in the registry |
+| `contig panel-diff <a> <b>` | Compare two panel versions (metadata and BED intervals); `--json`, `--fail-on-diff` |
+| `contig panel-archive <id>` | Move a validated panel into `<dir>/archive` without deleting it |
 | `contig report <id>` | Build a self-contained research report from a run bundle, optionally attaching M1 variants and M2 readiness; writes HTML + a JSON sidecar with input hashes. `--template publication\|internal\|audit` |
 | `contig report-check <sidecar>` | Recompute the report inputs’ SHA-256 and the HTML hash, verify the Ed25519 sidecar signature when present, and optionally re-hash the run’s outputs (`--outputs`) and the attached tables’ upstream sources (`--sources`); `--base-dir` resolves relative paths, `--require-signature` rejects unsigned reports |
+| `contig report-bundle <sidecar> --out <dir>` | Copy the HTML, sidecar, run record, and attached tables into a portable directory with relative paths; all table rows are kept |
+| `contig report-batch --project <json>` | Build every report in a project manifest; `--check` verifies each afterward |
+| `contig report-check-batch --project <json>` | Check every report in a project manifest; `--outputs`, `--sources`, `--require-signature` apply to each |
 | `contig family --vcf <vcf> --ped <ped>` | Research-use trio/family analysis: per-child inheritance, Mendelian consistency, de novo candidates, and pairwise sample concordance. Autosomal only in v1 |
 | `contig biomarkers --vcf <vcf> --callable-bed <bed>` | Research-use TMB verification from PASS variants in callable regions; compares a reported TMB within tolerance. MSI/LOH/CNV are `not_verified` in v1 |
-| `contig cohort-build --name <n> --variants <json,...>` | Build a local-only cohort index from M1 variant tables: per-variant seen-run counts/frequencies and per-gene summaries. No network, no sample IDs |
+| `contig cohort-build --name <n> --variants <json,...>` | Build a local-only cohort index from M1 variant tables: per-variant seen-run counts/frequencies and per-gene summaries. `--trace` records contributing run labels. No network, no sample IDs |
+| `contig cohort-list --cohort <json>` | List the runs that contributed to a cohort |
+| `contig cohort-append --cohort <json> --variants <json,...>` | Add runs to a traced cohort, updating counts/frequencies |
+| `contig cohort-merge <a> <b> --out <json>` | Merge two traced cohorts, deduping runs by content SHA-256 |
 | `contig cohort-query --cohort <json>` | Query a local cohort by gene, variant, or minimum run count |
 | `contig ask <id> "question"` | Grounded answers from the run bundle and optional M1/M2 tables, with source citations and suggested actions. `--llm` paraphrases the grounded answer; no model is required |
 | `contig ask-eval <id> --cases <jsonl>` | Run the frozen question/citation eval set against the deterministic router |
@@ -281,6 +289,11 @@ contig variants sample.vcf --gnomad-api --gnomad-cache gnomad-cache.json --out t
 - **Output:** TSV by default; `--json` emits the table plus metadata (source
   paths, SHA-256, build, filter spec, Contig version, notes). `--out` writes to a
   file; `--save-spec` writes the effective filter spec.
+- **Scale guard:** a WGS call set is bounded to 1,000,000 kept records by
+  default. Without `--region` or `--gene`, exceeding the cap is an error that
+  tells you to bound the input; `--max-records` raises the cap explicitly when
+  you really mean it. Region/gene filtering happens while streaming, so the full
+  call set is never held in memory.
 - **Research-use boundary:** no ACMG classification, diagnosis, prognosis,
   screening, or treatment recommendation is emitted by Contig. ClinVar
   significance is attributed, not re-owned.
@@ -304,11 +317,12 @@ contig readiness \
   --depth depth.tsv \
   --bed panel.bed \
   --caveats homology_caveats_GRCh38.bed \
+  --build GRCh38 \
   --out readiness.tsv
 
 # Or let Contig run samtools depth on a BAM/CRAM:
 contig readiness --bam sample.cram --reference GRCh38.fa \
-  --bed panel.bed --out readiness.tsv
+  --bed panel.bed --build GRCh38 --out readiness.tsv
 ```
 
 - **Input:** a `samtools depth -a` TSV (`chrom pos depth`, 1-based), or a
@@ -327,8 +341,18 @@ contig readiness --bam sample.cram --reference GRCh38.fa \
   `--caution-fraction` (0.50).
 - **Gene summary:** `--by-gene` aggregates exon/target rows into one row per
   gene with the worst readiness state and weight-averaged depth/percentages.
+  A BED3 (no gene column) produces no gene summaries; add a 4th-column gene
+  symbol or use `--gtf --genes` (the note says so).
+- **Build and preflight:** `--build` records the reference build in the table
+  (and the report compatibility preflight compares it to the run). A target/depth
+  chromosome-name mismatch is recorded as a note instead of silently producing
+  all-zero coverage.
+- **Caveat coverage:** the JSON meta says whether caveats were checked
+  (`caveats_checked`) and how many regions were loaded (`caveat_regions`); the
+  notes say it too.
 - **Output:** TSV by default; `--json` includes source paths, SHA-256,
-  thresholds, and the Contig version. `--out` writes to a file.
+  thresholds, build, caveat coverage, and the Contig version. `--out` writes to a
+  file.
 
 The homology BED is deliberately a separate input: use
 `data/homology/homology_caveats_GRCh38.bed` for SMN1/SMN2, PMS2/PMS2CL, and
@@ -351,6 +375,8 @@ contig panel-build --name "Hereditary cancer" \
 
 contig panel-list --dir panels
 contig panel-show <panel-id> --dir panels
+contig panel-diff <old-id> <new-id> --dir panels
+contig panel-archive <panel-id> --dir panels
 ```
 
 - **Gene list:** symbols are resolved against HGNC when `--hgnc` is supplied
@@ -362,7 +388,12 @@ contig panel-show <panel-id> --dir panels
   and checksums.
 - **Registry:** `<id>.bed` + `<id>.json` with name, source, genes, transcripts,
   build, version, method, checksum, creation time, and Contig version. The id is a slug
-  plus a short SHA-256 of the canonical BED.
+  plus a short SHA-256 of the canonical BED. `sources` records the BED/GTF/HGNC
+  path and SHA-256, so a rebuilt panel names exactly what it consumed.
+- **Diff and archive:** `panel-diff` compares metadata and BED intervals (added /
+  removed, `--json`, `--fail-on-diff`). `panel-archive` moves a validated panel
+  into `<dir>/archive`; it disappears from the active list but stays loadable
+  with `--dir <dir>/archive` and is never overwritten.
 - **Reuse:** the BED works directly as `--bed` for `contig variants` and
   `contig readiness`.
 
@@ -420,6 +451,31 @@ contig report-diff report-a.json report-b.json
   unsigned. An unsigned rewrite removes a stale signature rather than leaving one
   that vouches for different content. The signature does not make the report a
   clinical document.
+- **Compatibility warnings:** if the run’s assay/build or the attached table’s
+  build/genes do not line up, `contig report` still renders the report but names
+  the mismatch in the HTML, the sidecar (`warnings`), and stderr. Unknown builds
+  are not guessed.
+- **Portable bundle:** `contig report-bundle report.json --out bundle/` copies
+  the HTML, sidecar, run record (and its signature, when present), and attached
+  tables into one directory and rewrites the sidecar paths to relative ones, so
+  `contig report-check bundle/report.json` keeps working after the directory is
+  moved. The table JSON keeps every row, including rows beyond the HTML
+  `max_rows` cap. Run outputs and upstream source files are not bundled.
+- **Batch projects:** `contig report-batch --project project.json` builds every
+  entry; `contig report-check-batch --project project.json` checks them. All
+  relative paths in the manifest resolve against the manifest's directory, not
+  the current shell. Example:
+  ```json
+  {
+    "name": "Cardio panel",
+    "out_dir": "reports",
+    "reports": [
+      {"id": "r1", "run_id": "r1", "variants": "r1/variants.json",
+       "readiness": "r1/readiness.json", "spec": "spec.json", "bundle": true}
+    ]
+  }
+  ```
+  A failing entry does not stop the others; the batch exits 1 and names it.
 - **Research-use boundary:** the report carries a research-use banner, never a
   diagnosis, ACMG classification, treatment recommendation, or medical sign-off.
   PDF is produced by opening the self-contained HTML and printing to PDF; a
@@ -494,11 +550,16 @@ MSI can also be run from BAMs with `--msi-tumor-bam`, `--msi-normal-bam`,
 ```bash
 contig cohort-build --name "Lab cohort" \
   --variants run1.json,run2.json,run3.json \
+  --trace \
   --out cohort.json
 
+contig cohort-list --cohort cohort.json
 contig cohort-query --cohort cohort.json --gene BRCA1
 contig cohort-query --cohort cohort.json --variant 17-43057063-C-CT
 contig cohort-query --cohort cohort.json --min-runs 2
+
+contig cohort-append --cohort cohort.json --variants run4.json
+contig cohort-merge a.json b.json --out merged.json
 ```
 
 - **Local only:** aggregates the M1 `contig variants --json` tables already on
@@ -506,6 +567,13 @@ contig cohort-query --cohort cohort.json --min-runs 2
 - **Per variant:** seen-run count, frequency, genes, consequences, and ClinVar
   significance strings.
 - **Per gene:** unique variant count and runs with the gene.
+- **Traceability:** `--trace` records the contributing run labels per variant;
+  `cohort-list` lists the runs, and `cohort-query` shows the labels in a
+  `run_labels` column/field.
+- **Lifecycle:** `cohort-append` adds runs to an existing traced cohort;
+  `cohort-merge` unions two traced cohorts, deduping runs by content SHA-256 and
+  recomputing counts/frequencies. Merging an untraced cohort is refused rather
+  than guessed.
 - **Anonymize:** `--anonymize` hashes run labels and omits paths.
 - **Federated sharing is not part of v1.** Cross-lab aggregation still needs
   consent, privacy design, and legal review.

@@ -88,3 +88,28 @@ def test_by_gene_tsv_and_json():
     assert "GENE4" in text
     payload = json.loads(render_json(table))
     assert len(payload["genes"]) == 4
+
+
+def test_meta_records_build_and_caveat_coverage():
+    table = _table(build="GRCh38")
+    assert table.meta.build == "GRCh38"
+    assert table.meta.caveats_checked is True
+    assert table.meta.caveat_regions > 0
+    unchecked = _table(caveats=None)
+    assert unchecked.meta.caveats_checked is False
+    assert unchecked.meta.caveat_regions == 0
+
+
+def test_bed3_gets_gene_annotation_guidance(tmp_path):
+    bed3 = tmp_path / "panel.bed"
+    bed3.write_text("1\t0\t100\n")
+    table = build_readiness(DEPTH, bed=bed3)
+    assert table.genes == []
+    assert any("BED3" in note for note in table.meta.notes)
+
+
+def test_disjoint_chromosomes_get_a_build_warning(tmp_path):
+    depth = tmp_path / "depth.tsv"
+    depth.write_text("99\t1\t30\n")
+    table = build_readiness(depth, bed=PANEL)
+    assert any("no chromosome names shared" in note for note in table.meta.notes)

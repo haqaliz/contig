@@ -43,11 +43,14 @@ def run_variants(
     region: str | None = None,
     spec_path: str | None = None,
     save_spec: str | None = None,
+    max_records: int = 1_000_000,
     out: str | None = None,
     json_out: bool = False,
 ) -> None:
     if build not in (None, "GRCh37", "GRCh38"):
         raise ValueError("build must be GRCh37 or GRCh38")
+    if max_records < 1:
+        raise ValueError("max_records must be at least 1")
 
     explicit = FilterSpec(
         genes=_split(genes),
@@ -77,6 +80,7 @@ def run_variants(
         gnomad_dataset=gnomad_dataset,
         build=build,
         spec=spec,
+        max_records=max_records,
     )
 
     if save_spec:

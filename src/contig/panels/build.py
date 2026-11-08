@@ -5,12 +5,14 @@ from __future__ import annotations
 import gzip
 import hashlib
 import re
+import shutil
 from collections import defaultdict
 from importlib.metadata import PackageNotFoundError, version as pkg_version
 from pathlib import Path
 
+from contig.models import sha256_file
 from contig.panels.hgnc import HgncIndex, load_hgnc, resolve_symbols
-from contig.panels.models import Panel, PanelMeta
+from contig.panels.models import Panel, PanelMeta, PanelSource
 from contig.variants.vcf import normalize_chrom
 
 PanelRow = tuple[str, int, int, str, str, str]
@@ -53,7 +55,15 @@ def panel_id(name: str, bed_text: str, version: str = "1") -> str:
     return f"{slug}-v{version_slug}-{digest}"
 
 
-def _meta(name: str, build: str, source: str, bed_text: str, version: str = "1", **kwargs) -> PanelMeta:
+def _meta(
+    name: str,
+    build: str,
+    source: str,
+    bed_text: str,
+    version: str = "1",
+    sources: list[PanelSource] | None = None,
+    **kwargs,
+) -> PanelMeta:
     return PanelMeta(
         id=panel_id(name, bed_text, version),
         name=name,
@@ -61,6 +71,7 @@ def _meta(name: str, build: str, source: str, bed_text: str, version: str = "1",
         source=source,
         version=version,
         checksum=hashlib.sha256(bed_text.encode("utf-8")).hexdigest(),
+        sources=sources or [],
         contig_version=_contig_version(),
         **kwargs,
     )
@@ -102,6 +113,9 @@ def build_from_bed(path: str | Path, name: str, build: str = "GRCh38", version: 
             bed_text,
             version=version,
             method="canonicalized BED",
+            sources=[
+                PanelSource(kind="bed", path=str(path), sha256=sha256_file(path))
+            ],
             notes=[f"Source BED: {path}"],
         ),
         bed_text=bed_text,
@@ -172,11 +186,17 @@ def build_from_genes(
         raise ValueError("at least one gene is required")
 
     notes: list[str] = []
+    sources = [
+        PanelSource(kind="gtf", path=str(gtf_path), sha256=sha256_file(gtf_path))
+    ]
     if hgnc_path:
         index: HgncIndex = load_hgnc(hgnc_path)
         approved, unknown = resolve_symbols(genes, index)
         if unknown:
             raise ValueError(f"unknown HGNC symbol(s): {', '.join(unknown)}")
+        sources.append(
+            PanelSource(kind="hgnc", path=str(hgnc_path), sha256=sha256_file(hgnc_path))
+        )
         notes.append(f"HGNC validated against {index.version}")
     else:
         approved = sorted({gene.strip().upper() for gene in genes if gene.strip()})
@@ -202,6 +222,7 @@ def build_from_genes(
             genes=approved,
             transcripts=transcript_ids,
             method=method,
+            sources=sources,
             notes=notes,
         ),
         bed_text=bed_text,
@@ -244,3 +265,25 @@ def load_panel(directory: str | Path, panel_id_value: str) -> Panel:
     if checksum != meta.checksum:
         raise ValueError(f"panel BED checksum does not match its metadata: {panel_id_value}")
     return Panel(meta=meta, bed_text=bed_text)
+
+
+def archive_panel(directory: str | Path, panel_id_value: str) -> tuple[Path, Path]:
+    """Move a panel's BED and metadata into ``<directory>/archive``.
+
+    The panel is checksum-validated first. ``list_panels`` only reads the top
+    level, so an archived panel disappears from the active registry while staying
+    loadable with ``--dir <directory>/archive``. Never overwrites an archived copy.
+    """
+    directory = Path(directory)
+    load_panel(directory, panel_id_value)
+    archive = directory / "archive"
+    archive.mkdir(parents=True, exist_ok=True)
+    bed_path = directory / f"{panel_id_value}.bed"
+    meta_path = directory / f"{panel_id_value}.json"
+    dest_bed = archive / bed_path.name
+    dest_meta = archive / meta_path.name
+    if dest_bed.exists() or dest_meta.exists():
+        raise ValueError(f"panel already archived: {panel_id_value}")
+    shutil.move(str(bed_path), dest_bed)
+    shutil.move(str(meta_path), dest_meta)
+    return dest_bed, dest_meta

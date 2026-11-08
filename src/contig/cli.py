@@ -249,20 +249,30 @@ from contig.workspace import (
 from contig.variants.command import run_variants as run_variant_workbench
 from contig.readiness.command import run_readiness as run_readiness_workbench
 from contig.reporting.command import run_report as run_report_builder
+from contig.reporting.command import run_report_batch, run_report_check_batch
 from contig.reporting.command import run_report_check as run_report_staleness_check
+from contig.reporting.bundle import bundle_report as bundle_report_sidecar
 from contig.reporting.diff import diff_reports, render_diff
 from contig.panels.build import (
+    archive_panel as archive_panel_registry,
     build_from_bed as build_panel_from_bed,
     build_from_genes as build_panel_from_genes,
     list_panels as list_panel_registry,
     load_panel as load_panel_registry,
     write_panel as write_panel_registry,
 )
+from contig.panels.diff import panel_diff, render_panel_diff
 from contig.assistant.command import run_ask as run_grounded_ask
 from contig.assistant.command import run_ask_eval as run_grounded_ask_eval
 from contig.family.command import run_family as run_family_analysis
 from contig.biomarkers.command import run_biomarkers as run_biomarker_verification
-from contig.cohort.command import run_cohort_build, run_cohort_query
+from contig.cohort.command import (
+    run_cohort_append,
+    run_cohort_build,
+    run_cohort_list,
+    run_cohort_merge,
+    run_cohort_query,
+)
 
 app = typer.Typer(help="Contig: agentic bioinformatics analyst.")
 
@@ -4982,11 +4992,56 @@ def cohort_build(
     name: str = typer.Option(..., "--name", help="Cohort name."),
     variants: str = typer.Option(..., "--variants", help="Comma-separated M1 variants JSON files."),
     anonymize: bool = typer.Option(False, "--anonymize", help="Hash run labels and omit paths."),
+    trace: bool = typer.Option(False, "--trace", help="Record per-variant contributing run labels."),
     out: str = typer.Option("cohort.json", "--out", help="Cohort JSON output path."),
 ) -> None:
     """Build a local-only cohort index from M1 variant tables."""
     try:
-        run_cohort_build(name, variants=variants, anonymize=anonymize, out=out)
+        run_cohort_build(
+            name, variants=variants, anonymize=anonymize, trace=trace, out=out
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="cohort-append")
+def cohort_append(
+    cohort: str = typer.Option(..., "--cohort", help="Existing traced cohort JSON."),
+    variants: str = typer.Option(..., "--variants", help="Comma-separated M1 variants JSON files to add."),
+    out: str = typer.Option(None, "--out", help="Output path (default: update in place)."),
+) -> None:
+    """Add runs to an existing cohort built with --trace."""
+    try:
+        run_cohort_append(cohort, variants=variants, out=out)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="cohort-merge")
+def cohort_merge(
+    a: str = typer.Argument(..., help="First traced cohort JSON."),
+    b: str = typer.Argument(..., help="Second traced cohort JSON."),
+    out: str = typer.Option(..., "--out", help="Merged cohort JSON output path."),
+    name: str = typer.Option(None, "--name", help="Merged cohort name."),
+) -> None:
+    """Merge two traced cohorts, deduping runs by content SHA-256."""
+    try:
+        run_cohort_merge(a, b, out=out, name=name)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="cohort-list")
+def cohort_list(
+    cohort: str = typer.Option(..., "--cohort", help="Cohort JSON from cohort-build."),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of TSV."),
+) -> None:
+    """List the runs that contributed to a cohort."""
+    try:
+        run_cohort_list(cohort, json_out=json_out)
     except (FileNotFoundError, ValueError, OSError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
@@ -5223,6 +5278,49 @@ def panel_show(
     typer.echo(panel.meta.model_dump_json(indent=2))
 
 
+@app.command(name="panel-diff")
+def panel_diff_command(
+    a: str = typer.Argument(..., help="Baseline panel id."),
+    b: str = typer.Argument(..., help="Comparison panel id."),
+    directory: str = typer.Option("panels", "--dir", help="Panel registry directory."),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of text."),
+    fail_on_diff: bool = typer.Option(
+        False, "--fail-on-diff", help="Exit 1 when the panels differ."
+    ),
+) -> None:
+    """Compare two panel versions (metadata and BED intervals)."""
+    try:
+        result = panel_diff(
+            load_panel_registry(directory, a),
+            load_panel_registry(directory, b),
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    if json_out:
+        typer.echo(_json.dumps(result, indent=2))
+    else:
+        typer.echo(render_panel_diff(result), nl=False)
+    if fail_on_diff and not result["same"]:
+        raise typer.Exit(code=1)
+
+
+@app.command(name="panel-archive")
+def panel_archive(
+    panel_id: str = typer.Argument(..., help="Panel id to archive."),
+    directory: str = typer.Option("panels", "--dir", help="Panel registry directory."),
+) -> None:
+    """Move a panel into <dir>/archive, keeping it out of the active registry."""
+    try:
+        bed_path, meta_path = archive_panel_registry(directory, panel_id)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"Archived {panel_id}")
+    typer.echo(f"  BED:  {bed_path}")
+    typer.echo(f"  Meta: {meta_path}")
+
+
 @app.command()
 def report(
     run_id: str = typer.Argument(..., help="The run to report on."),
@@ -5255,6 +5353,70 @@ def report(
             meta_path=meta,
         )
     except (FileNotFoundError, ValueError, OSError, RunNotFoundError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="report-bundle")
+def report_bundle(
+    meta: str = typer.Argument(..., help="The report sidecar JSON to bundle."),
+    out: str = typer.Option(..., "--out", help="Bundle output directory."),
+) -> None:
+    """Copy a report, sidecar, and attached tables into a portable directory.
+
+    Paths in the copied sidecar are relative, so `contig report-check` works after
+    the directory is moved. Attached tables keep every row, including rows beyond
+    the HTML's max_rows cap. Run outputs and upstream source files are not
+    bundled.
+    """
+    try:
+        result = bundle_report_sidecar(meta, out)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"Wrote report bundle to {result['out']} ({result['inputs']} input(s))")
+    if result["signed"]:
+        typer.echo("Signed the bundled sidecar with Ed25519.")
+
+
+@app.command(name="report-check-batch")
+def report_check_batch(
+    project: str = typer.Option(..., "--project", help="Project manifest JSON."),
+    outputs: bool = typer.Option(False, "--outputs", help="Also verify each run's recorded outputs."),
+    sources: bool = typer.Option(False, "--sources", help="Also verify attached tables' upstream sources."),
+    require_signature: bool = typer.Option(False, "--require-signature", help="Exit 1 when any report is unsigned."),
+) -> None:
+    """Check every report listed in a project manifest."""
+    try:
+        run_report_check_batch(
+            project,
+            check_outputs=outputs,
+            check_sources=sources,
+            require_signature=require_signature,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="report-batch")
+def report_batch(
+    project: str = typer.Option(..., "--project", help="Project manifest JSON."),
+    check: bool = typer.Option(False, "--check", help="Check each report after building."),
+    outputs: bool = typer.Option(False, "--outputs", help="Also verify each run's recorded outputs."),
+    sources: bool = typer.Option(False, "--sources", help="Also verify attached tables' upstream sources."),
+    require_signature: bool = typer.Option(False, "--require-signature", help="Exit 1 when any report is unsigned."),
+) -> None:
+    """Build every report listed in a project manifest."""
+    try:
+        run_report_batch(
+            project,
+            check=check,
+            check_outputs=outputs,
+            check_sources=sources,
+            require_signature=require_signature,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
 
@@ -5335,6 +5497,7 @@ def readiness(
     gtf: str = typer.Option(None, "--gtf", help="GTF annotation; requires --genes."),
     genes: str = typer.Option(None, "--genes", help="Comma-separated gene symbols for --gtf."),
     caveats: str = typer.Option(None, "--caveats", help="Homology/pseudogene BED (BED4 or the 8-column caveat BED)."),
+    build: str = typer.Option(None, "--build", help="Reference build label (e.g. GRCh38) recorded in the table."),
     depth_threshold: int = typer.Option(20, "--depth-threshold", help="Depth threshold for readiness (default 20)."),
     ready_fraction: float = typer.Option(0.90, "--ready-fraction", help="Fraction at threshold needed for ready (default 0.90)."),
     caution_fraction: float = typer.Option(0.50, "--caution-fraction", help="Fraction at threshold below which a target is not interpretable (default 0.50)."),
@@ -5359,6 +5522,7 @@ def readiness(
             gtf=gtf,
             genes=genes,
             caveats=caveats,
+            build=build,
             depth_threshold=depth_threshold,
             ready_fraction=ready_fraction,
             caution_fraction=caution_fraction,
@@ -5392,6 +5556,7 @@ def variants(
     region: str = typer.Option(None, "--region", help="CHROM:START-END region to keep."),
     spec: str = typer.Option(None, "--spec", help="Replay a saved filter spec (JSON)."),
     save_spec: str = typer.Option(None, "--save-spec", help="Write the effective filter spec as JSON."),
+    max_records: int = typer.Option(1_000_000, "--max-records", help="Cap on records kept (default 1,000,000; raise for large WGS inputs)."),
     out: str = typer.Option(None, "--out", help="Write the table to this path instead of stdout."),
     json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of TSV."),
 ) -> None:
@@ -5400,7 +5565,9 @@ def variants(
     This is a deterministic filtering surface, not a clinical interpretation:
     ClinVar is shown as "ClinVar reports ...", never restated as Contig's own
     pathogenicity call. Use --spec to replay a filter, --out to write a table,
-    and --json for a machine-readable table plus provenance.
+    and --json for a machine-readable table plus provenance. A WGS call set is
+    bounded by --max-records (default 1,000,000): pass --region or --gene to
+    keep the working set small, or raise the cap explicitly.
     """
     try:
         run_variant_workbench(
@@ -5423,6 +5590,7 @@ def variants(
             region=region,
             spec_path=spec,
             save_spec=save_spec,
+            max_records=max_records,
             out=out,
             json_out=json_out,
         )

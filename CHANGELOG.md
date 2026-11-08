@@ -6,6 +6,13 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-08
+
+Research workbenches v1: variants, readiness, panels, reports (signed and
+portable), grounded ask, family, biomarkers, and a local cohort, plus the
+read-only `/research` dashboard and batch project reports. All research-use;
+no diagnosis, ACMG adjudication, or treatment recommendation.
+
 ### Added
 - **Research-use variant workbench (M1):** `contig variants` joins a VCF to
   ClinVar, Iranome, and a population-frequency TSV, applies deterministic filters
@@ -90,6 +97,36 @@ All notable changes to Contig are recorded here. The format follows
   verifies the files recorded in the attached M1/M2 tables' `meta.sources`, and
   `--base-dir` resolves relative paths. An unrecorded output/source set is
   reported `unverified`, never a false pass.
+- **Report compatibility preflight:** `contig report` warns (HTML, sidecar, and
+  stderr) when the run's assay/build or the attached tables' build/genes do not
+  line up. It never blocks the report and never guesses an unknown build.
+- **Portable report bundle:** `contig report-bundle <sidecar> --out <dir>`
+  copies the HTML, sidecar, run record (and its signature, when present), and
+  attached tables into one directory with relative paths, so `report-check`
+  keeps working after a move. The table JSON keeps every row, including rows
+  beyond the HTML `max_rows` cap.
+- **Panel provenance and lifecycle:** panel metadata now records the BED/GTF/HGNC
+  source paths and SHA-256s; `contig panel-diff` compares metadata and BED
+  intervals (`--json`, `--fail-on-diff`); `contig panel-archive` moves a
+  validated panel into `<dir>/archive` without deleting it.
+- **Cohort lifecycle and traceability:** `cohort-build --trace` records the
+  contributing run labels per variant; `cohort-list` lists the runs;
+  `cohort-query` shows `run_labels`; `cohort-append` adds runs and
+  `cohort-merge` unions traced cohorts, deduping by content SHA-256 and
+  recomputing counts/frequencies. Merging an untraced cohort is refused.
+- **Batch report projects:** `contig report-batch` and
+  `contig report-check-batch` read a project manifest, resolve its relative
+  paths against the manifest directory, and process every entry. A failing entry
+  does not stop the others; the batch exits 1 and names it.
+- **Readiness build and caveat preflight:** `contig readiness --build` records
+  the reference build; the JSON meta says whether caveats were checked and how
+  many regions loaded; a BED3 without gene names gets explicit gene-annotation
+  guidance; a target/depth chromosome mismatch is recorded instead of silently
+  producing all-zero coverage.
+- **WGS variant-table guard:** `contig variants` caps kept records at 1,000,000
+  by default and applies `--region`/`--gene` while streaming, so the full WGS
+  call set is not held in memory. Exceeding the cap without a bound is an error
+  that names the flags; `--max-records` raises the cap explicitly.
 
 ### Fixed
 - **Panel versions no longer overwrite each other:** the panel id includes the

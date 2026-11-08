@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import gzip
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from contig.variants.models import VariantKey, VariantRecord, VcfStats
@@ -302,6 +302,32 @@ def iter_variants(path: str | Path, stats: VcfStats | None = None) -> Iterator[V
             stats.emitted_rows += emitted
 
 
-def read_variants(path: str | Path) -> tuple[list[VariantRecord], VcfStats]:
+class VariantCapExceeded(ValueError):
+    """Raised when a read would keep more records than the explicit cap."""
+
+    def __init__(self, cap: int):
+        super().__init__(f"variant table exceeded the {cap:,}-record cap")
+        self.cap = cap
+
+
+def read_variants(
+    path: str | Path,
+    *,
+    keep: Callable[[VariantRecord], bool] | None = None,
+    max_records: int | None = None,
+) -> tuple[list[VariantRecord], VcfStats]:
+    """Read a VCF, optionally keeping only matching records up to a cap.
+
+    ``keep`` is applied while streaming, so a region/gene query never holds the
+    whole WGS call set in memory. The cap counts KEPT rows; exceeding it raises
+    rather than returning a silently truncated table.
+    """
     stats = VcfStats()
-    return list(iter_variants(path, stats)), stats
+    rows: list[VariantRecord] = []
+    for record in iter_variants(path, stats):
+        if keep is not None and not keep(record):
+            continue
+        if max_records is not None and len(rows) >= max_records:
+            raise VariantCapExceeded(max_records)
+        rows.append(record)
+    return rows, stats

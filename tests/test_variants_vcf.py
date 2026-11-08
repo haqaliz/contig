@@ -4,7 +4,9 @@ import gzip
 import shutil
 from pathlib import Path
 
-from contig.variants.vcf import normalize_chrom, read_variants
+import pytest
+
+from contig.variants.vcf import VariantCapExceeded, normalize_chrom, read_variants
 
 FIX = Path(__file__).parent / "fixtures" / "variants"
 SAMPLE = FIX / "sample.vcf"
@@ -104,3 +106,14 @@ def test_normalize_chrom_handles_prefixes_and_mito():
     assert normalize_chrom("17") == "17"
     assert normalize_chrom("chrM") == "MT"
     assert normalize_chrom("MT") == "MT"
+
+
+def test_read_cap_counts_kept_rows_and_raises():
+    with pytest.raises(VariantCapExceeded):
+        read_variants(SAMPLE, max_records=6)
+    rows, _ = read_variants(SAMPLE, max_records=7)
+    assert len(rows) == 7
+    kept, _ = read_variants(
+        SAMPLE, keep=lambda row: row.gene == "BRCA1", max_records=1
+    )
+    assert len(kept) == 1
