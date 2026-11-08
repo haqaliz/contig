@@ -25,7 +25,7 @@ TEMPLATE_SECTIONS = {
         "readiness", "provenance", "notes", "limitations", "reviewer",
     ],
     "audit": [
-        "verdict", "qc", "provenance", "limitations", "reviewer",
+        "verdict", "qc", "repairs", "provenance", "limitations", "reviewer",
     ],
 }
 
@@ -102,7 +102,7 @@ def _banner() -> str:
 
 def _summary(record: RunRecord, spec: ReportSpec) -> str:
     text = spec.summary or (
-        f"Verified run {record.run_id} from {record.pipeline} "
+        f"Run {record.run_id} from {record.pipeline} "
         f"({record.pipeline_revision})."
     )
     return _section("Summary", f"<p>{esc(text)}</p>")
@@ -166,14 +166,20 @@ def _variants(payload: dict[str, Any] | None, source: ReportInput | None, spec: 
     for row in payload.get("variants", [])[: spec.max_rows]:
         key = row.get("key", {})
         rows.append([
-            row.get("gene", ""),
+            row.get("gene") or "",
             key.get("chrom", ""),
             key.get("pos", ""),
             key.get("ref", ""),
             key.get("alt", ""),
-            row.get("consequence", "unannotated"),
-            row.get("clinvar_significance", "not in ClinVar"),
-            row.get("gnomad_af", ""),
+            row.get("rsid") or "",
+            row.get("genotype") or "",
+            row.get("depth") or "",
+            row.get("vaf") or "",
+            row.get("filter") or "",
+            row.get("consequence") or "unannotated",
+            row.get("clinvar_significance") or "not in ClinVar",
+            row.get("clinvar_review_status") or "",
+            row.get("population_af", row.get("gnomad_af", "")),
             row.get("iranome_af", ""),
         ])
     count = len(payload.get("variants", []))
@@ -182,14 +188,15 @@ def _variants(payload: dict[str, Any] | None, source: ReportInput | None, spec: 
         "the full table is in the attached JSON.</p>"
         if count > spec.max_rows else ""
     )
-    source_note = f'<p class="source">Source: {esc(source.path)} ({esc(source.sha256[:16])}…)</p>' if source else ""
+    source_note = f'<p class="source">Source: {esc(source.path)} (sha256 {esc(source.sha256)})</p>' if source else ""
     buckets = ", ".join(f"{name}={count}" for name, count in summary["clinvar"].items())
     return _section(
         "Variant evidence",
         f"<p><strong>{count}</strong> variants. ClinVar buckets: {esc(buckets)}.</p>"
         + cap_note
         + _table(
-            ["Gene", "Chrom", "Pos", "Ref", "Alt", "Consequence", "ClinVar", "gnomAD AF", "Iranome AF"],
+            ["Gene", "Chrom", "Pos", "Ref", "Alt", "rsID", "GT", "Depth", "VAF",
+             "Filter", "Consequence", "ClinVar", "ClinVar review", "Population AF", "Iranome AF"],
             rows,
             klass="compact",
         )
@@ -218,7 +225,7 @@ def _readiness(payload: dict[str, Any] | None, source: ReportInput | None, spec:
         f'<p class="muted">Showing {min(spec.max_rows, count)} of {count} targets.</p>'
         if count > spec.max_rows else ""
     )
-    source_note = f'<p class="source">Source: {esc(source.path)} ({esc(source.sha256[:16])}…)</p>' if source else ""
+    source_note = f'<p class="source">Source: {esc(source.path)} (sha256 {esc(source.sha256)})</p>' if source else ""
     blocked = ", ".join(summary["blocked"]) if summary["blocked"] else "none"
     return _section(
         "Coverage readiness",
@@ -236,7 +243,7 @@ def _readiness(payload: dict[str, Any] | None, source: ReportInput | None, spec:
 
 def _signature_label(signature: dict[str, Any] | None) -> str:
     if not signature or not signature.get("signed"):
-        return "Unsigned"
+        return "Unsigned (not signed)"
     if signature.get("signature_ok") is True:
         return "Signed; signature verified"
     if signature.get("signature_ok") is False:
@@ -248,12 +255,12 @@ def _provenance(record: RunRecord, inputs: list[ReportInput], signature: dict[st
     rows = [
         ["Pipeline", record.pipeline],
         ["Revision", record.pipeline_revision],
-        ["Assay", record.assay or ""],
-        ["Contig version", record.contig_version or ""],
-        ["Nextflow version", record.nextflow_version or ""],
+        ["Assay", record.assay or "not recorded"],
+        ["Contig version", record.contig_version or "not recorded"],
+        ["Nextflow version", record.nextflow_version or "not recorded"],
         ["Signature", _signature_label(signature)],
         ["Input checksums", len(record.input_checksums)],
-        ["Output checksums", len(record.output_checksums)],
+        ["Output checksums", f"{len(record.output_checksums)} (recorded; use contig verify to re-hash)"],
         ["Container digests", len(record.container_digests)],
     ]
     if record.reference_identity:
@@ -271,6 +278,11 @@ def _provenance(record: RunRecord, inputs: list[ReportInput], signature: dict[st
     return _section(
         "Provenance",
         _table(["Field", "Value"], rows, klass="compact")
+        + '<p class="muted">Input checksums are recorded as counts; output checksums '
+        "are not re-hashed here. Use <code>contig verify</code> for output integrity "
+        'and the Report inputs table below for the report artifacts. Signing is '
+        'optional: use <code>contig keygen</code> and <code>CONTIG_SIGNING_KEY</code>, '
+        'then <code>contig verify</code>.</p>'
         + "<h3>Report inputs</h3>"
         + _table(["Kind", "Path", "SHA-256", "Note"], inputs_rows, klass="compact"),
     )

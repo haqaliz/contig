@@ -56,8 +56,8 @@ def test_load_gnomad_caps_the_site_count():
 def test_build_table_with_gnomad_api():
     table = build_table(SAMPLE, gnomad_api=True, gnomad_client=FakeClient())
     row = next(row for row in table.rows if row.key.pos == 100)
-    assert row.gnomad_af == 0.002
-    assert row.gnomad_an == 1000
+    assert row.population_af == 0.002
+    assert row.population_an == 1000
     assert any(source.kind == "gnomad_api" for source in table.meta.sources)
 
 

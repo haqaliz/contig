@@ -64,3 +64,32 @@ def test_missing_variants_file_is_an_honest_error(tmp_path):
 def test_missing_sidecar_is_an_honest_error(tmp_path):
     with pytest.raises(FileNotFoundError):
         check_report(tmp_path / "missing.json")
+
+
+def test_check_verifies_the_html_hash(tmp_path):
+    html, meta = build_report(RUNS, "r1", ReportSpec(), variants_path=VARIANTS)
+    out = tmp_path / "report.html"
+    sidecar = tmp_path / "report.json"
+    write_report(html, meta, out, sidecar)
+    out.write_text(out.read_text() + "\n<!-- tampered -->\n")
+    results = check_report(sidecar)
+    html_result = next(item for item in results if item["kind"] == "html")
+    assert html_result["status"] == "stale"
+
+
+def test_check_works_from_another_directory(tmp_path, monkeypatch):
+    html, meta = build_report(RUNS, "r1", ReportSpec(), variants_path=VARIANTS)
+    out = tmp_path / "report.html"
+    sidecar = tmp_path / "report.json"
+    write_report(html, meta, out, sidecar)
+    monkeypatch.chdir(tmp_path.parent)
+    results = check_report(sidecar)
+    assert all(item["status"] == "current" for item in results)
+
+
+def test_write_report_creates_parent_directories(tmp_path):
+    html, meta = build_report(RUNS, "r1", ReportSpec())
+    out = tmp_path / "nested" / "report.html"
+    sidecar = tmp_path / "nested" / "report.json"
+    write_report(html, meta, out, sidecar)
+    assert out.is_file() and sidecar.is_file()

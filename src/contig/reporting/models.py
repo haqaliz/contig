@@ -52,5 +52,6 @@ class ReportMeta(BaseModel):
     contig_version: str = ""
     spec: ReportSpec = Field(default_factory=ReportSpec)
     inputs: list[ReportInput] = Field(default_factory=list)
+    html_path: str = ""
     html_sha256: str = ""
     notes: list[str] = Field(default_factory=list)

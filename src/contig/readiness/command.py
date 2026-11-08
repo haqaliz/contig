@@ -8,6 +8,7 @@ from contig.readiness.models import ReadinessThresholds
 from contig.readiness.table import (
     RESEARCH_USE_NOTICE,
     build_readiness,
+    render_gene_tsv,
     render_json,
     render_tsv,
     summarize,
@@ -34,6 +35,7 @@ def run_readiness(
     depth_threshold: int = 20,
     ready_fraction: float = 0.90,
     caution_fraction: float = 0.50,
+    by_gene: bool = False,
     out: str | None = None,
     json_out: bool = False,
 ) -> None:
@@ -63,8 +65,13 @@ def run_readiness(
     )
 
     if out:
-        write_table(table, out, as_json=json_out)
+        write_table(table, out, as_json=json_out, by_gene=by_gene)
         typer.echo(f"Wrote {out}")
         return
 
-    typer.echo(render_json(table) if json_out else render_tsv(table), nl=False)
+    if json_out:
+        typer.echo(render_json(table), nl=False)
+    elif by_gene:
+        typer.echo(render_gene_tsv(table), nl=False)
+    else:
+        typer.echo(render_tsv(table), nl=False)

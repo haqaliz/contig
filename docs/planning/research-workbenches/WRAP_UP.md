@@ -44,6 +44,18 @@ all eight surfaces over the downloaded data (not CI). It exercises:
 This is the closest thing to validation we can do without a design partner; it
 proves the plumbing, not that the defaults are scientifically right.
 
+### Agent-persona validation
+
+Four synthetic personas ran the CLI on real fixtures/data
+(`docs/validation/AGENT_PARTNERS.md`, reports in
+`docs/validation/agent-runs/`). They found and we fixed: panel-version overwrite,
+cohort duplicate double-counting, report HTML-hash verification, cwd-relative
+sidecars, the misleading “signed” label, missing report evidence columns,
+non-runnable `ask` actions, the generic-frequency mislabel, the panel-list
+header, and the missing gene-level readiness summary. Remaining findings are in
+`docs/validation/AGENT_VALIDATION_FINDINGS.md`; they are backlog, not dashboard
+blockers.
+
 ## What is deliberately not built
 
 - **Clinical diagnosis, ACMG adjudication, drug/treatment recommendations, a

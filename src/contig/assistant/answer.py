@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 
 from contig.assistant.context import Context
 from contig.assistant.models import Answer, Citation
@@ -64,6 +65,14 @@ def _run_citation(context: Context) -> Citation:
     return context.citations["run_record"]
 
 
+def _runs_dir_suffix(context: Context) -> str:
+    return f" --runs-dir {shlex.quote(context.runs_dir)}" if context.runs_dir != "runs" else ""
+
+
+def _run_command(context: Context, subcommand: str) -> str:
+    return f"contig {subcommand} {context.record.run_id}{_runs_dir_suffix(context)}"
+
+
 def _action(context: Context, command: str) -> str:
     return f"{command} {context.record.run_id}".strip()
 
@@ -83,7 +92,10 @@ def _verdict(context: Context) -> Answer:
         intent="verdict",
         answer=text,
         citations=[_run_citation(context)],
-        actions=[_action(context, "contig show --explain"), _action(context, "contig verify")],
+        actions=[
+            _run_command(context, "show") + " --explain",
+            _run_command(context, "verify"),
+        ],
     )
 
 
@@ -103,7 +115,7 @@ def _qc(context: Context) -> Answer:
         intent="qc",
         answer="\n".join(lines),
         citations=[_run_citation(context)],
-        actions=[_action(context, "contig show --explain")],
+        actions=[_run_command(context, "show") + " --explain"],
     )
 
 
@@ -125,7 +137,7 @@ def _repairs(context: Context) -> Answer:
         intent="repairs",
         answer=text,
         citations=[_run_citation(context)],
-        actions=[_action(context, "contig show")],
+        actions=[_run_command(context, "show")],
     )
 
 
@@ -153,7 +165,7 @@ def _provenance(context: Context) -> Answer:
         intent="provenance",
         answer=text,
         citations=[_run_citation(context)],
-        actions=[_action(context, "contig methods"), _action(context, "contig verify")],
+        actions=[_run_command(context, "methods"), _run_command(context, "verify")],
     )
 
 
@@ -162,7 +174,7 @@ def _methods(context: Context) -> Answer:
         intent="methods",
         answer=render_methods(context.record),
         citations=[_run_citation(context)],
-        actions=[_action(context, "contig methods")],
+        actions=[_run_command(context, "methods")],
     )
 
 
@@ -265,7 +277,7 @@ def _report(context: Context) -> Answer:
             "--readiness; use `contig report-check` to detect stale inputs."
         ),
         citations=[_run_citation(context)],
-        actions=[_action(context, "contig report"), "contig report-check <sidecar.json>"],
+        actions=[_run_command(context, "report"), "contig report-check <sidecar.json>"],
     )
 
 
@@ -279,11 +291,14 @@ def _help(context: Context) -> Answer:
             "questions that are not in the bundle or attached tables."
         ),
         citations=[_run_citation(context)],
-        actions=[_action(context, "contig show --explain"), _action(context, "contig report")],
+        actions=[
+            _run_command(context, "show") + " --explain",
+            _run_command(context, "report"),
+        ],
     )
 
 
-def _unknown() -> Answer:
+def _unknown(context: Context) -> Answer:
     return Answer(
         intent="unknown",
         answer=(
@@ -293,7 +308,7 @@ def _unknown() -> Answer:
         ),
         citations=[],
         confidence="none",
-        actions=["contig ask <run-id> \"help\""],
+        actions=[f"contig ask {context.record.run_id} \"help\"{_runs_dir_suffix(context)}"],
     )
 
 
@@ -324,4 +339,4 @@ def answer_question(context: Context, question: str) -> Answer:
                 return _variants(context, question)
             if context.readiness is not None:
                 return _readiness(context, question)
-    return _unknown()
+    return _unknown(context)

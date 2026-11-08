@@ -5232,6 +5232,7 @@ def panel_list(
     if not panels:
         typer.echo(f"No panels in {directory}.")
         return
+    typer.echo("id\tversion\tname\tsource\tgenes\tbuild")
     for meta in panels:
         genes = ",".join(meta.genes) if meta.genes else "-"
         typer.echo(f"{meta.id}\t{meta.version}\t{meta.name}\t{meta.source}\t{genes}\t{meta.build}")
@@ -5302,6 +5303,7 @@ def report_diff(
     a: str = typer.Argument(..., help="First report sidecar JSON."),
     b: str = typer.Argument(..., help="Second report sidecar JSON."),
     json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of text."),
+    fail_on_diff: bool = typer.Option(False, "--fail-on-diff", help="Exit 1 when the sidecars differ."),
 ) -> None:
     """Diff two report sidecars (spec, inputs, hashes, notes)."""
     try:
@@ -5313,6 +5315,8 @@ def report_diff(
         typer.echo(_json.dumps(result, indent=2))
     else:
         typer.echo(render_diff(result), nl=False)
+    if fail_on_diff and not result["same"]:
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -5328,6 +5332,7 @@ def readiness(
     depth_threshold: int = typer.Option(20, "--depth-threshold", help="Depth threshold for readiness (default 20)."),
     ready_fraction: float = typer.Option(0.90, "--ready-fraction", help="Fraction at threshold needed for ready (default 0.90)."),
     caution_fraction: float = typer.Option(0.50, "--caution-fraction", help="Fraction at threshold below which a target is not interpretable (default 0.50)."),
+    by_gene: bool = typer.Option(False, "--by-gene", help="Aggregate target rows into one summary per gene."),
     out: str = typer.Option(None, "--out", help="Write the table to this path instead of stdout."),
     json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of TSV."),
 ) -> None:
@@ -5351,6 +5356,7 @@ def readiness(
             depth_threshold=depth_threshold,
             ready_fraction=ready_fraction,
             caution_fraction=caution_fraction,
+            by_gene=by_gene,
             out=out,
             json_out=json_out,
         )

@@ -49,7 +49,7 @@ the filter spec/meta, Typer for the command, pytest. Existing `sha256_file` from
 - `VariantKey` frozen dataclass: `chrom: str, pos: int, ref: str, alt: str`.
 - `VariantRecord` dataclass: key, rsid, qual, filter, genotype, zygosity, depth,
   vaf, consequence, impact, gene, transcript, hgvsc, hgvsp, clinvar_*,
-  gnomad_af/an, iranome_af/ac/an.
+  population_af/an, iranome_af/ac/an.
 - `FilterSpec` Pydantic model: genes, consequences, max_af, clinvar_significance,
   pass_only, min_depth, min_vaf, zygosity, region. `to_dict()`/`from_dict()`.
 - `SourceProvenance` Pydantic model: kind, path, sha256, build, version, note.

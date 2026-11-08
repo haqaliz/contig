@@ -64,6 +64,8 @@ def test_audit_template_omits_the_variant_table():
     html = _render(spec)
     assert "Variant evidence" not in html
     assert "Provenance" in html
+    assert "Repair chain" in html
+    assert "STAR ran out of memory" in html
 
 
 def test_narrative_is_html_escaped():
@@ -86,3 +88,15 @@ def test_signature_status_is_rendered():
     assert "Signed; signature verified" in signed
     unsigned = _render(signature={})
     assert "Unsigned" in unsigned
+
+
+def test_variant_table_includes_the_evidence_columns():
+    spec = ReportSpec.model_validate_json(SPEC.read_text())
+    spec = ReportSpec.model_validate({**spec.model_dump(), "max_rows": 10})
+    html = _render(spec)
+    assert "rs80357906" in html
+    assert "0/1" in html
+    assert "150" in html
+    assert "Pathogenic" in html
+    assert "ClinVar review" in html
+    assert "unannotated" in html

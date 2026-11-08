@@ -40,11 +40,19 @@ def build_cohort(name: str, paths: list[str], *, anonymize: bool = False) -> Coh
     gene_runs: dict[str, set[str]] = defaultdict(set)
     gene_variants: dict[str, set[tuple[str, int, str, str]]] = defaultdict(set)
     used_labels: set[str] = set()
+    seen_digests: dict[str, str] = {}
+    duplicate_notes: list[str] = []
 
     for raw_path in paths:
         path = Path(raw_path)
         payload = load_variants_json(path)
         digest = sha256_file(path)
+        if digest in seen_digests:
+            duplicate_notes.append(
+                f"duplicate input skipped: {path} (same content as {seen_digests[digest]})"
+            )
+            continue
+        seen_digests[digest] = str(path)
         label = digest[:12] if anonymize else path.stem
         if label in used_labels:
             label = f"{label}-{digest[:6]}"
@@ -116,7 +124,8 @@ def build_cohort(name: str, paths: list[str], *, anonymize: bool = False) -> Coh
             anonymized=anonymize,
             notes=[
                 "Local-only cohort: no data leaves this machine.",
-                f"{len(variants)} variant(s) across {total_runs} run(s).",
+                f"{len(variants)} variant(s) across {total_runs} unique run(s).",
+                *duplicate_notes,
             ],
         ),
         variants=variants,

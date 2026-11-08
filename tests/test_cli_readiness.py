@@ -56,3 +56,10 @@ def test_bed_and_gtf_together_exit_nonzero():
     result = _invoke(["--depth", DEPTH, "--bed", PANEL, "--gtf", GTF, "--genes", "GENE1"])
     assert result.exit_code == 1
     assert "exactly one" in result.output.lower()
+
+
+def test_by_gene_output(tmp_path):
+    out = tmp_path / "genes.tsv"
+    result = _invoke(["--depth", DEPTH, "--bed", PANEL, "--by-gene", "--out", str(out)])
+    assert result.exit_code == 0, result.output
+    assert out.read_text().startswith("gene\ttargets")

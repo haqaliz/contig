@@ -98,3 +98,9 @@ def test_unknown_refuses_without_a_citation():
     assert answer.confidence == "none"
     assert answer.citations == []
     assert "won't guess" in answer.answer
+
+
+def test_actions_preserve_the_runs_dir_and_run_id_order():
+    answer = answer_question(_context(), "what is the verdict?")
+    assert answer.actions[0].startswith("contig show r1")
+    assert "--runs-dir" in answer.actions[0]

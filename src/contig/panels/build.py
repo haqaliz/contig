@@ -46,15 +46,16 @@ def canonical_bed(rows: list[PanelRow]) -> str:
     return "".join("\t".join(map(str, row)) + "\n" for row in unique)
 
 
-def panel_id(name: str, bed_text: str) -> str:
+def panel_id(name: str, bed_text: str, version: str = "1") -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "panel"
+    version_slug = re.sub(r"[^a-z0-9]+", "-", version.lower()).strip("-") or "1"
     digest = hashlib.sha256(bed_text.encode("utf-8")).hexdigest()[:8]
-    return f"{slug}-{digest}"
+    return f"{slug}-v{version_slug}-{digest}"
 
 
 def _meta(name: str, build: str, source: str, bed_text: str, version: str = "1", **kwargs) -> PanelMeta:
     return PanelMeta(
-        id=panel_id(name, bed_text),
+        id=panel_id(name, bed_text, version),
         name=name,
         build=build,
         source=source,

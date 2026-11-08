@@ -13,7 +13,7 @@ def _record(**kwargs):
         zygosity="het",
         depth=50,
         vaf=0.5,
-        gnomad_af=0.001,
+        population_af=0.001,
         clinvar_significance="Pathogenic",
     )
     defaults.update(kwargs)
@@ -37,21 +37,21 @@ def test_consequence_filter_uses_substrings():
 
 def test_max_af_uses_gnomad_first_and_drops_above_the_ceiling():
     rows = [
-        _record(gnomad_af=0.001),
-        _record(gnomad_af=0.02, key=VariantKey("17", 101, "C", "T")),
+        _record(population_af=0.001),
+        _record(population_af=0.02, key=VariantKey("17", 101, "C", "T")),
     ]
     kept = apply_filters(rows, FilterSpec(max_af=0.01))
-    assert [r.gnomad_af for r in kept] == [0.001]
+    assert [r.population_af for r in kept] == [0.001]
 
 
 def test_max_af_falls_back_to_iranome():
-    rows = [_record(gnomad_af=None, iranome_af=0.005)]
+    rows = [_record(population_af=None, iranome_af=0.005)]
     kept = apply_filters(rows, FilterSpec(max_af=0.01))
     assert kept
 
 
 def test_max_af_keeps_variants_with_unknown_frequency():
-    rows = [_record(gnomad_af=None, iranome_af=None)]
+    rows = [_record(population_af=None, iranome_af=None)]
     assert apply_filters(rows, FilterSpec(max_af=0.01)) == rows
 
 
@@ -111,13 +111,13 @@ def test_clinvar_rank_orders_actionable_before_benign():
 
 def test_sort_order_is_clinvar_then_af_then_consequence():
     rows = [
-        _record(clinvar_significance=None, gnomad_af=0.001, key=VariantKey("1", 1, "A", "G")),
-        _record(clinvar_significance="Benign", gnomad_af=0.001, key=VariantKey("1", 2, "A", "G")),
-        _record(clinvar_significance="Pathogenic", gnomad_af=0.01, key=VariantKey("1", 3, "A", "G")),
-        _record(clinvar_significance="Pathogenic", gnomad_af=0.001, key=VariantKey("1", 4, "A", "G")),
+        _record(clinvar_significance=None, population_af=0.001, key=VariantKey("1", 1, "A", "G")),
+        _record(clinvar_significance="Benign", population_af=0.001, key=VariantKey("1", 2, "A", "G")),
+        _record(clinvar_significance="Pathogenic", population_af=0.01, key=VariantKey("1", 3, "A", "G")),
+        _record(clinvar_significance="Pathogenic", population_af=0.001, key=VariantKey("1", 4, "A", "G")),
     ]
     ordered = sort_rows(rows)
-    assert [(r.clinvar_significance, r.gnomad_af, r.key.pos) for r in ordered] == [
+    assert [(r.clinvar_significance, r.population_af, r.key.pos) for r in ordered] == [
         ("Pathogenic", 0.001, 4),
         ("Pathogenic", 0.01, 3),
         ("Benign", 0.001, 2),

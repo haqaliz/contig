@@ -17,6 +17,7 @@ from contig.workspace import bundle_dir_for, load_run
 class Context:
     record: RunRecord
     bundle_dir: Path
+    runs_dir: str
     variants: dict[str, Any] | None
     readiness: dict[str, Any] | None
     citations: dict[str, Citation]
@@ -39,7 +40,7 @@ def load_context(
     record_path = bundle_dir / "run_record.json"
 
     citations = {
-        "run_record": _citation("run_record", record_path, "Signed/reproducible run record"),
+        "run_record": _citation("run_record", record_path, "Run record"),
     }
     variants = None
     if variants_path:
@@ -53,6 +54,7 @@ def load_context(
     return Context(
         record=record,
         bundle_dir=bundle_dir,
+        runs_dir=str(runs_dir),
         variants=variants,
         readiness=readiness,
         citations=citations,

@@ -11,7 +11,7 @@ from pathlib import Path
 from contig.models import sha256_file
 from contig.readiness.caveats import load_caveats
 from contig.readiness.depth import load_depth, run_samtools_depth
-from contig.readiness.evaluate import evaluate_targets
+from contig.readiness.evaluate import evaluate_targets, summarize_by_gene
 from contig.readiness.models import (
     ReadinessMeta,
     ReadinessTable,
@@ -111,15 +111,22 @@ def build_readiness(
     if caveats is not None:
         caveat_regions = load_caveats(caveats)
         sources.append(_source("caveats", caveats, f"{len(caveat_regions)} caveat regions"))
+        notes.append(f"caveats checked: {len(caveat_regions)} region(s)")
+    else:
+        notes.append("caveats not checked")
+
+    if targets and not any(target.gene for target in targets):
+        notes.append("target BED has no gene names; gene/transcript/exon columns are empty")
 
     rows = evaluate_targets(targets, depths, thresholds, caveat_regions)
+    genes = summarize_by_gene(rows)
     meta = ReadinessMeta(
         sources=sources,
         thresholds=thresholds,
         contig_version=_contig_version(),
         notes=notes,
     )
-    return ReadinessTable(rows=rows, meta=meta)
+    return ReadinessTable(rows=rows, meta=meta, genes=genes)
 
 
 def _pct(value: float) -> str:
@@ -152,16 +159,48 @@ def render_tsv(table: ReadinessTable) -> str:
     return "\n".join(lines) + "\n"
 
 
+GENE_COLUMNS = [
+    "gene", "targets", "bases", "covered_bases", "mean_depth",
+    "pct_20x", "pct_50x", "pct_100x", "zero_bases", "caveats",
+    "readiness", "reason",
+]
+
+
+def render_gene_tsv(table: ReadinessTable) -> str:
+    lines = ["\t".join(GENE_COLUMNS)]
+    for gene in table.genes:
+        lines.append("\t".join(str(value) for value in [
+            gene.gene, gene.targets, gene.bases, gene.covered_bases,
+            f"{gene.mean_depth:.2f}", _pct(gene.pct_20x), _pct(gene.pct_50x),
+            _pct(gene.pct_100x), gene.zero_bases, "; ".join(gene.caveats),
+            gene.readiness, gene.reason,
+        ]))
+    return "\n".join(lines) + "\n"
+
+
 def render_json(table: ReadinessTable) -> str:
     payload = {
         "meta": table.meta.model_dump(mode="json"),
         "targets": [asdict(row) for row in table.rows],
+        "genes": [asdict(gene) for gene in table.genes],
     }
     return json.dumps(payload, indent=2) + "\n"
 
 
-def write_table(table: ReadinessTable, path: str | Path, *, as_json: bool = False) -> None:
-    Path(path).write_text(render_json(table) if as_json else render_tsv(table), encoding="utf-8")
+def write_table(
+    table: ReadinessTable,
+    path: str | Path,
+    *,
+    as_json: bool = False,
+    by_gene: bool = False,
+) -> None:
+    if as_json:
+        text = render_json(table)
+    elif by_gene:
+        text = render_gene_tsv(table)
+    else:
+        text = render_tsv(table)
+    Path(path).write_text(text, encoding="utf-8")
 
 
 def summarize(rows: list[TargetMetrics]) -> dict[str, int]:

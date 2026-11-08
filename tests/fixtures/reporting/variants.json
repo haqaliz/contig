@@ -1,17 +1,73 @@
 {
   "meta": {
     "sources": [
-      {"kind": "calls", "path": "sample.vcf", "sha256": "aaaabbbbccccdddd", "build": "GRCh38", "note": "3 ALT rows"}
+      {
+        "kind": "calls",
+        "path": "sample.vcf",
+        "sha256": "aaaabbbbccccdddd",
+        "build": "GRCh38",
+        "note": "3 ALT rows"
+      }
     ],
-    "filters": {"genes": ["BRCA1", "GJB2"], "max_af": 0.01},
+    "filters": {
+      "genes": [
+        "BRCA1",
+        "GJB2"
+      ],
+      "max_af": 0.01
+    },
     "build": "GRCh38",
     "generated_at": "2026-11-07T00:00:00+00:00",
     "contig_version": "1.0.0",
     "notes": []
   },
   "variants": [
-    {"key": {"chrom": "17", "pos": 43057063, "ref": "C", "alt": "CT"}, "rsid": "rs80357906", "gene": "BRCA1", "consequence": "frameshift_variant", "clinvar_significance": "Pathogenic", "gnomad_af": 0.0001, "iranome_af": 0.001},
-    {"key": {"chrom": "13", "pos": 20189547, "ref": "G", "alt": "A"}, "rsid": "rs72474224", "gene": "GJB2", "consequence": "missense_variant", "clinvar_significance": "Likely_pathogenic", "gnomad_af": 0.01, "iranome_af": 0.008},
-    {"key": {"chrom": "1", "pos": 100, "ref": "A", "alt": "G"}, "rsid": null, "gene": null, "consequence": null, "clinvar_significance": null, "gnomad_af": null, "iranome_af": null}
+    {
+      "key": {
+        "chrom": "17",
+        "pos": 43057063,
+        "ref": "C",
+        "alt": "CT"
+      },
+      "rsid": "rs80357906",
+      "gene": "BRCA1",
+      "consequence": "frameshift_variant",
+      "clinvar_significance": "Pathogenic",
+      "population_af": 0.0001,
+      "iranome_af": 0.001,
+      "genotype": "0/1",
+      "depth": 150,
+      "vaf": 0.3333,
+      "filter": "PASS",
+      "clinvar_review_status": "criteria_provided,_multiple_submitters,_no_conflicts"
+    },
+    {
+      "key": {
+        "chrom": "13",
+        "pos": 20189547,
+        "ref": "G",
+        "alt": "A"
+      },
+      "rsid": "rs72474224",
+      "gene": "GJB2",
+      "consequence": "missense_variant",
+      "clinvar_significance": "Likely_pathogenic",
+      "population_af": 0.01,
+      "iranome_af": 0.008
+    },
+    {
+      "key": {
+        "chrom": "1",
+        "pos": 100,
+        "ref": "A",
+        "alt": "G"
+      },
+      "rsid": null,
+      "gene": null,
+      "consequence": null,
+      "clinvar_significance": null,
+      "population_af": null,
+      "iranome_af": null
+    }
   ]
 }

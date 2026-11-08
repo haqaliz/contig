@@ -52,6 +52,8 @@ def run_report_check(meta_path: str) -> None:
     stale = [item for item in results if item["status"] != "current"]
     for item in results:
         typer.echo(f"{item['status']:>8}  {item['kind']}: {item['path']}")
+        if item["status"] != "current":
+            typer.echo(f"          expected {item['expected']} actual {item['actual']}")
     if stale:
         typer.echo(f"{len(stale)} input(s) stale or missing.", err=True)
         raise typer.Exit(code=1)

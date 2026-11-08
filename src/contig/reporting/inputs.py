@@ -50,5 +50,5 @@ def load_readiness_json(path: str | Path) -> dict[str, Any]:
 
 
 def input_record(kind: str, path: str | Path, note: str | None = None) -> ReportInput:
-    path = Path(path)
+    path = Path(path).resolve()
     return ReportInput(kind=kind, path=str(path), sha256=sha256_file(path), note=note)
