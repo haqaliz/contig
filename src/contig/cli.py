@@ -5267,8 +5267,10 @@ def report(
 
     Optionally attaches the M1 variant table and M2 readiness table. Every
     attached input and its SHA-256 is recorded in the sidecar; use
-    `contig report-check` to detect stale inputs. Research-use only: no
-    diagnosis, clinical classification, or treatment recommendation.
+    `contig report-check` to detect stale inputs. When CONTIG_SIGNING_KEY is set,
+    a detached Ed25519 signature over the sidecar is written next to it and
+    `report-check` verifies it. Research-use only: no diagnosis, clinical
+    classification, or treatment recommendation.
     """
     try:
         run_report_builder(
@@ -5289,10 +5291,19 @@ def report(
 @app.command(name="report-check")
 def report_check(
     meta: str = typer.Argument(..., help="The report sidecar JSON to check."),
+    require_signature: bool = typer.Option(
+        False,
+        "--require-signature",
+        help="Exit 1 when the report manifest has no signature.",
+    ),
 ) -> None:
-    """Check whether a report's inputs are still current (by SHA-256)."""
+    """Check whether a report's inputs are still current (by SHA-256).
+
+    Also verifies the detached Ed25519 signature over the sidecar when one is
+    present; a tampered manifest or a bad signature exits 1.
+    """
     try:
-        run_report_staleness_check(meta)
+        run_report_staleness_check(meta, require_signature=require_signature)
     except (FileNotFoundError, ValueError, OSError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)

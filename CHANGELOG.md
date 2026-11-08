@@ -79,6 +79,12 @@ All notable changes to Contig are recorded here. The format follows
   `research/manifest.json` — variants, readiness (with `--by-gene`), report
   sidecar/HTML, family, biomarkers, and cohort — plus a grounded Ask panel. It
   never writes or launches a run; research use only.
+- **Signed report manifests:** when `CONTIG_SIGNING_KEY` is set, `contig report`
+  writes a detached Ed25519 signature over the sidecar (`<sidecar>.sig.json`),
+  binding the HTML hash, every input hash, the spec, and the reviewer block.
+  `contig report-check` verifies it, fails on a tampered manifest, and
+  `--require-signature` rejects unsigned reports; an unsigned rewrite removes a
+  stale signature. Research use only.
 
 ### Fixed
 - **Panel versions no longer overwrite each other:** the panel id includes the

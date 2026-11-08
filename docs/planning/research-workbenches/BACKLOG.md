@@ -63,7 +63,9 @@ These came from the four synthetic persona runs
 (`docs/validation/AGENT_VALIDATION_FINDINGS.md`). They are not counted in the
 milestone totals above.
 
-- Signed report manifest (HTML + sidecar + reviewer) using the Ed25519 keypair.
+- Signed report manifest (HTML + sidecar + reviewer) using the Ed25519 keypair —
+  **shipped (Unreleased);** `report-check` verifies it and `--require-signature`
+  rejects unsigned reports.
 - `report-check --outputs --sources --base-dir`; recurse into M1/M2 sources.
 - Report compatibility preflight for assay/build/gene mismatch.
 - Portable report bundle (HTML + sidecar + attached tables).
