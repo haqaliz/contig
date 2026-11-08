@@ -22,3 +22,8 @@ dist/
 !/data/manifest.json
 
 .serena/
+
+# Local research dashboard data
+/dashboard/research/*
+!/dashboard/research/README.md
+!/dashboard/research/manifest.example.json

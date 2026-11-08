@@ -67,6 +67,10 @@ compare runs, curate the failure corpus, and track the detector over time.
   existing graceful "not available" branch. To add an llm-tagged point for the
   comparison, run `contig eval-detector --detector llm --snapshot` with a provider
   and key configured.
+- **Research** (`/research`): read-only tables over the research-workbench JSON
+  artifacts (variants, readiness including the by-gene summary, report sidecar +
+  HTML, family, biomarkers, cohort) from a local `research/manifest.json`, plus a
+  grounded **Ask the run** panel. No writes or launches; research use only.
 - **Notifications**: a header activity bell reads `notifications.jsonl` and shows
   recent run events; a run waiting for your approval links straight to it.
 

@@ -1,0 +1,6 @@
+{
+  "run_id": "r1",
+  "runs_dir": "tests/fixtures/reporting/runs",
+  "variants": "dashboard/e2e/fixtures/research/variants.json",
+  "readiness": "dashboard/e2e/fixtures/research/readiness.json"
+}
