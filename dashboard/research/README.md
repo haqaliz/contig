@@ -19,3 +19,12 @@ contig cohort-build --name "Lab" --variants a.json,b.json --out research/cohort.
 
 The ask panel runs `contig ask` against the manifest's `run_id`, `runs_dir`,
 `variants`, and `readiness` (via `CONTIG_CLI` or `uv run contig`).
+
+## Per-run convention (X-1b)
+
+When a run writes research artifacts, use
+`runs/<run_id>/research/manifest.json` with the same schema and paths relative
+to that directory. The explicit `dashboard/research/manifest.json` (or
+`CONTIG_RESEARCH_DIR`) remains the default; auto-discovering the per-run
+convention is the X-1b slice and stays read-only. The dashboard never writes or
+launches a run.

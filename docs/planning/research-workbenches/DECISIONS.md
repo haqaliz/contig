@@ -50,12 +50,14 @@ build cycle.
 
 | Question | Decision |
 |---|---|
-| Human partner recruitment | **Not now.** Use **agent personas** as synthetic pre-validation instead. |
+| Human partner recruitment | **Resume now.** Source/contact routes are in `docs/validation/DATA_AND_PARTNER_ACQUISITION.md`; the executable outreach kit is `docs/validation/OUTREACH_KIT.md`. |
 | Agent validation scope | Task completion, command ergonomics, error messages, documentation gaps, reproducibility. |
 | Agent validation status | **Run 2026-11-08**; four personas. Blockers fixed (panel versioning, cohort dedupe, report HTML check, signed label, evidence columns, ask actions, frequency naming, gene-level readiness). Remaining findings are backlog. |
 | Agent validation limits | Agents **cannot** validate real trust, willingness-to-pay, or messy real-world data. Those still need humans later. |
 | Passing bar | If agents hit blockers, fix them before the dashboard. A future human gate is **≥3/5 complete core tasks and trust ≥4**. |
-| Partner recruitment | Existing network, when human validation is resumed. |
+| Partner recruitment | **Resume via the outreach kit**: nf-core Slack, warm intros, ABRF core facilities, NHS GLHs, AMP, Biostars/Reddit. Track in `outreach_targets.csv`. |
+| Dashboard auto-discovery | **Explicit `dashboard/research/manifest.json` remains the default.** An optional read-only per-run convention `runs/<run_id>/research/manifest.json` is the X-1b follow-up; no dashboard write/launch actions in the first release. |
+| M5 live LLM | **Local eval run 2026-11-09** with `qwen2.5:1.5b`; 9/9 grounding checks pass after the fidelity guard. Hosted small-model default remains pending the redacted-bundle + provider/privacy check. See `docs/validation/M5_LLM_EVAL.md`. |
 
 ## Resulting work order
 

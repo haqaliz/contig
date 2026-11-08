@@ -24,6 +24,18 @@ The companion tracker is `docs/validation/acquisition_tracker.csv`.
 build and diff a PanelApp public panel; verify LOH against TCGA ASCAT segments.
 Those three produce real evidence without asking anyone for anything.
 
+## 1a. How the seven asks are now executable
+
+| Ask | Mechanism | Artifact |
+|---|---|---|
+| 1. Outreach identity | GitHub issue form + nf-core Slack/GitHub identity; a dedicated email alias (domain alias or new Gmail) only for follow-up; no personal address | `docs/validation/OUTREACH_KIT.md`, `.github/ISSUE_TEMPLATE/design_partner.yml` |
+| 2. Target geography + intros | 20 verified public routes (NHS GLHs, UK/US cores, AMP, ABRF, nf-core, forums) + a forwardable warm-intro script | `docs/validation/outreach_targets.csv` |
+| 3. Redaction/data-use approval | A one-page, plain-language agreement template to send before any file; the lab's counsel can edit it | `docs/validation/REDACTION_AGREEMENT.md` |
+| 4. M5 access | Local Ollama (`qwen2.5:1.5b`) installed; the live eval script ran 9/9 after a fidelity guard; no API key needed for the local run | `docs/validation/M5_LLM_EVAL.md`, `scripts/llm_eval.py` |
+| 5. Institutional data access | Open TCGA-COAD ASCAT allele-specific segments downloaded (LOH data); MSI paired BAMs are controlled (dbGaP/EGA) with a cell-line fallback documented | this document, §3.6–3.7; `scripts/fetch_validation_data.sh` |
+| 6. Dashboard decision | Explicit manifest stays the default; optional read-only `runs/<run_id>/research/manifest.json` convention for X-1b; no write/launch actions | `docs/planning/research-workbenches/DECISIONS.md` |
+| 7. Large downloads | `fetch_validation_data.sh` downloads only the small/open files and prints the exact large-data routes; `data/` stays gitignored | `scripts/fetch_validation_data.sh` |
+
 ---
 
 ## 2. Blocked-item matrix
@@ -181,6 +193,13 @@ segments. If a file is controlled, use the dbGaP route in §4. The local
 COLO829 zip is **not** allele-specific (it has total copy number only), so it
 cannot close LOH by itself.
 
+**Run 2026-11-09:** downloaded one open TCGA-COAD ASCAT2 segment file to
+`data/cnv/tcga_ascat/TCGA-COAD.ascat2.allelic_specific.seg.txt` (88 lines).
+Columns: `GDC_Aliquot`, `Chromosome`, `Start`, `End`, `Copy_Number`,
+`Major_Copy_Number`, `Minor_Copy_Number`. LOH can be derived where the minor
+copy number is 0. The other open ASCAT2/ASCAT3 files are 2–11 KB each; no
+permission is needed for these processed segments.
+
 ### 3.7 M7 — MSI labels are open; the matched BAMs are the gate
 
 MSI status labels:
@@ -202,6 +221,12 @@ models and public WES exists (CCLE `PRJNA523380`), but they have **no matched
 normal**, and the current MSIsensor seam runs `msisensor msi` tumor/normal.
 Do not present a cell-line-only run as the M7-1b validation unless we add and
 validate a tumor-only mode.
+
+**Run 2026-11-09:** the GDC TCGA-COAD and CPTAC-2 WXS BAMs are
+`access=controlled` (15–50 GB each), so the paired run needs dbGaP/EGA. CCLE
+`PRJNA523380` has HCT116 WGS `SRR8639145` (~640M reads) and targeted capture
+`SRR8657432`; SW480 targeted capture `SRR8657564`. Those are tumor-only and
+do not replace a matched-normal pair.
 
 ---
 

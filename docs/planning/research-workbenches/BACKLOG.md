@@ -33,7 +33,7 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | M4-2 | M4 | Report diff between sidecars (`contig report-diff`) | done |
 | M4-3 | M4 | Reviewer workflow feedback / report examples | blocked |
 | M5-0 | M5 | `contig ask` + `ask-eval` (deterministic, citations, optional LLM) | done |
-| M5-1 | M5 | Live LLM eval + provider/privacy decision | blocked |
+| M5-1 | M5 | Live LLM eval + provider/privacy decision (local `qwen2.5:1.5b` 9/9 with the fidelity guard; hosted pending) | blocked |
 | M5-2 | M5 | Action execution behind the approval gate | deferred |
 | M5-3 | M5 | Dashboard chat panel | done |
 | M6-0 | M6 | `contig family` inheritance/Mendelian/de novo/concordance | done |
@@ -45,7 +45,7 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | M7-1a | M7 | MSI caller seam: parse MSIsensor output or run tumor/normal BAMs; threshold + reported-status comparison | done |
 | M7-1b | M7 | Real MSI-H/MSS pair validation + threshold calibration (MSIsensor example data + TCGA baseline available) | blocked |
 | M7-2a | M7 | CNV segment concordance (`--cnv-segments/--cnv-truth`) | done |
-| M7-2b | M7 | LOH verification (needs allele-specific data, not just segments) | blocked |
+| M7-2b | M7 | LOH verification (open TCGA-COAD ASCAT allele-specific segments acquired; needs the LOH check + expected calls) | blocked |
 | M7-3 | M7 | TMB tolerance/band calibration (SEQC2 TMB computed; reviewer needed) | blocked |
 | M8-0 | M8 | `contig cohort-build`/`cohort-query` local-only | done |
 | M8-1 | M8 | Federated/cross-lab frequency layer | blocked |

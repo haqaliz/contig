@@ -1,0 +1,65 @@
+name: Research design partner
+description: Volunteer a 60-minute session on your own VCF/panel/coverage data (research use only)
+title: "[partner] "
+labels: ["design-partner"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for considering a research-use feedback session. Contig runs
+        locally on your machine, never sends raw reads, and makes no clinical
+        claims. **Do not paste patient data, sample IDs, PHI, or raw paths
+        here**; this issue is public. A redacted example or a description of the
+        data shape is enough to start.
+  - type: input
+    id: name_role
+    attributes:
+      label: Name / role (optional)
+      description: How you would like to be addressed, and your role.
+      placeholder: "Alex, computational biologist"
+  - type: dropdown
+    id: persona
+    attributes:
+      label: Which best describes you?
+      options:
+        - Computational biologist
+        - Wet-lab scientist
+        - Core facility / genomics lab
+        - Biotech / clinical research
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: data_shape
+    attributes:
+      label: What data could you bring? (select all that apply)
+      options:
+        - label: Annotated VCF (VEP CSQ or SnpEff ANN)
+        - label: Panel BED or gene list + GTF
+        - label: Coverage/depth TSV or BAM/CRAM + target BED
+        - label: Multi-sample trio/quad VCF + PED
+        - label: Somatic tumor/normal VCF or CNV segments
+        - label: A redacted report you currently produce
+        - label: Other / not sure yet
+  - type: textarea
+    id: goal
+    attributes:
+      label: What would you like to test?
+      description: The task that matters to you, and what "useful" would look like.
+      placeholder: "Go from our panel VCF to a filtered table and a shareable report."
+  - type: input
+    id: timezone
+    attributes:
+      label: Timezone / availability
+      placeholder: "Europe/London, Tue/Thu afternoons"
+  - type: checkboxes
+    id: consent
+    attributes:
+      label: Agreement
+      options:
+        - label: I understand this is research-use validation, not a clinical service.
+          required: true
+        - label: I will not share patient-identifying data in this issue.
+          required: true
+        - label: I am willing to do one 60-minute session on a dataset I already have.
+          required: true
