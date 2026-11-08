@@ -81,7 +81,7 @@ the metadata note `caveats checked` / `caveats not checked`).
 | `contig panel-build --name <n>` | Build a canonical, checksummed panel BED from a gene list + GTF (optional HGNC normalization) or an existing BED; writes `<id>.bed` + `<id>.json` to the registry |
 | `contig panel-list` / `contig panel-show <id>` | List or inspect panels in the registry |
 | `contig report <id>` | Build a self-contained research report from a run bundle, optionally attaching M1 variants and M2 readiness; writes HTML + a JSON sidecar with input hashes. `--template publication\|internal\|audit` |
-| `contig report-check <sidecar>` | Recompute the report inputs’ SHA-256 and report current/stale/missing |
+| `contig report-check <sidecar>` | Recompute the report inputs’ SHA-256 and the HTML hash, and verify the Ed25519 sidecar signature when present (`--require-signature` rejects unsigned reports) |
 | `contig family --vcf <vcf> --ped <ped>` | Research-use trio/family analysis: per-child inheritance, Mendelian consistency, de novo candidates, and pairwise sample concordance. Autosomal only in v1 |
 | `contig biomarkers --vcf <vcf> --callable-bed <bed>` | Research-use TMB verification from PASS variants in callable regions; compares a reported TMB within tolerance. MSI/LOH/CNV are `not_verified` in v1 |
 | `contig cohort-build --name <n> --variants <json,...>` | Build a local-only cohort index from M1 variant tables: per-variant seen-run counts/frequencies and per-gene summaries. No network, no sample IDs |
@@ -408,6 +408,14 @@ contig report-diff report-a.json report-b.json
   non-zero if any is stale or missing. `contig report-diff` compares two
   sidecars (spec, inputs, hashes, notes) as text or JSON; `--fail-on-diff` makes
   differences exit non-zero.
+- **Signing:** set `CONTIG_SIGNING_KEY` (the same Ed25519 key used for run
+  bundles) when running `contig report` and the sidecar is signed; the detached
+  signature `<sidecar>.sig.json` binds the HTML hash, every input hash, the spec,
+  and the reviewer block. `contig report-check` verifies it and exits non-zero on
+  a tampered manifest; `--require-signature` exits non-zero when the report is
+  unsigned. An unsigned rewrite removes a stale signature rather than leaving one
+  that vouches for different content. The signature does not make the report a
+  clinical document.
 - **Research-use boundary:** the report carries a research-use banner, never a
   diagnosis, ACMG classification, treatment recommendation, or medical sign-off.
   PDF is produced by opening the self-contained HTML and printing to PDF; a
