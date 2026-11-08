@@ -1,5 +1,9 @@
 # Research workbenches blocked runbook
 
+> **Acquisition:** `docs/validation/DATA_AND_PARTNER_ACQUISITION.md` names the
+> open datasets, permission routes, and outreach contacts for each blocked row;
+> `docs/validation/acquisition_tracker.csv` is the live tracker.
+
 Each blocked row in `BACKLOG.md` needs evidence before code. This file records
 exactly what to collect and what to change when it arrives.
 

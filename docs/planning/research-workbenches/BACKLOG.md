@@ -3,8 +3,10 @@
 **Status 2026-11-08:** all eight milestones have a v1, the read-only research
 dashboard ships, and report sidecars can be signed. The remaining rows are
 **deferred** (post-v1, no user asking yet) or **blocked** on evidence/data a
-design partner or reviewer must supply. See `WRAP_UP.md` for the narrative and
-`BLOCKED_RUNBOOK.md` for the exact evidence.
+design partner or reviewer must supply. See `WRAP_UP.md` for the narrative,
+`BLOCKED_RUNBOOK.md` for the exact evidence, and
+`docs/validation/DATA_AND_PARTNER_ACQUISITION.md` for the open-data and
+permission/contact plan.
 
 Status legend: `done` · `deferred` (post-v1, not blocked) · `blocked` (needs
 real data/reviewer/legal) · `decision` (deliberately not building).

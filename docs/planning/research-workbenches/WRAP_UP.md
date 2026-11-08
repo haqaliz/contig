@@ -88,7 +88,9 @@ blockers.
    `docs/validation/DESIGN_PARTNER_KIT.md`. Pick 3–5 researchers/labs, have them
    run their own data through the commands, and measure time-to-result, trust,
    which filters/thresholds they challenge, and willingness to pay. This is the
-   roadmap's own gate.
+   roadmap's own gate. Source and contact routes are in
+   `docs/validation/DATA_AND_PARTNER_ACQUISITION.md`; keep
+   `docs/validation/acquisition_tracker.csv` current.
 2. **Dashboard/auto-discovery integration (P1).** Make the new surfaces usable
    without manually passing `--variants`/`--readiness`/`--vcf`: auto-discover
    from the run bundle, add report/variant/readiness actions.
