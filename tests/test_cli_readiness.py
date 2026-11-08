@@ -25,6 +25,7 @@ def test_help_lists_the_readiness_options():
     assert "--bed" in result.output
     assert "--gtf" in result.output
     assert "--caveats" in result.output
+    assert "--build" in result.output
 
 
 def test_writes_a_tsv_and_prints_the_summary(tmp_path):

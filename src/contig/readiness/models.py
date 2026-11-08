@@ -81,6 +81,9 @@ class SourceProvenance(BaseModel):
 class ReadinessMeta(BaseModel):
     sources: list[SourceProvenance] = Field(default_factory=list)
     thresholds: ReadinessThresholds = Field(default_factory=ReadinessThresholds)
+    build: str | None = None
+    caveats_checked: bool = False
+    caveat_regions: int = 0
     generated_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
     )

@@ -77,7 +77,7 @@ the metadata note `caveats checked` / `caveats not checked`).
 | `contig export <id> --rocrate` | Export the run's provenance as an RO-Crate (ro-crate-metadata.json) |
 | `contig methods <id>` | A deterministic, citation-ready methods paragraph from the bundle |
 | `contig variants <vcf>` | Research-use variant table: join a call set to ClinVar, Iranome, and a population-frequency TSV, filter deterministically, and export TSV/JSON. `--spec` replays a saved filter; `--json` includes provenance |
-| `contig readiness --depth <tsv>` | Per-target coverage and interpretation readiness: mean depth, % ≥20x/50x/100x, zero-coverage bases, homology/pseudogene caveats, and a `ready`/`caution`/`not-interpretable` state |
+| `contig readiness --depth <tsv>` | Per-target coverage and interpretation readiness: mean depth, % ≥20x/50x/100x, zero-coverage bases, homology/pseudogene caveats, explicit caveat coverage, build label, and a `ready`/`caution`/`not-interpretable` state |
 | `contig panel-build --name <n>` | Build a canonical, checksummed panel BED from a gene list + GTF (optional HGNC normalization) or an existing BED; writes `<id>.bed` + `<id>.json` to the registry |
 | `contig panel-list` / `contig panel-show <id>` | List or inspect panels in the registry |
 | `contig panel-diff <a> <b>` | Compare two panel versions (metadata and BED intervals); `--json`, `--fail-on-diff` |
@@ -312,11 +312,12 @@ contig readiness \
   --depth depth.tsv \
   --bed panel.bed \
   --caveats homology_caveats_GRCh38.bed \
+  --build GRCh38 \
   --out readiness.tsv
 
 # Or let Contig run samtools depth on a BAM/CRAM:
 contig readiness --bam sample.cram --reference GRCh38.fa \
-  --bed panel.bed --out readiness.tsv
+  --bed panel.bed --build GRCh38 --out readiness.tsv
 ```
 
 - **Input:** a `samtools depth -a` TSV (`chrom pos depth`, 1-based), or a
@@ -335,8 +336,18 @@ contig readiness --bam sample.cram --reference GRCh38.fa \
   `--caution-fraction` (0.50).
 - **Gene summary:** `--by-gene` aggregates exon/target rows into one row per
   gene with the worst readiness state and weight-averaged depth/percentages.
+  A BED3 (no gene column) produces no gene summaries; add a 4th-column gene
+  symbol or use `--gtf --genes` (the note says so).
+- **Build and preflight:** `--build` records the reference build in the table
+  (and the report compatibility preflight compares it to the run). A target/depth
+  chromosome-name mismatch is recorded as a note instead of silently producing
+  all-zero coverage.
+- **Caveat coverage:** the JSON meta says whether caveats were checked
+  (`caveats_checked`) and how many regions were loaded (`caveat_regions`); the
+  notes say it too.
 - **Output:** TSV by default; `--json` includes source paths, SHA-256,
-  thresholds, and the Contig version. `--out` writes to a file.
+  thresholds, build, caveat coverage, and the Contig version. `--out` writes to a
+  file.
 
 The homology BED is deliberately a separate input: use
 `data/homology/homology_caveats_GRCh38.bed` for SMN1/SMN2, PMS2/PMS2CL, and

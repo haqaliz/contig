@@ -82,5 +82,6 @@ milestone totals above.
 - Batch report/check and a project/workspace manifest —
   **shipped (Unreleased):** `report-batch`, `report-check-batch`, and
   manifest-relative path resolution.
-- Readiness build matching, caveat coverage, and BED3 gene-annotation guidance.
+- Readiness build matching, caveat coverage, and BED3 gene-annotation guidance —
+  **shipped (Unreleased):** `--build`, explicit caveat meta, and preflight notes.
 - WGS region/gene guard and explicit record cap.

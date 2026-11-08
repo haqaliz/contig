@@ -111,6 +111,11 @@ All notable changes to Contig are recorded here. The format follows
   `contig report-check-batch` read a project manifest, resolve its relative
   paths against the manifest directory, and process every entry. A failing entry
   does not stop the others; the batch exits 1 and names it.
+- **Readiness build and caveat preflight:** `contig readiness --build` records
+  the reference build; the JSON meta says whether caveats were checked and how
+  many regions loaded; a BED3 without gene names gets explicit gene-annotation
+  guidance; a target/depth chromosome mismatch is recorded instead of silently
+  producing all-zero coverage.
 
 ### Fixed
 - **Panel versions no longer overwrite each other:** the panel id includes the

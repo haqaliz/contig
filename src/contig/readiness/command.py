@@ -32,6 +32,7 @@ def run_readiness(
     gtf: str | None = None,
     genes: str | None = None,
     caveats: str | None = None,
+    build: str | None = None,
     depth_threshold: int = 20,
     ready_fraction: float = 0.90,
     caution_fraction: float = 0.50,
@@ -55,6 +56,7 @@ def run_readiness(
         gtf=gtf,
         genes=_genes(genes),
         caveats=caveats,
+        build=build,
         thresholds=thresholds,
     )
     counts = summarize(table.rows)

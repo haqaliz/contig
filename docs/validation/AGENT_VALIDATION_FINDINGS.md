@@ -44,7 +44,7 @@ This is pre-validation: it found concrete bugs/UX gaps, not market evidence.
 | Panel registry | No archival/diff; panel meta lacks GTF/HGNC path+SHA-256 | **Fixed (Unreleased):** `sources` records the BED/GTF/HGNC path+SHA-256; `panel-diff` compares metadata/intervals; `panel-archive` moves a validated panel into `<dir>/archive` |
 | Cohort | No append/list/merge; query does not show contributing run labels | **Fixed (Unreleased):** `--trace` records per-variant run labels; `cohort-list`, `cohort-append`, `cohort-merge`, and the query `run_labels` column ship; merge dedupes by SHA-256 and refuses untraced cohorts |
 | Batch/workspace | `report`/`report-check` are one-at-a-time; defaults are cwd-relative | **Fixed (Unreleased):** `report-batch`/`report-check-batch` read a project manifest and resolve its relative paths against the manifest directory; a failing entry does not stop the others |
-| Readiness | Build/preflight checks and caveat coverage are not explicit; BED3 labels are empty | Add build matching, caveat coverage, and gene annotation guidance |
+| Readiness | Build/preflight checks and caveat coverage are not explicit; BED3 labels are empty | **Fixed (Unreleased):** `--build` is recorded, meta carries `caveats_checked`/`caveat_regions`, BED3 gets gene-annotation guidance, and a target/depth chromosome mismatch is recorded |
 | Scale | WGS inputs still need a region/gene first | Add a `--region`/`--gene` guard and clear cap |
 | M8 | Federation needs consent/privacy/tenancy/legal design | PRD + architecture only; no code |
 
