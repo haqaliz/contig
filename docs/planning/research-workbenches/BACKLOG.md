@@ -71,7 +71,9 @@ milestone totals above.
   **shipped (Unreleased);** unrecorded sets are `unverified`, never a false pass.
 - Report compatibility preflight for assay/build/gene mismatch —
   **shipped (Unreleased);** HTML, sidecar, and stderr warnings, never blocking.
-- Portable report bundle (HTML + sidecar + attached tables).
+- Portable report bundle (HTML + sidecar + attached tables) —
+  **shipped (Unreleased):** `contig report-bundle` writes relative paths and
+  keeps every table row.
 - Panel archival/diff and GTF/HGNC source hashes in panel metadata.
 - Cohort append/list/merge and opt-in contributing-run labels.
 - Batch report/check and a project/workspace manifest.

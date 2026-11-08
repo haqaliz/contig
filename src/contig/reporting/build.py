@@ -193,17 +193,26 @@ def build_report(
     return html, meta
 
 
-def write_report(html: str, meta: ReportMeta, out_path: str | Path, meta_path: str | Path) -> Path | None:
+def write_report(
+    html: str,
+    meta: ReportMeta,
+    out_path: str | Path,
+    meta_path: str | Path,
+    *,
+    relative_paths: bool = False,
+) -> Path | None:
     """Write the HTML and sidecar; sign the sidecar when CONTIG_SIGNING_KEY is set.
 
     The detached signature covers the sidecar's canonical JSON, so it binds the
     HTML hash, every input hash, the spec, and the reviewer block. Returns the
     signature path, or None for an unsigned report. An unsigned rewrite removes a
     stale signature from an earlier signed write, so a leftover sidecar can never
-    keep vouching for different content.
+    keep vouching for different content. ``relative_paths`` records the HTML path
+    relative to the sidecar (for a portable bundle) instead of absolute.
     """
     out_path = Path(out_path).resolve()
-    meta = meta.model_copy(update={"html_path": str(out_path)})
+    html_record = out_path.name if relative_paths else str(out_path)
+    meta = meta.model_copy(update={"html_path": html_record})
     meta_path = Path(meta_path)
     meta_text = meta.model_dump_json(indent=2)
     signature = _manifest_signature(meta_text)

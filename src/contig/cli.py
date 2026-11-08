@@ -250,6 +250,7 @@ from contig.variants.command import run_variants as run_variant_workbench
 from contig.readiness.command import run_readiness as run_readiness_workbench
 from contig.reporting.command import run_report as run_report_builder
 from contig.reporting.command import run_report_check as run_report_staleness_check
+from contig.reporting.bundle import bundle_report as bundle_report_sidecar
 from contig.reporting.diff import diff_reports, render_diff
 from contig.panels.build import (
     build_from_bed as build_panel_from_bed,
@@ -5257,6 +5258,28 @@ def report(
     except (FileNotFoundError, ValueError, OSError, RunNotFoundError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
+
+
+@app.command(name="report-bundle")
+def report_bundle(
+    meta: str = typer.Argument(..., help="The report sidecar JSON to bundle."),
+    out: str = typer.Option(..., "--out", help="Bundle output directory."),
+) -> None:
+    """Copy a report, sidecar, and attached tables into a portable directory.
+
+    Paths in the copied sidecar are relative, so `contig report-check` works after
+    the directory is moved. Attached tables keep every row, including rows beyond
+    the HTML's max_rows cap. Run outputs and upstream source files are not
+    bundled.
+    """
+    try:
+        result = bundle_report_sidecar(meta, out)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"Wrote report bundle to {result['out']} ({result['inputs']} input(s))")
+    if result["signed"]:
+        typer.echo("Signed the bundled sidecar with Ed25519.")
 
 
 @app.command(name="report-check")

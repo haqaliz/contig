@@ -93,6 +93,11 @@ All notable changes to Contig are recorded here. The format follows
 - **Report compatibility preflight:** `contig report` warns (HTML, sidecar, and
   stderr) when the run's assay/build or the attached tables' build/genes do not
   line up. It never blocks the report and never guesses an unknown build.
+- **Portable report bundle:** `contig report-bundle <sidecar> --out <dir>`
+  copies the HTML, sidecar, run record (and its signature, when present), and
+  attached tables into one directory with relative paths, so `report-check`
+  keeps working after a move. The table JSON keeps every row, including rows
+  beyond the HTML `max_rows` cap.
 
 ### Fixed
 - **Panel versions no longer overwrite each other:** the panel id includes the

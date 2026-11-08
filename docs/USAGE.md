@@ -82,6 +82,7 @@ the metadata note `caveats checked` / `caveats not checked`).
 | `contig panel-list` / `contig panel-show <id>` | List or inspect panels in the registry |
 | `contig report <id>` | Build a self-contained research report from a run bundle, optionally attaching M1 variants and M2 readiness; writes HTML + a JSON sidecar with input hashes. `--template publication\|internal\|audit` |
 | `contig report-check <sidecar>` | Recompute the report inputs’ SHA-256 and the HTML hash, verify the Ed25519 sidecar signature when present, and optionally re-hash the run’s outputs (`--outputs`) and the attached tables’ upstream sources (`--sources`); `--base-dir` resolves relative paths, `--require-signature` rejects unsigned reports |
+| `contig report-bundle <sidecar> --out <dir>` | Copy the HTML, sidecar, run record, and attached tables into a portable directory with relative paths; all table rows are kept |
 | `contig family --vcf <vcf> --ped <ped>` | Research-use trio/family analysis: per-child inheritance, Mendelian consistency, de novo candidates, and pairwise sample concordance. Autosomal only in v1 |
 | `contig biomarkers --vcf <vcf> --callable-bed <bed>` | Research-use TMB verification from PASS variants in callable regions; compares a reported TMB within tolerance. MSI/LOH/CNV are `not_verified` in v1 |
 | `contig cohort-build --name <n> --variants <json,...>` | Build a local-only cohort index from M1 variant tables: per-variant seen-run counts/frequencies and per-gene summaries. No network, no sample IDs |
@@ -424,6 +425,12 @@ contig report-diff report-a.json report-b.json
   build/genes do not line up, `contig report` still renders the report but names
   the mismatch in the HTML, the sidecar (`warnings`), and stderr. Unknown builds
   are not guessed.
+- **Portable bundle:** `contig report-bundle report.json --out bundle/` copies
+  the HTML, sidecar, run record (and its signature, when present), and attached
+  tables into one directory and rewrites the sidecar paths to relative ones, so
+  `contig report-check bundle/report.json` keeps working after the directory is
+  moved. The table JSON keeps every row, including rows beyond the HTML
+  `max_rows` cap. Run outputs and upstream source files are not bundled.
 - **Research-use boundary:** the report carries a research-use banner, never a
   diagnosis, ACMG classification, treatment recommendation, or medical sign-off.
   PDF is produced by opening the self-contained HTML and printing to PDF; a
