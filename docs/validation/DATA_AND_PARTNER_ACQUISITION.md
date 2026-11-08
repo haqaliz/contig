@@ -68,9 +68,12 @@ uv run contig family \
 # 399 rows, 217 evaluated, 0 Mendelian inconsistent, 0 de novo
 ```
 
-Next: merge/stream the three full truth VCFs into one multi-sample trio (or
-extend the subset) and calibrate the IBS0 swap threshold from the trio's
-pairwise genotype concordance. Source:
+**Run 2026-11-09:** the chr20 subset gives parent-child same-genotype rates of
+0.72 (HG002/HG003) and 0.82 (HG002/HG004), with IBS0 = 0 in all pairs. The
+current swap flag (`IBS0 > 1%` or `same > 99%`) correctly does not fire. Full
+trio calibration needs a three-way merge of the per-sample truth VCFs; `bcftools`
+is not installed locally, so either install it or stream-merge the three sorted
+VCFs. Source:
 `https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/`.
 GIAB is open; cite NIST/GIAB.
 
