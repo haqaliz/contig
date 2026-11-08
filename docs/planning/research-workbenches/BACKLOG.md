@@ -79,6 +79,8 @@ milestone totals above.
 - Cohort append/list/merge and opt-in contributing-run labels —
   **shipped (Unreleased):** `--trace`, `cohort-list`, `cohort-append`,
   `cohort-merge`, and the query `run_labels` column.
-- Batch report/check and a project/workspace manifest.
+- Batch report/check and a project/workspace manifest —
+  **shipped (Unreleased):** `report-batch`, `report-check-batch`, and
+  manifest-relative path resolution.
 - Readiness build matching, caveat coverage, and BED3 gene-annotation guidance.
 - WGS region/gene guard and explicit record cap.

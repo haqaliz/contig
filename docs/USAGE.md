@@ -85,6 +85,8 @@ the metadata note `caveats checked` / `caveats not checked`).
 | `contig report <id>` | Build a self-contained research report from a run bundle, optionally attaching M1 variants and M2 readiness; writes HTML + a JSON sidecar with input hashes. `--template publication\|internal\|audit` |
 | `contig report-check <sidecar>` | Recompute the report inputs’ SHA-256 and the HTML hash, verify the Ed25519 sidecar signature when present, and optionally re-hash the run’s outputs (`--outputs`) and the attached tables’ upstream sources (`--sources`); `--base-dir` resolves relative paths, `--require-signature` rejects unsigned reports |
 | `contig report-bundle <sidecar> --out <dir>` | Copy the HTML, sidecar, run record, and attached tables into a portable directory with relative paths; all table rows are kept |
+| `contig report-batch --project <json>` | Build every report in a project manifest; `--check` verifies each afterward |
+| `contig report-check-batch --project <json>` | Check every report in a project manifest; `--outputs`, `--sources`, `--require-signature` apply to each |
 | `contig family --vcf <vcf> --ped <ped>` | Research-use trio/family analysis: per-child inheritance, Mendelian consistency, de novo candidates, and pairwise sample concordance. Autosomal only in v1 |
 | `contig biomarkers --vcf <vcf> --callable-bed <bed>` | Research-use TMB verification from PASS variants in callable regions; compares a reported TMB within tolerance. MSI/LOH/CNV are `not_verified` in v1 |
 | `contig cohort-build --name <n> --variants <json,...>` | Build a local-only cohort index from M1 variant tables: per-variant seen-run counts/frequencies and per-gene summaries. `--trace` records contributing run labels. No network, no sample IDs |
@@ -443,6 +445,21 @@ contig report-diff report-a.json report-b.json
   `contig report-check bundle/report.json` keeps working after the directory is
   moved. The table JSON keeps every row, including rows beyond the HTML
   `max_rows` cap. Run outputs and upstream source files are not bundled.
+- **Batch projects:** `contig report-batch --project project.json` builds every
+  entry; `contig report-check-batch --project project.json` checks them. All
+  relative paths in the manifest resolve against the manifest's directory, not
+  the current shell. Example:
+  ```json
+  {
+    "name": "Cardio panel",
+    "out_dir": "reports",
+    "reports": [
+      {"id": "r1", "run_id": "r1", "variants": "r1/variants.json",
+       "readiness": "r1/readiness.json", "spec": "spec.json", "bundle": true}
+    ]
+  }
+  ```
+  A failing entry does not stop the others; the batch exits 1 and names it.
 - **Research-use boundary:** the report carries a research-use banner, never a
   diagnosis, ACMG classification, treatment recommendation, or medical sign-off.
   PDF is produced by opening the self-contained HTML and printing to PDF; a

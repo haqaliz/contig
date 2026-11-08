@@ -107,6 +107,10 @@ All notable changes to Contig are recorded here. The format follows
   `cohort-query` shows `run_labels`; `cohort-append` adds runs and
   `cohort-merge` unions traced cohorts, deduping by content SHA-256 and
   recomputing counts/frequencies. Merging an untraced cohort is refused.
+- **Batch report projects:** `contig report-batch` and
+  `contig report-check-batch` read a project manifest, resolve its relative
+  paths against the manifest directory, and process every entry. A failing entry
+  does not stop the others; the batch exits 1 and names it.
 
 ### Fixed
 - **Panel versions no longer overwrite each other:** the panel id includes the

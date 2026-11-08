@@ -249,6 +249,7 @@ from contig.workspace import (
 from contig.variants.command import run_variants as run_variant_workbench
 from contig.readiness.command import run_readiness as run_readiness_workbench
 from contig.reporting.command import run_report as run_report_builder
+from contig.reporting.command import run_report_batch, run_report_check_batch
 from contig.reporting.command import run_report_check as run_report_staleness_check
 from contig.reporting.bundle import bundle_report as bundle_report_sidecar
 from contig.reporting.diff import diff_reports, render_diff
@@ -5376,6 +5377,48 @@ def report_bundle(
     typer.echo(f"Wrote report bundle to {result['out']} ({result['inputs']} input(s))")
     if result["signed"]:
         typer.echo("Signed the bundled sidecar with Ed25519.")
+
+
+@app.command(name="report-check-batch")
+def report_check_batch(
+    project: str = typer.Option(..., "--project", help="Project manifest JSON."),
+    outputs: bool = typer.Option(False, "--outputs", help="Also verify each run's recorded outputs."),
+    sources: bool = typer.Option(False, "--sources", help="Also verify attached tables' upstream sources."),
+    require_signature: bool = typer.Option(False, "--require-signature", help="Exit 1 when any report is unsigned."),
+) -> None:
+    """Check every report listed in a project manifest."""
+    try:
+        run_report_check_batch(
+            project,
+            check_outputs=outputs,
+            check_sources=sources,
+            require_signature=require_signature,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="report-batch")
+def report_batch(
+    project: str = typer.Option(..., "--project", help="Project manifest JSON."),
+    check: bool = typer.Option(False, "--check", help="Check each report after building."),
+    outputs: bool = typer.Option(False, "--outputs", help="Also verify each run's recorded outputs."),
+    sources: bool = typer.Option(False, "--sources", help="Also verify attached tables' upstream sources."),
+    require_signature: bool = typer.Option(False, "--require-signature", help="Exit 1 when any report is unsigned."),
+) -> None:
+    """Build every report listed in a project manifest."""
+    try:
+        run_report_batch(
+            project,
+            check=check,
+            check_outputs=outputs,
+            check_sources=sources,
+            require_signature=require_signature,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
 
 
 @app.command(name="report-check")
