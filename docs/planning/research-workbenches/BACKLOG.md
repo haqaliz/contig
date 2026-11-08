@@ -1,9 +1,10 @@
 # Research workbenches wrap-up backlog
 
-**Status 2026-11-08:** all eight milestones have a v1. There are no open code
-rows: every remaining row is **deferred** (post-v1, no user asking yet) or
-**blocked** on evidence/data a design partner or reviewer must supply. See
-`WRAP_UP.md` for the narrative and `BLOCKED_RUNBOOK.md` for the exact evidence.
+**Status 2026-11-08:** all eight milestones have a v1, the read-only research
+dashboard ships, and report sidecars can be signed. The remaining rows are
+**deferred** (post-v1, no user asking yet) or **blocked** on evidence/data a
+design partner or reviewer must supply. See `WRAP_UP.md` for the narrative and
+`BLOCKED_RUNBOOK.md` for the exact evidence.
 
 Status legend: `done` · `deferred` (post-v1, not blocked) · `blocked` (needs
 real data/reviewer/legal) · `decision` (deliberately not building).
@@ -14,7 +15,7 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | M1-1 | M1 | gnomAD GraphQL client + local cache (`--gnomad-api`, 1000-site cap) | done |
 | M1-2 | M1 | Real annotated VCF from a design partner (VEP/SnpEff) | blocked |
 | M1-3 | M1 | Iranome GRCh37 → GRCh38 liftover | deferred |
-| M1-4 | M1 | Dashboard variant table | deferred |
+| M1-4 | M1 | Dashboard variant table | done |
 | M1-5 | M1 | Filter/sort semantics review with a researcher | blocked |
 | M2-0 | M2 | `contig readiness` per-target coverage/readiness | done |
 | M2-1 | M2 | Direct BAM/CRAM ingestion (`contig readiness --bam`) | done |
@@ -26,13 +27,13 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | M3-1b | M3 | Panel archival + diff | deferred |
 | M3-2 | M3 | Real lab panel validation | blocked |
 | M4-0 | M4 | `contig report` + `report-check` (HTML, sidecar, templates) | done |
-| M4-1 | M4 | Native PDF export | deferred |
+| M4-1 | M4 | Native PDF export | decision (browser print-to-PDF only) |
 | M4-2 | M4 | Report diff between sidecars (`contig report-diff`) | done |
 | M4-3 | M4 | Reviewer workflow feedback / report examples | blocked |
 | M5-0 | M5 | `contig ask` + `ask-eval` (deterministic, citations, optional LLM) | done |
 | M5-1 | M5 | Live LLM eval + provider/privacy decision | blocked |
 | M5-2 | M5 | Action execution behind the approval gate | deferred |
-| M5-3 | M5 | Dashboard chat panel | deferred |
+| M5-3 | M5 | Dashboard chat panel | done |
 | M6-0 | M6 | `contig family` inheritance/Mendelian/de novo/concordance | done |
 | M6-1 | M6 | X/Y/MT sex-aware Mendelian rules (basic; unknown sex not_evaluated) | done |
 | M6-2 | M6 | Multiple families/quads per PED | deferred |
@@ -46,16 +47,16 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | M7-3 | M7 | TMB tolerance/band calibration (SEQC2 TMB computed; reviewer needed) | blocked |
 | M8-0 | M8 | `contig cohort-build`/`cohort-query` local-only | done |
 | M8-1 | M8 | Federated/cross-lab frequency layer | blocked |
-| M8-2 | M8 | Dashboard cohort view | deferred |
-| X-1 | Cross | Dashboard integration for M1–M8 surfaces | deferred |
+| M8-2 | M8 | Dashboard cohort view | done |
+| X-1 | Cross | Dashboard integration for M1–M8 surfaces (read-only) | done |
+| X-1b | Cross | Auto-discovery from the run bundle + report/variant/readiness actions | deferred |
 | X-2 | Cross | Streaming/scale mode for large VCF/depth files | deferred |
 | X-3 | Cross | Design-partner validation of all defaults | blocked |
 | X-4 | Cross | Release 1.1.0 (version bump + release notes) | deferred |
 | X-5 | Cross | Clinical diagnosis / ACMG adjudication / drug recs | decision |
 
-**Totals:** 15 built · 14 deferred · 12 blocked · 1 decision (42 rows). No row is
-an unfinished code task; every blocked row names its evidence in
-`BLOCKED_RUNBOOK.md`.
+**Totals:** 19 built · 10 deferred · 12 blocked · 2 decisions (43 rows). Every
+blocked row names its evidence in `BLOCKED_RUNBOOK.md`.
 
 ## Agent-validation follow-ups (2026-11-08)
 
