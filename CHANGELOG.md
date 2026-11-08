@@ -6,6 +6,13 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **LLM paraphrase fidelity:** `contig ask --llm` now falls back to the
+  deterministic grounded answer when the model changes a refusal, drops or adds
+  a verdict token, or returns less than half the grounded text. The local
+  `qwen2.5:1.5b` eval went 8/9 → 9/9 with the guard; see
+  `docs/validation/M5_LLM_EVAL.md`.
+
 ## [1.1.0] - 2026-11-08
 
 Research workbenches v1: variants, readiness, panels, reports (signed and

@@ -74,6 +74,28 @@ class HttpModelClient:
             raise ValueError("LLM response did not contain choices[0].message.content") from exc
 
 
+VERDICT_TOKENS = ("PASS", "WARN", "FAIL", "UNVERIFIED")
+REFUSAL_MARKER = "won't guess"
+MIN_LENGTH_RATIO = 0.5
+
+
+def _preserves_grounding(grounded: str, candidate: str) -> bool:
+    """True iff the paraphrase keeps the refusal, verdict, and enough content.
+
+    The model may rephrase only. A changed refusal, a dropped/added verdict
+    token, or a heavily truncated answer falls back to the deterministic text.
+    This is a fidelity guard, not a semantic judge.
+    """
+    if (REFUSAL_MARKER in grounded.lower()) != (REFUSAL_MARKER in candidate.lower()):
+        return False
+    for verdict in VERDICT_TOKENS:
+        if (verdict in grounded) != (verdict in candidate):
+            return False
+    if len(candidate.strip()) < MIN_LENGTH_RATIO * len(grounded.strip()):
+        return False
+    return True
+
+
 def paraphrase(answer: Answer, client: ModelClient, question: str) -> Answer:
     citations = "\n".join(
         f"- {citation.label}: {citation.path} (sha256 {citation.sha256})"
@@ -86,6 +108,6 @@ def paraphrase(answer: Answer, client: ModelClient, question: str) -> Answer:
         "Rephrase the grounded answer only."
     )
     text = client.complete(prompt).strip()
-    if not text:
+    if not text or not _preserves_grounding(answer.answer, text):
         return answer
     return answer.model_copy(update={"answer": text})
