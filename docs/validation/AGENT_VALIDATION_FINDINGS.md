@@ -42,7 +42,7 @@ This is pre-validation: it found concrete bugs/UX gaps, not market evidence.
 | Report completeness | Provenance ends at the M1/M2 JSON; upstream VCF/depth/BED paths may be absent or placeholder | Recurse into table `meta.sources` and label missing upstream evidence |
 | Report portability | HTML + sidecar do not bundle the attached tables; rows beyond `max_rows` are not in the artifact | **Fixed (Unreleased):** `contig report-bundle <sidecar> --out <dir>` copies the HTML, sidecar, run record, and tables with relative paths; the table JSON keeps every row |
 | Panel registry | No archival/diff; panel meta lacks GTF/HGNC path+SHA-256 | **Fixed (Unreleased):** `sources` records the BED/GTF/HGNC path+SHA-256; `panel-diff` compares metadata/intervals; `panel-archive` moves a validated panel into `<dir>/archive` |
-| Cohort | No append/list/merge; query does not show contributing run labels | Add cohort lifecycle and opt-in traceability |
+| Cohort | No append/list/merge; query does not show contributing run labels | **Fixed (Unreleased):** `--trace` records per-variant run labels; `cohort-list`, `cohort-append`, `cohort-merge`, and the query `run_labels` column ship; merge dedupes by SHA-256 and refuses untraced cohorts |
 | Batch/workspace | `report`/`report-check` are one-at-a-time; defaults are cwd-relative | Add a project manifest and batch commands |
 | Readiness | Build/preflight checks and caveat coverage are not explicit; BED3 labels are empty | Add build matching, caveat coverage, and gene annotation guidance |
 | Scale | WGS inputs still need a region/gene first | Add a `--region`/`--gene` guard and clear cap |

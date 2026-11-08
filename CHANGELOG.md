@@ -102,6 +102,11 @@ All notable changes to Contig are recorded here. The format follows
   source paths and SHA-256s; `contig panel-diff` compares metadata and BED
   intervals (`--json`, `--fail-on-diff`); `contig panel-archive` moves a
   validated panel into `<dir>/archive` without deleting it.
+- **Cohort lifecycle and traceability:** `cohort-build --trace` records the
+  contributing run labels per variant; `cohort-list` lists the runs;
+  `cohort-query` shows `run_labels`; `cohort-append` adds runs and
+  `cohort-merge` unions traced cohorts, deduping by content SHA-256 and
+  recomputing counts/frequencies. Merging an untraced cohort is refused.
 
 ### Fixed
 - **Panel versions no longer overwrite each other:** the panel id includes the

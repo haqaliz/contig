@@ -87,7 +87,10 @@ the metadata note `caveats checked` / `caveats not checked`).
 | `contig report-bundle <sidecar> --out <dir>` | Copy the HTML, sidecar, run record, and attached tables into a portable directory with relative paths; all table rows are kept |
 | `contig family --vcf <vcf> --ped <ped>` | Research-use trio/family analysis: per-child inheritance, Mendelian consistency, de novo candidates, and pairwise sample concordance. Autosomal only in v1 |
 | `contig biomarkers --vcf <vcf> --callable-bed <bed>` | Research-use TMB verification from PASS variants in callable regions; compares a reported TMB within tolerance. MSI/LOH/CNV are `not_verified` in v1 |
-| `contig cohort-build --name <n> --variants <json,...>` | Build a local-only cohort index from M1 variant tables: per-variant seen-run counts/frequencies and per-gene summaries. No network, no sample IDs |
+| `contig cohort-build --name <n> --variants <json,...>` | Build a local-only cohort index from M1 variant tables: per-variant seen-run counts/frequencies and per-gene summaries. `--trace` records contributing run labels. No network, no sample IDs |
+| `contig cohort-list --cohort <json>` | List the runs that contributed to a cohort |
+| `contig cohort-append --cohort <json> --variants <json,...>` | Add runs to a traced cohort, updating counts/frequencies |
+| `contig cohort-merge <a> <b> --out <json>` | Merge two traced cohorts, deduping runs by content SHA-256 |
 | `contig cohort-query --cohort <json>` | Query a local cohort by gene, variant, or minimum run count |
 | `contig ask <id> "question"` | Grounded answers from the run bundle and optional M1/M2 tables, with source citations and suggested actions. `--llm` paraphrases the grounded answer; no model is required |
 | `contig ask-eval <id> --cases <jsonl>` | Run the frozen question/citation eval set against the deterministic router |
@@ -514,11 +517,16 @@ MSI can also be run from BAMs with `--msi-tumor-bam`, `--msi-normal-bam`,
 ```bash
 contig cohort-build --name "Lab cohort" \
   --variants run1.json,run2.json,run3.json \
+  --trace \
   --out cohort.json
 
+contig cohort-list --cohort cohort.json
 contig cohort-query --cohort cohort.json --gene BRCA1
 contig cohort-query --cohort cohort.json --variant 17-43057063-C-CT
 contig cohort-query --cohort cohort.json --min-runs 2
+
+contig cohort-append --cohort cohort.json --variants run4.json
+contig cohort-merge a.json b.json --out merged.json
 ```
 
 - **Local only:** aggregates the M1 `contig variants --json` tables already on
@@ -526,6 +534,13 @@ contig cohort-query --cohort cohort.json --min-runs 2
 - **Per variant:** seen-run count, frequency, genes, consequences, and ClinVar
   significance strings.
 - **Per gene:** unique variant count and runs with the gene.
+- **Traceability:** `--trace` records the contributing run labels per variant;
+  `cohort-list` lists the runs, and `cohort-query` shows the labels in a
+  `run_labels` column/field.
+- **Lifecycle:** `cohort-append` adds runs to an existing traced cohort;
+  `cohort-merge` unions two traced cohorts, deduping runs by content SHA-256 and
+  recomputing counts/frequencies. Merging an untraced cohort is refused rather
+  than guessed.
 - **Anonymize:** `--anonymize` hashes run labels and omits paths.
 - **Federated sharing is not part of v1.** Cross-lab aggregation still needs
   consent, privacy design, and legal review.

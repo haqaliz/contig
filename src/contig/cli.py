@@ -265,7 +265,13 @@ from contig.assistant.command import run_ask as run_grounded_ask
 from contig.assistant.command import run_ask_eval as run_grounded_ask_eval
 from contig.family.command import run_family as run_family_analysis
 from contig.biomarkers.command import run_biomarkers as run_biomarker_verification
-from contig.cohort.command import run_cohort_build, run_cohort_query
+from contig.cohort.command import (
+    run_cohort_append,
+    run_cohort_build,
+    run_cohort_list,
+    run_cohort_merge,
+    run_cohort_query,
+)
 
 app = typer.Typer(help="Contig: agentic bioinformatics analyst.")
 
@@ -4985,11 +4991,56 @@ def cohort_build(
     name: str = typer.Option(..., "--name", help="Cohort name."),
     variants: str = typer.Option(..., "--variants", help="Comma-separated M1 variants JSON files."),
     anonymize: bool = typer.Option(False, "--anonymize", help="Hash run labels and omit paths."),
+    trace: bool = typer.Option(False, "--trace", help="Record per-variant contributing run labels."),
     out: str = typer.Option("cohort.json", "--out", help="Cohort JSON output path."),
 ) -> None:
     """Build a local-only cohort index from M1 variant tables."""
     try:
-        run_cohort_build(name, variants=variants, anonymize=anonymize, out=out)
+        run_cohort_build(
+            name, variants=variants, anonymize=anonymize, trace=trace, out=out
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="cohort-append")
+def cohort_append(
+    cohort: str = typer.Option(..., "--cohort", help="Existing traced cohort JSON."),
+    variants: str = typer.Option(..., "--variants", help="Comma-separated M1 variants JSON files to add."),
+    out: str = typer.Option(None, "--out", help="Output path (default: update in place)."),
+) -> None:
+    """Add runs to an existing cohort built with --trace."""
+    try:
+        run_cohort_append(cohort, variants=variants, out=out)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="cohort-merge")
+def cohort_merge(
+    a: str = typer.Argument(..., help="First traced cohort JSON."),
+    b: str = typer.Argument(..., help="Second traced cohort JSON."),
+    out: str = typer.Option(..., "--out", help="Merged cohort JSON output path."),
+    name: str = typer.Option(None, "--name", help="Merged cohort name."),
+) -> None:
+    """Merge two traced cohorts, deduping runs by content SHA-256."""
+    try:
+        run_cohort_merge(a, b, out=out, name=name)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="cohort-list")
+def cohort_list(
+    cohort: str = typer.Option(..., "--cohort", help="Cohort JSON from cohort-build."),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of TSV."),
+) -> None:
+    """List the runs that contributed to a cohort."""
+    try:
+        run_cohort_list(cohort, json_out=json_out)
     except (FileNotFoundError, ValueError, OSError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
