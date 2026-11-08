@@ -420,6 +420,10 @@ contig report-diff report-a.json report-b.json
   unsigned. An unsigned rewrite removes a stale signature rather than leaving one
   that vouches for different content. The signature does not make the report a
   clinical document.
+- **Compatibility warnings:** if the run’s assay/build or the attached table’s
+  build/genes do not line up, `contig report` still renders the report but names
+  the mismatch in the HTML, the sidecar (`warnings`), and stderr. Unknown builds
+  are not guessed.
 - **Research-use boundary:** the report carries a research-use banner, never a
   diagnosis, ACMG classification, treatment recommendation, or medical sign-off.
   PDF is produced by opening the self-contained HTML and printing to PDF; a

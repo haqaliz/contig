@@ -100,6 +100,25 @@ def _banner() -> str:
     )
 
 
+def _banner() -> str:
+    return (
+        '<div class="banner"><strong>Research use only.</strong> This report is '
+        "not a clinical report, diagnosis, or treatment recommendation. "
+        "ClinVar values are what ClinVar reported, not a Contig classification."
+        "</div>"
+    )
+
+
+def _compatibility_warnings(warnings: list[str] | None) -> str:
+    if not warnings:
+        return ""
+    items = "".join(f"<li>{esc(warning)}</li>" for warning in warnings)
+    return (
+        '<div class="warnings"><strong>Compatibility warnings.</strong>'
+        f"<ul>{items}</ul></div>"
+    )
+
+
 def _summary(record: RunRecord, spec: ReportSpec) -> str:
     text = spec.summary or (
         f"Run {record.run_id} from {record.pipeline} "
@@ -324,6 +343,9 @@ h3 { margin-top: 1.25rem; }
 .source { color: #6b7280; font-size: 0.85rem; }
 .banner { background: #fef3c7; border: 1px solid #f59e0b; padding: 0.75rem 1rem;
           border-radius: 6px; margin: 1rem 0; }
+.warnings { background: #fff7ed; border: 1px solid #fb923c; padding: 0.75rem 1rem;
+            border-radius: 6px; margin: 1rem 0; }
+.warnings ul { margin: 0.5rem 0 0 1.25rem; padding: 0; }
 table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.9rem; }
 th, td { border: 1px solid #d1d5db; padding: 0.4rem 0.5rem; text-align: left;
          vertical-align: top; }
@@ -349,6 +371,7 @@ def render_html(
     readiness: dict[str, Any] | None = None,
     inputs: list[ReportInput] | None = None,
     signature: dict[str, Any] | None = None,
+    warnings: list[str] | None = None,
 ) -> str:
     inputs = inputs or []
     variants_input = next((item for item in inputs if item.kind == "variants"), None)
@@ -377,6 +400,7 @@ def render_html(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         f"<title>{esc(spec.title or 'Contig research report')}</title>"
         f"<style>{CSS}</style></head><body>"
-        f"{_header(record, spec)}{_banner()}{sections}{footer}"
+        f"{_header(record, spec)}{_banner()}{_compatibility_warnings(warnings)}"
+        f"{sections}{footer}"
         "</body></html>"
     )

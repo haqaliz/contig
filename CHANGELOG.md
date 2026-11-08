@@ -90,6 +90,9 @@ All notable changes to Contig are recorded here. The format follows
   verifies the files recorded in the attached M1/M2 tables' `meta.sources`, and
   `--base-dir` resolves relative paths. An unrecorded output/source set is
   reported `unverified`, never a false pass.
+- **Report compatibility preflight:** `contig report` warns (HTML, sidecar, and
+  stderr) when the run's assay/build or the attached tables' build/genes do not
+  line up. It never blocks the report and never guesses an unknown build.
 
 ### Fixed
 - **Panel versions no longer overwrite each other:** the panel id includes the

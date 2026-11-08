@@ -47,6 +47,8 @@ def run_report(
         variants_path=variants,
         readiness_path=readiness,
     )
+    for warning in meta.warnings:
+        typer.echo(f"Compatibility warning: {warning}", err=True)
     out_path = out or str(Path(runs_dir) / run_id / "report.html")
     meta_path = meta_path or str(Path(runs_dir) / run_id / "report.json")
     sig_path = write_report(html, meta, out_path, meta_path)

@@ -16,6 +16,7 @@ from contig.bundle import (
     verify_signature_in_dir,
 )
 from contig.models import RunRecord, sha256_file
+from contig.registry import assay_for_pipeline
 from contig.reporting.inputs import (
     input_record,
     load_readiness_json,
@@ -41,6 +42,108 @@ def _contig_version() -> str:
         return "unknown"
 
 
+def _normalize_build(value: object) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.lower().replace("_", "").replace("-", "").replace(".", "")
+    if "grch38" in text or "hg38" in text:
+        return "GRCh38"
+    if "grch37" in text or "hg19" in text or "b37" in text:
+        return "GRCh37"
+    return None
+
+
+def _run_build(record: RunRecord) -> str | None:
+    identity = record.reference_identity
+    return _normalize_build(identity.genome) if identity else None
+
+
+def _gene_set(values: object) -> set[str]:
+    if not isinstance(values, list):
+        return set()
+    return {value for value in values if isinstance(value, str) and value}
+
+
+def compatibility_warnings(
+    record: RunRecord,
+    variants: dict | None,
+    readiness: dict | None,
+) -> list[str]:
+    """Honest pre-flight warnings for an attached table that may not match the run.
+
+    Never blocks the report: the tables are still rendered and hashed, with the
+    mismatch named in the HTML, the sidecar, and stderr. Only facts present in
+    the artifacts are compared; an unknown build is not guessed.
+    """
+    warnings: list[str] = []
+    assay = record.assay or assay_for_pipeline(record.pipeline)
+    run_build = _run_build(record)
+    variants_meta = variants.get("meta") if isinstance(variants, dict) else None
+    variants_build = (
+        _normalize_build(variants_meta.get("build"))
+        if isinstance(variants_meta, dict)
+        else None
+    )
+    if run_build and variants_build and run_build != variants_build:
+        warnings.append(
+            f"The run reference is {run_build} but the variant table is {variants_build}."
+        )
+    readiness_meta = readiness.get("meta") if isinstance(readiness, dict) else None
+    readiness_build = (
+        _normalize_build(readiness_meta.get("build"))
+        if isinstance(readiness_meta, dict)
+        else None
+    )
+    if run_build and readiness_build and run_build != readiness_build:
+        warnings.append(
+            f"The run reference is {run_build} but the readiness table is {readiness_build}."
+        )
+    if assay not in {"variant_calling", "somatic_variant_calling"} and (
+        variants is not None or readiness is not None
+    ):
+        attached = []
+        if variants is not None:
+            attached.append("variant evidence")
+        if readiness is not None:
+            attached.append("readiness")
+        warnings.append(
+            f"The run assay is {assay or 'unknown'}; attached "
+            f"{' and '.join(attached)} are DNA-oriented research tables."
+        )
+    filters = variants_meta.get("filters") if isinstance(variants_meta, dict) else None
+    variant_genes = _gene_set(filters.get("genes")) if isinstance(filters, dict) else set()
+    if variants and not variant_genes:
+        rows = variants.get("variants")
+        if isinstance(rows, list):
+            variant_genes = {
+                row.get("gene")
+                for row in rows
+                if isinstance(row, dict) and isinstance(row.get("gene"), str)
+            }
+    readiness_genes: set[str] = set()
+    if isinstance(readiness, dict):
+        readiness_genes = {
+            gene.get("gene")
+            for gene in readiness.get("genes") or []
+            if isinstance(gene, dict) and isinstance(gene.get("gene"), str)
+        }
+        if not readiness_genes:
+            for target in readiness.get("targets") or []:
+                if not isinstance(target, dict):
+                    continue
+                inner = target.get("target")
+                if isinstance(inner, dict) and isinstance(inner.get("gene"), str):
+                    readiness_genes.add(inner["gene"])
+    missing = sorted(variant_genes - readiness_genes)
+    if variant_genes and readiness_genes and missing:
+        warnings.append(
+            "Variant genes not covered by the readiness table: "
+            + ", ".join(missing)
+            + "."
+        )
+    return warnings
+
+
 def build_report(
     runs_dir: str | Path,
     run_id: str,
@@ -64,6 +167,7 @@ def build_report(
         inputs.append(input_record("readiness", readiness_path, "M2 coverage/readiness table"))
 
     signature = verify_signature_in_dir(bundle_dir)
+    warnings = compatibility_warnings(record, variants, readiness)
     html = render_html(
         record,
         spec,
@@ -71,6 +175,7 @@ def build_report(
         readiness=readiness,
         inputs=inputs,
         signature=signature,
+        warnings=warnings,
     )
     meta = ReportMeta(
         run_id=run_id,
@@ -78,6 +183,7 @@ def build_report(
         spec=spec,
         inputs=inputs,
         html_sha256=hashlib.sha256(html.encode("utf-8")).hexdigest(),
+        warnings=warnings,
         notes=[
             f"Template: {spec.template}",
             f"Variant table attached: {'yes' if variants is not None else 'no'}",

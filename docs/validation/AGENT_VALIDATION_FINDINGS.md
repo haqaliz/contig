@@ -38,7 +38,7 @@ This is pre-validation: it found concrete bugs/UX gaps, not market evidence.
 |---|---|---|
 | Report trust | Sidecar is unsigned and editable; HTML hash is checked, but the sidecar itself has no signature | **Fixed (Unreleased):** `contig report` signs the sidecar with `CONTIG_SIGNING_KEY` (detached Ed25519 `<sidecar>.sig.json`); `report-check` verifies it and fails on tampering; `--require-signature` rejects unsigned reports |
 | Report trust | `report-check` verifies inputs + HTML, not the run’s declared outputs or the tables’ upstream sources | **Fixed (Unreleased):** `report-check --outputs` re-hashes the run’s recorded outputs (same drift check as `contig verify`), `--sources` verifies each attached table’s `meta.sources`, and `--base-dir` resolves relative paths; unrecorded sets are `unverified`, never a false pass |
-| Report trust | No assay/build/gene compatibility preflight between run, variants, and readiness | Warn on assay/gene/build mismatch before rendering |
+| Report trust | No assay/build/gene compatibility preflight between run, variants, and readiness | **Fixed (Unreleased):** `contig report` warns in the HTML, sidecar `warnings`, and stderr on an assay/build/gene mismatch; it never blocks and never guesses an unknown build |
 | Report completeness | Provenance ends at the M1/M2 JSON; upstream VCF/depth/BED paths may be absent or placeholder | Recurse into table `meta.sources` and label missing upstream evidence |
 | Report portability | HTML + sidecar do not bundle the attached tables; rows beyond `max_rows` are not in the artifact | Add a portable report bundle (HTML + sidecar + tables) |
 | Panel registry | No archival/diff; panel meta lacks GTF/HGNC path+SHA-256 | Add panel archive/diff and source hashes |

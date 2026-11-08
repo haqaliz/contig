@@ -69,7 +69,8 @@ milestone totals above.
   rejects unsigned reports.
 - `report-check --outputs --sources --base-dir`; recurse into M1/M2 sources —
   **shipped (Unreleased);** unrecorded sets are `unverified`, never a false pass.
-- Report compatibility preflight for assay/build/gene mismatch.
+- Report compatibility preflight for assay/build/gene mismatch —
+  **shipped (Unreleased);** HTML, sidecar, and stderr warnings, never blocking.
 - Portable report bundle (HTML + sidecar + attached tables).
 - Panel archival/diff and GTF/HGNC source hashes in panel metadata.
 - Cohort append/list/merge and opt-in contributing-run labels.
