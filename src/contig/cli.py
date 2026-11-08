@@ -108,8 +108,9 @@ from contig.reproduce_corpus import (
 )
 from contig.bundle import (
     compute_input_checksums,
-    compute_output_checksums,
     compute_tree_sha256,
+    results_dir_for,
+    verify_outputs,
     verify_signature_in_dir,
     write_reproduce_bundle,
 )
@@ -2310,42 +2311,12 @@ def show(
 
 
 def _results_dir_for(record: RunRecord, runs_dir: str, run_id: str) -> Path:
-    """Where a run's outputs live for re-hashing: recorded outdir, else the default.
+    """The run's results directory, preferring the recorded outdir.
 
-    The CLI absolutizes --outdir into record.parameters; verify prefers that path
-    when it still exists, and otherwise falls back to runs_dir/<id>/results (a
-    moved runs directory, or a test-profile run), matching how finalize hashed.
+    Kept as a thin CLI-local wrapper so call sites need no bundle-path plumbing;
+    the rule itself lives in contig.bundle.results_dir_for.
     """
-    outdir = record.parameters.get("outdir")
-    if outdir:
-        path = Path(str(outdir))
-        if path.is_dir():
-            return path
-    return Path(runs_dir) / run_id / "results"
-
-
-def verify_outputs(record: RunRecord, results_dir: Path) -> dict:
-    """Compare on-disk outputs against the recorded checksums (PRD contract B).
-
-    Returns {ok, changed, missing}: `changed` are recorded files whose current
-    hash differs, `missing` are recorded files no longer on disk (both sorted).
-    Empty recorded checksums report ok with nothing to verify; new files that
-    were never recorded are ignored (only the anchored outputs are guaranteed).
-    """
-    recorded = record.output_checksums
-    if not recorded:
-        return {"ok": True, "changed": [], "missing": []}
-    current = compute_output_checksums(results_dir)
-    changed: list[str] = []
-    missing: list[str] = []
-    for rel, digest in recorded.items():
-        if rel not in current:
-            missing.append(rel)
-        elif current[rel] != digest:
-            changed.append(rel)
-    changed.sort()
-    missing.sort()
-    return {"ok": not (changed or missing), "changed": changed, "missing": missing}
+    return results_dir_for(record, Path(runs_dir) / run_id)
 
 
 @app.command()
@@ -5296,14 +5267,38 @@ def report_check(
         "--require-signature",
         help="Exit 1 when the report manifest has no signature.",
     ),
+    base_dir: str = typer.Option(
+        None,
+        "--base-dir",
+        help="Resolve relative sidecar, table-source, and output paths against this directory.",
+    ),
+    outputs: bool = typer.Option(
+        False,
+        "--outputs",
+        help="Also verify the run's recorded output checksums.",
+    ),
+    sources: bool = typer.Option(
+        False,
+        "--sources",
+        help="Also verify the attached tables' upstream sources.",
+    ),
 ) -> None:
     """Check whether a report's inputs are still current (by SHA-256).
 
     Also verifies the detached Ed25519 signature over the sidecar when one is
-    present; a tampered manifest or a bad signature exits 1.
+    present; a tampered manifest or a bad signature exits 1. `--outputs` and
+    `--sources` extend the check to the run's declared outputs and the attached
+    tables' upstream files; an unrecorded set is reported unverified, never a
+    false pass.
     """
     try:
-        run_report_staleness_check(meta, require_signature=require_signature)
+        run_report_staleness_check(
+            meta,
+            require_signature=require_signature,
+            base_dir=base_dir,
+            check_outputs=outputs,
+            check_sources=sources,
+        )
     except (FileNotFoundError, ValueError, OSError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)

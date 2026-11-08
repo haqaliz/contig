@@ -450,6 +450,53 @@ def compute_output_checksums(results_dir: str | Path) -> dict[str, str]:
     return checksums
 
 
+def results_dir_for(
+    record: RunRecord,
+    bundle_dir: str | Path,
+    *,
+    base_dir: str | Path | None = None,
+) -> Path:
+    """Where a run's outputs live for re-hashing: recorded outdir, else bundle/results.
+
+    The CLI absolutizes --outdir into record.parameters; verify prefers that path
+    when it still exists, and otherwise falls back to <bundle>/results (a moved
+    runs directory, or a test-profile run), matching how finalize hashed. A
+    relative recorded outdir is resolved against ``base_dir`` when given.
+    """
+    outdir = record.parameters.get("outdir")
+    if outdir:
+        path = Path(str(outdir))
+        if not path.is_absolute() and base_dir is not None:
+            path = Path(base_dir) / path
+        if path.is_dir():
+            return path
+    return Path(bundle_dir) / "results"
+
+
+def verify_outputs(record: RunRecord, results_dir: str | Path) -> dict:
+    """Compare on-disk outputs against the recorded checksums (PRD contract B).
+
+    Returns {ok, changed, missing}: `changed` are recorded files whose current
+    hash differs, `missing` are recorded files no longer on disk (both sorted).
+    Empty recorded checksums report ok with nothing to verify; new files that
+    were never recorded are ignored (only the anchored outputs are guaranteed).
+    """
+    recorded = record.output_checksums
+    if not recorded:
+        return {"ok": True, "changed": [], "missing": []}
+    current = compute_output_checksums(results_dir)
+    changed: list[str] = []
+    missing: list[str] = []
+    for rel, digest in recorded.items():
+        if rel not in current:
+            missing.append(rel)
+        elif current[rel] != digest:
+            changed.append(rel)
+    changed.sort()
+    missing.sort()
+    return {"ok": not (changed or missing), "changed": changed, "missing": missing}
+
+
 def _raise(err: OSError) -> None:
     """os.walk onerror callback: re-raise so a directory-listing error is never
     silently swallowed (os.walk's default onerror=None would just skip the

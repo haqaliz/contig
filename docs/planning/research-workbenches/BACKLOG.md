@@ -67,7 +67,8 @@ milestone totals above.
 - Signed report manifest (HTML + sidecar + reviewer) using the Ed25519 keypair —
   **shipped (Unreleased);** `report-check` verifies it and `--require-signature`
   rejects unsigned reports.
-- `report-check --outputs --sources --base-dir`; recurse into M1/M2 sources.
+- `report-check --outputs --sources --base-dir`; recurse into M1/M2 sources —
+  **shipped (Unreleased);** unrecorded sets are `unverified`, never a false pass.
 - Report compatibility preflight for assay/build/gene mismatch.
 - Portable report bundle (HTML + sidecar + attached tables).
 - Panel archival/diff and GTF/HGNC source hashes in panel metadata.

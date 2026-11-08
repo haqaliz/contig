@@ -9,7 +9,9 @@ import typer
 from contig.reporting.build import (
     build_report,
     check_report,
+    check_report_outputs,
     check_report_signature,
+    check_report_sources,
     write_report,
 )
 from contig.reporting.models import ReportSpec
@@ -54,13 +56,27 @@ def run_report(
         typer.echo(f"Wrote {sig_path} (Ed25519 signature)")
 
 
-def run_report_check(meta_path: str, *, require_signature: bool = False) -> None:
-    results = check_report(meta_path)
-    stale = [item for item in results if item["status"] != "current"]
+def run_report_check(
+    meta_path: str,
+    *,
+    require_signature: bool = False,
+    base_dir: str | None = None,
+    check_outputs: bool = False,
+    check_sources: bool = False,
+) -> None:
+    results = check_report(meta_path, base_dir=base_dir)
+    if check_outputs:
+        results.extend(check_report_outputs(meta_path, base_dir=base_dir))
+    if check_sources:
+        results.extend(check_report_sources(meta_path, base_dir=base_dir))
+    stale = [item for item in results if item["status"] in {"stale", "missing"}]
+    unverified = [item for item in results if item["status"] == "unverified"]
     for item in results:
         typer.echo(f"{item['status']:>8}  {item['kind']}: {item['path']}")
-        if item["status"] != "current":
+        if item["status"] in {"stale", "missing"}:
             typer.echo(f"          expected {item['expected']} actual {item['actual']}")
+        elif item.get("note"):
+            typer.echo(f"          {item['note']}")
     signature = check_report_signature(meta_path)
     signature_bad = False
     if not signature["signed"]:
@@ -71,11 +87,13 @@ def run_report_check(meta_path: str, *, require_signature: bool = False) -> None
         signature_bad = True
         typer.echo(f"signature: INVALID ({signature['detail']})", err=True)
     if stale:
-        typer.echo(f"{len(stale)} input(s) stale or missing.", err=True)
+        typer.echo(f"{len(stale)} item(s) stale or missing.", err=True)
         raise typer.Exit(code=1)
     if signature_bad:
         raise typer.Exit(code=1)
     if require_signature and not signature["signed"]:
         typer.echo("A signed report manifest is required.", err=True)
         raise typer.Exit(code=1)
+    if unverified:
+        typer.echo(f"{len(unverified)} item(s) could not be verified.", err=True)
     typer.echo("All report inputs are current.")
