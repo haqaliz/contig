@@ -6,6 +6,13 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-08
+
+Research workbenches v1: variants, readiness, panels, reports (signed and
+portable), grounded ask, family, biomarkers, and a local cohort, plus the
+read-only `/research` dashboard and batch project reports. All research-use;
+no diagnosis, ACMG adjudication, or treatment recommendation.
+
 ### Added
 - **Research-use variant workbench (M1):** `contig variants` joins a VCF to
   ClinVar, Iranome, and a population-frequency TSV, applies deterministic filters
