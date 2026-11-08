@@ -253,12 +253,14 @@ from contig.reporting.command import run_report_check as run_report_staleness_ch
 from contig.reporting.bundle import bundle_report as bundle_report_sidecar
 from contig.reporting.diff import diff_reports, render_diff
 from contig.panels.build import (
+    archive_panel as archive_panel_registry,
     build_from_bed as build_panel_from_bed,
     build_from_genes as build_panel_from_genes,
     list_panels as list_panel_registry,
     load_panel as load_panel_registry,
     write_panel as write_panel_registry,
 )
+from contig.panels.diff import panel_diff, render_panel_diff
 from contig.assistant.command import run_ask as run_grounded_ask
 from contig.assistant.command import run_ask_eval as run_grounded_ask_eval
 from contig.family.command import run_family as run_family_analysis
@@ -5222,6 +5224,49 @@ def panel_show(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
     typer.echo(panel.meta.model_dump_json(indent=2))
+
+
+@app.command(name="panel-diff")
+def panel_diff_command(
+    a: str = typer.Argument(..., help="Baseline panel id."),
+    b: str = typer.Argument(..., help="Comparison panel id."),
+    directory: str = typer.Option("panels", "--dir", help="Panel registry directory."),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of text."),
+    fail_on_diff: bool = typer.Option(
+        False, "--fail-on-diff", help="Exit 1 when the panels differ."
+    ),
+) -> None:
+    """Compare two panel versions (metadata and BED intervals)."""
+    try:
+        result = panel_diff(
+            load_panel_registry(directory, a),
+            load_panel_registry(directory, b),
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    if json_out:
+        typer.echo(_json.dumps(result, indent=2))
+    else:
+        typer.echo(render_panel_diff(result), nl=False)
+    if fail_on_diff and not result["same"]:
+        raise typer.Exit(code=1)
+
+
+@app.command(name="panel-archive")
+def panel_archive(
+    panel_id: str = typer.Argument(..., help="Panel id to archive."),
+    directory: str = typer.Option("panels", "--dir", help="Panel registry directory."),
+) -> None:
+    """Move a panel into <dir>/archive, keeping it out of the active registry."""
+    try:
+        bed_path, meta_path = archive_panel_registry(directory, panel_id)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"Archived {panel_id}")
+    typer.echo(f"  BED:  {bed_path}")
+    typer.echo(f"  Meta: {meta_path}")
 
 
 @app.command()

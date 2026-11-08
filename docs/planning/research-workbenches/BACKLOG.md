@@ -74,7 +74,8 @@ milestone totals above.
 - Portable report bundle (HTML + sidecar + attached tables) —
   **shipped (Unreleased):** `contig report-bundle` writes relative paths and
   keeps every table row.
-- Panel archival/diff and GTF/HGNC source hashes in panel metadata.
+- Panel archival/diff and GTF/HGNC source hashes in panel metadata —
+  **shipped (Unreleased):** `panel-diff`, `panel-archive`, and `meta.sources`.
 - Cohort append/list/merge and opt-in contributing-run labels.
 - Batch report/check and a project/workspace manifest.
 - Readiness build matching, caveat coverage, and BED3 gene-annotation guidance.

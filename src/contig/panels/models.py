@@ -8,6 +8,13 @@ from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 
 
+class PanelSource(BaseModel):
+    kind: str
+    path: str
+    sha256: str
+    note: str | None = None
+
+
 class PanelMeta(BaseModel):
     id: str
     name: str
@@ -18,6 +25,7 @@ class PanelMeta(BaseModel):
     transcripts: list[str] = Field(default_factory=list)
     method: str = ""
     checksum: str = ""
+    sources: list[PanelSource] = Field(default_factory=list)
     created_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
     )

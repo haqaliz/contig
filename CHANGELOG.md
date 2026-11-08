@@ -98,6 +98,10 @@ All notable changes to Contig are recorded here. The format follows
   attached tables into one directory with relative paths, so `report-check`
   keeps working after a move. The table JSON keeps every row, including rows
   beyond the HTML `max_rows` cap.
+- **Panel provenance and lifecycle:** panel metadata now records the BED/GTF/HGNC
+  source paths and SHA-256s; `contig panel-diff` compares metadata and BED
+  intervals (`--json`, `--fail-on-diff`); `contig panel-archive` moves a
+  validated panel into `<dir>/archive` without deleting it.
 
 ### Fixed
 - **Panel versions no longer overwrite each other:** the panel id includes the

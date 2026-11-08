@@ -80,6 +80,8 @@ the metadata note `caveats checked` / `caveats not checked`).
 | `contig readiness --depth <tsv>` | Per-target coverage and interpretation readiness: mean depth, % ≥20x/50x/100x, zero-coverage bases, homology/pseudogene caveats, and a `ready`/`caution`/`not-interpretable` state |
 | `contig panel-build --name <n>` | Build a canonical, checksummed panel BED from a gene list + GTF (optional HGNC normalization) or an existing BED; writes `<id>.bed` + `<id>.json` to the registry |
 | `contig panel-list` / `contig panel-show <id>` | List or inspect panels in the registry |
+| `contig panel-diff <a> <b>` | Compare two panel versions (metadata and BED intervals); `--json`, `--fail-on-diff` |
+| `contig panel-archive <id>` | Move a validated panel into `<dir>/archive` without deleting it |
 | `contig report <id>` | Build a self-contained research report from a run bundle, optionally attaching M1 variants and M2 readiness; writes HTML + a JSON sidecar with input hashes. `--template publication\|internal\|audit` |
 | `contig report-check <sidecar>` | Recompute the report inputs’ SHA-256 and the HTML hash, verify the Ed25519 sidecar signature when present, and optionally re-hash the run’s outputs (`--outputs`) and the attached tables’ upstream sources (`--sources`); `--base-dir` resolves relative paths, `--require-signature` rejects unsigned reports |
 | `contig report-bundle <sidecar> --out <dir>` | Copy the HTML, sidecar, run record, and attached tables into a portable directory with relative paths; all table rows are kept |
@@ -352,6 +354,8 @@ contig panel-build --name "Hereditary cancer" \
 
 contig panel-list --dir panels
 contig panel-show <panel-id> --dir panels
+contig panel-diff <old-id> <new-id> --dir panels
+contig panel-archive <panel-id> --dir panels
 ```
 
 - **Gene list:** symbols are resolved against HGNC when `--hgnc` is supplied
@@ -363,7 +367,12 @@ contig panel-show <panel-id> --dir panels
   and checksums.
 - **Registry:** `<id>.bed` + `<id>.json` with name, source, genes, transcripts,
   build, version, method, checksum, creation time, and Contig version. The id is a slug
-  plus a short SHA-256 of the canonical BED.
+  plus a short SHA-256 of the canonical BED. `sources` records the BED/GTF/HGNC
+  path and SHA-256, so a rebuilt panel names exactly what it consumed.
+- **Diff and archive:** `panel-diff` compares metadata and BED intervals (added /
+  removed, `--json`, `--fail-on-diff`). `panel-archive` moves a validated panel
+  into `<dir>/archive`; it disappears from the active list but stays loadable
+  with `--dir <dir>/archive` and is never overwritten.
 - **Reuse:** the BED works directly as `--bed` for `contig variants` and
   `contig readiness`.
 
