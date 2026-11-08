@@ -5556,6 +5556,7 @@ def variants(
     region: str = typer.Option(None, "--region", help="CHROM:START-END region to keep."),
     spec: str = typer.Option(None, "--spec", help="Replay a saved filter spec (JSON)."),
     save_spec: str = typer.Option(None, "--save-spec", help="Write the effective filter spec as JSON."),
+    max_records: int = typer.Option(1_000_000, "--max-records", help="Cap on records kept (default 1,000,000; raise for large WGS inputs)."),
     out: str = typer.Option(None, "--out", help="Write the table to this path instead of stdout."),
     json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of TSV."),
 ) -> None:
@@ -5564,7 +5565,9 @@ def variants(
     This is a deterministic filtering surface, not a clinical interpretation:
     ClinVar is shown as "ClinVar reports ...", never restated as Contig's own
     pathogenicity call. Use --spec to replay a filter, --out to write a table,
-    and --json for a machine-readable table plus provenance.
+    and --json for a machine-readable table plus provenance. A WGS call set is
+    bounded by --max-records (default 1,000,000): pass --region or --gene to
+    keep the working set small, or raise the cap explicitly.
     """
     try:
         run_variant_workbench(
@@ -5587,6 +5590,7 @@ def variants(
             region=region,
             spec_path=spec,
             save_spec=save_spec,
+            max_records=max_records,
             out=out,
             json_out=json_out,
         )

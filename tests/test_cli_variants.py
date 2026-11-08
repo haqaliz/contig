@@ -24,6 +24,7 @@ def test_help_lists_the_workbench_options():
     assert "--clinvar" in result.output
     assert "--pass-only" in result.output
     assert "--save-spec" in result.output
+    assert "--max-records" in result.output
 
 
 def test_writes_a_tsv_and_prints_the_research_use_notice(tmp_path):
@@ -66,6 +67,17 @@ def test_missing_vcf_exits_nonzero():
     result = _invoke([str(FIX / "missing.vcf")])
     assert result.exit_code == 1
     assert "not found" in result.output.lower()
+
+
+def test_wgs_cap_requires_a_region_or_gene():
+    capped = _invoke([SAMPLE, "--max-records", "1"])
+    assert capped.exit_code == 1
+    assert "--region" in capped.output
+    bounded = _invoke([
+        SAMPLE, "--max-records", "1", "--region", "17:43000000-43100000",
+    ])
+    assert bounded.exit_code == 0, bounded.output
+    assert bounded.output.count("BRCA1") >= 1
 
 
 def test_build_mismatch_records_the_iranome_skip(tmp_path):

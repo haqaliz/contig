@@ -9,7 +9,7 @@ from importlib.metadata import PackageNotFoundError, version as pkg_version
 from pathlib import Path
 
 from contig.models import sha256_file
-from contig.variants.filters import apply_filters, sort_rows
+from contig.variants.filters import apply_filters, matches, sort_rows
 from contig.variants.gnomad import GnomadClient, GraphQLGnomadClient, load_gnomad
 from contig.variants.models import (
     FilterSpec,
@@ -24,7 +24,7 @@ from contig.variants.sources import (
     load_frequencies,
     load_iranome,
 )
-from contig.variants.vcf import read_variants
+from contig.variants.vcf import VariantCapExceeded, read_variants
 
 COLUMNS = [
     "chrom", "pos", "ref", "alt", "rsid", "gene", "transcript",
@@ -59,14 +59,34 @@ def build_table(
     gnomad_dataset: str = "gnomad_r4",
     build: str | None = None,
     spec: FilterSpec | None = None,
+    max_records: int | None = 1_000_000,
 ) -> VariantTable:
     spec = spec or FilterSpec()
     calls = Path(calls)
     if not calls.is_file():
         raise FileNotFoundError(f"VCF not found: {calls}")
+    if max_records is not None and max_records < 1:
+        raise ValueError("max_records must be at least 1")
     build = build or infer_build_from_vcf(calls)
 
-    rows, stats = read_variants(calls)
+    early = FilterSpec(genes=spec.genes, region=spec.region)
+    try:
+        rows, stats = read_variants(
+            calls,
+            keep=lambda record: matches(record, early),
+            max_records=max_records,
+        )
+    except VariantCapExceeded as exc:
+        if spec.region or spec.genes:
+            raise ValueError(
+                f"the bounded query still exceeded the {exc.cap:,}-record cap; "
+                "narrow --region/--genes or raise --max-records explicitly"
+            ) from exc
+        raise ValueError(
+            f"VCF has more than {exc.cap:,} records; pass --region CHROM:START-END "
+            "or --gene SYMBOL,... to bound a WGS input, or raise --max-records "
+            "explicitly"
+        ) from exc
     sites = {row.key for row in rows}
     sources = [
         SourceProvenance(

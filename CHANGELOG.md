@@ -116,6 +116,10 @@ All notable changes to Contig are recorded here. The format follows
   many regions loaded; a BED3 without gene names gets explicit gene-annotation
   guidance; a target/depth chromosome mismatch is recorded instead of silently
   producing all-zero coverage.
+- **WGS variant-table guard:** `contig variants` caps kept records at 1,000,000
+  by default and applies `--region`/`--gene` while streaming, so the full WGS
+  call set is not held in memory. Exceeding the cap without a bound is an error
+  that names the flags; `--max-records` raises the cap explicitly.
 
 ### Fixed
 - **Panel versions no longer overwrite each other:** the panel id includes the

@@ -76,7 +76,7 @@ the metadata note `caveats checked` / `caveats not checked`).
 | `contig estimate --pipeline <p> --input <sheet>` | Pre-run runtime and cost estimate, data-driven from past runs of that pipeline with a sample-count heuristic fallback |
 | `contig export <id> --rocrate` | Export the run's provenance as an RO-Crate (ro-crate-metadata.json) |
 | `contig methods <id>` | A deterministic, citation-ready methods paragraph from the bundle |
-| `contig variants <vcf>` | Research-use variant table: join a call set to ClinVar, Iranome, and a population-frequency TSV, filter deterministically, and export TSV/JSON. `--spec` replays a saved filter; `--json` includes provenance |
+| `contig variants <vcf>` | Research-use variant table: join a call set to ClinVar, Iranome, and a population-frequency TSV, filter deterministically, and export TSV/JSON. `--spec` replays a saved filter; `--json` includes provenance; `--max-records` bounds a WGS input (default 1,000,000) |
 | `contig readiness --depth <tsv>` | Per-target coverage and interpretation readiness: mean depth, % ≥20x/50x/100x, zero-coverage bases, homology/pseudogene caveats, explicit caveat coverage, build label, and a `ready`/`caution`/`not-interpretable` state |
 | `contig panel-build --name <n>` | Build a canonical, checksummed panel BED from a gene list + GTF (optional HGNC normalization) or an existing BED; writes `<id>.bed` + `<id>.json` to the registry |
 | `contig panel-list` / `contig panel-show <id>` | List or inspect panels in the registry |
@@ -289,6 +289,11 @@ contig variants sample.vcf --gnomad-api --gnomad-cache gnomad-cache.json --out t
 - **Output:** TSV by default; `--json` emits the table plus metadata (source
   paths, SHA-256, build, filter spec, Contig version, notes). `--out` writes to a
   file; `--save-spec` writes the effective filter spec.
+- **Scale guard:** a WGS call set is bounded to 1,000,000 kept records by
+  default. Without `--region` or `--gene`, exceeding the cap is an error that
+  tells you to bound the input; `--max-records` raises the cap explicitly when
+  you really mean it. Region/gene filtering happens while streaming, so the full
+  call set is never held in memory.
 - **Research-use boundary:** no ACMG classification, diagnosis, prognosis,
   screening, or treatment recommendation is emitted by Contig. ClinVar
   significance is attributed, not re-owned.

@@ -89,3 +89,18 @@ def test_write_table_writes_tsv_and_json(tmp_path):
 def test_missing_vcf_is_an_honest_error(tmp_path):
     with pytest.raises(FileNotFoundError):
         build_table(tmp_path / "missing.vcf")
+
+
+def test_wgs_guard_and_bounded_read():
+    with pytest.raises(ValueError, match="--region"):
+        build_table(SAMPLE, max_records=1)
+    bounded = build_table(
+        SAMPLE,
+        spec=FilterSpec(region="17:43000000-43100000"),
+        max_records=1,
+    )
+    assert [row.gene for row in bounded.rows] == ["BRCA1"]
+    by_gene = build_table(
+        SAMPLE, spec=FilterSpec(genes=["BRCA1"]), max_records=1
+    )
+    assert [row.gene for row in by_gene.rows] == ["BRCA1"]

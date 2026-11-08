@@ -84,4 +84,6 @@ milestone totals above.
   manifest-relative path resolution.
 - Readiness build matching, caveat coverage, and BED3 gene-annotation guidance —
   **shipped (Unreleased):** `--build`, explicit caveat meta, and preflight notes.
-- WGS region/gene guard and explicit record cap.
+- WGS region/gene guard and explicit record cap —
+  **shipped (Unreleased):** streaming `--region`/`--gene` bound plus a
+  1,000,000-record default cap that names the flags.
