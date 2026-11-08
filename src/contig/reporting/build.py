@@ -38,7 +38,7 @@ def build_report(
     record = load_run_bundle(runs_dir, run_id)
     bundle_dir = run_bundle_dir(runs_dir, run_id)
 
-    inputs = [input_record("run_record", bundle_dir / "run_record.json", "Signed/reproducible run record")]
+    inputs = [input_record("run_record", bundle_dir / "run_record.json", "Run record")]
     variants = None
     if variants_path:
         variants = load_variants_json(variants_path)
@@ -73,8 +73,13 @@ def build_report(
 
 
 def write_report(html: str, meta: ReportMeta, out_path: str | Path, meta_path: str | Path) -> None:
-    Path(out_path).write_text(html, encoding="utf-8")
-    Path(meta_path).write_text(meta.model_dump_json(indent=2), encoding="utf-8")
+    out_path = Path(out_path).resolve()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(html, encoding="utf-8")
+    meta = meta.model_copy(update={"html_path": str(out_path)})
+    meta_path = Path(meta_path)
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.write_text(meta.model_dump_json(indent=2), encoding="utf-8")
 
 
 def check_report(meta_path: str | Path) -> list[dict[str, str]]:
@@ -85,6 +90,8 @@ def check_report(meta_path: str | Path) -> list[dict[str, str]]:
     results: list[dict[str, str]] = []
     for item in meta.inputs:
         path = Path(item.path)
+        if not path.is_absolute():
+            path = meta_path.parent / path
         if not path.is_file():
             results.append({
                 "kind": item.kind,
@@ -102,4 +109,23 @@ def check_report(meta_path: str | Path) -> list[dict[str, str]]:
             "expected": item.sha256,
             "actual": actual,
         })
+    if meta.html_path:
+        html_path = Path(meta.html_path)
+        if not html_path.is_file():
+            results.append({
+                "kind": "html",
+                "path": meta.html_path,
+                "status": "missing",
+                "expected": meta.html_sha256,
+                "actual": "",
+            })
+        else:
+            actual = sha256_file(html_path)
+            results.append({
+                "kind": "html",
+                "path": meta.html_path,
+                "status": "current" if actual == meta.html_sha256 else "stale",
+                "expected": meta.html_sha256,
+                "actual": actual,
+            })
     return results

@@ -56,3 +56,19 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 **Totals:** 15 built · 14 deferred · 12 blocked · 1 decision (42 rows). No row is
 an unfinished code task; every blocked row names its evidence in
 `BLOCKED_RUNBOOK.md`.
+
+## Agent-validation follow-ups (2026-11-08)
+
+These came from the four synthetic persona runs
+(`docs/validation/AGENT_VALIDATION_FINDINGS.md`). They are not counted in the
+milestone totals above.
+
+- Signed report manifest (HTML + sidecar + reviewer) using the Ed25519 keypair.
+- `report-check --outputs --sources --base-dir`; recurse into M1/M2 sources.
+- Report compatibility preflight for assay/build/gene mismatch.
+- Portable report bundle (HTML + sidecar + attached tables).
+- Panel archival/diff and GTF/HGNC source hashes in panel metadata.
+- Cohort append/list/merge and opt-in contributing-run labels.
+- Batch report/check and a project/workspace manifest.
+- Readiness build matching, caveat coverage, and BED3 gene-annotation guidance.
+- WGS region/gene guard and explicit record cap.

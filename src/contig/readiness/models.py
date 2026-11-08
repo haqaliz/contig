@@ -89,6 +89,23 @@ class ReadinessMeta(BaseModel):
 
 
 @dataclass
+class GeneMetrics:
+    gene: str
+    targets: int
+    bases: int
+    covered_bases: int
+    mean_depth: float
+    pct_20x: float
+    pct_50x: float
+    pct_100x: float
+    zero_bases: int
+    caveats: list[str]
+    readiness: str
+    reason: str
+
+
+@dataclass
 class ReadinessTable:
     rows: list[TargetMetrics]
     meta: ReadinessMeta
+    genes: list[GeneMetrics] = field(default_factory=list)

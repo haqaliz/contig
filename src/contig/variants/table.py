@@ -31,7 +31,7 @@ COLUMNS = [
     "consequence", "impact", "hgvsc", "hgvsp", "genotype", "zygosity",
     "depth", "vaf", "filter", "clinvar_significance", "clinvar_review_status",
     "clinvar_condition", "clinvar_variant_type", "clinvar_hgvs",
-    "gnomad_af", "gnomad_an", "iranome_af", "iranome_ac", "iranome_an",
+    "population_af", "population_an", "iranome_af", "iranome_ac", "iranome_an",
 ]
 
 RESEARCH_USE_NOTICE = (
@@ -133,8 +133,8 @@ def build_table(
         rows = [
             dataclasses.replace(
                 row,
-                gnomad_af=(evidence.get(row.key).af if evidence.get(row.key) else None),
-                gnomad_an=(evidence.get(row.key).an if evidence.get(row.key) else None),
+                population_af=(evidence.get(row.key).af if evidence.get(row.key) else None),
+                population_an=(evidence.get(row.key).an if evidence.get(row.key) else None),
             )
             for row in rows
         ]
@@ -151,8 +151,8 @@ def build_table(
         rows = [
             dataclasses.replace(
                 row,
-                gnomad_af=(evidence.get(row.key).af if evidence.get(row.key) else None),
-                gnomad_an=(evidence.get(row.key).an if evidence.get(row.key) else None),
+                population_af=(evidence.get(row.key).af if evidence.get(row.key) else None),
+                population_an=(evidence.get(row.key).an if evidence.get(row.key) else None),
             )
             for row in rows
         ]
@@ -206,8 +206,8 @@ def render_tsv(table: VariantTable) -> str:
             _format(row.clinvar_condition),
             _format(row.clinvar_variant_type),
             _format(row.clinvar_hgvs),
-            _format(row.gnomad_af),
-            _format(row.gnomad_an),
+            _format(row.population_af),
+            _format(row.population_an),
             _format(row.iranome_af),
             _format(row.iranome_ac),
             _format(row.iranome_an),

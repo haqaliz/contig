@@ -75,6 +75,29 @@ All notable changes to Contig are recorded here. The format follows
   hashes run labels and omits paths. Federated/cross-lab sharing remains a
   separate consent/legal design.
 
+### Fixed
+- **Panel versions no longer overwrite each other:** the panel id includes the
+  version, so v1/v2 coexist in the registry; `panel-list` has a header.
+- **Cohort inputs are deduped by SHA-256:** passing the same content twice no
+  longer inflates run counts or frequencies; the duplicate is noted.
+- **Report artifacts are bound:** report inputs are stored as absolute paths;
+  `report-check` verifies the recorded HTML hash and prints expected/actual for
+  stale/missing items; `report` creates missing parent directories.
+- **Truthful report wording:** unsigned records are labelled “Run record” and
+  “Unsigned (not signed)”; the provenance explains signing.
+- **Report evidence table:** rsid, GT, depth, VAF, filter, and ClinVar review
+  status are included; unannotated variants render as `unannotated`; the
+  frequency column is “Population AF”.
+- **Ask actions:** suggested commands preserve `--runs-dir` and put the run id
+  before options, so they are copy-paste runnable.
+- **Frequency schema:** public fields/columns are `population_af` /
+  `population_an`, not `gnomad_af` / `gnomad_an`, when the source is a generic
+  frequency TSV.
+- **Readiness gene summary:** `--by-gene` aggregates targets into one row per
+  gene with the worst state and weighted metrics.
+- **Report diff gate:** `report-diff --fail-on-diff` exits 1 on differences.
+- **Audit template:** includes the repair chain.
+
 ## [1.0.0] - 2026-10-21
 
 Feature-complete release. 40 of the 87 capability-backlog items are built; the

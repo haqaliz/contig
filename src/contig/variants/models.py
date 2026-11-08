@@ -46,8 +46,8 @@ class VariantRecord:
     clinvar_condition: str | None = None
     clinvar_variant_type: str | None = None
     clinvar_hgvs: str | None = None
-    gnomad_af: float | None = None
-    gnomad_an: int | None = None
+    population_af: float | None = None
+    population_an: int | None = None
     iranome_af: float | None = None
     iranome_ac: int | None = None
     iranome_an: int | None = None

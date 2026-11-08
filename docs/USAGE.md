@@ -26,8 +26,35 @@ To run a **real** pipeline you also need:
 | **Nextflow** | Executes the nf-core pipelines | `brew install nextflow` |
 | **Java runtime** | Nextflow runs on the JVM (`JAVA_HOME` → a JDK) | e.g. Homebrew's `openjdk` |
 | **Docker** | Pulls pinned tool containers; must be running | [Docker Desktop](https://www.docker.com/) |
+| **samtools** | Coverage/depth for `contig readiness --bam` | `brew install samtools` |
+| **tabix** | Builds the real GIAB trio subset script (optional) | `brew install htslib` |
 
 The CLI and the test suite work **without** Nextflow/Java/Docker; only live runs need them.
+
+> **Source checkout:** use `uv run contig ...` (or `.venv/bin/contig`). A stale
+> `contig` on `PATH` may be an older Homebrew install without the workbench
+> commands.
+
+---
+
+## Files and formats
+
+| Term | What it means here |
+|---|---|
+| **VCF** | Variant calls (`CHROM POS ID REF ALT QUAL FILTER INFO FORMAT sample`). Variants can carry VEP `CSQ` or SnpEff `ANN` annotations. |
+| **BED** | 0-based, half-open intervals: `chrom start end [name]`. Panel BEDs add gene/transcript columns. |
+| **GTF** | Gene/exon annotation (1-based, inclusive); gzipped is fine. |
+| **HGNC** | Approved gene symbols, aliases, and previous symbols; used to normalize panel genes. |
+| **BAM/CRAM** | Aligned reads, sorted and indexed. Readiness needs one of these (or a depth TSV), **not** a VCF alone. |
+| **FASTA** | Reference genome sequence. Needed by `samtools` for some CRAMs; `--reference` is optional when the CRAM is self-contained. |
+| **Depth TSV** | `samtools depth -a` output: `chrom pos depth` (1-based). |
+| **Sidecar** | The JSON companion to a report (`--meta`), with input paths/hashes and the HTML hash. |
+| **M1 / M2** | Internal milestone labels for the variant table (`variants`) and readiness table (`readiness`); not biology. |
+| **Build** | Genome assembly (GRCh37/GRCh38). The calls, BED/GTF, BAM/CRAM, and annotation must match; Contig skips a mismatched Iranome/ClinVar source rather than guessing. |
+
+A variant without VEP/SnpEff annotation is shown as `unannotated`; it is never
+dropped. A blank readiness `caveats` cell means the caveat BED was checked (see
+the metadata note `caveats checked` / `caveats not checked`).
 
 ---
 
@@ -286,8 +313,9 @@ contig readiness --bam sample.cram --reference GRCh38.fa \
 
 - **Input:** a `samtools depth -a` TSV (`chrom pos depth`, 1-based), or a
   BAM/CRAM plus `--bam` (Contig runs `samtools depth -a -b` behind an injectable
-  seam; `--reference` is passed for CRAM decoding). Targets are a BED
-  (`chrom start end [name]`) or a GTF with `--genes`.
+  seam; `--reference` is optional and only needed when `samtools` cannot decode
+  the CRAM without it). **A VCF alone is not enough for readiness.** Targets are
+  a BED (`chrom start end [name]`) or a GTF with `--genes`.
 - **Metrics:** bases, covered bases, mean depth, % ≥20x/50x/100x, and
   zero-coverage bases per target.
 - **Readiness:** `ready` when the target meets the depth and fraction thresholds
@@ -297,6 +325,8 @@ contig readiness --bam sample.cram --reference GRCh38.fa \
   floor or the target has no bases. Every row carries the reason.
 - **Thresholds:** `--depth-threshold` (default 20), `--ready-fraction` (0.90),
   `--caution-fraction` (0.50).
+- **Gene summary:** `--by-gene` aggregates exon/target rows into one row per
+  gene with the worst readiness state and weight-averaged depth/percentages.
 - **Output:** TSV by default; `--json` includes source paths, SHA-256,
   thresholds, and the Contig version. `--out` writes to a file.
 
@@ -320,7 +350,7 @@ contig panel-build --name "Hereditary cancer" \
   --out-dir panels
 
 contig panel-list --dir panels
-contig panel-show hereditary-cancer-a3d15b1d --dir panels
+contig panel-show <panel-id> --dir panels
 ```
 
 - **Gene list:** symbols are resolved against HGNC when `--hgnc` is supplied
@@ -374,9 +404,10 @@ contig report-diff report-a.json report-b.json
   (`name`, `role`, `reviewed_at`, `statement`), and `max_rows`.
 - **Sidecar:** `report.json` records every input path + SHA-256, the spec, the
   Contig version, the generated timestamp, and the HTML hash.
-  `contig report-check` recomputes the inputs and exits non-zero if any is stale
-  or missing. `contig report-diff` compares two sidecars (spec, inputs, hashes,
-  notes) as text or JSON.
+  `contig report-check` recomputes the inputs and the HTML hash, and exits
+  non-zero if any is stale or missing. `contig report-diff` compares two
+  sidecars (spec, inputs, hashes, notes) as text or JSON; `--fail-on-diff` makes
+  differences exit non-zero.
 - **Research-use boundary:** the report carries a research-use banner, never a
   diagnosis, ACMG classification, treatment recommendation, or medical sign-off.
   PDF is produced by opening the self-contained HTML and printing to PDF; a

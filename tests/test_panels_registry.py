@@ -36,3 +36,12 @@ def test_missing_panel_is_an_honest_error(tmp_path):
 
 def test_empty_registry_lists_nothing(tmp_path):
     assert list_panels(tmp_path) == []
+
+
+def test_panel_versions_get_distinct_ids_and_coexist(tmp_path):
+    one = build_from_genes(["BRCA1"], GTF, name="Versioned", version="1")
+    two = build_from_genes(["BRCA1"], GTF, name="Versioned", version="2")
+    assert one.meta.id != two.meta.id
+    write_panel(one, tmp_path)
+    write_panel(two, tmp_path)
+    assert {meta.version for meta in list_panels(tmp_path)} == {"1", "2"}

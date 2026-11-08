@@ -68,3 +68,23 @@ def test_bed_and_gtf_are_mutually_exclusive():
 def test_missing_depth_is_an_honest_error(tmp_path):
     with pytest.raises(FileNotFoundError):
         build_readiness(tmp_path / "missing.tsv", bed=PANEL)
+
+
+def test_gene_summary_aggregates_exons():
+    table = _table()
+    genes = {gene.gene: gene for gene in table.genes}
+    assert set(genes) == {"GENE1", "GENE2", "GENE3", "GENE4"}
+    assert genes["GENE1"].readiness == "caution"
+    assert genes["GENE3"].readiness == "not-interpretable"
+    assert genes["GENE4"].readiness == "ready"
+    assert genes["GENE4"].targets == 1
+
+
+def test_by_gene_tsv_and_json():
+    from contig.readiness.table import render_gene_tsv, render_json
+    table = _table()
+    text = render_gene_tsv(table)
+    assert text.startswith("gene\ttargets")
+    assert "GENE4" in text
+    payload = json.loads(render_json(table))
+    assert len(payload["genes"]) == 4

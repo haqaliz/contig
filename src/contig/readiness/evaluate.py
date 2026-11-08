@@ -5,6 +5,7 @@ from __future__ import annotations
 from contig.readiness.caveats import overlapping_caveats
 from contig.readiness.models import (
     CaveatRegion,
+    GeneMetrics,
     ReadinessThresholds,
     Target,
     TargetMetrics,
@@ -88,3 +89,42 @@ def evaluate_targets(
     caveats: list[CaveatRegion],
 ) -> list[TargetMetrics]:
     return [evaluate_target(target, depths, thresholds, caveats) for target in targets]
+
+
+def summarize_by_gene(rows: list[TargetMetrics]) -> list[GeneMetrics]:
+    grouped: dict[str, list[TargetMetrics]] = {}
+    for row in rows:
+        gene = row.target.gene
+        if gene:
+            grouped.setdefault(gene, []).append(row)
+    summaries: list[GeneMetrics] = []
+    rank = {"not-interpretable": 0, "caution": 1, "ready": 2}
+    for gene, gene_rows in sorted(grouped.items()):
+        bases = sum(row.bases for row in gene_rows)
+        covered = sum(row.covered_bases for row in gene_rows)
+        zero = sum(row.zero_bases for row in gene_rows)
+        caveats = sorted({caveat for row in gene_rows for caveat in row.caveats})
+        worst = min(gene_rows, key=lambda row: rank.get(row.readiness, 0))
+        summaries.append(GeneMetrics(
+            gene=gene,
+            targets=len(gene_rows),
+            bases=bases,
+            covered_bases=covered,
+            mean_depth=(
+                sum(row.mean_depth * row.bases for row in gene_rows) / bases if bases else 0.0
+            ),
+            pct_20x=(
+                sum(row.pct_20x * row.bases for row in gene_rows) / bases if bases else 0.0
+            ),
+            pct_50x=(
+                sum(row.pct_50x * row.bases for row in gene_rows) / bases if bases else 0.0
+            ),
+            pct_100x=(
+                sum(row.pct_100x * row.bases for row in gene_rows) / bases if bases else 0.0
+            ),
+            zero_bases=zero,
+            caveats=caveats,
+            readiness=worst.readiness,
+            reason=f"{len(gene_rows)} target(s); worst {worst.readiness}: {worst.reason}",
+        ))
+    return summaries

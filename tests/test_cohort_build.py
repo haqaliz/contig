@@ -57,3 +57,12 @@ def test_empty_and_missing_inputs():
         build_cohort("Lab", [])
     with pytest.raises(FileNotFoundError):
         build_cohort("Lab", [str(FIX / "missing.json")])
+
+
+def test_duplicate_input_content_is_counted_once():
+    cohort = build_cohort("Lab", [PATHS[0], PATHS[0], PATHS[1]])
+    assert cohort.meta.total_runs == 2
+    brca1 = next(v for v in cohort.variants if v.genes == ["BRCA1"])
+    assert brca1.seen_runs == 2
+    assert brca1.frequency == 1.0
+    assert any("duplicate input skipped" in note for note in cohort.meta.notes)

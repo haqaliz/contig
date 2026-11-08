@@ -59,8 +59,8 @@ def consequence_rank(consequence: str | None) -> int:
 
 
 def _af(record: VariantRecord) -> float | None:
-    if record.gnomad_af is not None:
-        return record.gnomad_af
+    if record.population_af is not None:
+        return record.population_af
     return record.iranome_af
 
 

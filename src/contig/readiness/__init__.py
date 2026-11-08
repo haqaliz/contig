@@ -6,6 +6,7 @@ deterministic ready/caution/not-interpretable state. No clinical claim.
 
 from contig.readiness.models import (
     CaveatRegion,
+    GeneMetrics,
     ReadinessMeta,
     ReadinessTable,
     ReadinessThresholds,
@@ -16,6 +17,7 @@ from contig.readiness.models import (
 
 __all__ = [
     "CaveatRegion",
+    "GeneMetrics",
     "ReadinessMeta",
     "ReadinessTable",
     "ReadinessThresholds",

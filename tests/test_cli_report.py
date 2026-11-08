@@ -95,3 +95,22 @@ def test_report_diff_command(tmp_path):
     ])
     assert json_result.exit_code == 0
     assert '"same": false' in json_result.output
+    gate = CliRunner().invoke(app, [
+        "report-diff", str(one.with_suffix(".json")), str(two.with_suffix(".json")),
+        "--fail-on-diff",
+    ])
+    assert gate.exit_code == 1
+
+
+def test_report_check_catches_html_tampering(tmp_path):
+    out = tmp_path / "report.html"
+    meta = tmp_path / "report.json"
+    built = _invoke([
+        "r1", "--runs-dir", RUNS, "--variants", VARIANTS,
+        "--out", str(out), "--meta", str(meta),
+    ])
+    assert built.exit_code == 0, built.output
+    out.write_text(out.read_text() + "\n<!-- tampered -->\n")
+    checked = CliRunner().invoke(app, ["report-check", str(meta)])
+    assert checked.exit_code == 1
+    assert "stale" in checked.output.lower()
