@@ -81,7 +81,7 @@ the metadata note `caveats checked` / `caveats not checked`).
 | `contig panel-build --name <n>` | Build a canonical, checksummed panel BED from a gene list + GTF (optional HGNC normalization) or an existing BED; writes `<id>.bed` + `<id>.json` to the registry |
 | `contig panel-list` / `contig panel-show <id>` | List or inspect panels in the registry |
 | `contig report <id>` | Build a self-contained research report from a run bundle, optionally attaching M1 variants and M2 readiness; writes HTML + a JSON sidecar with input hashes. `--template publication\|internal\|audit` |
-| `contig report-check <sidecar>` | Recompute the report inputs’ SHA-256 and the HTML hash, and verify the Ed25519 sidecar signature when present (`--require-signature` rejects unsigned reports) |
+| `contig report-check <sidecar>` | Recompute the report inputs’ SHA-256 and the HTML hash, verify the Ed25519 sidecar signature when present, and optionally re-hash the run’s outputs (`--outputs`) and the attached tables’ upstream sources (`--sources`); `--base-dir` resolves relative paths, `--require-signature` rejects unsigned reports |
 | `contig family --vcf <vcf> --ped <ped>` | Research-use trio/family analysis: per-child inheritance, Mendelian consistency, de novo candidates, and pairwise sample concordance. Autosomal only in v1 |
 | `contig biomarkers --vcf <vcf> --callable-bed <bed>` | Research-use TMB verification from PASS variants in callable regions; compares a reported TMB within tolerance. MSI/LOH/CNV are `not_verified` in v1 |
 | `contig cohort-build --name <n> --variants <json,...>` | Build a local-only cohort index from M1 variant tables: per-variant seen-run counts/frequencies and per-gene summaries. No network, no sample IDs |
@@ -405,9 +405,13 @@ contig report-diff report-a.json report-b.json
 - **Sidecar:** `report.json` records every input path + SHA-256, the spec, the
   Contig version, the generated timestamp, and the HTML hash.
   `contig report-check` recomputes the inputs and the HTML hash, and exits
-  non-zero if any is stale or missing. `contig report-diff` compares two
-  sidecars (spec, inputs, hashes, notes) as text or JSON; `--fail-on-diff` makes
-  differences exit non-zero.
+  non-zero if any is stale or missing. `--outputs` also re-hashes the run's
+  recorded outputs, `--sources` verifies the upstream files recorded by the
+  attached M1/M2 tables, and `--base-dir` resolves relative paths against a
+  chosen directory. An unrecorded output/source set is reported `unverified`,
+  never a false pass. `contig report-diff` compares two sidecars (spec, inputs,
+  hashes, notes) as text or JSON; `--fail-on-diff` makes differences exit
+  non-zero.
 - **Signing:** set `CONTIG_SIGNING_KEY` (the same Ed25519 key used for run
   bundles) when running `contig report` and the sidecar is signed; the detached
   signature `<sidecar>.sig.json` binds the HTML hash, every input hash, the spec,

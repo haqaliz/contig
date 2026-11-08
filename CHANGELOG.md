@@ -85,6 +85,11 @@ All notable changes to Contig are recorded here. The format follows
   `contig report-check` verifies it, fails on a tampered manifest, and
   `--require-signature` rejects unsigned reports; an unsigned rewrite removes a
   stale signature. Research use only.
+- **Report-check reaches upstream evidence:** `--outputs` re-hashes the run's
+  recorded outputs (the same drift check as `contig verify`), `--sources`
+  verifies the files recorded in the attached M1/M2 tables' `meta.sources`, and
+  `--base-dir` resolves relative paths. An unrecorded output/source set is
+  reported `unverified`, never a false pass.
 
 ### Fixed
 - **Panel versions no longer overwrite each other:** the panel id includes the

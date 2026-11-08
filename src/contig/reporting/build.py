@@ -8,8 +8,14 @@ import os
 from importlib.metadata import PackageNotFoundError, version as pkg_version
 from pathlib import Path
 
-from contig.bundle import SIGNING_KEY_ENV, verify_signature_in_dir
-from contig.models import sha256_file
+from contig.bundle import (
+    SIGNING_KEY_ENV,
+    compute_output_checksums,
+    results_dir_for,
+    verify_outputs,
+    verify_signature_in_dir,
+)
+from contig.models import RunRecord, sha256_file
 from contig.reporting.inputs import (
     input_record,
     load_readiness_json,
@@ -170,16 +176,33 @@ def check_report_signature(meta_path: str | Path) -> dict[str, object]:
     }
 
 
-def check_report(meta_path: str | Path) -> list[dict[str, str]]:
+def _resolve_path(value: str, base: Path) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else base / path
+
+
+def _unverified(kind: str, path: str, note: str) -> dict[str, str]:
+    return {
+        "kind": kind,
+        "path": path,
+        "status": "unverified",
+        "expected": "",
+        "actual": "",
+        "note": note,
+    }
+
+
+def check_report(
+    meta_path: str | Path, *, base_dir: str | Path | None = None
+) -> list[dict[str, str]]:
     meta_path = Path(meta_path)
     if not meta_path.is_file():
         raise FileNotFoundError(f"report sidecar not found: {meta_path}")
     meta = ReportMeta.model_validate_json(meta_path.read_text(encoding="utf-8"))
+    base = Path(base_dir).resolve() if base_dir else meta_path.parent
     results: list[dict[str, str]] = []
     for item in meta.inputs:
-        path = Path(item.path)
-        if not path.is_absolute():
-            path = meta_path.parent / path
+        path = _resolve_path(item.path, base)
         if not path.is_file():
             results.append({
                 "kind": item.kind,
@@ -198,7 +221,7 @@ def check_report(meta_path: str | Path) -> list[dict[str, str]]:
             "actual": actual,
         })
     if meta.html_path:
-        html_path = Path(meta.html_path)
+        html_path = _resolve_path(meta.html_path, base)
         if not html_path.is_file():
             results.append({
                 "kind": "html",
@@ -217,3 +240,112 @@ def check_report(meta_path: str | Path) -> list[dict[str, str]]:
                 "actual": actual,
             })
     return results
+
+
+def check_report_outputs(
+    meta_path: str | Path, *, base_dir: str | Path | None = None
+) -> list[dict[str, str]]:
+    """Verify the run's recorded output checksums against the results directory.
+
+    Resolves the run record from the sidecar's ``run_record`` input, then reuses
+    the same drift check as ``contig verify``. An unrecorded output set is
+    reported ``unverified`` (never a false pass), not as a failure.
+    """
+    meta_path = Path(meta_path)
+    meta = ReportMeta.model_validate_json(meta_path.read_text(encoding="utf-8"))
+    base = Path(base_dir).resolve() if base_dir else meta_path.parent
+    run_input = next((item for item in meta.inputs if item.kind == "run_record"), None)
+    if run_input is None:
+        return [_unverified("outputs", str(meta_path), "no run_record input")]
+    run_path = _resolve_path(run_input.path, base)
+    try:
+        record = RunRecord.model_validate_json(run_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return [_unverified("outputs", str(run_path), "run record unreadable")]
+    results_dir = results_dir_for(record, run_path.parent, base_dir=base)
+    if not record.output_checksums:
+        return [
+            _unverified(
+                "outputs", str(results_dir), "no output checksums recorded"
+            )
+        ]
+    current = compute_output_checksums(results_dir)
+    drift = verify_outputs(record, results_dir)
+    rows: list[dict[str, str]] = []
+    for rel, expected in sorted(record.output_checksums.items()):
+        path = results_dir / rel
+        if rel in drift["missing"]:
+            status, actual = "missing", ""
+        elif rel in drift["changed"]:
+            status, actual = "stale", current.get(rel, "")
+        else:
+            status, actual = "current", expected
+        rows.append({
+            "kind": "output",
+            "path": str(path),
+            "status": status,
+            "expected": expected,
+            "actual": actual,
+        })
+    return rows
+
+
+def check_report_sources(
+    meta_path: str | Path, *, base_dir: str | Path | None = None
+) -> list[dict[str, str]]:
+    """Verify the upstream sources recorded by attached M1/M2 tables.
+
+    Relative source paths resolve against ``base_dir`` when given, else the
+    table's own directory. A table with no recorded sources is ``unverified``.
+    """
+    meta_path = Path(meta_path)
+    meta = ReportMeta.model_validate_json(meta_path.read_text(encoding="utf-8"))
+    base = Path(base_dir).resolve() if base_dir else meta_path.parent
+    rows: list[dict[str, str]] = []
+    for item in meta.inputs:
+        if item.kind not in {"variants", "readiness"}:
+            continue
+        table_path = _resolve_path(item.path, base)
+        try:
+            payload = json.loads(table_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            rows.append(
+                _unverified(f"{item.kind}:sources", str(table_path), "table unreadable")
+            )
+            continue
+        meta_payload = payload.get("meta") if isinstance(payload, dict) else None
+        sources = meta_payload.get("sources", []) if isinstance(meta_payload, dict) else []
+        if not isinstance(sources, list) or not sources:
+            rows.append(
+                _unverified(
+                    f"{item.kind}:sources",
+                    str(table_path),
+                    "no upstream sources recorded",
+                )
+            )
+            continue
+        table_base = Path(base_dir).resolve() if base_dir else table_path.parent
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            source_path = _resolve_path(str(source.get("path", "")), table_base)
+            expected = str(source.get("sha256", ""))
+            kind = f"{item.kind}:{source.get('kind', 'source')}"
+            if not expected:
+                rows.append(
+                    _unverified(str(kind), str(source_path), "no sha256 recorded")
+                )
+                continue
+            if not source_path.is_file():
+                status, actual = "missing", ""
+            else:
+                actual = sha256_file(source_path)
+                status = "current" if actual == expected else "stale"
+            rows.append({
+                "kind": kind,
+                "path": str(source_path),
+                "status": status,
+                "expected": expected,
+                "actual": actual,
+            })
+    return rows
