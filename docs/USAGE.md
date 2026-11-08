@@ -771,6 +771,12 @@ npm install
 npm run dev            # http://localhost:3000 (reads ../runs)
 ```
 
+The **Research** page (`/research`) is read-only: it renders a local
+`dashboard/research/manifest.json` (or `CONTIG_RESEARCH_DIR`) pointing at the
+JSON/HTML produced by the workbench commands — variants, readiness (including
+`--by-gene`), report sidecar/HTML, family, biomarkers, and cohort — plus a
+grounded Ask panel. See `dashboard/research/README.md`.
+
 ## What's not built yet
 
 An LLM-backed planner (the goal→pipeline matcher is deterministic and replaceable

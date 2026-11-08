@@ -75,6 +75,11 @@ All notable changes to Contig are recorded here. The format follows
   hashes run labels and omits paths. Federated/cross-lab sharing remains a
   separate consent/legal design.
 
+- **Read-only research dashboard:** `/research` renders a local
+  `research/manifest.json` — variants, readiness (with `--by-gene`), report
+  sidecar/HTML, family, biomarkers, and cohort — plus a grounded Ask panel. It
+  never writes or launches a run; research use only.
+
 ### Fixed
 - **Panel versions no longer overwrite each other:** the panel id includes the
   version, so v1/v2 coexist in the registry; `panel-list` has a header.

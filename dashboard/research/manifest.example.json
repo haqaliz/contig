@@ -1,0 +1,11 @@
+{
+  "run_id": "r1",
+  "runs_dir": "tests/fixtures/reporting/runs",
+  "variants": "dashboard/research/variants.json",
+  "readiness": "dashboard/research/readiness.json",
+  "report_meta": "dashboard/research/report.json",
+  "report_html": "dashboard/research/report.html",
+  "family": "dashboard/research/family.json",
+  "biomarkers": "dashboard/research/biomarkers.json",
+  "cohort": "dashboard/research/cohort.json"
+}

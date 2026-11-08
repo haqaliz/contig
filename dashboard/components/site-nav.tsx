@@ -12,6 +12,7 @@ const LINKS: { href: string; label: string }[] = [
   { href: "/runs", label: "Runs" },
   { href: "/reproduce", label: "Reproduce" },
   { href: "/eval", label: "Detector" },
+  { href: "/research", label: "Research" },
   { href: "/pending", label: "Pending" },
 ];
 

@@ -1,0 +1,16 @@
+{
+  "meta": {
+    "sources": [
+      {"kind": "depth", "path": "depth.tsv", "sha256": "eeeeffff00001111", "note": "150 positions"}
+    ],
+    "thresholds": {"depth_threshold": 20, "ready_fraction": 0.9, "caution_fraction": 0.5},
+    "generated_at": "2026-11-07T00:00:00+00:00",
+    "contig_version": "1.0.0",
+    "notes": []
+  },
+  "targets": [
+    {"target": {"chrom": "1", "start": 0, "end": 50, "name": "GENE1", "gene": "GENE1"}, "mean_depth": 30.0, "pct_20x": 1.0, "readiness": "ready", "reason": "mean 30.0x; 100.0% at 20x"},
+    {"target": {"chrom": "1", "start": 50, "end": 100, "name": "GENE2", "gene": "GENE2"}, "mean_depth": 17.0, "pct_20x": 0.8, "readiness": "caution", "reason": "80.0% at 20x is below the ready floor 90%"},
+    {"target": {"chrom": "1", "start": 100, "end": 150, "name": "GENE3", "gene": "GENE3"}, "mean_depth": 0.0, "pct_20x": 0.0, "readiness": "not-interpretable", "reason": "0 covered bases"}
+  ]
+}

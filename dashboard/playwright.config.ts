@@ -1,3 +1,5 @@
+import path from "path";
+
 import { defineConfig, devices } from "@playwright/test";
 
 // Smoke tests for the dashboard. They load each route and exercise the verdict
@@ -30,5 +32,9 @@ export default defineConfig({
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
+    env: {
+      ...process.env,
+      CONTIG_RESEARCH_DIR: path.resolve(__dirname, "e2e/fixtures/research"),
+    },
   },
 });
