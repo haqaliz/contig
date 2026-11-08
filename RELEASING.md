@@ -115,9 +115,23 @@ CI now builds `contig-macos-x86_64` in the `binary-macos-intel` job (Rosetta on 
 Apple Silicon runner), so it should be on the release automatically. Only if that
 job ever fails and `contig-macos-x86_64` is missing, build it locally on an Apple
 Silicon machine under Rosetta (the same steps the job runs) and upload it as
-`haqaliz` (not the push-only collaborator):
+`haqaliz` (not the push-only collaborator).
+
+On v1.1.0 GitHub cancelled both `macos-14` jobs while they were queued (the rest of
+the release — wheel, PyPI, GHCR, Linux/Windows — published normally). The workaround
+is to build the two macOS assets locally and attach them to the release.
 
 ```bash
+# arm64 (native)
+uv venv /tmp/contig-arm64 --python 3.12
+uv pip install --python /tmp/contig-arm64/bin/python . pyinstaller
+/tmp/contig-arm64/bin/pyinstaller --onefile --name contig \
+  --collect-submodules contig --copy-metadata contig \
+  --add-data "src/contig/data:contig/data" packaging/contig_main.py
+mv dist/contig dist/contig-macos-arm64
+./dist/contig-macos-arm64 version
+gh release upload vX.Y.Z dist/contig-macos-arm64 --repo haqaliz/contig
+
 # x86_64 Python 3.12 (uv is arm64-only, so fetch a standalone build)
 curl -fsSL -o py.tgz "https://github.com/astral-sh/python-build-standalone/releases/latest/download/cpython-3.12-x86_64-apple-darwin-install_only.tar.gz" || \
   echo "pick the exact asset URL from the python-build-standalone latest release"
@@ -130,6 +144,17 @@ arch -x86_64 /tmp/contig-x64/bin/pyinstaller --onefile --name contig \
   --add-data "src/contig/data:contig/data" packaging/contig_main.py
 mv dist/contig dist/contig-macos-x86_64
 gh release upload vX.Y.Z dist/contig-macos-x86_64 --repo haqaliz/contig
+```
+
+If a release-asset upload resets mid-transfer (`curl: (56) Recv failure`), retry
+the uploads API with a throttle, which worked on v1.1.0:
+
+```bash
+curl --http1.1 --limit-rate 500k --retry 5 \
+  -X POST -H "Authorization: token $(gh auth token)" \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @dist/contig-macos-arm64 \
+  "https://uploads.github.com/repos/haqaliz/contig/releases/<release-id>/assets?name=contig-macos-arm64"
 ```
 
 ## Note on the runtime
