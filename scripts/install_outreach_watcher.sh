@@ -1,5 +1,5 @@
 #!/bin/bash
-# Install a 15-minute macOS LaunchAgent that runs the deterministic outreach
+# Install a 12-hour macOS LaunchAgent that runs the deterministic outreach
 # reply watcher. It only writes a local digest; it never replies.
 set -euo pipefail
 
@@ -28,7 +28,7 @@ cat > "$PLIST" <<EOF
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
   <key>StartInterval</key>
-  <integer>900</integer>
+  <integer>43200</integer>
   <key>RunAtLoad</key>
   <true/>
   <key>StandardOutPath</key>
@@ -42,7 +42,7 @@ EOF
 launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
 launchctl kickstart -k "gui/$(id -u)/$LABEL"
-echo "Installed $LABEL (every 15 minutes)."
+echo "Installed $LABEL (every 12 hours)."
 echo "Log: $HOME/Library/Logs/contig-outreach.log"
 echo "Digest: ~/.local/state/contig-outreach/replies.md"
 echo "Uninstall: launchctl bootout gui/$(id -u) '$PLIST' && rm '$PLIST'"

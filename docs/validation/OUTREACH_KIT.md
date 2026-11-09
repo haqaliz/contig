@@ -367,7 +367,7 @@ Only new matches are appended to
 `~/.local/state/contig-outreach/replies.md`; seen IDs are stored in
 `seen.json`. It never replies.
 
-Install a 15-minute macOS LaunchAgent if you want it watching in the
+Install a 12-hour macOS LaunchAgent if you want it watching in the
 background:
 
 ```bash
