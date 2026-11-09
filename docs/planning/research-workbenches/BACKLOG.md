@@ -51,13 +51,13 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | M8-1 | M8 | Federated/cross-lab frequency layer | blocked |
 | M8-2 | M8 | Dashboard cohort view | done |
 | X-1 | Cross | Dashboard integration for M1–M8 surfaces (read-only) | done |
-| X-1b | Cross | Auto-discovery from the run bundle + report/variant/readiness actions | deferred |
+| X-1b | Cross | Auto-discovery from the run bundle + report/variant/readiness actions | done (read-only manifest auto-discovery; actions deferred) |
 | X-2 | Cross | Streaming/scale mode for large VCF/depth files | deferred |
 | X-3 | Cross | Design-partner validation of all defaults | blocked |
 | X-4 | Cross | Release 1.1.0 (version bump + release notes) | deferred |
 | X-5 | Cross | Clinical diagnosis / ACMG adjudication / drug recs | decision |
 
-**Totals:** 20 built · 10 deferred · 11 blocked · 2 decisions (43 rows). Every
+**Totals:** 21 built · 9 deferred · 11 blocked · 2 decisions (43 rows). Every
 blocked row names its evidence in `BLOCKED_RUNBOOK.md`.
 
 ## Agent-validation follow-ups (2026-11-08)

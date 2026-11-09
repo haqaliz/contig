@@ -12,6 +12,10 @@ All notable changes to Contig are recorded here. The format follows
   reports `match`/`divergent`/`unverified`. Total copy number alone is refused;
   a self-comparison on the open TCGA-COAD ASCAT file matches at 100%, but real
   caller validation still needs a run's own allele-specific segments.
+- **Dashboard research auto-discovery:** when no explicit
+  `dashboard/research/manifest.json` (or `CONTIG_RESEARCH_DIR`) exists,
+  `/research` picks the newest `runs/<id>/research/manifest.json` by mtime and
+  shows the source. The explicit manifest remains the default; read-only.
 
 ### Fixed
 - **LLM paraphrase fidelity:** `contig ask --llm` now falls back to the

@@ -56,7 +56,7 @@ build cycle.
 | Agent validation limits | Agents **cannot** validate real trust, willingness-to-pay, or messy real-world data. Those still need humans later. |
 | Passing bar | If agents hit blockers, fix them before the dashboard. A future human gate is **≥3/5 complete core tasks and trust ≥4**. |
 | Partner recruitment | **Resume via the outreach kit**: nf-core Slack, warm intros, ABRF core facilities, NHS GLHs, AMP, Biostars/Reddit. Track in `outreach_targets.csv`. |
-| Dashboard auto-discovery | **Explicit `dashboard/research/manifest.json` remains the default.** An optional read-only per-run convention `runs/<run_id>/research/manifest.json` is the X-1b follow-up; no dashboard write/launch actions in the first release. |
+| Dashboard auto-discovery | **Explicit `dashboard/research/manifest.json` remains the default.** Read-only per-run auto-discovery of the newest `runs/<run_id>/research/manifest.json` is **shipped**; no dashboard write/launch actions. |
 | M5 live LLM | **Local eval run 2026-11-09** with `qwen2.5:1.5b`; 9/9 grounding checks pass after the fidelity guard. Hosted small-model default remains pending the redacted-bundle + provider/privacy check. See `docs/validation/M5_LLM_EVAL.md`. |
 
 ## Resulting work order

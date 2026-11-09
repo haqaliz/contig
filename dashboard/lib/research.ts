@@ -8,6 +8,8 @@ import path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
 
+import { runsDir } from "./runs";
+
 const pexec = promisify(execFile);
 
 export interface ResearchManifest {
@@ -149,9 +151,11 @@ export interface ResearchData {
   biomarkers: BiomarkerReport | null;
   cohort: CohortTable | null;
   reportHtml: string | null;
+  manifestSource: string;
+  manifestPath: string;
 }
 
-/** Directory holding the research manifest and artifacts. */
+/** Directory holding the explicit research manifest and artifacts. */
 export function researchDir(): string {
   return process.env.CONTIG_RESEARCH_DIR
     ? path.resolve(process.env.CONTIG_RESEARCH_DIR)
@@ -162,9 +166,77 @@ function repoRoot(): string {
   return path.resolve(process.cwd(), "..");
 }
 
-function resolveArtifact(value?: string): string | null {
+interface ManifestLocation {
+  file: string;
+  baseDir: string;
+  source: string;
+}
+
+async function exists(candidate: string): Promise<boolean> {
+  try {
+    await fs.access(candidate);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The explicit manifest wins. Otherwise use the newest
+ * runs/<run_id>/research/manifest.json (read-only, no writes).
+ */
+async function manifestLocation(): Promise<ManifestLocation | null> {
+  const explicitDir = researchDir();
+  const explicit = path.join(explicitDir, "manifest.json");
+  if (await exists(explicit)) {
+    return { file: explicit, baseDir: explicitDir, source: "explicit manifest" };
+  }
+
+  const runs = runsDir();
+  let entries: string[];
+  try {
+    entries = await fs.readdir(runs);
+  } catch {
+    return null;
+  }
+  const candidates: (ManifestLocation & { mtime: number })[] = [];
+  for (const name of entries) {
+    const file = path.join(runs, name, "research", "manifest.json");
+    try {
+      const stat = await fs.stat(file);
+      if (stat.isFile()) {
+        candidates.push({
+          file,
+          baseDir: path.dirname(file),
+          source: `runs/${name}/research`,
+          mtime: stat.mtimeMs,
+        });
+      }
+    } catch {
+      // a run without research artifacts is normal
+    }
+  }
+  candidates.sort((a, b) => b.mtime - a.mtime);
+  return candidates[0] ?? null;
+}
+
+/**
+ * Resolve a manifest path. Per-run manifests resolve against their own
+ * directory first; the repo-root fallback keeps existing explicit manifests
+ * working. A missing file is returned as the local candidate so the error
+ * points at the intended location.
+ */
+async function resolveArtifact(
+  value: string | undefined,
+  baseDir: string,
+): Promise<string | null> {
   if (!value) return null;
-  return path.isAbsolute(value) ? value : path.resolve(repoRoot(), value);
+  if (path.isAbsolute(value)) return value;
+  const local = path.resolve(baseDir, value);
+  if (await exists(local)) return local;
+  const repo = path.resolve(repoRoot(), value);
+  if (await exists(repo)) return repo;
+  return local;
 }
 
 async function readJson<T>(file: string | null): Promise<T | null> {
@@ -177,17 +249,33 @@ async function readJson<T>(file: string | null): Promise<T | null> {
 }
 
 export async function loadResearch(): Promise<ResearchData | null> {
-  const manifestFile = path.join(researchDir(), "manifest.json");
-  const manifest = await readJson<ResearchManifest>(manifestFile);
+  const location = await manifestLocation();
+  if (!location) return null;
+  const manifest = await readJson<ResearchManifest>(location.file);
   if (!manifest) return null;
 
-  const variants = await readJson<VariantTable>(resolveArtifact(manifest.variants));
-  const readiness = await readJson<ReadinessTable>(resolveArtifact(manifest.readiness));
-  const reportMeta = await readJson<ReportMeta>(resolveArtifact(manifest.report_meta));
-  const family = await readJson<FamilyTable>(resolveArtifact(manifest.family));
-  const biomarkers = await readJson<BiomarkerReport>(resolveArtifact(manifest.biomarkers));
-  const cohort = await readJson<CohortTable>(resolveArtifact(manifest.cohort));
-  const reportHtmlPath = resolveArtifact(manifest.report_html);
+  const variants = await readJson<VariantTable>(
+    await resolveArtifact(manifest.variants, location.baseDir),
+  );
+  const readiness = await readJson<ReadinessTable>(
+    await resolveArtifact(manifest.readiness, location.baseDir),
+  );
+  const reportMeta = await readJson<ReportMeta>(
+    await resolveArtifact(manifest.report_meta, location.baseDir),
+  );
+  const family = await readJson<FamilyTable>(
+    await resolveArtifact(manifest.family, location.baseDir),
+  );
+  const biomarkers = await readJson<BiomarkerReport>(
+    await resolveArtifact(manifest.biomarkers, location.baseDir),
+  );
+  const cohort = await readJson<CohortTable>(
+    await resolveArtifact(manifest.cohort, location.baseDir),
+  );
+  const reportHtmlPath = await resolveArtifact(
+    manifest.report_html,
+    location.baseDir,
+  );
   let reportHtml: string | null = null;
   if (reportHtmlPath) {
     try {
@@ -197,20 +285,33 @@ export async function loadResearch(): Promise<ResearchData | null> {
     }
   }
 
-  return { manifest, variants, readiness, reportMeta, family, biomarkers, cohort, reportHtml };
+  return {
+    manifest,
+    variants,
+    readiness,
+    reportMeta,
+    family,
+    biomarkers,
+    cohort,
+    reportHtml,
+    manifestSource: location.source,
+    manifestPath: location.file,
+  };
 }
 
 /** Run the grounded ask command against the manifest's run context. */
 export async function askResearch(question: string): Promise<unknown> {
-  const manifest = await readJson<ResearchManifest>(path.join(researchDir(), "manifest.json"));
+  const location = await manifestLocation();
+  if (!location) throw new Error("research manifest not found");
+  const manifest = await readJson<ResearchManifest>(location.file);
   if (!manifest?.run_id) throw new Error("research manifest has no run_id");
   if (!question.trim()) throw new Error("question is required");
 
   const args = ["ask", manifest.run_id, question, "--json"];
-  const runsDir = resolveArtifact(manifest.runs_dir);
-  const variants = resolveArtifact(manifest.variants);
-  const readiness = resolveArtifact(manifest.readiness);
-  if (runsDir) args.push("--runs-dir", runsDir);
+  const runsDirArg = await resolveArtifact(manifest.runs_dir, location.baseDir);
+  const variants = await resolveArtifact(manifest.variants, location.baseDir);
+  const readiness = await resolveArtifact(manifest.readiness, location.baseDir);
+  if (runsDirArg) args.push("--runs-dir", runsDirArg);
   if (variants) args.push("--variants", variants);
   if (readiness) args.push("--readiness", readiness);
 

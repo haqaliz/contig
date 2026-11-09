@@ -34,7 +34,14 @@ export default defineConfig({
     timeout: 120_000,
     env: {
       ...process.env,
-      CONTIG_RESEARCH_DIR: path.resolve(__dirname, "e2e/fixtures/research"),
+      ...(process.env.CONTIG_E2E_DISCOVERY
+        ? {
+            CONTIG_RESEARCH_DIR: path.resolve(__dirname, "e2e/fixtures/no-explicit-research"),
+            CONTIG_RUNS_DIR: path.resolve(__dirname, "e2e/fixtures/discovery-runs"),
+          }
+        : {
+            CONTIG_RESEARCH_DIR: path.resolve(__dirname, "e2e/fixtures/research"),
+          }),
     },
   },
 });

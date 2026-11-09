@@ -1,0 +1,6 @@
+{
+  "run_id": "r1",
+  "runs_dir": "../../../../../tests/fixtures/reporting/runs",
+  "variants": "variants.json",
+  "readiness": "readiness.json"
+}

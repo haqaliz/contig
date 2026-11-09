@@ -142,6 +142,11 @@ export default async function ResearchPage() {
         count={variants.length || undefined}
         description="Read-only evidence, readiness, reports, family, biomarkers, and cohort context. Research use only; no clinical claims."
       />
+      {data.manifestSource.startsWith("runs/") ? (
+        <p className="text-xs text-muted-foreground">
+          Auto-discovered from <code className="font-mono">{data.manifestSource}</code>.
+        </p>
+      ) : null}
 
       <Section
         title="Variant evidence"

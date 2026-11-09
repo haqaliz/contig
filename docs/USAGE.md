@@ -865,7 +865,8 @@ The **Research** page (`/research`) is read-only: it renders a local
 `dashboard/research/manifest.json` (or `CONTIG_RESEARCH_DIR`) pointing at the
 JSON/HTML produced by the workbench commands — variants, readiness (including
 `--by-gene`), report sidecar/HTML, family, biomarkers, and cohort — plus a
-grounded Ask panel. See `dashboard/research/README.md`.
+grounded Ask panel. When no explicit manifest exists, it auto-discovers the
+newest `runs/<id>/research/manifest.json`. See `dashboard/research/README.md`.
 
 ## What's not built yet
 
