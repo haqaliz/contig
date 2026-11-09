@@ -344,3 +344,51 @@ first if you want a one-paste flow.
 - Never commit an app password; use Keychain.
 - Never attach PHI or a VCF/BAM before the redaction agreement is signed.
 - One message per target; no mass CC.
+
+---
+
+## 7. Reply triage: deterministic watcher first, agent only for drafting
+
+Do **not** use an LLM to decide what counts as a reply. Filter deterministically:
+
+```bash
+python3 scripts/check_outreach_replies.py
+```
+
+It reads the last 50 AOL Inbox envelopes via himalaya, matches:
+
+- **reply** — sender domain is one of the five targets, or a `Re:` subject
+  contains a known topic;
+- **auto-reply** — subject starts with “Automatic reply”, “Auto-Reply”,
+  “Out of Office”, etc.;
+- **bounce** — sender is `mailer-daemon`/`postmaster`.
+
+Only new matches are appended to
+`~/.local/state/contig-outreach/replies.md`; seen IDs are stored in
+`seen.json`. It never replies.
+
+Install a 15-minute macOS LaunchAgent if you want it watching in the
+background:
+
+```bash
+bash scripts/install_outreach_watcher.sh
+# log:    ~/Library/Logs/contig-outreach.log
+# digest: ~/.local/state/contig-outreach/replies.md
+```
+
+For a one-off look at the real inbox:
+
+```bash
+himalaya envelope list -a aol -m Inbox --page-size 20
+himalaya message read -a aol <id>
+```
+
+**When a real reply appears**, use an agent only for the drafting step:
+
+1. Read the message (`himalaya message read -a aol <id>`).
+2. Ask an agent to summarize it and draft a reply from the project facts.
+3. You approve or edit the draft.
+4. Send it from himalaya (or a normal reply command) — never auto-send.
+
+The watcher is cheap, predictable, and private; the agent is for language and
+judgement, not for deciding whether an email is a reply.
