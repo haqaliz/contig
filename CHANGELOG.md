@@ -6,6 +6,13 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **LOH verification:** `contig biomarkers --loh-segments/--loh-truth` compares
+  allele-specific LOH intervals (minor copy number) by base-level Jaccard and
+  reports `match`/`divergent`/`unverified`. Total copy number alone is refused;
+  a self-comparison on the open TCGA-COAD ASCAT file matches at 100%, but real
+  caller validation still needs a run's own allele-specific segments.
+
 ### Fixed
 - **LLM paraphrase fidelity:** `contig ask --llm` now falls back to the
   deterministic grounded answer when the model changes a refusal, drops or adds

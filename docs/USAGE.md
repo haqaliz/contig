@@ -88,7 +88,7 @@ the metadata note `caveats checked` / `caveats not checked`).
 | `contig report-batch --project <json>` | Build every report in a project manifest; `--check` verifies each afterward |
 | `contig report-check-batch --project <json>` | Check every report in a project manifest; `--outputs`, `--sources`, `--require-signature` apply to each |
 | `contig family --vcf <vcf> --ped <ped>` | Research-use trio/family analysis: per-child inheritance, Mendelian consistency, de novo candidates, and pairwise sample concordance. Autosomal only in v1 |
-| `contig biomarkers --vcf <vcf> --callable-bed <bed>` | Research-use TMB verification from PASS variants in callable regions; compares a reported TMB within tolerance. MSI/LOH/CNV are `not_verified` in v1 |
+| `contig biomarkers --vcf <vcf> --callable-bed <bed>` | Research-use TMB verification from PASS variants in callable regions; compares a reported TMB within tolerance. MSI, CNV, and LOH can be verified from independent inputs; without them they are `not_verified` |
 | `contig cohort-build --name <n> --variants <json,...>` | Build a local-only cohort index from M1 variant tables: per-variant seen-run counts/frequencies and per-gene summaries. `--trace` records contributing run labels. No network, no sample IDs |
 | `contig cohort-list --cohort <json>` | List the runs that contributed to a cohort |
 | `contig cohort-append --cohort <json> --variants <json,...>` | Add runs to a traced cohort, updating counts/frequencies |
@@ -518,6 +518,11 @@ contig biomarkers \
 contig biomarkers --vcf somatic.vcf --callable-bed regions.bed \
   --msi-output example.paired.output --reported-msi MSI \
   --out biomarkers.tsv
+
+# LOH from allele-specific segments (minor copy number column):
+contig biomarkers --vcf somatic.vcf --callable-bed regions.bed \
+  --loh-segments run.ascat.seg.txt --loh-truth tcga.ascat.seg.txt \
+  --out biomarkers.tsv
 ```
 
 MSI can also be run from BAMs with `--msi-tumor-bam`, `--msi-normal-bam`,
@@ -538,8 +543,13 @@ MSI can also be run from BAMs with `--msi-tumor-bam`, `--msi-normal-bam`,
   overlap-weighted segment concordance and mean absolute delta are reported as
   `match`/`divergent`/`unverified` (`--cnv-tolerance` default 0.2,
   `--cnv-min-concordance` default 0.90).
-- **LOH:** still `not_verified`; it needs allele-specific data, not just
-  segments.
+- **LOH:** when `--loh-segments` and `--loh-truth` are supplied, the
+  base-level Jaccard overlap of the LOH intervals (minor copy number < 0.5) is
+  reported as `match`/`divergent`/`unverified` (`--loh-min-agreement` default
+  0.90). The input must carry a minor-copy-number column
+  (`Minor_Copy_Number`, `minor_cn`, `lcn.em`); total copy number alone is
+  refused. A self-comparison proves the parser/comparator, not a caller; real
+  validation needs a run's own allele-specific segments.
 - **Boundary:** research reproducibility check only; no NCCN, drug, or treatment
   recommendation.
 

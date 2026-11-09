@@ -25,6 +25,8 @@ def test_help_lists_options():
     assert "--callable-bed" in plain(result.output)
     assert "--reported-tmb" in plain(result.output)
     assert "--msi-output" in plain(result.output)
+    assert "--loh-segments" in plain(result.output)
+    assert "--loh-truth" in plain(result.output)
 
 
 def test_writes_tsv_and_summary(tmp_path):

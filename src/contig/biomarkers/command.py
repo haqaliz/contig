@@ -5,6 +5,7 @@ from __future__ import annotations
 import typer
 
 from contig.biomarkers.cnv import compare_files
+from contig.biomarkers.loh import compare_loh_files
 from contig.biomarkers.msi import parse_msi_output, run_msisensor
 from contig.biomarkers.report import (
     RESEARCH_USE_NOTICE,
@@ -37,6 +38,9 @@ def run_biomarkers(
     cnv_value_column: str | None = None,
     cnv_tolerance: float = 0.2,
     cnv_min_concordance: float = 0.90,
+    loh_segments: str | None = None,
+    loh_truth: str | None = None,
+    loh_min_agreement: float = 0.90,
     out: str | None = None,
     json_out: bool = False,
 ) -> None:
@@ -44,6 +48,8 @@ def run_biomarkers(
         raise ValueError("msi_threshold must be between 0 and 100")
     if bool(cnv_segments) != bool(cnv_truth):
         raise ValueError("CNV comparison requires both --cnv-segments and --cnv-truth")
+    if bool(loh_segments) != bool(loh_truth):
+        raise ValueError("LOH comparison requires both --loh-segments and --loh-truth")
     cnv_result = None
     if cnv_segments and cnv_truth:
         cnv_result = compare_files(
@@ -51,6 +57,11 @@ def run_biomarkers(
             value_column=cnv_value_column,
             tolerance=cnv_tolerance,
             min_concordance=cnv_min_concordance,
+        )
+    loh_result = None
+    if loh_segments and loh_truth:
+        loh_result = compare_loh_files(
+            loh_segments, loh_truth, min_agreement=loh_min_agreement
         )
     msi_result = None
     if any((msi_tumor_bam, msi_normal_bam, msi_sites, msi_bed)):
@@ -75,13 +86,16 @@ def run_biomarkers(
         reported_cnv=reported_cnv,
         coding_only=coding_only,
         msi_result=msi_result,
+        loh_result=loh_result,
         cnv_result=cnv_result,
     )
     tmb = next(entry for entry in report.entries if entry.name == "TMB computed")
     msi = next(entry for entry in report.entries if entry.name == "MSI")
+    loh = next(entry for entry in report.entries if entry.name == "LOH")
     cnv = next(entry for entry in report.entries if entry.name == "CNV")
     typer.echo(f"TMB: {tmb.value} mut/Mb ({tmb.status})", err=True)
     typer.echo(f"MSI: {msi.value or 'not attached'} ({msi.status})", err=True)
+    typer.echo(f"LOH: {loh.value or 'not attached'} ({loh.status})", err=True)
     typer.echo(f"CNV: {cnv.value or 'not attached'} ({cnv.status})", err=True)
 
     if out:

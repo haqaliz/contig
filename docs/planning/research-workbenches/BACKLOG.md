@@ -45,7 +45,7 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | M7-1a | M7 | MSI caller seam: parse MSIsensor output or run tumor/normal BAMs; threshold + reported-status comparison | done |
 | M7-1b | M7 | Real MSI-H/MSS pair validation + threshold calibration (MSIsensor example data + TCGA baseline available) | blocked |
 | M7-2a | M7 | CNV segment concordance (`--cnv-segments/--cnv-truth`) | done |
-| M7-2b | M7 | LOH verification (open TCGA-COAD ASCAT allele-specific segments acquired; needs the LOH check + expected calls) | blocked |
+| M7-2b | M7 | LOH verification (`--loh-segments/--loh-truth` comparator shipped; real caller validation needs a run's allele-specific segments) | blocked |
 | M7-3 | M7 | TMB tolerance/band calibration (SEQC2 TMB computed; reviewer needed) | blocked |
 | M8-0 | M8 | `contig cohort-build`/`cohort-query` local-only | done |
 | M8-1 | M8 | Federated/cross-lab frequency layer | blocked |

@@ -13,6 +13,7 @@ from contig.biomarkers.models import (
     SourceProvenance,
 )
 from contig.biomarkers.cnv import CnvResult
+from contig.biomarkers.loh import LohResult
 from contig.biomarkers.msi import MsiResult, msi_status
 from contig.biomarkers.tmb import compute_tmb
 from contig.models import sha256_file
@@ -56,6 +57,7 @@ def build_report(
     reported_cnv: str | None = None,
     coding_only: bool = False,
     msi_result: MsiResult | None = None,
+    loh_result: LohResult | None = None,
     cnv_result: CnvResult | None = None,
 ) -> BiomarkerReport:
     if not 0.0 <= tmb_tolerance <= 1.0:
@@ -104,24 +106,34 @@ def build_report(
             detail="no independent MSI caller or truth set attached",
         ))
 
-    entries.extend([
-        BiomarkerEntry(
+    if loh_result:
+        entries.append(BiomarkerEntry(
+            name="LOH",
+            value=f"{loh_result.jaccard:.2%}",
+            unit="LOH Jaccard",
+            status=loh_result.status,
+            detail=(
+                loh_result.detail
+                + (f"; reported {reported_loh}" if reported_loh else "")
+            ),
+        ))
+    else:
+        entries.append(BiomarkerEntry(
             name="LOH",
             value=reported_loh or "",
             status="not_verified",
-            detail="no independent LOH segments or truth set in v1",
+            detail="no independent allele-specific LOH segments or truth set attached",
+        ))
+    entries.append(BiomarkerEntry(
+        name="CNV",
+        value=f"{cnv_result.concordance:.2%}" if cnv_result else (reported_cnv or ""),
+        unit="bases concordant" if cnv_result else "",
+        status=cnv_result.status if cnv_result else "not_verified",
+        detail=(
+            cnv_result.detail + (f"; reported {reported_cnv}" if reported_cnv else "")
+            if cnv_result else "no independent CNV segments or truth set attached"
         ),
-        BiomarkerEntry(
-            name="CNV",
-            value=f"{cnv_result.concordance:.2%}" if cnv_result else (reported_cnv or ""),
-            unit="bases concordant" if cnv_result else "",
-            status=cnv_result.status if cnv_result else "not_verified",
-            detail=(
-                cnv_result.detail + (f"; reported {reported_cnv}" if reported_cnv else "")
-                if cnv_result else "no independent CNV segments or truth set attached"
-            ),
-        ),
-    ])
+    ))
 
     sources = [
         _source("vcf", vcf_path, f"{result['records']} records"),
@@ -134,6 +146,13 @@ def build_report(
         ):
             if path and Path(path).is_file():
                 sources.append(_source(kind, path, "CNV segment comparison input"))
+    if loh_result:
+        for kind, path in (
+            ("loh_call", loh_result.call_path),
+            ("loh_truth", loh_result.truth_path),
+        ):
+            if path and Path(path).is_file():
+                sources.append(_source(kind, path, "LOH allele-specific segment comparison input"))
     if msi_result:
         for kind, path in (
             ("msi_output", msi_result.output_path),

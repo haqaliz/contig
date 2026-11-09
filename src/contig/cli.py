@@ -5093,14 +5093,18 @@ def biomarkers(
     cnv_value_column: str = typer.Option(None, "--cnv-value-column", help="Segment value column (auto-detected by default)."),
     cnv_tolerance: float = typer.Option(0.2, "--cnv-tolerance", help="Absolute segment-value tolerance."),
     cnv_min_concordance: float = typer.Option(0.90, "--cnv-min-concordance", help="Concordant-base fraction for a match."),
+    loh_segments: str = typer.Option(None, "--loh-segments", help="Allele-specific CNV segments for the run (minor copy-number column)."),
+    loh_truth: str = typer.Option(None, "--loh-truth", help="Allele-specific truth segments (for example TCGA ASCAT)."),
+    loh_min_agreement: float = typer.Option(0.90, "--loh-min-agreement", help="LOH Jaccard threshold for a match."),
     out: str = typer.Option(None, "--out", help="Write the report to this path instead of stdout."),
     json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of TSV."),
 ) -> None:
     """Research-use TMB verification from a somatic VCF + callable BED.
 
     Computes TMB from PASS variants in callable regions and compares a reported
-    value within tolerance. MSI/LOH/CNV are recorded as not_verified in v1. No
-    drug or treatment recommendation is emitted.
+    value within tolerance. MSI, LOH, and CNV can be verified against independent
+    inputs (MSIsensor, allele-specific segments); without them they are
+    not_verified. No drug or treatment recommendation is emitted.
     """
     try:
         run_biomarker_verification(
@@ -5124,6 +5128,9 @@ def biomarkers(
             cnv_value_column=cnv_value_column,
             cnv_tolerance=cnv_tolerance,
             cnv_min_concordance=cnv_min_concordance,
+            loh_segments=loh_segments,
+            loh_truth=loh_truth,
+            loh_min_agreement=loh_min_agreement,
             out=out,
             json_out=json_out,
         )

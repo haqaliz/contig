@@ -92,6 +92,13 @@ Remaining:
 Then: report `match`/`divergent` with a research-use note.
 
 ### M7-2b: LOH
+**Comparator shipped 2026-11-10:** `contig biomarkers --loh-segments/--loh-truth`
+parses allele-specific segments with a minor-copy-number column, derives LOH
+intervals (minor CN < 0.5), and reports base-level Jaccard as
+`match`/`divergent`/`unverified`. A self-comparison on the open TCGA-COAD ASCAT
+file matches at 100% (295M LOH bases). The remaining validation is a real run's
+own allele-specific segments; total copy number alone is refused.
+
 Data acquired: COLO829 copy-number segments
 (`data/cnv/COLO829/copynumber/`). CNV segment concordance is implemented
 (`--cnv-segments/--cnv-truth`).
