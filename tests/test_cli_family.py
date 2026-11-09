@@ -5,6 +5,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from tests.ansi import plain
+
 from contig.cli import app
 
 FIX = Path(__file__).parent / "fixtures" / "family"
@@ -19,8 +21,8 @@ def _invoke(args):
 def test_help_lists_options():
     result = _invoke(["--help"])
     assert result.exit_code == 0
-    assert "--vcf" in result.output
-    assert "--ped" in result.output
+    assert "--vcf" in plain(result.output)
+    assert "--ped" in plain(result.output)
 
 
 def test_writes_a_tsv_and_summary(tmp_path):
@@ -45,4 +47,4 @@ def test_json_output_contains_meta(tmp_path):
 def test_missing_vcf_exits_nonzero():
     result = _invoke(["--vcf", str(FIX / "missing.vcf"), "--ped", PED])
     assert result.exit_code == 1
-    assert "not found" in result.output.lower()
+    assert "not found" in plain(result.output).lower()

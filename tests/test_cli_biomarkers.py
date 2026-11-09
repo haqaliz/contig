@@ -5,6 +5,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from tests.ansi import plain
+
 from contig.cli import app
 
 FIX = Path(__file__).parent / "fixtures" / "biomarkers"
@@ -19,10 +21,10 @@ def _invoke(args):
 def test_help_lists_options():
     result = _invoke(["--help"])
     assert result.exit_code == 0
-    assert "--vcf" in result.output
-    assert "--callable-bed" in result.output
-    assert "--reported-tmb" in result.output
-    assert "--msi-output" in result.output
+    assert "--vcf" in plain(result.output)
+    assert "--callable-bed" in plain(result.output)
+    assert "--reported-tmb" in plain(result.output)
+    assert "--msi-output" in plain(result.output)
 
 
 def test_writes_tsv_and_summary(tmp_path):
@@ -94,10 +96,10 @@ def test_cnv_requires_both_inputs():
         "--cnv-segments", str(FIX / "cnv_call_match.tsv"),
     ])
     assert result.exit_code == 1
-    assert "both" in result.output.lower()
+    assert "both" in plain(result.output).lower()
 
 
 def test_missing_vcf_exits_nonzero():
     result = _invoke(["--vcf", str(FIX / "missing.vcf"), "--callable-bed", BED])
     assert result.exit_code == 1
-    assert "not found" in result.output.lower()
+    assert "not found" in plain(result.output).lower()

@@ -4,6 +4,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from tests.ansi import plain
+
 from contig.cli import app
 
 FIX = Path(__file__).parent / "fixtures" / "panels"
@@ -19,9 +21,9 @@ def _invoke(args):
 def test_panel_build_help_lists_options():
     result = _invoke(["panel-build", "--help"])
     assert result.exit_code == 0
-    assert "--genes" in result.output
-    assert "--bed" in result.output
-    assert "--gtf" in result.output
+    assert "--genes" in plain(result.output)
+    assert "--bed" in plain(result.output)
+    assert "--gtf" in plain(result.output)
 
 
 def test_build_from_genes_list_and_show(tmp_path):
@@ -69,7 +71,7 @@ def test_unknown_gene_exits_nonzero(tmp_path):
         "--gtf", GTF, "--hgnc", HGNC, "--out-dir", str(tmp_path),
     ])
     assert result.exit_code == 1
-    assert "unknown HGNC" in result.output
+    assert "unknown HGNC" in plain(result.output)
 
 
 def test_genes_and_bed_are_mutually_exclusive(tmp_path):
@@ -78,4 +80,4 @@ def test_genes_and_bed_are_mutually_exclusive(tmp_path):
         "--out-dir", str(tmp_path),
     ])
     assert result.exit_code == 1
-    assert "exactly one" in result.output
+    assert "exactly one" in plain(result.output)

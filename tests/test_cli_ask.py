@@ -5,6 +5,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from tests.ansi import plain
+
 from contig.cli import app
 
 FIX = Path(__file__).parent / "fixtures" / "reporting"
@@ -22,9 +24,9 @@ def _invoke(args):
 def test_ask_help_lists_options():
     result = _invoke(["ask", "--help"])
     assert result.exit_code == 0
-    assert "--variants" in result.output
-    assert "--readiness" in result.output
-    assert "--llm" in result.output
+    assert "--variants" in plain(result.output)
+    assert "--readiness" in plain(result.output)
+    assert "--llm" in plain(result.output)
 
 
 def test_ask_verdict_with_citations():
@@ -33,9 +35,9 @@ def test_ask_verdict_with_citations():
         "--variants", VARIANTS, "--readiness", READINESS,
     ])
     assert result.exit_code == 0, result.output
-    assert "WARN" in result.output
-    assert "Sources:" in result.output
-    assert "run_record" in result.output
+    assert "WARN" in plain(result.output)
+    assert "Sources:" in plain(result.output)
+    assert "run_record" in plain(result.output)
 
 
 def test_ask_json_output():
@@ -52,7 +54,7 @@ def test_ask_json_output():
 def test_ask_unknown_refuses():
     result = _invoke(["ask", "r1", "what is the weather?", "--runs-dir", RUNS])
     assert result.exit_code == 0, result.output
-    assert "won't guess" in result.output
+    assert "won't guess" in plain(result.output)
 
 
 def test_ask_eval_passes_the_fixture():
@@ -61,7 +63,7 @@ def test_ask_eval_passes_the_fixture():
         "--readiness", READINESS, "--cases", CASES, "--min-accuracy", "1.0",
     ])
     assert result.exit_code == 0, result.output
-    assert "9/9" in result.output
+    assert "9/9" in plain(result.output)
 
 
 def test_ask_eval_fails_below_threshold(tmp_path):
@@ -72,13 +74,13 @@ def test_ask_eval_fails_below_threshold(tmp_path):
         "--min-accuracy", "1.0",
     ])
     assert result.exit_code == 1
-    assert "0/1" in result.output
+    assert "0/1" in plain(result.output)
 
 
 def test_missing_run_exits_nonzero():
     result = _invoke(["ask", "missing", "what is the verdict?", "--runs-dir", RUNS])
     assert result.exit_code == 1
-    assert "no bundled run" in result.output.lower()
+    assert "no bundled run" in plain(result.output).lower()
 
 
 def test_llm_without_config_exits_nonzero(monkeypatch):
@@ -88,4 +90,4 @@ def test_llm_without_config_exits_nonzero(monkeypatch):
         "ask", "r1", "what is the verdict?", "--runs-dir", RUNS, "--llm",
     ])
     assert result.exit_code == 1
-    assert "no LLM configured" in result.output
+    assert "no LLM configured" in plain(result.output)

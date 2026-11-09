@@ -5,6 +5,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from tests.ansi import plain
+
 from contig.cli import app
 
 FIX = Path(__file__).parent / "fixtures" / "variants"
@@ -21,10 +23,10 @@ def _invoke(args):
 def test_help_lists_the_workbench_options():
     result = _invoke(["--help"])
     assert result.exit_code == 0
-    assert "--clinvar" in result.output
-    assert "--pass-only" in result.output
-    assert "--save-spec" in result.output
-    assert "--max-records" in result.output
+    assert "--clinvar" in plain(result.output)
+    assert "--pass-only" in plain(result.output)
+    assert "--save-spec" in plain(result.output)
+    assert "--max-records" in plain(result.output)
 
 
 def test_writes_a_tsv_and_prints_the_research_use_notice(tmp_path):
@@ -66,7 +68,7 @@ def test_saved_spec_replays_the_same_rows(tmp_path):
 def test_missing_vcf_exits_nonzero():
     result = _invoke([str(FIX / "missing.vcf")])
     assert result.exit_code == 1
-    assert "not found" in result.output.lower()
+    assert "not found" in plain(result.output).lower()
 
 
 def test_wgs_cap_requires_a_region_or_gene():

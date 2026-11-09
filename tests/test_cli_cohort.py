@@ -5,6 +5,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from tests.ansi import plain
+
 from contig.cli import app
 
 FIX = Path(__file__).parent / "fixtures" / "cohort"
@@ -18,8 +20,8 @@ def _invoke(args):
 def test_help_lists_options():
     build = _invoke(["cohort-build", "--help"])
     query = _invoke(["cohort-query", "--help"])
-    assert build.exit_code == 0 and "--variants" in build.output
-    assert query.exit_code == 0 and "--cohort" in query.output
+    assert build.exit_code == 0 and "--variants" in plain(build.output)
+    assert query.exit_code == 0 and "--cohort" in plain(query.output)
 
 
 def test_build_and_query(tmp_path):
@@ -46,4 +48,4 @@ def test_build_anonymized(tmp_path):
 def test_missing_input_exits_nonzero(tmp_path):
     result = _invoke(["cohort-build", "--name", "Lab", "--variants", str(FIX / "missing.json"), "--out", str(tmp_path / "c.json")])
     assert result.exit_code == 1
-    assert "not found" in result.output.lower()
+    assert "not found" in plain(result.output).lower()

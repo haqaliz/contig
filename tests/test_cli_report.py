@@ -5,6 +5,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from tests.ansi import plain
+
 from contig.cli import app
 from contig.reporting.build import build_report, write_report
 from contig.reporting.models import ReportSpec
@@ -23,9 +25,9 @@ def _invoke(args):
 def test_help_lists_the_report_options():
     result = _invoke(["--help"])
     assert result.exit_code == 0
-    assert "--variants" in result.output
-    assert "--readiness" in result.output
-    assert "--template" in result.output
+    assert "--variants" in plain(result.output)
+    assert "--readiness" in plain(result.output)
+    assert "--template" in plain(result.output)
 
 
 def test_builds_html_and_sidecar(tmp_path):
@@ -66,7 +68,7 @@ def test_report_check_is_current_then_stale(tmp_path):
 def test_missing_run_exits_nonzero(tmp_path):
     result = _invoke(["missing", "--runs-dir", RUNS, "--out", str(tmp_path / "x.html"), "--meta", str(tmp_path / "x.json")])
     assert result.exit_code == 1
-    assert "no bundled run" in result.output.lower()
+    assert "no bundled run" in plain(result.output).lower()
 
 
 def test_audit_template_omits_variant_evidence(tmp_path):
@@ -89,7 +91,7 @@ def test_report_diff_command(tmp_path):
     write_report(html, meta, two.with_suffix(".html"), two.with_suffix(".json"))
     result = CliRunner().invoke(app, ["report-diff", str(one.with_suffix(".json")), str(two.with_suffix(".json"))])
     assert result.exit_code == 0, result.output
-    assert "spec.title" in result.output
+    assert "spec.title" in plain(result.output)
     json_result = CliRunner().invoke(app, [
         "report-diff", str(one.with_suffix(".json")), str(two.with_suffix(".json")), "--json",
     ])
