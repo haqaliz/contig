@@ -24,6 +24,10 @@ All notable changes to Contig are recorded here. The format follows
   and variants shared by both parents, optionally filtered by `--genes` or a
   `--panel` BED (gene in column 4). Autosomal only; X/Y/MT are skipped and
   noted. No risk estimate, diagnosis, or reproductive advice.
+- **Readiness sex check / possible sample swap:** `contig readiness --sex-vcf`
+  records a VCF-only inferred karyotypic sex and X-het/chrX/chrY signals;
+  `--expected-sex` turns a mismatch into a possible-sample-swap caution and
+  downgrades `ready` targets. Inconclusive VCFs are not called a swap.
 
 ### Fixed
 - **LLM paraphrase fidelity:** `contig ask --llm` now falls back to the

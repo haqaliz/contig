@@ -77,7 +77,7 @@ the metadata note `caveats checked` / `caveats not checked`).
 | `contig export <id> --rocrate` | Export the run's provenance as an RO-Crate (ro-crate-metadata.json) |
 | `contig methods <id>` | A deterministic, citation-ready methods paragraph from the bundle |
 | `contig variants <vcf>` | Research-use variant table: join a call set to ClinVar, Iranome, and a population-frequency TSV, filter deterministically, and export TSV/JSON. `--spec` replays a saved filter; `--json` includes provenance; `--max-records` bounds a WGS input (default 1,000,000) |
-| `contig readiness --depth <tsv>` | Per-target coverage and interpretation readiness: mean depth, % ≥20x/50x/100x, zero-coverage bases, homology/pseudogene caveats, explicit caveat coverage, build label, and a `ready`/`caution`/`not-interpretable` state |
+| `contig readiness --depth <tsv>` | Per-target coverage and interpretation readiness: mean depth, % ≥20x/50x/100x, zero-coverage bases, homology/pseudogene caveats, explicit caveat coverage, build label, optional VCF sex check / possible-sample-swap caution, and a `ready`/`caution`/`not-interpretable` state |
 | `contig panel-build --name <n>` | Build a canonical, checksummed panel BED from a gene list + GTF (optional HGNC normalization) or an existing BED; writes `<id>.bed` + `<id>.json` to the registry |
 | `contig panel-list` / `contig panel-show <id>` | List or inspect panels in the registry |
 | `contig panel-diff <a> <b>` | Compare two panel versions (metadata and BED intervals); `--json`, `--fail-on-diff` |
@@ -351,6 +351,11 @@ contig readiness --bam sample.cram --reference GRCh38.fa \
 - **Caveat coverage:** the JSON meta says whether caveats were checked
   (`caveats_checked`) and how many regions were loaded (`caveat_regions`); the
   notes say it too.
+- **Sex check / possible swap:** `--sex-vcf` runs the VCF-only karyotypic-sex
+  signal and records `meta.sample_qc` (inferred sex, X-het, chrX/chrY sites).
+  `--expected-sex XX|XY` (or `female`/`male`) marks a mismatch as a
+  **possible sample swap** and downgrades `ready` targets to `caution`; an
+  inconclusive VCF is reported as inconclusive, never as a swap.
 - **Output:** TSV by default; `--json` includes source paths, SHA-256,
   thresholds, build, caveat coverage, and the Contig version. `--out` writes to a
   file.

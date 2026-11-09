@@ -16,10 +16,12 @@ from contig.readiness.models import (
     ReadinessMeta,
     ReadinessTable,
     ReadinessThresholds,
+    SampleQC,
     SourceProvenance,
     TargetMetrics,
 )
 from contig.readiness.targets import load_bed_targets, load_gtf_targets
+from contig.verification.sex_plausibility import sex_signals
 
 COLUMNS = [
     "target", "gene", "transcript", "exon", "chrom", "start", "end",
@@ -44,6 +46,27 @@ def _source(kind: str, path: str | Path, note: str) -> SourceProvenance:
     return SourceProvenance(kind=kind, path=str(path), sha256=sha256_file(path), note=note)
 
 
+SEX_ALIASES = {
+    "xx": "XX",
+    "female": "XX",
+    "f": "XX",
+    "2": "XX",
+    "xy": "XY",
+    "male": "XY",
+    "m": "XY",
+    "1": "XY",
+}
+
+
+def _normalize_sex(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text not in SEX_ALIASES:
+        raise ValueError("expected_sex must be XX, XY, female, or male")
+    return SEX_ALIASES[text]
+
+
 def build_readiness(
     depth: str | Path | None = None,
     *,
@@ -55,6 +78,8 @@ def build_readiness(
     genes: set[str] | list[str] = (),
     caveats: str | Path | None = None,
     build: str | None = None,
+    sex_vcf: str | Path | None = None,
+    expected_sex: str | None = None,
     thresholds: ReadinessThresholds | None = None,
 ) -> ReadinessTable:
     if (depth is None) == (bam is None):
@@ -64,6 +89,9 @@ def build_readiness(
     if bam is not None and bed is None:
         raise ValueError("--bam requires --bed (samtools depth needs target intervals)")
     thresholds = thresholds or ReadinessThresholds()
+    expected_sex = _normalize_sex(expected_sex)
+    if expected_sex and sex_vcf is None:
+        raise ValueError("expected_sex requires --sex-vcf")
 
     notes: list[str] = []
     if bam is not None:
@@ -133,6 +161,53 @@ def build_readiness(
         notes.append(f"build: {build}")
 
     rows = evaluate_targets(targets, depths, thresholds, caveat_regions)
+
+    sample_qc = None
+    if sex_vcf:
+        signals = sex_signals(sex_vcf)
+        concordance = None
+        possible_swap = False
+        if expected_sex and signals.inferred_sex in {"XX", "XY"}:
+            concordance = signals.inferred_sex == expected_sex
+            possible_swap = not concordance
+        note = (
+            f"sex check: inferred {signals.inferred_sex}"
+            + (
+                f" (X-het {signals.x_het_ratio:.3f}, {signals.x_sites} chrX sites, "
+                f"{signals.y_variant_count} chrY sites)"
+                if signals.x_het_ratio is not None
+                else f" ({signals.x_sites} chrX sites, {signals.y_variant_count} chrY sites)"
+            )
+            + (f"; expected {expected_sex}" if expected_sex else "; expected sex not supplied")
+        )
+        if signals.inferred_sex not in {"XX", "XY"}:
+            note += "; sex check inconclusive (no swap call)"
+        if possible_swap:
+            note += "; possible sample swap"
+        sample_qc = SampleQC(
+            inferred_sex=signals.inferred_sex,
+            x_het_ratio=signals.x_het_ratio,
+            x_sites=signals.x_sites,
+            y_variant_count=signals.y_variant_count,
+            expected_sex=expected_sex,
+            sex_concordance=concordance,
+            possible_swap=possible_swap,
+            note=note,
+        )
+        sources.append(_source("sex_vcf", sex_vcf, "VCF sex-check input"))
+        notes.append(note)
+        if possible_swap:
+            caveat = (
+                f"possible sample swap: inferred {signals.inferred_sex} "
+                f"vs expected {expected_sex}"
+            )
+            for row in rows:
+                if caveat not in row.caveats:
+                    row.caveats.append(caveat)
+                if row.readiness == "ready":
+                    row.readiness = "caution"
+                    row.reason = caveat
+
     genes = summarize_by_gene(rows)
     meta = ReadinessMeta(
         sources=sources,
@@ -140,6 +215,7 @@ def build_readiness(
         build=build,
         caveats_checked=caveats is not None,
         caveat_regions=len(caveat_regions),
+        sample_qc=sample_qc,
         contig_version=_contig_version(),
         notes=notes,
     )

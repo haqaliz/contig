@@ -43,7 +43,7 @@ build cycle.
 | M4 PDF | **Browser print-to-PDF** from the self-contained HTML; no native PDF dependency now. |
 | WGS scale | **Require `--region` or `--gene` first** for large VCFs; add streaming/indexing only if a partner hits the guard. |
 | M6 family | **Multiple families/quads and carrier/couple views shipped**; X/Y/MT basic rules shipped. Carrier/couple views are autosomal only in this slice. |
-| M2 sample QC | **VCF-only** sex/relatedness/swap checks; no BAM requirement. |
+| M2 sample QC | **VCF-only sex check shipped** (`--sex-vcf`/`--expected-sex`); relatedness and non-sex sample-identity checks remain deferred. No BAM requirement. |
 | M8 | **PRD + architecture only**: consent, k-anonymity/privacy, tenancy, threat model, legal checklist. No federated code until two labs ask. |
 
 ## Validation

@@ -5532,6 +5532,8 @@ def readiness(
     genes: str = typer.Option(None, "--genes", help="Comma-separated gene symbols for --gtf."),
     caveats: str = typer.Option(None, "--caveats", help="Homology/pseudogene BED (BED4 or the 8-column caveat BED)."),
     build: str = typer.Option(None, "--build", help="Reference build label (e.g. GRCh38) recorded in the table."),
+    sex_vcf: str = typer.Option(None, "--sex-vcf", help="Germline VCF for a VCF-only sex check."),
+    expected_sex: str = typer.Option(None, "--expected-sex", help="XX/XY (or female/male) for a sample-swap check; requires --sex-vcf."),
     depth_threshold: int = typer.Option(20, "--depth-threshold", help="Depth threshold for readiness (default 20)."),
     ready_fraction: float = typer.Option(0.90, "--ready-fraction", help="Fraction at threshold needed for ready (default 0.90)."),
     caution_fraction: float = typer.Option(0.50, "--caution-fraction", help="Fraction at threshold below which a target is not interpretable (default 0.50)."),
@@ -5543,8 +5545,10 @@ def readiness(
 
     Consumes `samtools depth -a` output plus a target BED or GTF, and reports
     mean depth, % at 20x/50x/100x, zero-coverage bases, homology/pseudogene
-    caveats, and a deterministic ready/caution/not-interpretable state. This is
-    a data-sufficiency check, not a clinical guarantee.
+    caveats, and a deterministic ready/caution/not-interpretable state. An
+    optional `--sex-vcf` adds a VCF-only sex check; `--expected-sex` turns a
+    mismatch into a possible-sample-swap caution. This is a data-sufficiency
+    check, not a clinical guarantee.
     """
     try:
         run_readiness_workbench(
@@ -5557,6 +5561,8 @@ def readiness(
             genes=genes,
             caveats=caveats,
             build=build,
+            sex_vcf=sex_vcf,
+            expected_sex=expected_sex,
             depth_threshold=depth_threshold,
             ready_fraction=ready_fraction,
             caution_fraction=caution_fraction,

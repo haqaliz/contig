@@ -78,12 +78,24 @@ class SourceProvenance(BaseModel):
     note: str | None = None
 
 
+class SampleQC(BaseModel):
+    inferred_sex: str
+    x_het_ratio: float | None = None
+    x_sites: int = 0
+    y_variant_count: int = 0
+    expected_sex: str | None = None
+    sex_concordance: bool | None = None
+    possible_swap: bool = False
+    note: str = ""
+
+
 class ReadinessMeta(BaseModel):
     sources: list[SourceProvenance] = Field(default_factory=list)
     thresholds: ReadinessThresholds = Field(default_factory=ReadinessThresholds)
     build: str | None = None
     caveats_checked: bool = False
     caveat_regions: int = 0
+    sample_qc: SampleQC | None = None
     generated_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
     )

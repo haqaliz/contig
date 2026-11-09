@@ -33,6 +33,8 @@ def run_readiness(
     genes: str | None = None,
     caveats: str | None = None,
     build: str | None = None,
+    sex_vcf: str | None = None,
+    expected_sex: str | None = None,
     depth_threshold: int = 20,
     ready_fraction: float = 0.90,
     caution_fraction: float = 0.50,
@@ -57,6 +59,8 @@ def run_readiness(
         genes=_genes(genes),
         caveats=caveats,
         build=build,
+        sex_vcf=sex_vcf,
+        expected_sex=expected_sex,
         thresholds=thresholds,
     )
     counts = summarize(table.rows)
@@ -65,6 +69,8 @@ def run_readiness(
         f"{counts['caution']} caution, {counts['not-interpretable']} not-interpretable",
         err=True,
     )
+    if table.meta.sample_qc:
+        typer.echo(table.meta.sample_qc.note, err=True)
 
     if out:
         write_table(table, out, as_json=json_out, by_gene=by_gene)
