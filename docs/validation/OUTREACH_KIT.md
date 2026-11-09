@@ -231,19 +231,21 @@ run. It reads the password from `CONTIG_SMTP_PASSWORD` or macOS Keychain
 (`security find-generic-password -a contig-outreach -s smtp -w`). The batch is
 `docs/validation/outreach_messages_batch1.json`.
 
-### General-purpose CLI: `msmtp` (AOL included)
+### General-purpose CLI: `himalaya` (AOL included)
 
-`msmtp` is the standard send-only CLI. Install it and run the AOL setup script;
-it prompts for the address and app password, stores the password in Keychain,
-writes `~/.msmtprc` with mode 600, and tests the SMTP login without sending:
+`himalaya` is a full SMTP/IMAP client. Install it and run the AOL setup script;
+it prompts for the address and password, stores the password in Keychain,
+writes `~/.config/himalaya/config.toml` with mode 600, and tests both logins
+without sending:
 
 ```bash
-brew install msmtp
-bash scripts/setup_msmtp_aol.sh
+brew install himalaya
+bash scripts/setup_himalaya_aol.sh
 ```
 
-AOL settings used: `smtp.aol.com`, port `465`, SSL, full AOL address, app
-password. If your AOL account has no app-password option, use Gmail below.
+AOL settings used: `imap.aol.com` port `993` TLS, `smtp.aol.com` port `465`
+TLS, full AOL address, app password if 2-Step Verification is on. If AOL
+rejects the login, use Gmail below.
 
 Send the previews one at a time:
 
@@ -252,13 +254,17 @@ CONTIG_SMTP_FROM="you@aol.com" python scripts/send_outreach.py \
   --messages docs/validation/outreach_messages_batch1.json \
   --out-dir /tmp/outreach-eml-aol
 
-msmtp -a aol -t < /tmp/outreach-eml-aol/central-south-glh.eml
-msmtp -a aol -t < /tmp/outreach-eml-aol/amp.eml
-msmtp -a aol -t < /tmp/outreach-eml-aol/panelapp.eml
+himalaya message send -a aol /tmp/outreach-eml-aol/central-south-glh.eml
+himalaya message send -a aol /tmp/outreach-eml-aol/amp.eml
+himalaya message send -a aol /tmp/outreach-eml-aol/panelapp.eml
 ```
 
-For a full interactive SMTP/IMAP client instead of send-only, `himalaya`
-(`brew install himalaya`) works with the same AOL credentials.
+Read replies in the terminal:
+
+```bash
+himalaya envelope list -a aol --page-size 10
+himalaya message read -a aol <id>
+```
 
 ### Recommended: a dedicated Gmail address
 
