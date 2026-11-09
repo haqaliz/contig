@@ -231,6 +231,35 @@ run. It reads the password from `CONTIG_SMTP_PASSWORD` or macOS Keychain
 (`security find-generic-password -a contig-outreach -s smtp -w`). The batch is
 `docs/validation/outreach_messages_batch1.json`.
 
+### General-purpose CLI: `msmtp` (AOL included)
+
+`msmtp` is the standard send-only CLI. Install it and run the AOL setup script;
+it prompts for the address and app password, stores the password in Keychain,
+writes `~/.msmtprc` with mode 600, and tests the SMTP login without sending:
+
+```bash
+brew install msmtp
+bash scripts/setup_msmtp_aol.sh
+```
+
+AOL settings used: `smtp.aol.com`, port `465`, SSL, full AOL address, app
+password. If your AOL account has no app-password option, use Gmail below.
+
+Send the previews one at a time:
+
+```bash
+CONTIG_SMTP_FROM="you@aol.com" python scripts/send_outreach.py \
+  --messages docs/validation/outreach_messages_batch1.json \
+  --out-dir /tmp/outreach-eml-aol
+
+msmtp -a aol -t < /tmp/outreach-eml-aol/central-south-glh.eml
+msmtp -a aol -t < /tmp/outreach-eml-aol/amp.eml
+msmtp -a aol -t < /tmp/outreach-eml-aol/panelapp.eml
+```
+
+For a full interactive SMTP/IMAP client instead of send-only, `himalaya`
+(`brew install himalaya`) works with the same AOL credentials.
+
 ### Recommended: a dedicated Gmail address
 
 Best reliability and keeps outreach out of a personal inbox.
