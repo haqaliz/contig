@@ -247,6 +247,20 @@ AOL settings used: `imap.aol.com` port `993` TLS, `smtp.aol.com` port `465`
 TLS, full AOL address, app password if 2-Step Verification is on. If AOL
 rejects the login, use Gmail below.
 
+**AOL requires an app password for third-party apps** — the normal account
+password will fail. Generate one at
+`https://login.aol.com/myaccount/security` → “Generate app password”. Use a
+browser you have used for AOL for several days, not Incognito; if the page
+refuses, open AOL webmail first. If AOL reports “too many bad auth attempts”,
+stop testing for 15–30 minutes, then update only the password:
+
+```bash
+bash scripts/update_himalaya_aol_password.sh
+himalaya account check -a aol
+```
+
+If it still fails, switch to the Gmail path below.
+
 Send the previews one at a time:
 
 ```bash
