@@ -22,11 +22,14 @@ security add-generic-password -U -a aol-smtp -s msmtp -w "$AOL_PASS"
 unset AOL_PASS
 
 CONFIG="$HOME/.msmtprc"
+CA_BUNDLE="/opt/homebrew/etc/ca-certificates/cert.pem"
+[ -f "$CA_BUNDLE" ] || CA_BUNDLE="/etc/ssl/cert.pem"
 cat > "$CONFIG" <<EOF
 defaults
 auth on
 tls on
 tls_starttls off
+tls_trust_file $CA_BUNDLE
 logfile ~/.msmtp.log
 timeout 30
 
