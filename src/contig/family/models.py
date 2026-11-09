@@ -68,6 +68,7 @@ class SourceProvenance(BaseModel):
 
 class FamilyMeta(BaseModel):
     family_id: str
+    family_ids: list[str] = Field(default_factory=list)
     samples: list[str] = Field(default_factory=list)
     sources: list[SourceProvenance] = Field(default_factory=list)
     summary: dict[str, object] = Field(default_factory=dict)

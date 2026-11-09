@@ -87,7 +87,7 @@ the metadata note `caveats checked` / `caveats not checked`).
 | `contig report-bundle <sidecar> --out <dir>` | Copy the HTML, sidecar, run record, and attached tables into a portable directory with relative paths; all table rows are kept |
 | `contig report-batch --project <json>` | Build every report in a project manifest; `--check` verifies each afterward |
 | `contig report-check-batch --project <json>` | Check every report in a project manifest; `--outputs`, `--sources`, `--require-signature` apply to each |
-| `contig family --vcf <vcf> --ped <ped>` | Research-use trio/family analysis: per-child inheritance, Mendelian consistency, de novo candidates, and pairwise sample concordance. Autosomal only in v1 |
+| `contig family --vcf <vcf> --ped <ped>` | Research-use trio/family analysis: per-child inheritance, Mendelian consistency, de novo candidates, and pairwise sample concordance. Multiple families/quads per PED; autosomal plus basic X/Y/MT rules |
 | `contig biomarkers --vcf <vcf> --callable-bed <bed>` | Research-use TMB verification from PASS variants in callable regions; compares a reported TMB within tolerance. MSI, CNV, and LOH can be verified from independent inputs; without them they are `not_verified` |
 | `contig cohort-build --name <n> --variants <json,...>` | Build a local-only cohort index from M1 variant tables: per-variant seen-run counts/frequencies and per-gene summaries. `--trace` records contributing run labels. No network, no sample IDs |
 | `contig cohort-list --cohort <json>` | List the runs that contributed to a cohort |
@@ -489,19 +489,23 @@ contig report-diff report-a.json report-b.json
 contig family --vcf family.vcf --ped family.ped --out family.tsv
 ```
 
-- **Input:** one multi-sample VCF containing the child and parents, plus a PED
-  with one family. Separate per-sample VCFs must be merged first.
-- **Per row:** child, chrom/pos/ref/alt, gene/consequence, the three genotypes,
-  inheritance (`paternal`, `maternal`, `biparental`, `de_novo`, `not_carried`,
-  `unknown`, `not_evaluated`), Mendelian consistency, and a de novo candidate
-  flag. X/Y/MT use basic sex-aware rules when the PED supplies sex; unknown sex
-  stays `not_evaluated`.
-- **Summary:** evaluated sites, Mendelian-inconsistent sites (excluding de novo
-  candidates), de novo candidate count, error rate, inheritance counts, and
-  pairwise same-genotype/opposite-homozygote rates with a possible-swap flag.
-- **Boundary:** autosomal plus basic X/Y/MT rules; unknown sex is
-  `not_evaluated`. A de novo candidate is not a validated event. This is a
-  research calculation, not clinical counselling, diagnosis, or PGT-M.
+- **Input:** one multi-sample VCF containing every child and parent, plus a PED
+  that may contain multiple families/quads. Separate per-sample VCFs must be
+  merged first. A sample may belong to only one family.
+- **Per row:** family id, child, chrom/pos/ref/alt, gene/consequence, the three
+  genotypes, inheritance (`paternal`, `maternal`, `biparental`, `de_novo`,
+  `not_carried`, `unknown`, `not_evaluated`), Mendelian consistency, and a de
+  novo candidate flag. X/Y/MT use basic sex-aware rules when the PED supplies
+  sex; unknown sex stays `not_evaluated`.
+- **Summary:** total families, evaluated sites, Mendelian-inconsistent sites
+  (excluding de novo candidates), de novo candidate count, error rate,
+  inheritance counts, per-family summaries, and pairwise
+  same-genotype/opposite-homozygote rates with a possible-swap flag. The JSON
+  `family_ids` list is authoritative; `family_id` is the first family for
+  back-compat.
+- **Boundary:** multiple families/quads are supported; a de novo candidate is
+  not a validated event. This is a research calculation, not clinical
+  counselling, diagnosis, or PGT-M.
 
 ---
 

@@ -202,6 +202,7 @@ def pairwise_concordance(family: Family, variants: list[FamilyVariant]) -> list[
             # catches a duplicate sample, not a real parent-child.
             possible_swap = relationship == "parent-child" and (ibs0_rate > 0.01 or same_rate > 0.99)
             results.append({
+                "family_id": family.family_id,
                 "sample_a": a,
                 "sample_b": b,
                 "relationship": relationship,

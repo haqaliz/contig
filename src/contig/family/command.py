@@ -18,6 +18,7 @@ def run_family(vcf: str, ped: str, *, out: str | None = None, json_out: bool = F
     table = build_family_table(vcf, ped)
     summary = table.meta.summary
     typer.echo(
+        f"{summary.get('families', 1)} family(ies), "
         f"{summary.get('rows', 0)} row(s), {summary.get('evaluated', 0)} evaluated: "
         f"{summary.get('mendelian_inconsistent', 0)} Mendelian inconsistent, "
         f"{summary.get('de_novo_candidates', 0)} de novo candidate(s), "

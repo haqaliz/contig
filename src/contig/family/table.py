@@ -9,7 +9,7 @@ from pathlib import Path
 
 from contig.family.analyze import analyze_variant, pairwise_concordance, summarize
 from contig.family.models import FamilyMeta, FamilyRow, FamilyTable, SourceProvenance
-from contig.family.ped import load_ped
+from contig.family.ped import load_families
 from contig.family.vcf import read_family_variants
 from contig.models import sha256_file
 
@@ -37,21 +37,40 @@ def _source(kind: str, path: str | Path, note: str) -> SourceProvenance:
 
 
 def build_family_table(vcf_path: str | Path, ped_path: str | Path) -> FamilyTable:
-    family = load_ped(ped_path)
-    variants, stats = read_family_variants(vcf_path, family.samples)
+    families = load_families(ped_path)
+    samples = [sample for family in families for sample in family.samples]
+    variants, stats = read_family_variants(vcf_path, samples)
     rows: list[FamilyRow] = []
-    for variant in variants:
-        rows.extend(analyze_variant(family, variant))
+    concordance: list[dict[str, object]] = []
+    for family in families:
+        for variant in variants:
+            rows.extend(analyze_variant(family, variant))
+        concordance.extend(pairwise_concordance(family, variants))
 
+    summary = summarize(rows)
+    summary["families"] = len(families)
+    summary["per_family"] = {
+        family.family_id: summarize(
+            [row for row in rows if row.family_id == family.family_id]
+        )
+        for family in families
+    }
+    child_count = sum(len(family.children) for family in families)
     meta = FamilyMeta(
-        family_id=family.family_id,
-        samples=family.samples,
+        family_id=families[0].family_id,
+        family_ids=[family.family_id for family in families],
+        samples=samples,
         sources=[
             _source("vcf", vcf_path, f"{stats.total_records} records; {stats.emitted_rows} ALT rows"),
-            _source("ped", ped_path, f"{len(family.members)} samples; {len(family.children)} child(ren)"),
+            _source(
+                "ped",
+                ped_path,
+                f"{len(families)} families; {len(samples)} samples; "
+                f"{child_count} child(ren)",
+            ),
         ],
-        summary=summarize(rows),
-        concordance=pairwise_concordance(family, variants),
+        summary=summary,
+        concordance=concordance,
         contig_version=_contig_version(),
         notes=(
             [f"{stats.skipped_lines} malformed VCF lines skipped"]

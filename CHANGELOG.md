@@ -16,6 +16,10 @@ All notable changes to Contig are recorded here. The format follows
   `dashboard/research/manifest.json` (or `CONTIG_RESEARCH_DIR`) exists,
   `/research` picks the newest `runs/<id>/research/manifest.json` by mtime and
   shows the source. The explicit manifest remains the default; read-only.
+- **Multiple families/quads in one PED:** `contig family` now analyzes every
+  family in a PED, emits the family id per row, per-family summaries, and
+  per-family pairwise concordance. A sample may belong to only one family;
+  `load_ped` remains the single-family helper.
 
 ### Fixed
 - **LLM paraphrase fidelity:** `contig ask --llm` now falls back to the
