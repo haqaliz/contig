@@ -88,6 +88,7 @@ the metadata note `caveats checked` / `caveats not checked`).
 | `contig report-batch --project <json>` | Build every report in a project manifest; `--check` verifies each afterward |
 | `contig report-check-batch --project <json>` | Check every report in a project manifest; `--outputs`, `--sources`, `--require-signature` apply to each |
 | `contig family --vcf <vcf> --ped <ped>` | Research-use trio/family analysis: per-child inheritance, Mendelian consistency, de novo candidates, and pairwise sample concordance. Multiple families/quads per PED; autosomal plus basic X/Y/MT rules |
+| `contig carriers --vcf <vcf> --ped <ped>` | Research-use per-person carrier and couple shared-carrier views, optionally filtered to a recessive gene panel (`--genes` / `--panel`). Autosomal only |
 | `contig biomarkers --vcf <vcf> --callable-bed <bed>` | Research-use TMB verification from PASS variants in callable regions; compares a reported TMB within tolerance. MSI, CNV, and LOH can be verified from independent inputs; without them they are `not_verified` |
 | `contig cohort-build --name <n> --variants <json,...>` | Build a local-only cohort index from M1 variant tables: per-variant seen-run counts/frequencies and per-gene summaries. `--trace` records contributing run labels. No network, no sample IDs |
 | `contig cohort-list --cohort <json>` | List the runs that contributed to a cohort |
@@ -506,6 +507,32 @@ contig family --vcf family.vcf --ped family.ped --out family.tsv
 - **Boundary:** multiple families/quads are supported; a de novo candidate is
   not a validated event. This is a research calculation, not clinical
   counselling, diagnosis, or PGT-M.
+
+---
+
+## Carrier / couple view (research use)
+
+```bash
+contig carriers --vcf family.vcf --ped family.ped \
+  --genes BRCA1,BRCA2 --out carriers.tsv
+
+# Or a panel BED with gene names in column 4:
+contig carriers --vcf family.vcf --ped family.ped \
+  --panel panels/<id>.bed --out carriers.tsv
+```
+
+- **Per-person view:** every family member with an ALT genotype in the
+  recessive panel, labelled `carrier` or `homozygous_alt` (no genotype is
+  omitted).
+- **Couple view:** variants where both parents carry an ALT allele, labelled
+  `both_carriers`, `one_homozygous`, or `both_homozygous`; the children's
+  genotypes and a `child_status` are included for context.
+- **Panel filter:** `--genes` and `--panel` are unioned; with neither, no panel
+  filter is applied and the report says so. Unannotated variants cannot pass a
+  panel filter.
+- **Boundary:** autosomal only; X/Y/MT variants are skipped and counted. This
+  is a genotype calculation, not a risk estimate, diagnosis, or reproductive
+  advice. No clinical counselling.
 
 ---
 

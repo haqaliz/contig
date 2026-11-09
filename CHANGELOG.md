@@ -20,6 +20,10 @@ All notable changes to Contig are recorded here. The format follows
   family in a PED, emits the family id per row, per-family summaries, and
   per-family pairwise concordance. A sample may belong to only one family;
   `load_ped` remains the single-family helper.
+- **Carrier/couple views:** `contig carriers` lists per-person ALT genotypes
+  and variants shared by both parents, optionally filtered by `--genes` or a
+  `--panel` BED (gene in column 4). Autosomal only; X/Y/MT are skipped and
+  noted. No risk estimate, diagnosis, or reproductive advice.
 
 ### Fixed
 - **LLM paraphrase fidelity:** `contig ask --llm` now falls back to the

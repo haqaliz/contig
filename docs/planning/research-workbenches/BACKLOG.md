@@ -39,7 +39,7 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | M6-0 | M6 | `contig family` inheritance/Mendelian/de novo/concordance | done |
 | M6-1 | M6 | X/Y/MT sex-aware Mendelian rules (basic; unknown sex not_evaluated) | done |
 | M6-2 | M6 | Multiple families/quads per PED | done |
-| M6-3 | M6 | Carrier/couple views + recessive panels | deferred |
+| M6-3 | M6 | Carrier/couple views + recessive panels | done |
 | M6-4 | M6 | Real trio validation + swap-threshold calibration (full GIAB trio: 2.26M evaluated, 19 residual inconsistencies in no-inconsistent regions, IBS0=0) | done |
 | M7-0 | M7 | `contig biomarkers` TMB verification | done |
 | M7-1a | M7 | MSI caller seam: parse MSIsensor output or run tumor/normal BAMs; threshold + reported-status comparison | done |
@@ -57,7 +57,7 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | X-4 | Cross | Release 1.1.0 (version bump + release notes) | deferred |
 | X-5 | Cross | Clinical diagnosis / ACMG adjudication / drug recs | decision |
 
-**Totals:** 22 built · 8 deferred · 11 blocked · 2 decisions (43 rows). Every
+**Totals:** 23 built · 7 deferred · 11 blocked · 2 decisions (43 rows). Every
 blocked row names its evidence in `BLOCKED_RUNBOOK.md`.
 
 ## Agent-validation follow-ups (2026-11-08)

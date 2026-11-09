@@ -1,5 +1,6 @@
 ##fileformat=VCFv4.2
+##INFO=<ID=CSQ,Number=.,Type=String,Description="Consequence annotations from Ensembl VEP. Format=Allele|Consequence|IMPACT|SYMBOL|Gene|Feature_type|Feature">
 #CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	C1	F1	M1	C2	F2	M2
-1	100	.	A	G	.	.	.	GT	0/1	0/1	0/0	0/0	0/1	0/1
-1	200	.	C	T	.	.	.	GT	1/1	0/1	0/1	0/1	0/0	0/1
+1	100	.	A	G	.	.	CSQ=G|missense_variant|MODERATE|GENE2|GENE2|Transcript|ENST2	GT	0/1	0/1	0/0	0/0	0/1	0/1
+1	200	.	C	T	.	.	CSQ=T|missense_variant|MODERATE|GENE1|GENE1|Transcript|ENST1	GT	1/1	0/1	0/1	0/1	0/0	0/1
 1	300	.	G	A	.	.	.	GT	0/1	0/0	0/0	1/1	0/1	0/1

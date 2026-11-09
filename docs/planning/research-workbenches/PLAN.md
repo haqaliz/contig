@@ -470,7 +470,7 @@ the existing approval gate.
 **Status:** v1 implemented 2026-11-08 — `contig family` (inheritance,
 autosomal + basic X/Y/MT Mendelian consistency, de novo candidates,
 concordance), with PRD and task plan in `docs/planning/family-trio/`.
-Carrier/couple views and multi-family support remain follow-ups.
+Carrier/couple views and multi-family support shipped 2026-11-10.
 
 **Goal.** Support research-use family analysis: inheritance-aware filtering,
 Mendelian consistency, de novo candidates, carrier status, and couple

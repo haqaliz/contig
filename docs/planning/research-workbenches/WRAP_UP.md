@@ -16,7 +16,7 @@ names the evidence each blocked row needs.
 | M3 | `contig panel-build`/`panel-list`/`panel-show` | HGNC-resolved, MANE-preferred, checksummed panel BED registry with version labels | 24 | No archival/diff; no real lab panel |
 | M4 | `contig report`/`report-check`/`report-diff` | Self-contained HTML report, sidecar hashes, templates, reviewer block, staleness check, sidecar diff | 37 | HTML only; no PDF/dashboard |
 | M5 | `contig ask`/`ask-eval` | Grounded Q&A over the bundle + M1/M2, citations, suggested actions, optional LLM paraphrase | 31 | No live LLM eval; deterministic router only |
-| M6 | `contig family` | Inheritance, autosomal + basic X/Y/MT Mendelian consistency, de novo candidates, pairwise concordance, multiple families/quads per PED | 25 | Full GIAB trio validated (2.26M evaluated, 19 residual inconsistencies in no-inconsistent regions, IBS0=0); multiple families/quads supported |
+| M6 | `contig family` / `contig carriers` | Inheritance, autosomal + basic X/Y/MT Mendelian consistency, de novo candidates, pairwise concordance, multiple families/quads, carrier/couple views | 25 | Full GIAB trio validated (2.26M evaluated, 19 residual inconsistencies in no-inconsistent regions, IBS0=0); carrier/couple views are autosomal only |
 | M7 | `contig biomarkers` | TMB from PASS variants in a callable BED; MSI from MSIsensor output/BAMs; CNV segment concordance; LOH from allele-specific segments | 32 | LOH comparator ships; real allele-specific caller validation pending; MSI/CNV thresholds need real validation |
 | M8 | `contig cohort-build`/`cohort-query` | Local-only per-variant/gene cohort counts and frequencies | 16 | No federated/cross-lab layer |
 

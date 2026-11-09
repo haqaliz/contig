@@ -264,6 +264,7 @@ from contig.panels.build import (
 from contig.panels.diff import panel_diff, render_panel_diff
 from contig.assistant.command import run_ask as run_grounded_ask
 from contig.assistant.command import run_ask_eval as run_grounded_ask_eval
+from contig.family.command import run_carriers as run_carrier_analysis
 from contig.family.command import run_family as run_family_analysis
 from contig.biomarkers.command import run_biomarkers as run_biomarker_verification
 from contig.cohort.command import (
@@ -5142,18 +5143,44 @@ def biomarkers(
 @app.command()
 def family(
     vcf: str = typer.Option(..., "--vcf", help="Multi-sample VCF with the family genotypes."),
-    ped: str = typer.Option(..., "--ped", help="PED file for one family."),
+    ped: str = typer.Option(..., "--ped", help="PED file with one or more families."),
     out: str = typer.Option(None, "--out", help="Write the table to this path instead of stdout."),
     json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of TSV."),
 ) -> None:
     """Research-use inheritance and Mendelian checks for a trio/family.
 
     Reads a multi-sample VCF + PED and reports per-child inheritance, Mendelian
-    consistency, de novo candidates, and pairwise sample concordance. Autosomal
-    only in v1; X/Y/MT are marked not_evaluated. No clinical interpretation.
+    consistency, de novo candidates, and pairwise sample concordance. Multiple
+    families/quads per PED are supported; X/Y/MT use basic sex-aware rules.
+    No clinical interpretation.
     """
     try:
         run_family_analysis(vcf, ped, out=out, json_out=json_out)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def carriers(
+    vcf: str = typer.Option(..., "--vcf", help="Multi-sample VCF with the family genotypes."),
+    ped: str = typer.Option(..., "--ped", help="PED file with one or more families."),
+    genes: str = typer.Option(None, "--genes", help="Comma-separated recessive panel genes."),
+    panel: str = typer.Option(None, "--panel", help="Panel BED with gene names in column 4."),
+    out: str = typer.Option(None, "--out", help="Write the report to this path instead of stdout."),
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON instead of TSV."),
+) -> None:
+    """Research-use carrier and couple shared-carrier views.
+
+    Lists per-person ALT genotypes and variants where both parents carry an ALT
+    allele, optionally restricted to a recessive gene panel. Autosomal only;
+    X/Y/MT are skipped and noted. No risk estimate, diagnosis, or reproductive
+    advice.
+    """
+    try:
+        run_carrier_analysis(
+            vcf, ped, genes=genes, panel=panel, out=out, json_out=json_out
+        )
     except (FileNotFoundError, ValueError, OSError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
