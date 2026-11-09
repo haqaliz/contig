@@ -65,6 +65,13 @@ accuracy and refusal accuracy; only then enable `--llm` by default.
 ## M6 — family/trio
 
 ### M6-4: real trio + swap threshold
+**Closed 2026-11-09** with the full GIAB Ashkenazim trio: 5,027,114 rows,
+2,259,196 evaluated, 19 residual inconsistencies (0.00084%) inside the
+intersected `*_noinconsistent.bed` regions, IBS0 = 0 across ~3.2M parent-child
+sites. The current swap threshold is confirmed; the calibration is recorded in
+`src/contig/family/analyze.py`. The old evidence request is kept below for
+reference.
+
 Collect:
 - A real multi-sample trio/quad VCF + PED.
 - Expected inheritance for a few known variants.

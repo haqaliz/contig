@@ -196,6 +196,10 @@ def pairwise_concordance(family: Family, variants: list[FamilyVariant]) -> list[
             same_rate = same / called if called else 0.0
             ibs0_rate = opposite / called if called else 0.0
             relationship = _relationship(family, a, b)
+            # Calibrated on the full GIAB Ashkenazim trio (2026-11-09):
+            # IBS0=0 across ~3.2M parent-child sites and same-genotype 0.71-0.72;
+            # 1% IBS0 is >100x the observed noise floor. The 99% same-rate branch
+            # catches a duplicate sample, not a real parent-child.
             possible_swap = relationship == "parent-child" and (ibs0_rate > 0.01 or same_rate > 0.99)
             results.append({
                 "sample_a": a,

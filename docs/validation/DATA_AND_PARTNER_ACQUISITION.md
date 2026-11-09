@@ -82,10 +82,15 @@ uv run contig family \
 
 **Run 2026-11-09:** the chr20 subset gives parent-child same-genotype rates of
 0.72 (HG002/HG003) and 0.82 (HG002/HG004), with IBS0 = 0 in all pairs. The
-current swap flag (`IBS0 > 1%` or `same > 99%`) correctly does not fire. Full
-trio calibration needs a three-way merge of the per-sample truth VCFs; `bcftools`
-is not installed locally, so either install it or stream-merge the three sorted
-VCFs. Source:
+full trio (merged with `bcftools merge -m none`) gives **5,649,742 rows,
+2,386,190 evaluated, 452 Mendelian inconsistencies (0.02%)**. Intersecting the
+three GIAB `*_noinconsistent.bed` files (686,545 intervals) gives **5,027,114
+rows, 2,259,196 evaluated, 19 residual inconsistencies (0.00084%)**; IBS0 = 0
+across ~3.2M parent-child sites, same-genotype 0.71–0.72, and the swap flag
+never fires. The current swap threshold (`IBS0 > 1%` or `same > 99%`) is
+conservative and confirmed by the data; the 19 residual calls are truth-set
+noise, not a Contig failure. The calibration is recorded in
+`src/contig/family/analyze.py`. Source:
 `https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/`.
 GIAB is open; cite NIST/GIAB.
 
