@@ -221,3 +221,77 @@ when there is a reply, not when a message was sent.
 
 If after 20 contacts there is no reply, change the channel, not the message:
 warm intros first, then Slack, then core facilities, then forums.
+
+---
+
+## 6. Sending from the terminal
+
+`scripts/send_outreach.py` sends a JSON batch over SMTP and defaults to a dry
+run. It reads the password from `CONTIG_SMTP_PASSWORD` or macOS Keychain
+(`security find-generic-password -a contig-outreach -s smtp -w`). The batch is
+`docs/validation/outreach_messages_batch1.json`.
+
+### Recommended: a dedicated Gmail address
+
+Best reliability and keeps outreach out of a personal inbox.
+
+1. Create `contig.research@gmail.com` (or a domain alias).
+2. Enable 2-Step Verification.
+3. Google Account → Security → App passwords → create “Contig outreach” → copy
+   the 16-character password.
+4. Store it in Keychain (not shell history):
+
+   ```bash
+   read -rsp "App password: " SMTP_PASS; echo
+   security add-generic-password -a contig-outreach -s smtp -w "$SMTP_PASS"
+   unset SMTP_PASS
+   ```
+
+5. Configure and test:
+
+   ```bash
+   export CONTIG_SMTP_HOST=smtp.gmail.com
+   export CONTIG_SMTP_PORT=465
+   export CONTIG_SMTP_SECURITY=ssl
+   export CONTIG_SMTP_USER=contig.research@gmail.com
+   export CONTIG_SMTP_FROM=contig.research@gmail.com
+   export CONTIG_SMTP_FROM_NAME="Ali Haqiqi"
+
+   python scripts/send_outreach.py \
+     --messages docs/validation/outreach_messages_batch1.json --check
+   ```
+
+6. Send after reviewing the previews:
+
+   ```bash
+   python scripts/send_outreach.py \
+     --messages docs/validation/outreach_messages_batch1.json --send
+   ```
+
+### Other providers
+
+| Provider | Host / port / security | Credential |
+|---|---|---|
+| AOL | `smtp.aol.com` / 465 / `ssl` | Full AOL address + app password from AOL Account Security (2FA may be required) |
+| Proton Mail | `127.0.0.1` / 1025 / `starttls` | Requires a paid Proton plan + Proton Mail Bridge; use the Bridge-generated username/password |
+| iCloud | `smtp.mail.me.com` / 587 / `starttls` | Apple app-specific password |
+| Fastmail | `smtp.fastmail.com` / 465 / `ssl` | Fastmail app password |
+| Outlook personal | `smtp-mail.outlook.com` / 587 / `starttls` | App password; Microsoft 365 may block basic SMTP auth |
+
+Set `CONTIG_SMTP_HOST`, `CONTIG_SMTP_PORT`, `CONTIG_SMTP_SECURITY`,
+`CONTIG_SMTP_USER`, and `CONTIG_SMTP_FROM` accordingly. Proton Bridge must be
+running; AOL app passwords are the only AOL route this script supports.
+
+### What the script does not send
+
+The nf-core Slack post, the two web contact forms (North Thames GLH, Exeter),
+and the Biostars/Reddit posts are not email. Open those pages and paste the
+matching block from `outreach_batch_1.md`. Copy the Slack post to the clipboard
+first if you want a one-paste flow.
+
+### Safety
+
+- Dry run is the default; `--send` is explicit.
+- Never commit an app password; use Keychain.
+- Never attach PHI or a VCF/BAM before the redaction agreement is signed.
+- One message per target; no mass CC.

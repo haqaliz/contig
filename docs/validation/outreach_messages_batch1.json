@@ -1,0 +1,20 @@
+[
+  {
+    "id": "central-south-glh",
+    "to": "GMSAAdmin@uhb.nhs.uk",
+    "subject": "One panel BED + redacted report for a research-use readiness check?",
+    "body": "Hi — I maintain Contig, a local research-use workflow that checks coverage readiness and builds an HTML report with hashed provenance. I am validating it on real panel/WES data and looking for one panel BED or gene list with the transcript policy you use, and (separately) 1–2 fully redacted reports you already produce. Nothing patient-identifying leaves your lab; I can sign a redaction/data-use agreement first. In return I will send a short summary of how the readiness states and report provenance compare to your expectations. Would that be possible?"
+  },
+  {
+    "id": "amp",
+    "to": "amp@amp.org",
+    "subject": "15-min review of MSI/TMB verification bands?",
+    "body": "Hi — I am building a research-use biomarker verification check (TMB from PASS variants in a callable BED; MSI from MSIsensor output or tumor/normal BAMs). I am not making clinical claims; I need a sanity check on the band and definition (coding-only vs all-PASS, MSI-H threshold). Could you spare 15 minutes, or point me to a published pair/values I should use? De-identified or public data only."
+  },
+  {
+    "id": "panelapp",
+    "to": "panelapp@genomicsengland.co.uk",
+    "subject": "PanelApp attribution and signed-off panel export for research-use validation",
+    "body": "Hi — I maintain Contig, a local research-use variant/coverage/report workflow. I am validating it against public clinical panel definitions and already use the PanelApp API (for example panel 245, 82 green genes). Could you confirm the attribution/licence wording you prefer for a research-use validation, and whether there is a signed-off panel export format you recommend over the API? I am not redistributing patient data or making clinical claims."
+  }
+]
