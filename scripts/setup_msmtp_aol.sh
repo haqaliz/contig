@@ -16,7 +16,7 @@ read -rp "AOL email address: " AOL_ADDRESS
 if [[ "$AOL_ADDRESS" != *"@aol.com" ]]; then
   echo "warning: '$AOL_ADDRESS' does not end in @aol.com" >&2
 fi
-read -rsp "AOL app password (not your normal password): " AOL_PASS; echo
+read -rsp "AOL password (use an app password if 2-Step Verification is on): " AOL_PASS; echo
 
 security add-generic-password -U -a aol-smtp -s msmtp -w "$AOL_PASS"
 unset AOL_PASS
