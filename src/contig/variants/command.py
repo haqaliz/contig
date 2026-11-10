@@ -32,6 +32,7 @@ def run_variants(
     gnomad_cache: str | None = None,
     gnomad_dataset: str = "gnomad_r4",
     build: str | None = None,
+    iranome_build: str = "GRCh37",
     genes: str | None = None,
     consequences: str | None = None,
     max_af: float | None = None,
@@ -49,6 +50,8 @@ def run_variants(
 ) -> None:
     if build not in (None, "GRCh37", "GRCh38"):
         raise ValueError("build must be GRCh37 or GRCh38")
+    if iranome_build not in ("GRCh37", "GRCh38"):
+        raise ValueError("iranome_build must be GRCh37 or GRCh38")
     if max_records < 1:
         raise ValueError("max_records must be at least 1")
 
@@ -79,6 +82,7 @@ def run_variants(
         gnomad_cache=gnomad_cache,
         gnomad_dataset=gnomad_dataset,
         build=build,
+        iranome_build=iranome_build,
         spec=spec,
         max_records=max_records,
     )

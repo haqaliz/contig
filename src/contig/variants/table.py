@@ -58,6 +58,7 @@ def build_table(
     gnomad_cache: str | Path | None = None,
     gnomad_dataset: str = "gnomad_r4",
     build: str | None = None,
+    iranome_build: str = "GRCh37",
     spec: FilterSpec | None = None,
     max_records: int | None = 1_000_000,
 ) -> VariantTable:
@@ -133,7 +134,9 @@ def build_table(
             ]
 
     if iranome:
-        evidence, provenance = load_iranome(iranome, sites, build)
+        evidence, provenance = load_iranome(
+            iranome, sites, build, source_build=iranome_build
+        )
         sources.append(provenance)
         notes.append(provenance.note or "")
         rows = [

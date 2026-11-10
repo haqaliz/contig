@@ -77,6 +77,7 @@ the metadata note `caveats checked` / `caveats not checked`).
 | `contig export <id> --rocrate` | Export the run's provenance as an RO-Crate (ro-crate-metadata.json) |
 | `contig methods <id>` | A deterministic, citation-ready methods paragraph from the bundle |
 | `contig variants <vcf>` | Research-use variant table: join a call set to ClinVar, Iranome, and a population-frequency TSV, filter deterministically, and export TSV/JSON. `--spec` replays a saved filter; `--json` includes provenance; `--max-records` bounds a WGS input (default 1,000,000) |
+| `contig iranome-lift --iranome <tsv> --chain <chain.gz> --out <tsv>` | Lift the GRCh37 Iranome table to GRCh38 with the UCSC chain; writes a `.lift.json` sidecar with counts and hashes |
 | `contig readiness --depth <tsv>` | Per-target coverage and interpretation readiness: mean depth, % ≥20x/50x/100x, zero-coverage bases, homology/pseudogene caveats, explicit caveat coverage, build label, optional VCF sex check / possible-sample-swap caution, and a `ready`/`caution`/`not-interpretable` state |
 | `contig panel-build --name <n>` | Build a canonical, checksummed panel BED from a gene list + GTF (optional HGNC normalization) or an existing BED; writes `<id>.bed` + `<id>.json` to the registry |
 | `contig panel-list` / `contig panel-show <id>` | List or inspect panels in the registry |
@@ -299,9 +300,23 @@ contig variants sample.vcf --gnomad-api --gnomad-cache gnomad-cache.json --out t
   screening, or treatment recommendation is emitted by Contig. ClinVar
   significance is attributed, not re-owned.
 
-Iranome is GRCh37; a GRCh38 input skips it with a recorded note (no liftoff in
-this first slice). The v1 table is built in memory, so it is intended for one
-sample's call set, not a population catalogue; subset by region first if needed.
+Iranome is GRCh37 by default. For a GRCh38 input, lift it once with the public
+UCSC chain and declare the lifted table's build:
+
+```bash
+curl -fsSL -o hg19ToHg38.over.chain.gz \
+  https://hgdownload.soe.ucsc.edu/goldenPath/hg19/liftOver/hg19ToHg38.over.chain.gz
+contig iranome-lift --iranome data/iranome/iranome_panel.tsv \
+  --chain hg19ToHg38.over.chain.gz --out data/iranome/iranome_grch38.tsv
+contig variants sample.vcf --iranome data/iranome/iranome_grch38.tsv \
+  --iranome-build GRCh38 --build GRCh38 --out table.tsv
+```
+
+The sidecar records mapped/unmapped counts, the chain/output SHA-256, and both
+builds. A variant spanning a chain gap or a reverse-strand chain is unmapped,
+never guessed. A GRCh38 input still skips a GRCh37 Iranome table with a note.
+The v1 table is built in memory, so it is intended for one sample's call set,
+not a population catalogue; subset by region first if needed.
 See `docs/planning/research-workbenches/DATA_SOURCES.md` for the source license table
 and the `data/README.md` for the starter data.
 

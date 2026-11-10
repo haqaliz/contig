@@ -16,7 +16,7 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | M1-0 | M1 | `contig variants` workbench (ClinVar/Iranome/frequency, filters, TSV/JSON, spec replay) | done |
 | M1-1 | M1 | gnomAD GraphQL client + local cache (`--gnomad-api`, 1000-site cap) | done |
 | M1-2 | M1 | Real annotated VCF from a design partner (VEP/SnpEff) | blocked |
-| M1-3 | M1 | Iranome GRCh37 → GRCh38 liftover | deferred |
+| M1-3 | M1 | Iranome GRCh37 → GRCh38 liftover | done |
 | M1-4 | M1 | Dashboard variant table | done |
 | M1-5 | M1 | Filter/sort semantics review with a researcher | blocked |
 | M2-0 | M2 | `contig readiness` per-target coverage/readiness | done |
@@ -57,7 +57,7 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | X-4 | Cross | Release 1.1.0 (version bump + release notes) | done |
 | X-5 | Cross | Clinical diagnosis / ACMG adjudication / drug recs | decision |
 
-**Totals:** 27 built · 3 deferred · 11 blocked · 2 decisions (43 rows). Every
+**Totals:** 28 built · 2 deferred · 11 blocked · 2 decisions (43 rows). Every
 blocked row names its evidence in `BLOCKED_RUNBOOK.md`.
 
 ## Agent-validation follow-ups (2026-11-08)

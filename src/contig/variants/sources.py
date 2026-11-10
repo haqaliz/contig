@@ -122,15 +122,26 @@ def load_iranome(
     path: str | Path,
     sites: set[VariantKey],
     build: str | None = None,
+    *,
+    source_build: str = "GRCh37",
 ) -> tuple[dict[VariantKey, IranomeEvidence], SourceProvenance]:
-    """Join the Iranome GRCh37 panel. A different build is skipped, never guessed."""
+    """Join an Iranome table whose source build matches the input build.
+
+    The table is GRCh37 by default; a lifted GRCh38 table is used only when the
+    caller declares its source build. A mismatch is skipped, never guessed.
+    """
 
     path = Path(path)
     if not path.is_file():
         raise FileNotFoundError(f"Iranome source not found: {path}")
-    if build != "GRCh37":
-        note = f"skipped: Iranome is GRCh37, input build is {build or 'unknown'}"
-        return {}, _provenance("iranome", path, build, note, "Iranome (Fattahi 2019)")
+    if build != source_build:
+        note = (
+            f"skipped: Iranome table is {source_build}, input build is "
+            f"{build or 'unknown'}"
+        )
+        return {}, _provenance(
+            "iranome", path, source_build, note, "Iranome (Fattahi 2019)"
+        )
 
     evidence: dict[VariantKey, IranomeEvidence] = {}
     matched = 0
@@ -154,7 +165,11 @@ def load_iranome(
             matched += 1
 
     note = f"{matched} of {len(sites)} input sites matched"
-    return evidence, _provenance("iranome", path, "GRCh37", note, "Iranome (Fattahi 2019)")
+    if source_build != "GRCh37":
+        note += f"; source table build {source_build}"
+    return evidence, _provenance(
+        "iranome", path, source_build, note, "Iranome (Fattahi 2019)"
+    )
 
 
 def load_frequencies(

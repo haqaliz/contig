@@ -247,6 +247,7 @@ from contig.workspace import (
     load_run_with_text,
 )
 from contig.variants.command import run_variants as run_variant_workbench
+from contig.variants.liftover import lift_iranome as lift_iranome_table
 from contig.readiness.command import run_readiness as run_readiness_workbench
 from contig.reporting.command import run_report as run_report_builder
 from contig.reporting.command import run_report_batch, run_report_check_batch
@@ -5579,12 +5580,13 @@ def readiness(
 def variants(
     vcf: str = typer.Argument(..., help="Text VCF to inspect (plain or .gz)."),
     clinvar: str = typer.Option(None, "--clinvar", help="ClinVar VCF used for the evidence join."),
-    iranome: str = typer.Option(None, "--iranome", help="Iranome TSV (GRCh37; skipped on other builds)."),
+    iranome: str = typer.Option(None, "--iranome", help="Iranome TSV (GRCh37 by default; use --iranome-build for a lifted table)."),
     frequencies: str = typer.Option(None, "--frequencies", help="Population-frequency TSV: CHROM POS REF ALT AF [AN]."),
     gnomad_api: bool = typer.Option(False, "--gnomad-api", help="Fetch gnomAD v4 frequencies for the input sites (max 1000)."),
     gnomad_cache: str = typer.Option(None, "--gnomad-cache", help="Local JSON cache for gnomAD API results."),
     gnomad_dataset: str = typer.Option("gnomad_r4", "--gnomad-dataset", help="gnomAD dataset id."),
     build: str = typer.Option(None, "--build", help="GRCh37 or GRCh38; inferred from the VCF header when omitted."),
+    iranome_build: str = typer.Option("GRCh37", "--iranome-build", help="Build of the Iranome table (GRCh37 default; GRCh38 for a lifted table)."),
     gene: str = typer.Option(None, "--gene", help="Comma-separated gene symbols to keep."),
     consequence: str = typer.Option(None, "--consequence", help="Comma-separated consequence substrings to keep."),
     max_af: float = typer.Option(None, "--max-af", help="Keep variants at or below this population AF (0-1)."),
@@ -5619,6 +5621,7 @@ def variants(
             gnomad_cache=gnomad_cache,
             gnomad_dataset=gnomad_dataset,
             build=build,
+            iranome_build=iranome_build,
             genes=gene,
             consequences=consequence,
             max_af=max_af,
@@ -5637,6 +5640,29 @@ def variants(
     except (FileNotFoundError, ValueError, OSError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
+
+
+@app.command(name="iranome-lift")
+def iranome_lift(
+    iranome: str = typer.Option(..., "--iranome", help="GRCh37 Iranome TSV."),
+    chain: str = typer.Option(..., "--chain", help="UCSC hg19ToHg38.over.chain.gz."),
+    out: str = typer.Option(..., "--out", help="Lifted GRCh38 TSV output path."),
+) -> None:
+    """Lift the GRCh37 Iranome table to GRCh38 with a UCSC chain file.
+
+    Writes the lifted TSV and a `.lift.json` sidecar with the chain/output
+    SHA-256, mapped/unmapped counts, and source/target builds. A variant spanning
+    a chain gap or a reverse-strand chain is unmapped, never guessed.
+    """
+    try:
+        result = lift_iranome_table(iranome, chain, out)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(
+        f"Wrote {out}: {result['mapped']} mapped, {result['unmapped']} unmapped"
+    )
+    typer.echo(f"Sidecar: {result['sidecar']}")
 
 
 @app.command(name="triage-stats")

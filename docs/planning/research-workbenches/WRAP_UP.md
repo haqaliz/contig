@@ -11,7 +11,7 @@ names the evidence each blocked row needs.
 
 | Milestone | Command | What it does | Tests | Honest limit |
 |---|---|---|---|---|
-| M1 | `contig variants` | ClinVar/Iranome/frequency/gnomAD-API join, deterministic filters, TSV/JSON + provenance, spec replay | 56 | In-memory table; gnomAD API capped at 1000 sites; Iranome GRCh37 only |
+| M1 | `contig variants` / `contig iranome-lift` | ClinVar/Iranome/frequency/gnomAD-API join, deterministic filters, TSV/JSON + provenance, spec replay, Iranome GRCh37→GRCh38 liftover | 56 | In-memory table; gnomAD API capped at 1000 sites; Iranome liftover is chain-dependent |
 | M2 | `contig readiness` | Per-target depth from a TSV or BAM/CRAM, %≥20x/50x/100x, homology caveats, VCF sex check / possible swap, ready/caution/not-interpretable | 39 | Depth thresholds uncalibrated; sex check is VCF-only |
 | M3 | `contig panel-build`/`panel-list`/`panel-show`/`panel-diff`/`panel-archive` | HGNC-resolved, MANE-preferred, checksummed panel BED registry with version labels, source hashes, diff and archive | 24 | No real lab panel |
 | M4 | `contig report`/`report-check`/`report-diff` | Self-contained HTML report, sidecar hashes, templates, reviewer block, staleness check, sidecar diff | 37 | HTML only; no PDF/dashboard |

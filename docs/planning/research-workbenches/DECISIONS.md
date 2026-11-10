@@ -21,7 +21,7 @@ build cycle.
 |---|---|
 | Data/licensing policy | **Open-only**: ClinVar, gnomAD, GIAB, 1000G, Iranome, CIViC, ClinGen, HPO, GENCODE, MANE, HGNC. |
 | Licensed sources | **Not used**, despite the multi-select interest: the open-only policy wins. OMIM, NCCN, COSMIC, OncoKB, HGMD, and commercial CADD/SpliceAI are out. |
-| Iranome access | **Keep the per-gene browser scrape** for now; add **GRCh37→GRCh38 UCSC liftover**. |
+| Iranome access | **Keep the per-gene browser scrape**; **GRCh37→GRCh38 UCSC liftover shipped** (`contig iranome-lift`). |
 | gnomAD / ClinVar | Keep the existing API/cache and FTP/VCF paths; no new work unless rate limits bite. |
 | HPO | Add as optional phenotype context for family analysis; no ranking model. |
 | CIViC | Add as attributed cancer evidence; no drug/treatment recommendation. |

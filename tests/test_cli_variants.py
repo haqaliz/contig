@@ -27,6 +27,7 @@ def test_help_lists_the_workbench_options():
     assert "--pass-only" in plain(result.output)
     assert "--save-spec" in plain(result.output)
     assert "--max-records" in plain(result.output)
+    assert "--iranome-build" in plain(result.output)
 
 
 def test_writes_a_tsv_and_prints_the_research_use_notice(tmp_path):

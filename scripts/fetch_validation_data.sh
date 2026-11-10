@@ -68,6 +68,19 @@ check_seqc2() {
   echo "  BAMs:   https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/seqc/Somatic_Mutation_WG/data/WGS/ (large)"
 }
 
+fetch_liftover() {
+  local dir="$DATA_DIR/liftover"
+  mkdir -p "$dir"
+  if [ ! -f "$dir/hg19ToHg38.over.chain.gz" ]; then
+    echo "Fetching the UCSC hg19ToHg38 liftover chain (small)"
+    curl -fsSL --max-time 120 \
+      'https://hgdownload.soe.ucsc.edu/goldenPath/hg19/liftOver/hg19ToHg38.over.chain.gz' \
+      -o "$dir/hg19ToHg38.over.chain.gz"
+  fi
+  echo "Chain: $dir/hg19ToHg38.over.chain.gz"
+  echo "Lift Iranome: uv run contig iranome-lift --iranome data/iranome/iranome_panel.tsv --chain $dir/hg19ToHg38.over.chain.gz --out data/iranome/iranome_grch38.tsv"
+}
+
 check_msi() {
   echo "MSI tumor/normal validation:"
   echo "  paired BAMs with known MSI status are controlled access (TCGA/CPTAC via dbGaP/EGA)."
@@ -80,11 +93,12 @@ check_msi() {
 }
 
 case "$TARGET" in
-  all) fetch_panelapp; fetch_ascat; check_giab; check_seqc2; check_msi ;;
+  all) fetch_panelapp; fetch_ascat; fetch_liftover; check_giab; check_seqc2; check_msi ;;
   panelapp) fetch_panelapp ;;
   ascat) fetch_ascat ;;
   giab) check_giab ;;
   seqc2) check_seqc2 ;;
   msi) check_msi ;;
+  liftover) fetch_liftover ;;
   *) echo "unknown target: $TARGET" >&2; exit 2 ;;
 esac

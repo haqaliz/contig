@@ -32,6 +32,11 @@ All notable changes to Contig are recorded here. The format follows
   keeps only positions inside the target intervals, so a whole-genome depth
   file is not held in memory. The source note reports how many positions were
   outside the targets and skipped.
+- **Iranome GRCh37 → GRCh38 liftover:** `contig iranome-lift` uses the public
+  UCSC hg19ToHg38 chain to lift the Iranome table, writes a `.lift.json`
+  sidecar with counts/hashes/both builds, and `contig variants --iranome-build
+  GRCh38` joins the lifted table. Gap-spanning and reverse-strand variants are
+  unmapped, never guessed.
 
 ### Fixed
 - **LLM paraphrase fidelity:** `contig ask --llm` now falls back to the
