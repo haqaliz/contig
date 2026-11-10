@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from contig.readiness.depth import load_depth
+from contig.readiness.depth import load_depth, load_depth_for_targets
+from contig.readiness.models import Target
 
 FIX = Path(__file__).parent / "fixtures" / "readiness"
 DEPTH = FIX / "depth.tsv"
@@ -46,3 +47,23 @@ def test_duplicate_position_keeps_last_and_counts(tmp_path):
 def test_missing_file_is_an_honest_error(tmp_path):
     with pytest.raises(FileNotFoundError):
         load_depth(tmp_path / "missing.tsv")
+
+
+def test_load_depth_for_targets_keeps_only_inside_positions(tmp_path):
+    path = tmp_path / "depth.tsv"
+    path.write_text(
+        "1\t90\t5\n"
+        "1\t100\t5\n"
+        "1\t101\t30\n"
+        "1\t110\t30\n"
+        "1\t111\t30\n"
+        "1\t101\t31\n"
+        "2\t101\t30\n"
+    )
+    targets = [Target("1", 100, 110, "T1")]
+    depths, stats = load_depth_for_targets(path, targets)
+    assert depths == {("1", 101): 31, ("1", 110): 30}
+    assert stats.positions == 2
+    assert stats.duplicates == 1
+    assert stats.outside == 4
+    assert stats.chroms == {"1", "2"}

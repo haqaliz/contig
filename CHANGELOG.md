@@ -28,6 +28,10 @@ All notable changes to Contig are recorded here. The format follows
   records a VCF-only inferred karyotypic sex and X-het/chrX/chrY signals;
   `--expected-sex` turns a mismatch into a possible-sample-swap caution and
   downgrades `ready` targets. Inconclusive VCFs are not called a swap.
+- **Streaming depth filtering:** `contig readiness --depth` streams the TSV and
+  keeps only positions inside the target intervals, so a whole-genome depth
+  file is not held in memory. The source note reports how many positions were
+  outside the targets and skipped.
 
 ### Fixed
 - **LLM paraphrase fidelity:** `contig ask --llm` now falls back to the

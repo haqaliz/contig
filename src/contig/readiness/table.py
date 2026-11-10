@@ -10,7 +10,7 @@ from pathlib import Path
 
 from contig.models import sha256_file
 from contig.readiness.caveats import load_caveats
-from contig.readiness.depth import load_depth, run_samtools_depth
+from contig.readiness.depth import load_depth, load_depth_for_targets, run_samtools_depth
 from contig.readiness.evaluate import evaluate_targets, summarize_by_gene
 from contig.readiness.models import (
     ReadinessMeta,
@@ -94,6 +94,15 @@ def build_readiness(
         raise ValueError("expected_sex requires --sex-vcf")
 
     notes: list[str] = []
+    if bed is not None:
+        targets = load_bed_targets(bed)
+        target_note = f"{len(targets)} BED targets"
+        notes.append(f"{len(targets)} target(s) from BED")
+    else:
+        targets = load_gtf_targets(gtf, genes)
+        target_note = f"{len(targets)} GTF exon targets"
+        notes.append(f"{len(targets)} target(s) from GTF")
+
     if bam is not None:
         with tempfile.TemporaryDirectory(prefix="contig-depth-") as tmp:
             depth_path = Path(tmp) / "depth.tsv"
@@ -110,31 +119,16 @@ def build_readiness(
             sources.append(_source("reference", reference, "samtools depth reference"))
         notes.append("depth computed with samtools depth")
     else:
-        depths, depth_stats = load_depth(depth)
-        sources = [
-            _source(
-                "depth",
-                depth,
-                f"{depth_stats.positions} positions"
-                + (f"; {depth_stats.skipped} malformed lines skipped" if depth_stats.skipped else "")
-                + (f"; {depth_stats.duplicates} duplicate positions" if depth_stats.duplicates else ""),
-            )
-        ]
+        depths, depth_stats = load_depth_for_targets(depth, targets)
+        sources = [_source("depth", depth, "depth input")]
     sources[0].note = (
         (sources[0].note or "")
         + f"; {depth_stats.positions} positions"
         + (f"; {depth_stats.skipped} malformed lines skipped" if depth_stats.skipped else "")
         + (f"; {depth_stats.duplicates} duplicate positions" if depth_stats.duplicates else "")
+        + (f"; {depth_stats.outside} positions outside targets skipped" if depth_stats.outside else "")
     ).strip("; ")
-
-    if bed is not None:
-        targets = load_bed_targets(bed)
-        sources.append(_source("targets", bed, f"{len(targets)} BED targets"))
-        notes.append(f"{len(targets)} target(s) from BED")
-    else:
-        targets = load_gtf_targets(gtf, genes)
-        sources.append(_source("targets", gtf, f"{len(targets)} GTF exon targets"))
-        notes.append(f"{len(targets)} target(s) from GTF")
+    sources.append(_source("targets", bed if bed is not None else gtf, target_note))
 
     caveat_regions = []
     if caveats is not None:
@@ -151,11 +145,16 @@ def build_readiness(
         )
 
     target_chroms = {target.chrom for target in targets}
-    depth_chroms = {chrom for chrom, _pos in depths}
+    depth_chroms = depth_stats.chroms
     if target_chroms and depth_chroms and target_chroms.isdisjoint(depth_chroms):
         notes.append(
             "no chromosome names shared between the targets and the depth input; "
             "check the build and contig naming"
+        )
+    if depth_stats.lines and not depths:
+        notes.append(
+            "depth has no positions inside the target intervals; check the "
+            "BED/GTF coordinates"
         )
     if build:
         notes.append(f"build: {build}")

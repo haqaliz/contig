@@ -359,6 +359,10 @@ contig readiness --bam sample.cram --reference GRCh38.fa \
 - **Output:** TSV by default; `--json` includes source paths, SHA-256,
   thresholds, build, caveat coverage, and the Contig version. `--out` writes to a
   file.
+- **Scale:** a whole-genome `--depth` TSV is streamed and filtered to the
+  target intervals; positions outside the panel are counted and skipped, not
+  held in memory. `--bam` already emits only target regions via `samtools depth
+  -b`. The M1 variant table has its own explicit record cap.
 
 The homology BED is deliberately a separate input: use
 `data/homology/homology_caveats_GRCh38.bed` for SMN1/SMN2, PMS2/PMS2CL, and

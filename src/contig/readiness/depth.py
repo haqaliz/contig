@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import gzip
 import subprocess
-from dataclasses import dataclass
+from bisect import bisect_right
+from dataclasses import dataclass, field
 from pathlib import Path
 
+from contig.readiness.models import Target
 from contig.variants.vcf import normalize_chrom
 
 
@@ -16,6 +18,8 @@ class DepthStats:
     positions: int = 0
     skipped: int = 0
     duplicates: int = 0
+    outside: int = 0
+    chroms: set[str] = field(default_factory=set)
 
 
 def _open_text(path: str | Path):
@@ -54,6 +58,89 @@ def load_depth(path: str | Path) -> tuple[dict[tuple[str, int], int], DepthStats
                 stats.skipped += 1
                 continue
             stats.lines += 1
+            stats.chroms.add(key[0])
+            if key in depths:
+                stats.duplicates += 1
+            depths[key] = value
+
+    stats.positions = len(depths)
+    return depths, stats
+
+
+def _merged_intervals(targets: list[Target]) -> dict[str, list[tuple[int, int]]]:
+    by_chrom: dict[str, list[tuple[int, int]]] = {}
+    for target in targets:
+        by_chrom.setdefault(target.chrom, []).append((target.start, target.end))
+    merged: dict[str, list[tuple[int, int]]] = {}
+    for chrom, intervals in by_chrom.items():
+        intervals.sort()
+        out: list[tuple[int, int]] = []
+        for start, end in intervals:
+            if out and start <= out[-1][1]:
+                out[-1] = (out[-1][0], max(out[-1][1], end))
+            else:
+                out.append((start, end))
+        merged[chrom] = out
+    return merged
+
+
+def load_depth_for_targets(
+    path: str | Path, targets: list[Target]
+) -> tuple[dict[tuple[str, int], int], DepthStats]:
+    """Stream a depth TSV, keeping only positions inside target intervals.
+
+    A whole-genome `samtools depth -a` file can be billions of lines; the
+    readiness table only needs the panel positions. This bounds memory to the
+    target intervals instead of the whole depth file. BED/GTF targets are
+    0-based half-open, while depth positions are 1-based: a position is inside
+    when ``start < pos <= end``.
+    """
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(f"depth file not found: {path}")
+
+    merged = _merged_intervals(targets)
+    starts = {
+        chrom: [start for start, _end in intervals]
+        for chrom, intervals in merged.items()
+    }
+    depths: dict[tuple[str, int], int] = {}
+    stats = DepthStats()
+    with _open_text(path) as handle:
+        for line in handle:
+            if not line.strip() or line.startswith("#"):
+                continue
+            fields = line.split()
+            if len(fields) < 3:
+                stats.skipped += 1
+                continue
+            if fields[0].lower() == "chrom":
+                continue
+            try:
+                chrom = normalize_chrom(fields[0])
+                pos = int(fields[1])
+                value = int(float(fields[2]))
+            except ValueError:
+                stats.skipped += 1
+                continue
+            if value < 0:
+                stats.skipped += 1
+                continue
+            stats.lines += 1
+            stats.chroms.add(chrom)
+            intervals = merged.get(chrom)
+            if not intervals:
+                stats.outside += 1
+                continue
+            index = bisect_right(starts[chrom], pos) - 1
+            if (
+                index < 0
+                or pos <= intervals[index][0]
+                or pos > intervals[index][1]
+            ):
+                stats.outside += 1
+                continue
+            key = (chrom, pos)
             if key in depths:
                 stats.duplicates += 1
             depths[key] = value

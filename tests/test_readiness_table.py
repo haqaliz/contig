@@ -113,3 +113,13 @@ def test_disjoint_chromosomes_get_a_build_warning(tmp_path):
     depth.write_text("99\t1\t30\n")
     table = build_readiness(depth, bed=PANEL)
     assert any("no chromosome names shared" in note for note in table.meta.notes)
+
+
+def test_depth_outside_targets_is_streamed_and_noted(tmp_path):
+    extra = "".join(f"1\t{1_000_000 + i}\t30\n" for i in range(1000))
+    depth = tmp_path / "depth.tsv"
+    depth.write_text(DEPTH.read_text() + extra)
+    table = build_readiness(depth, bed=PANEL)
+    assert len(table.rows) == 4
+    source = next(item for item in table.meta.sources if item.kind == "depth")
+    assert "1000 positions outside targets skipped" in (source.note or "")
