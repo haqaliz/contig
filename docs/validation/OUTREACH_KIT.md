@@ -94,7 +94,9 @@ Use the public pages:
 - East Genomics: `cuh.geneticslaboratories@nhs.net`
   (`https://www.eastgenomics.nhs.uk/about-us/genomic-laboratory-hub/contact-us`;
   the old `geneticslaboratories@nhs.net` address rejects external mail with a 550)
-- North East & Yorkshire GLH: `https://ney-genomics.org.uk/`
+- North East & Yorkshire GLH: `https://ney-genomics.org.uk/` (the
+  `tr.genlabadmin@nhs.net` address rejects external mail; use the public
+  contact page or 0113 2065205)
 
 Ask for one panel BED + transcript policy, 1–2 redacted reports, or a
 15-minute reviewer chat. Send the redaction agreement before any file.

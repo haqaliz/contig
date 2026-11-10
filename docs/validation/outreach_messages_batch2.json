@@ -5,7 +5,7 @@
     "status": "bounced",
     "note": "550 5.4.1 Recipient address rejected: Access denied on 2026-11-11; use cuh.geneticslaboratories@nhs.net or the public contact form",
     "subject": "One panel BED + redacted report for a research-use readiness check?",
-    "body": "Hi — I maintain Contig, a local research-use workflow that checks coverage readiness and builds an HTML report with hashed provenance. I am validating it on real panel/WES data and looking for one panel BED or gene list with the transcript policy you use, and (separately) 1–2 fully redacted reports you already produce. Nothing patient-identifying leaves your lab; I can sign a redaction/data-use agreement first. In return I will send a short summary of how the readiness states and report provenance compare to your expectations. Would that be possible? — East Genomics enquiry."
+    "body": "Hi \u2014 I maintain Contig, a local research-use workflow that checks coverage readiness and builds an HTML report with hashed provenance. I am validating it on real panel/WES data and looking for one panel BED or gene list with the transcript policy you use, and (separately) 1\u20132 fully redacted reports you already produce. Nothing patient-identifying leaves your lab; I can sign a redaction/data-use agreement first. In return I will send a short summary of how the readiness states and report provenance compare to your expectations. Would that be possible? \u2014 East Genomics enquiry."
   },
   {
     "id": "east-genomics-cuh",
@@ -13,6 +13,14 @@
     "status": "sent",
     "note": "Sent 2026-11-11 via himalaya from haqaliz@aol.com to the official contact-page address",
     "subject": "One panel BED + redacted report for a research-use readiness check?",
-    "body": "Hi — I maintain Contig, a local research-use workflow that checks coverage readiness and builds an HTML report with hashed provenance. I am validating it on real panel/WES data and looking for one panel BED or gene list with the transcript policy you use, and (separately) 1–2 fully redacted reports you already produce. Nothing patient-identifying leaves your lab; I can sign a redaction/data-use agreement first. In return I will send a short summary of how the readiness states and report provenance compare to your expectations. Would that be possible? — East Genomics enquiry."
+    "body": "Hi \u2014 I maintain Contig, a local research-use workflow that checks coverage readiness and builds an HTML report with hashed provenance. I am validating it on real panel/WES data and looking for one panel BED or gene list with the transcript policy you use, and (separately) 1\u20132 fully redacted reports you already produce. Nothing patient-identifying leaves your lab; I can sign a redaction/data-use agreement first. In return I will send a short summary of how the readiness states and report provenance compare to your expectations. Would that be possible? \u2014 East Genomics enquiry."
+  },
+  {
+    "id": "north-east-yorkshire-glh",
+    "to": "tr.genlabadmin@nhs.net",
+    "subject": "One panel BED + redacted report for a research-use readiness check?",
+    "body": "Hi \u2014 I maintain Contig, a local research-use workflow that checks coverage readiness and builds an HTML report with hashed provenance. I am validating it on real panel/WES data and looking for one panel BED or gene list with the transcript policy you use, and (separately) 1\u20132 fully redacted reports you already produce. Nothing patient-identifying leaves your lab; I can sign a redaction/data-use agreement first. In return I will send a short summary of how the readiness states and report provenance compare to your expectations. Would that be possible? \u2014 North East and Yorkshire GLH enquiry.",
+    "status": "bounced",
+    "note": "550 5.4.1 Access denied on 2026-11-11; use the public contact page or phone 0113 2065205"
   }
 ]

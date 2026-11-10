@@ -280,7 +280,9 @@ request. Send the redaction/data-use terms before receiving files.
 - East Genomics: `cuh.geneticslaboratories@nhs.net`,
   `https://www.eastgenomics.nhs.uk/about-us/genomic-laboratory-hub/contact-us`
   (the old `geneticslaboratories@nhs.net` address rejects external mail with a 550)
-- North East & Yorkshire GLH: `https://ney-genomics.org.uk/`
+- North East & Yorkshire GLH: `https://ney-genomics.org.uk/` (the
+  `tr.genlabadmin@nhs.net` address rejects external mail; use the public
+  contact page or 0113 2065205)
 - AMP: `amp@amp.org`, +1 301-634-7987, `https://www.amp.org/`
 - ABRF CoreMarketplace: `https://coremarketplace.org/?searchterms=*`
 - GDC Help Desk: `support@nci-gdc.datacommons.io`
