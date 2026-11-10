@@ -1,6 +1,6 @@
 # Outreach kit — research design partners and data/reviewer requests
 
-**Status 2026-11-09.** This is the executable version of the people side of
+**Status 2026-11-11.** This is the executable version of the people side of
 `DATA_AND_PARTNER_ACQUISITION.md`. It assumes no new email infrastructure is
 required to start: the first contact can happen through GitHub, nf-core Slack,
 Biostars, Reddit, and the public lab/core contact pages. Email is only needed
@@ -229,7 +229,8 @@ warm intros first, then Slack, then core facilities, then forums.
 `scripts/send_outreach.py` sends a JSON batch over SMTP and defaults to a dry
 run. It reads the password from `CONTIG_SMTP_PASSWORD` or macOS Keychain
 (`security find-generic-password -a contig-outreach -s smtp -w`). The batch is
-`docs/validation/outreach_messages_batch1.json`.
+`docs/validation/outreach_messages_batch1.json`; the next email-only batch is
+`docs/validation/outreach_messages_batch2.json`.
 
 ### General-purpose CLI: `himalaya` (AOL included)
 
