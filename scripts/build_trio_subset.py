@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Build a small multi-sample trio VCF from the GIAB Ashkenazim trio.
 
-Uses `tabix` for region extraction; no Python VCF dependency. The output is a
-real-data manual fixture for `contig family` (not a CI test).
+Uses `tabix` for region extraction; no Python VCF dependency. Multi-allelic
+ALTs are split and the GT is remapped to each biallelic record, so the output
+is valid VCF for annotation as well as `contig family`. The output is a
+real-data manual fixture (not a CI test).
 """
 
 from __future__ import annotations
@@ -28,6 +30,27 @@ def _gt(format_value: str, sample_value: str) -> str:
     return values[index] if index < len(values) and values[index] else "./."
 
 
+def _remap_gt(gt: str, alt_index: int) -> str:
+    """Remap a multi-allelic GT to one biallelic ALT record.
+
+    ``alt_index`` is 1-based. The target allele becomes 1, every other ALT
+    allele becomes 0 (the sample does not carry the target on that haplotype),
+    and missing stays missing. This keeps the split records valid VCF.
+    """
+    separator = "|" if "|" in gt else "/"
+    alleles = []
+    for allele in gt.split(separator):
+        if allele == ".":
+            alleles.append(".")
+        elif allele == "0":
+            alleles.append("0")
+        elif allele.isdigit():
+            alleles.append("1" if int(allele) == alt_index else "0")
+        else:
+            alleles.append(".")
+    return separator.join(alleles)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--region", default="chr20:1000000-1200000")
@@ -51,9 +74,11 @@ def main() -> None:
             if len(fields) < 10:
                 continue
             chrom, pos, ident, ref, alt, _qual, _filter, _info, fmt, value = fields[:10]
-            for alt_allele in alt.split(","):
+            for alt_index, alt_allele in enumerate(alt.split(","), start=1):
                 key = (chrom, pos, ref, alt_allele)
-                sites.setdefault(key, {})[sample] = _gt(fmt, value)
+                sites.setdefault(key, {})[sample] = _remap_gt(
+                    _gt(fmt, value), alt_index
+                )
                 ids.setdefault(key, ident)
 
     ordered = sorted(sites, key=lambda key: (key[0], int(key[1]), key[2], key[3]))

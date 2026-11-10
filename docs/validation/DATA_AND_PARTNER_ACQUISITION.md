@@ -1,6 +1,6 @@
 # Data and partner acquisition plan
 
-**Status 2026-11-09.** This turns the blocked rows in
+**Status 2026-11-11.** This turns the blocked rows in
 `docs/planning/research-workbenches/BACKLOG.md` into concrete sources, access
 routes, and outreach. Open data first; permission-gated data second; people
 last. Nothing here changes the research-use boundary: no diagnosis, no
@@ -168,6 +168,26 @@ Its `CSQ` format is minimal (`Allele|Consequence|Feature_type|Feature|Amino_acid
 and has no `SYMBOL`/`Gene`, so gene-level filters cannot match. Use a GIAB VEP
 run with `--symbol` (or a partner VCF with gene symbols) for the full M1-2/M1-5
 shape.
+
+**Run 2026-11-11 — SnpEff path works on real GIAB data.** Java is available
+through Homebrew (`/opt/homebrew/opt/openjdk/bin/java`). SnpEff core 5.4 with
+the `GRCh38.mane.1.5.ensembl` database annotated the GIAB chr20 trio subset:
+399/399 records carry `ANN` with `Gene_Name`, and
+`contig variants ... --gene RSPO4,PSMF1` matched 23 + 94 rows with parsed
+consequence, impact, and HGVS. The first run exposed a fixture bug:
+`scripts/build_trio_subset.py` split multi-allelic ALTs but kept the original
+`1/2` genotypes, so SnpEff dropped 12 records. The script now remaps each GT to
+the biallelic record; the regenerated subset has 399 valid rows. A partner VCF
+is still the M1-2 gate for real-world annotation/transcript quirks, but the
+public run closes the format/shape gap.
+
+```bash
+# SnpEff core + MANE database (manual; ~400 MB database)
+java -jar snpEff.jar ann -v -noLog GRCh38.mane.1.5.ensembl \
+  /tmp/AshkenazimTrio_chr20_subset.fixed.vcf > /tmp/AJtrio.snpeff.vcf
+uv run contig variants /tmp/AJtrio.snpeff.vcf --build GRCh38 \
+  --gene RSPO4,PSMF1 --out /tmp/aj_genes.tsv
+```
 
 ### 3.5 M2 — coverage plumbing from nf-core (ready locally)
 

@@ -18,6 +18,12 @@ Collect from one design partner:
 Then: add the VCF as a manual gate (not CI), run `contig variants --json`, and
 compare the evidence table to their expectation. Fix only evidenced gaps.
 
+**Public-data validation 2026-11-11:** SnpEff MANE 1.5 annotated the GIAB
+chr20 trio subset (399/399 records with `ANN` gene names); the `--gene`
+filter and consequence/HGVS parsing matched. This closes the format/shape
+gap. A partner VCF is still needed for real annotation/transcript quirks and
+expected rows.
+
 ### M1-5: filter/sort review
 Ask the partner:
 - Which filters matter (gene, consequence, AF, ClinVar significance, depth/VAF,

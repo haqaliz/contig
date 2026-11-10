@@ -52,6 +52,10 @@ All notable changes to Contig are recorded here. The format follows
   unmapped, never guessed.
 
 ### Fixed
+- **Trio-subset fixture validity:** `scripts/build_trio_subset.py` now remaps
+  multi-allelic `GT` indexes when splitting ALTs, so every biallelic record has
+  a valid genotype. This fixes 12 records that SnpEff dropped and keeps the
+  manual family fixture valid for annotation.
 - **LLM paraphrase fidelity:** `contig ask --llm` now falls back to the
   deterministic grounded answer when the model changes a refusal, drops or adds
   a verdict token, or returns less than half the grounded text. The local
