@@ -8,6 +8,8 @@ for the follow-up and for the redaction agreement.
 
 Research-use only. No PHI, no clinical claims, no patient data in public issues.
 
+Batch-2 form/community drafts: `docs/validation/outreach_batch_2_forms.md`.
+
 ---
 
 ## 1. Identity: what to send from
@@ -84,6 +86,12 @@ No link-dropping without context.
 3. Open each facility's page; use its public contact form. Do not scrape
    personal emails.
 4. Send template B. Target 10 per wave; log every contact.
+
+Public core addresses used in batch 2:
+
+- Liverpool Centre for Genomic Research: `CGR.Enquiries@liverpool.ac.uk`
+- Oxford: `info@well.ox.ac.uk` (ask them to forward to the Oxford Genomics Centre)
+- Wellcome Sanger Institute: `contact@sanger.ac.uk`
 
 ### 2.5 NHS Genomic Laboratory Hubs — panel/report/reviewer route
 

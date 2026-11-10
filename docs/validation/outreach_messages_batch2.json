@@ -22,5 +22,37 @@
     "body": "Hi \u2014 I maintain Contig, a local research-use workflow that checks coverage readiness and builds an HTML report with hashed provenance. I am validating it on real panel/WES data and looking for one panel BED or gene list with the transcript policy you use, and (separately) 1\u20132 fully redacted reports you already produce. Nothing patient-identifying leaves your lab; I can sign a redaction/data-use agreement first. In return I will send a short summary of how the readiness states and report provenance compare to your expectations. Would that be possible? \u2014 North East and Yorkshire GLH enquiry.",
     "status": "bounced",
     "note": "550 5.4.1 Access denied on 2026-11-11; use the public contact page or phone 0113 2065205"
+  },
+  {
+    "id": "liverpool-cgr",
+    "to": "CGR.Enquiries@liverpool.ac.uk",
+    "subject": "One panel/WES run for a research-use coverage-readiness check?",
+    "body": "Hi \u2014 I maintain Contig, a local research-use workflow that checks coverage readiness and builds an HTML report with hashed provenance. I am validating it on real panel/WES data and looking for one run with the coverage you would expect, plus your ready thresholds if you have them. Nothing patient-identifying leaves your lab; I can sign a redaction/data-use agreement first. In return I will send a short summary of how the readiness states compare to your expectations. Would that be possible? \u2014 Liverpool Centre for Genomic Research enquiry.",
+    "status": "sent",
+    "note": "Sent 2026-11-11 via himalaya from haqaliz@aol.com to the official CGR enquiries address"
+  },
+  {
+    "id": "oxford-genomics",
+    "to": "info@well.ox.ac.uk",
+    "subject": "One panel/WES run for a research-use coverage-readiness check?",
+    "body": "Hi \u2014 I maintain Contig, a local research-use workflow that checks coverage readiness and builds an HTML report with hashed provenance. I am validating it on real panel/WES data and looking for one run with the coverage you would expect, plus your ready thresholds if you have them. Nothing patient-identifying leaves your lab; I can sign a redaction/data-use agreement first. In return I will send a short summary of how the readiness states compare to your expectations. Could you forward this to the Oxford Genomics Centre? \u2014 Oxford Genomics enquiry.",
+    "status": "sent",
+    "note": "Sent 2026-11-11 via himalaya from haqaliz@aol.com; asked CHG to forward to the Oxford Genomics Centre"
+  },
+  {
+    "id": "sanger",
+    "to": "contact@sanger.ac.uk",
+    "subject": "One panel/WES run for a research-use coverage-readiness check?",
+    "body": "Hi \u2014 I maintain Contig, a local research-use workflow that checks coverage readiness and builds an HTML report with hashed provenance. I am validating it on real panel/WES data and looking for one run with the coverage you would expect, plus your ready thresholds if you have them. Nothing patient-identifying leaves your lab; I can sign a redaction/data-use agreement first. In return I will send a short summary of how the readiness states compare to your expectations. Could you forward this to the relevant genomics core or faculty group? \u2014 Sanger enquiry.",
+    "status": "sent",
+    "note": "Sent 2026-11-11 via himalaya from haqaliz@aol.com; routed to IDS Service Desk ticket [#INC-84355]"
+  },
+  {
+    "id": "baylor-genetics",
+    "to": "info@baylorgenetics.com",
+    "subject": "One redacted report + reviewer workflow for a research-use check?",
+    "body": "Hi \u2014 I maintain Contig, a local research-use workflow that builds an HTML report with hashed provenance. I am validating report structure and provenance on real lab output and looking for 1\u20132 fully redacted reports you already produce, plus a sense of who reviews/signs them. Nothing patient-identifying leaves your lab; I can sign a redaction/data-use agreement first. In return I will send a short summary of how the report provenance compares to your workflow. Would that be possible? \u2014 Baylor Genetics enquiry.",
+    "status": "sent",
+    "note": "Sent 2026-11-11 via himalaya from haqaliz@aol.com; Baylor created case 00768756"
   }
 ]
