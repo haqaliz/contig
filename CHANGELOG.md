@@ -7,6 +7,12 @@ All notable changes to Contig are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Approval-gated assistant actions:** `contig ask --execute N` runs the Nth
+  suggested action only after an interactive `y/N` prompt or
+  `--approve-action`. Execution is argv-based (no shell), allowlisted to
+  `show`, `verify`, `methods`, `report`, and `report-check`, and refuses
+  actions that still contain placeholders. `--execute` cannot be combined with
+  `--json`.
 - **Expanded homology/pseudogene caveats:** the readiness caveat BED now covers
   33 genes / 13 pair groups, including CYP21A2/CYP21A1P, GBA1/GBA1LP,
   PKD1/PKD1P1-P6, STRC/STRCP1, NCF1/NCF1B/NCF1C, CYP2D6/CYP2D7/CYP2D8P,

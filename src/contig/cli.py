@@ -5196,12 +5196,15 @@ def ask(
     readiness: str = typer.Option(None, "--readiness", help="M2 readiness JSON from `contig readiness --json`."),
     json_out: bool = typer.Option(False, "--json", help="Emit the answer as JSON."),
     llm: bool = typer.Option(False, "--llm", help="Paraphrase the grounded answer with a configured LLM."),
+    execute: int = typer.Option(None, "--execute", help="Execute the Nth suggested action after approval (1-based)."),
+    approve_action: bool = typer.Option(False, "--approve-action", help="Approve the selected action without the interactive prompt."),
 ) -> None:
     """Answer a question from the run bundle and optional M1/M2 tables.
 
     Answers are grounded in the bundle and cite the source file + SHA-256. The
     optional --llm only paraphrases the grounded answer; it does not retrieve or
-    decide. Research-use only: no diagnosis or clinical classification.
+    decide. Suggested actions never run unless --execute is given and the action
+    is approved. Research-use only: no diagnosis or clinical classification.
     """
     try:
         run_grounded_ask(
@@ -5212,6 +5215,8 @@ def ask(
             readiness=readiness,
             json_out=json_out,
             llm=llm,
+            execute=execute,
+            approve_action=approve_action,
         )
     except (FileNotFoundError, ValueError, OSError, RunNotFoundError) as exc:
         typer.echo(str(exc), err=True)

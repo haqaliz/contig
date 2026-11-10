@@ -661,6 +661,8 @@ contig ask r1 "why did it repair?"
 contig ask r1 "is BRCA1 ready?" --readiness readiness.json
 contig ask r1 "tell me about BRCA1" --variants variants.json
 contig ask r1 "what is the verdict?" --json
+contig ask r1 "what is the verdict?" --execute 1
+contig ask r1 "what is the verdict?" --execute 1 --approve-action
 ```
 
 - **Grounded:** answers come from `run_record.json` and the optional M1/M2
@@ -669,7 +671,12 @@ contig ask r1 "what is the verdict?" --json
   attached variants (including gene queries), attached readiness, report next
   steps, and help. Anything else is refused with “I won’t guess.”
 - **Actions:** answers suggest the next command (`contig show --explain`,
-  `contig verify`, `contig report`, etc.) but never execute it.
+  `contig verify`, `contig report`, etc.). They never run unless you pass
+  `--execute N` (1-based). The selected action is shown and asks `y/N`; use
+  `--approve-action` for the explicit non-interactive approval. Execution is
+  argv-based (no shell), limited to `show`, `verify`, `methods`, `report`, and
+  `report-check`, and refuses actions that still contain placeholders such as
+  `<vcf>`. `--execute` cannot be combined with `--json`.
 - **Optional LLM:** `--llm` paraphrases the already-grounded answer using an
   OpenAI-compatible endpoint configured with `CONTIG_LLM_URL`,
   `CONTIG_LLM_MODEL`, and optional `CONTIG_LLM_API_KEY`. The model is told to

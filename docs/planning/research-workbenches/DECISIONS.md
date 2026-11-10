@@ -35,6 +35,7 @@ build cycle.
 | LLM path | **OpenAI small/cheap model as the default**, plus a configurable local OpenAI-compatible endpoint. |
 | Bundle text privacy | Hosted LLM may receive **redacted bundle text** (paths/sample IDs removed). Raw reads never leave the machine. |
 | Assistant scope | Keep the deterministic grounded router as the source of truth; the LLM only paraphrases/answers from the provided context. Actions remain approval-gated. |
+| Assistant action execution | **Shipped 2026-11-10.** `contig ask --execute N` runs only an allowlisted `contig` action (`show`, `verify`, `methods`, `report`, `report-check`) after a `y/N` prompt or `--approve-action`; argv-only, no shell, placeholders refused. Not reusing `approval.json` (that remains the self-heal run-state contract). |
 
 ## Analysis extensions
 

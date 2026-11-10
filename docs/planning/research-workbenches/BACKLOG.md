@@ -34,7 +34,7 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | M4-3 | M4 | Reviewer workflow feedback / report examples | blocked |
 | M5-0 | M5 | `contig ask` + `ask-eval` (deterministic, citations, optional LLM) | done |
 | M5-1 | M5 | Live LLM eval + provider/privacy decision (local `qwen2.5:1.5b` 9/9 with the fidelity guard; hosted pending) | blocked |
-| M5-2 | M5 | Action execution behind the approval gate | deferred |
+| M5-2 | M5 | Action execution behind the approval gate | done |
 | M5-3 | M5 | Dashboard chat panel | done |
 | M6-0 | M6 | `contig family` inheritance/Mendelian/de novo/concordance | done |
 | M6-1 | M6 | X/Y/MT sex-aware Mendelian rules (basic; unknown sex not_evaluated) | done |
@@ -57,7 +57,7 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | X-4 | Cross | Release 1.1.0 (version bump + release notes) | done |
 | X-5 | Cross | Clinical diagnosis / ACMG adjudication / drug recs | decision |
 
-**Totals:** 29 built · 1 deferred · 11 blocked · 2 decisions (43 rows). Every
+**Totals:** 30 built · 0 deferred · 11 blocked · 2 decisions (43 rows). Every
 blocked row names its evidence in `BLOCKED_RUNBOOK.md`.
 
 ## Agent-validation follow-ups (2026-11-08)

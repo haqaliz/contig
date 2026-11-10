@@ -59,7 +59,9 @@ recommend treatment.
 
 - A dashboard chat panel.
 - Follow-up questions with conversation state.
-- Action execution behind the approval gate.
+- **Shipped 2026-11-10:** Action execution behind the approval gate
+  (`contig ask --execute N`, interactive `y/N` or `--approve-action`; argv-only
+  and subcommand-allowlisted).
 - Local model support/packaging.
 - Retrieval over logs and repair evidence, not just structured fields.
 

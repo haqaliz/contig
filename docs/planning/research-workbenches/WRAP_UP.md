@@ -1,8 +1,8 @@
 # Research workbenches wrap-up: where M1–M8 stand
 
 **Status 2026-11-10:** all eight milestones have a shippable v1. The engine,
-CLI, docs, and synthetic tests are in place; what remains is **validation,
-integration, and the deliberately deferred parts** — not unfinished code.
+CLI, docs, and synthetic tests are in place; what remains is **validation and
+integration** — not unfinished code.
 
 No open code row: `BACKLOG.md` is the row-level ledger; `BLOCKED_RUNBOOK.md`
 names the evidence each blocked row needs.
@@ -15,7 +15,7 @@ names the evidence each blocked row needs.
 | M2 | `contig readiness` | Per-target depth from a TSV or BAM/CRAM, %≥20x/50x/100x, expanded 33-gene homology/pseudogene caveats, VCF sex check / possible swap, ready/caution/not-interpretable | 61 | Depth thresholds uncalibrated; sex check is VCF-only; caveat BED uses one representative transcript per gene |
 | M3 | `contig panel-build`/`panel-list`/`panel-show`/`panel-diff`/`panel-archive` | HGNC-resolved, MANE-preferred, checksummed panel BED registry with version labels, source hashes, diff and archive | 24 | No real lab panel |
 | M4 | `contig report`/`report-check`/`report-diff` | Self-contained HTML report, sidecar hashes, templates, reviewer block, staleness check, sidecar diff | 37 | HTML only; no PDF/dashboard |
-| M5 | `contig ask`/`ask-eval` | Grounded Q&A over the bundle + M1/M2, citations, suggested actions, optional LLM paraphrase | 31 | Local `qwen2.5:1.5b` eval 9/9 after the fidelity guard; hosted default still needs the provider/privacy decision |
+| M5 | `contig ask`/`ask-eval` | Grounded Q&A over the bundle + M1/M2, citations, suggested actions, approval-gated action execution, optional LLM paraphrase | 52 | Local `qwen2.5:1.5b` eval 9/9 after the fidelity guard; hosted default still needs the provider/privacy decision |
 | M6 | `contig family` / `contig carriers` | Inheritance, autosomal + basic X/Y/MT Mendelian consistency, de novo candidates, pairwise concordance, multiple families/quads, carrier/couple views | 25 | Full GIAB trio validated (2.26M evaluated, 19 residual inconsistencies in no-inconsistent regions, IBS0=0); carrier/couple views are autosomal only |
 | M7 | `contig biomarkers` | TMB from PASS variants in a callable BED; MSI from MSIsensor output/BAMs; CNV segment concordance; LOH from allele-specific segments | 32 | LOH comparator ships; real allele-specific caller validation pending; MSI/CNV thresholds need real validation |
 | M8 | `contig cohort-build`/`cohort-query` | Local-only per-variant/gene cohort counts and frequencies | 16 | No federated/cross-lab layer |

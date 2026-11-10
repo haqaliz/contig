@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import typer
 
+from contig.assistant.actions import execute_action
 from contig.assistant.answer import answer_question
 from contig.assistant.context import load_context
 from contig.assistant.evaluate import evaluate_cases, load_eval_cases
@@ -38,7 +39,13 @@ def run_ask(
     readiness: str | None = None,
     json_out: bool = False,
     llm: bool = False,
+    execute: int | None = None,
+    approve_action: bool = False,
 ) -> None:
+    if execute is not None and json_out:
+        raise ValueError("--execute cannot be combined with --json")
+    if approve_action and execute is None:
+        raise ValueError("--approve-action requires --execute")
     typer.echo(RESEARCH_USE_NOTICE, err=True)
     context = load_context(runs_dir, run_id, variants_path=variants, readiness_path=readiness)
     answer = answer_question(context, question)
@@ -49,6 +56,28 @@ def run_ask(
         typer.echo(answer.model_dump_json(indent=2))
         return
     _print_answer(answer)
+
+    if execute is not None:
+        if not answer.actions:
+            raise ValueError("this answer has no suggested actions")
+        if not 1 <= execute <= len(answer.actions):
+            raise ValueError(
+                f"--execute must be between 1 and {len(answer.actions)}"
+            )
+        command = answer.actions[execute - 1]
+        typer.echo("")
+        typer.echo(f"Selected action: {command}")
+        ran, code = execute_action(
+            command,
+            approved=approve_action,
+            confirm=lambda prompt: typer.confirm(prompt, default=False),
+        )
+        if not ran:
+            typer.echo("Action not run.")
+            return
+        typer.echo(f"Action exited with code {code}.")
+        if code != 0:
+            raise typer.Exit(code=code)
 
 
 def run_ask_eval(

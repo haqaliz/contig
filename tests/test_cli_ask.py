@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
@@ -17,8 +18,8 @@ READINESS = str(FIX / "readiness.json")
 CASES = str(ASSIST / "eval.jsonl")
 
 
-def _invoke(args):
-    return CliRunner().invoke(app, args)
+def _invoke(args, input=None):
+    return CliRunner().invoke(app, args, input=input)
 
 
 def test_ask_help_lists_options():
@@ -27,6 +28,8 @@ def test_ask_help_lists_options():
     assert "--variants" in plain(result.output)
     assert "--readiness" in plain(result.output)
     assert "--llm" in plain(result.output)
+    assert "--execute" in plain(result.output)
+    assert "--approve-action" in plain(result.output)
 
 
 def test_ask_verdict_with_citations():
@@ -91,3 +94,91 @@ def test_llm_without_config_exits_nonzero(monkeypatch):
     ])
     assert result.exit_code == 1
     assert "no LLM configured" in plain(result.output)
+
+
+def test_ask_execute_runs_an_approved_action(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "contig.assistant.actions.subprocess.run",
+        lambda argv, check=False: calls.append(argv) or SimpleNamespace(returncode=0),
+    )
+    result = _invoke([
+        "ask", "r1", "what is the verdict?", "--runs-dir", RUNS,
+        "--execute", "1", "--approve-action",
+    ])
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1
+    assert calls[0][:2] == ["contig", "show"]
+    assert "--explain" in calls[0]
+    assert "Selected action:" in plain(result.output)
+    assert "exited with code 0" in plain(result.output)
+
+
+def test_ask_execute_prompts_and_can_refuse(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "contig.assistant.actions.subprocess.run",
+        lambda argv, check=False: calls.append(argv) or SimpleNamespace(returncode=0),
+    )
+    result = _invoke(
+        ["ask", "r1", "what is the verdict?", "--runs-dir", RUNS, "--execute", "1"],
+        input="n\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert calls == []
+    assert "Action not run." in plain(result.output)
+
+
+def test_ask_execute_cannot_be_combined_with_json():
+    result = _invoke([
+        "ask", "r1", "what is the verdict?", "--runs-dir", RUNS,
+        "--json", "--execute", "1", "--approve-action",
+    ])
+    assert result.exit_code == 1
+    assert "cannot be combined" in plain(result.output)
+
+
+def test_ask_execute_out_of_range_is_refused():
+    result = _invoke([
+        "ask", "r1", "what is the verdict?", "--runs-dir", RUNS,
+        "--execute", "99", "--approve-action",
+    ])
+    assert result.exit_code == 1
+    assert "between 1 and" in plain(result.output)
+
+
+def test_ask_approve_action_requires_execute():
+    result = _invoke([
+        "ask", "r1", "what is the verdict?", "--runs-dir", RUNS,
+        "--approve-action",
+    ])
+    assert result.exit_code == 1
+    assert "requires --execute" in plain(result.output)
+
+
+def test_ask_execute_propagates_a_failing_action(monkeypatch):
+    monkeypatch.setattr(
+        "contig.assistant.actions.subprocess.run",
+        lambda argv, check=False: SimpleNamespace(returncode=3),
+    )
+    result = _invoke([
+        "ask", "r1", "what is the verdict?", "--runs-dir", RUNS,
+        "--execute", "1", "--approve-action",
+    ])
+    assert result.exit_code == 3
+    assert "exited with code 3" in plain(result.output)
+
+
+def test_ask_execute_prompt_approval_runs(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "contig.assistant.actions.subprocess.run",
+        lambda argv, check=False: calls.append(argv) or SimpleNamespace(returncode=0),
+    )
+    result = _invoke(
+        ["ask", "r1", "what is the verdict?", "--runs-dir", RUNS, "--execute", "1"],
+        input="y\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1
+    assert "exited with code 0" in plain(result.output)
