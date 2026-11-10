@@ -134,7 +134,7 @@
     {
       "path": "data/giab/AshkenazimTrio_chr20_subset.vcf",
       "bytes": 16686,
-      "sha256": "653a703b8ccd76b9aad509bf78dc64f20b35fd212bbb98fb82cb77d939d4fe2e",
+      "sha256": "9e6a9b758e302f45bd40fdb7b2f581d47455e4152d3bde17f119772c57588803",
       "source_url": "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/",
       "license": "Public (NIST/GIAB)",
       "milestone": "M2/M6",
