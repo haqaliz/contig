@@ -277,7 +277,8 @@ request. Send the redaction/data-use terms before receiving files.
   `info@genomicsengland.co.uk`, `https://www.genomicsengland.co.uk/contact`
 - North Thames GLH: `https://www.gosh.nhs.uk/wards-and-departments/departments/laboratory-medicine/north-thames-genomic-laboratory-hub/`
 - Central & South GLH: `GMSAAdmin@uhb.nhs.uk`, `https://centralsouthgenomics.nhs.uk/about-us/contact-us-2/`
-- East Genomics: `geneticslaboratories@nhs.net`, `https://www.eastgenomics.nhs.uk/`
+- East Genomics: `https://www.eastgenomics.nhs.uk/` (the
+  `geneticslaboratories@nhs.net` address rejects external mail with a 550)
 - North East & Yorkshire GLH: `https://ney-genomics.org.uk/`
 - AMP: `amp@amp.org`, +1 301-634-7987, `https://www.amp.org/`
 - ABRF CoreMarketplace: `https://coremarketplace.org/?searchterms=*`
