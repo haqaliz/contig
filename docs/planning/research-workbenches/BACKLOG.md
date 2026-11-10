@@ -26,7 +26,7 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | M2-4 | M2 | Homology/pseudogene list expansion | deferred |
 | M3-0 | M3 | `contig panel-build`/`panel-list`/`panel-show` | done |
 | M3-1a | M3 | Panel version label (`--version`, listed in the registry) | done |
-| M3-1b | M3 | Panel archival + diff | deferred |
+| M3-1b | M3 | Panel archival + diff | done |
 | M3-2 | M3 | Real lab panel validation | blocked |
 | M4-0 | M4 | `contig report` + `report-check` (HTML, sidecar, templates) | done |
 | M4-1 | M4 | Native PDF export | decision (browser print-to-PDF only) |
@@ -54,10 +54,10 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | X-1b | Cross | Auto-discovery from the run bundle + report/variant/readiness actions | done (read-only manifest auto-discovery; actions deferred) |
 | X-2 | Cross | Streaming/scale mode for large VCF/depth files | done (M1 cap + streaming depth filtering) |
 | X-3 | Cross | Design-partner validation of all defaults | blocked |
-| X-4 | Cross | Release 1.1.0 (version bump + release notes) | deferred |
+| X-4 | Cross | Release 1.1.0 (version bump + release notes) | done |
 | X-5 | Cross | Clinical diagnosis / ACMG adjudication / drug recs | decision |
 
-**Totals:** 25 built · 5 deferred · 11 blocked · 2 decisions (43 rows). Every
+**Totals:** 27 built · 3 deferred · 11 blocked · 2 decisions (43 rows). Every
 blocked row names its evidence in `BLOCKED_RUNBOOK.md`.
 
 ## Agent-validation follow-ups (2026-11-08)

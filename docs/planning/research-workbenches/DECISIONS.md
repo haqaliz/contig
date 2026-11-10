@@ -12,7 +12,7 @@ build cycle.
 | Dashboard scope | **Read-only** first: variants, readiness, report, ask, family, biomarkers, cohort. No launch/approve actions in the first release. |
 | Dashboard data source | **Static JSON/bundles from disk**, like the current dashboard; move to an API only when write actions are needed. |
 | Dashboard stack | Keep the existing Next.js app. |
-| Release timing | **After validation**, not before. |
+| Release timing | **1.1.0 shipped 2026-11-08** on synthetic/agent validation; human validation remains the gate for the defaults. |
 | First build after validation | **Dashboard integration**. |
 
 ## Data and licensing
