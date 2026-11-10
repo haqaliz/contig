@@ -46,7 +46,7 @@ OUT=/tmp/contig-research-smoke bash scripts/smoke_research_workbenches.sh
 | `clingen/ClinGen_haploinsufficiency_gene_GRCh38.bed` | ClinGen dosage sensitivity (haploinsufficiency) | 48 KB | CC0 |
 | `clingen/ClinGen_triplosensitivity_gene_GRCh38.bed` | ClinGen dosage sensitivity (triplosensitivity) | 41 KB | CC0 |
 | `homology/genomicSuperDups_hg38.txt.gz` | UCSC segmental duplications (homology caveats) | 4 MB | Open (UCSC) |
-| `homology/homology_caveats_GRCh38.bed` | Curated SMN1/SMN2, PMS2/PMS2CL, HBA1/HBA2 exon BED | 1,105 exon rows | Derived from GENCODE |
+| `homology/homology_caveats_GRCh38.bed` | Curated homology/pseudogene exon BED: SMN1/SMN2, PMS2/PMS2CL, HBA1/HBA2, CYP21A2/CYP21A1P, GBA1/GBA1LP, PKD1/PKD1P1-P6, STRC/STRCP1, NCF1/NCF1B/NCF1C, CYP2D6/CYP2D7/CYP2D8P, PTEN/PTENP1, GJB2/GJB6, IKBKG/IKBKGP1, HBB/HBD | 724 exon/partner rows, 33 genes | Derived from GENCODE GRCh38.113 (MANE Select, else Ensembl canonical) |
 | `hpo/phenotype.hpoa` | HPO disease–phenotype annotations | 34 MB | HPO license; cite |
 | `hpo/genes_to_phenotype.txt` | HPO gene–phenotype annotations | 20 MB | HPO license; cite |
 | `mane/MANE.GRCh38.v1.4.summary.txt.gz` | MANE Select transcript summary | 1.1 MB | Public (NCBI) |

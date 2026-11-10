@@ -7,6 +7,13 @@ All notable changes to Contig are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Expanded homology/pseudogene caveats:** the readiness caveat BED now covers
+  33 genes / 13 pair groups, including CYP21A2/CYP21A1P, GBA1/GBA1LP,
+  PKD1/PKD1P1-P6, STRC/STRCP1, NCF1/NCF1B/NCF1C, CYP2D6/CYP2D7/CYP2D8P,
+  PTEN/PTENP1, GJB2/GJB6, IKBKG/IKBKGP1, and HBB/HBD, alongside the original
+  SMN1/SMN2, PMS2/PMS2CL, and HBA1/HBA2 pairs. The derived BED uses one
+  representative transcript per gene (MANE Select, else Ensembl canonical) and
+  one row per exon/partner.
 - **LOH verification:** `contig biomarkers --loh-segments/--loh-truth` compares
   allele-specific LOH intervals (minor copy number) by base-level Jaccard and
   reports `match`/`divergent`/`unverified`. Total copy number alone is refused;

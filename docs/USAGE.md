@@ -380,9 +380,15 @@ contig readiness --bam sample.cram --reference GRCh38.fa \
   -b`. The M1 variant table has its own explicit record cap.
 
 The homology BED is deliberately a separate input: use
-`data/homology/homology_caveats_GRCh38.bed` for SMN1/SMN2, PMS2/PMS2CL, and
-HBA1/HBA2, or supply your own BED4. A readiness state is a data-sufficiency
-statement, not a clinical guarantee.
+`data/homology/homology_caveats_GRCh38.bed` for the curated list (SMN1/SMN2,
+PMS2/PMS2CL, HBA1/HBA2, CYP21A2/CYP21A1P, GBA1/GBA1LP, PKD1/PKD1P1-P6,
+STRC/STRCP1, NCF1/NCF1B/NCF1C, CYP2D6/CYP2D7/CYP2D8P, PTEN/PTENP1, GJB2/GJB6,
+IKBKG/IKBKGP1, HBB/HBD), or supply your own BED4/BED8. The derived BED uses one
+representative transcript per gene (MANE Select, else Ensembl canonical), so a
+gene's alternative exons are not caveated unless they are in that transcript.
+Rebuild the derived BED with `python3 scripts/build_derived_data.py` after
+updating the GTF. A readiness state is a data-sufficiency statement, not a
+clinical guarantee.
 
 ---
 

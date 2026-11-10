@@ -264,12 +264,12 @@
     },
     {
       "path": "data/homology/homology_caveats_GRCh38.bed",
-      "bytes": 86182,
-      "sha256": "42a6d8a88d13647ea46f0418de99f475f40c945201eb056760c9d38f29bea493",
+      "bytes": 62523,
+      "sha256": "3b2d364f83d2bedaac78b5165f6a330263ad4fdb55827efb254a5c0bb6c526a4",
       "source_url": "Derived from GENCODE GRCh38.113",
       "license": "Derived; GENCODE terms",
       "milestone": "M2",
-      "note": "SMN1/SMN2, PMS2/PMS2CL, HBA1/HBA2 caveat BED"
+      "note": "Curated 33-gene homology/pseudogene caveat BED (representative transcript per gene)"
     },
     {
       "path": "data/hpo/genes_to_phenotype.txt",

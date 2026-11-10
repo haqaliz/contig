@@ -26,7 +26,7 @@ META: dict[str, tuple[str, str, str, str]] = {
     "ensembl/homo_sapiens_incl_consequences": ("https://ftp.ensembl.org/pub/release-113/variation/vcf/homo_sapiens/", "Open (Ensembl)", "M1", "VEP-consequence VCF (catalogue, not a sample)"),
     "giab/": ("https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/AshkenazimTrio/", "Public (NIST/GIAB)", "M2/M6", "GIAB truth set"),
     "homology/genomicSuperDups": ("https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/genomicSuperDups.txt.gz", "Open (UCSC)", "M2", "Segmental duplications"),
-    "homology/homology_caveats": ("Derived from GENCODE GRCh38.113", "Derived; GENCODE terms", "M2", "SMN1/SMN2, PMS2/PMS2CL, HBA1/HBA2 caveat BED"),
+    "homology/homology_caveats": ("Derived from GENCODE GRCh38.113", "Derived; GENCODE terms", "M2", "Curated 33-gene homology/pseudogene caveat BED (representative transcript per gene)"),
     "iranome/": ("https://www.iranome.com/", "Free with citation (Iranome)", "M1", "Iranian allele frequencies; cite Fattahi 2019"),
     "kaggle/clinvar-conflicting/": ("https://www.kaggle.com/datasets/kevinarvai/clinvar-conflicting", "CC0", "M1", "Kaggle ClinVar table"),
     "kaggle/gse131027/": ("https://www.kaggle.com/datasets/mannekuntanagendra/variant-calling-human-genome-analysis-gse131027", "MIT", "M1", "Small sample VCF fixture"),

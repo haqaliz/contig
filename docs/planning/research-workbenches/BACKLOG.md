@@ -23,7 +23,7 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | M2-1 | M2 | Direct BAM/CRAM ingestion (`contig readiness --bam`) | done |
 | M2-2 | M2 | Sex check / sample-swap readiness caveats | done |
 | M2-3 | M2 | Threshold calibration (20x, 90%, 50%) on real panels (nf-core CRAM + BED available) | blocked |
-| M2-4 | M2 | Homology/pseudogene list expansion | deferred |
+| M2-4 | M2 | Homology/pseudogene list expansion | done |
 | M3-0 | M3 | `contig panel-build`/`panel-list`/`panel-show` | done |
 | M3-1a | M3 | Panel version label (`--version`, listed in the registry) | done |
 | M3-1b | M3 | Panel archival + diff | done |
@@ -57,7 +57,7 @@ real data/reviewer/legal) · `decision` (deliberately not building).
 | X-4 | Cross | Release 1.1.0 (version bump + release notes) | done |
 | X-5 | Cross | Clinical diagnosis / ACMG adjudication / drug recs | decision |
 
-**Totals:** 28 built · 2 deferred · 11 blocked · 2 decisions (43 rows). Every
+**Totals:** 29 built · 1 deferred · 11 blocked · 2 decisions (43 rows). Every
 blocked row names its evidence in `BLOCKED_RUNBOOK.md`.
 
 ## Agent-validation follow-ups (2026-11-08)

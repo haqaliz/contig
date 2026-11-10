@@ -1,6 +1,6 @@
 # Research workbenches wrap-up: where M1–M8 stand
 
-**Status 2026-11-08:** all eight milestones have a shippable v1. The engine,
+**Status 2026-11-10:** all eight milestones have a shippable v1. The engine,
 CLI, docs, and synthetic tests are in place; what remains is **validation,
 integration, and the deliberately deferred parts** — not unfinished code.
 
@@ -12,10 +12,10 @@ names the evidence each blocked row needs.
 | Milestone | Command | What it does | Tests | Honest limit |
 |---|---|---|---|---|
 | M1 | `contig variants` / `contig iranome-lift` | ClinVar/Iranome/frequency/gnomAD-API join, deterministic filters, TSV/JSON + provenance, spec replay, Iranome GRCh37→GRCh38 liftover | 56 | In-memory table; gnomAD API capped at 1000 sites; Iranome liftover is chain-dependent |
-| M2 | `contig readiness` | Per-target depth from a TSV or BAM/CRAM, %≥20x/50x/100x, homology caveats, VCF sex check / possible swap, ready/caution/not-interpretable | 39 | Depth thresholds uncalibrated; sex check is VCF-only |
+| M2 | `contig readiness` | Per-target depth from a TSV or BAM/CRAM, %≥20x/50x/100x, expanded 33-gene homology/pseudogene caveats, VCF sex check / possible swap, ready/caution/not-interpretable | 61 | Depth thresholds uncalibrated; sex check is VCF-only; caveat BED uses one representative transcript per gene |
 | M3 | `contig panel-build`/`panel-list`/`panel-show`/`panel-diff`/`panel-archive` | HGNC-resolved, MANE-preferred, checksummed panel BED registry with version labels, source hashes, diff and archive | 24 | No real lab panel |
 | M4 | `contig report`/`report-check`/`report-diff` | Self-contained HTML report, sidecar hashes, templates, reviewer block, staleness check, sidecar diff | 37 | HTML only; no PDF/dashboard |
-| M5 | `contig ask`/`ask-eval` | Grounded Q&A over the bundle + M1/M2, citations, suggested actions, optional LLM paraphrase | 31 | No live LLM eval; deterministic router only |
+| M5 | `contig ask`/`ask-eval` | Grounded Q&A over the bundle + M1/M2, citations, suggested actions, optional LLM paraphrase | 31 | Local `qwen2.5:1.5b` eval 9/9 after the fidelity guard; hosted default still needs the provider/privacy decision |
 | M6 | `contig family` / `contig carriers` | Inheritance, autosomal + basic X/Y/MT Mendelian consistency, de novo candidates, pairwise concordance, multiple families/quads, carrier/couple views | 25 | Full GIAB trio validated (2.26M evaluated, 19 residual inconsistencies in no-inconsistent regions, IBS0=0); carrier/couple views are autosomal only |
 | M7 | `contig biomarkers` | TMB from PASS variants in a callable BED; MSI from MSIsensor output/BAMs; CNV segment concordance; LOH from allele-specific segments | 32 | LOH comparator ships; real allele-specific caller validation pending; MSI/CNV thresholds need real validation |
 | M8 | `contig cohort-build`/`cohort-query` | Local-only per-variant/gene cohort counts and frequencies | 16 | No federated/cross-lab layer |
@@ -75,7 +75,7 @@ blockers.
 | M2 threshold calibration | Real panel/WES runs with expected coverage and a reviewer |
 | M3 real panel | One real lab panel BED + expected behavior |
 | M4 report feedback | 2–3 redacted report examples + reviewer workflow |
-| M5 live LLM eval | Provider/privacy decision + a real eval run |
+| M5 hosted LLM default | Local eval is done (9/9 after the fidelity guard); a provider/privacy decision is still needed for the hosted small-model default |
 | M6 real trio/swap threshold | A real multi-sample trio VCF + expected inheritance |
 | M7 MSI/CNV calibration + LOH | A real MSI-H/MSS pair + threshold; a real CNV segment file + expected calls; LOH needs allele-specific data |
 | M7 TMB band | A domain reviewer and real tumor-normal TMB values |

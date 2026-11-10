@@ -44,6 +44,7 @@ build cycle.
 | WGS scale | **Require `--region` or `--gene` first** for large VCFs; the M1 cap and streaming readiness depth filtering are shipped. Further VCF indexing/streaming only if a partner hits the cap. |
 | M6 family | **Multiple families/quads and carrier/couple views shipped**; X/Y/MT basic rules shipped. Carrier/couple views are autosomal only in this slice. |
 | M2 sample QC | **VCF-only sex check shipped** (`--sex-vcf`/`--expected-sex`); relatedness and non-sex sample-identity checks remain deferred. No BAM requirement. |
+| M2 homology caveats | **Curated 33-gene / 13-pair-group list shipped.** Each gene uses one representative transcript (MANE Select, else Ensembl canonical); BED rows are exon-level and partner-specific. The list is not exhaustive; add pairs only with public documentation. |
 | M8 | **PRD + architecture only**: consent, k-anonymity/privacy, tenancy, threat model, legal checklist. No federated code until two labs ask. |
 
 ## Validation
