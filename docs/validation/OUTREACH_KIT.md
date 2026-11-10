@@ -91,8 +91,9 @@ Use the public pages:
 
 - North Thames GLH: `https://www.gosh.nhs.uk/wards-and-departments/departments/laboratory-medicine/north-thames-genomic-laboratory-hub/`
 - Central & South GLH: `https://centralsouthgenomics.nhs.uk/` (`GMSAAdmin@uhb.nhs.uk`)
-- East Genomics: `https://www.eastgenomics.nhs.uk/` (the `geneticslaboratories@nhs.net`
-  address currently rejects external mail with a 550; use the public contact form)
+- East Genomics: `cuh.geneticslaboratories@nhs.net`
+  (`https://www.eastgenomics.nhs.uk/about-us/genomic-laboratory-hub/contact-us`;
+  the old `geneticslaboratories@nhs.net` address rejects external mail with a 550)
 - North East & Yorkshire GLH: `https://ney-genomics.org.uk/`
 
 Ask for one panel BED + transcript policy, 1–2 redacted reports, or a
