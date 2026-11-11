@@ -94,20 +94,20 @@ blockers.
    roadmap's own gate. Source and contact routes are in
    `docs/validation/DATA_AND_PARTNER_ACQUISITION.md`; keep
    `docs/validation/acquisition_tracker.csv` current.
-2. **Dashboard/auto-discovery integration (P1).** Make the new surfaces usable
-   without manually passing `--variants`/`--readiness`/`--vcf`: auto-discover
-   from the run bundle, add report/variant/readiness actions.
-3. **M7 follow-up (P1).** Acquire HCT116/SW480 data, wire an MSI caller, then
-   LOH/CNV segments. Keep the no-drug rule.
-4. **Scale/performance (P2).** Add streaming or explicit record caps for large
-   VCF/depth inputs before a WGS design partner arrives.
-5. **M8 federation design (P3).** Only after two labs ask. Design doc first; no
-   code.
+2. **Upgrade provisional rows (P1).** Supply the evidence in the table above:
+   partner VCF, lab panel/BED, redacted reports, real MSI/LOH/TMB review. There
+   is no queued feature work; each upgrade is evidence-driven.
+3. **M5 local-only default (done).** No hosted provider. Revisit only with a new
+   explicit provider/privacy decision.
+4. **M8 federation (decision).** No code until 2+ labs and legal/privacy
+   approve.
 
 ## How to resume
 
-- Pick a `deferred` row from `BACKLOG.md` if you want a code task.
-- Pick a `blocked` row only after its `BLOCKED_RUNBOOK.md` evidence exists.
+- There are no deferred code rows. Start from a `provisional` row only when its
+  evidence in `BLOCKED_RUNBOOK.md` exists.
+- X-3 is the human gate: do not call the defaults calibrated until 3–5 partners
+  complete the core tasks with trust ≥4.
 - The discipline stays: test-first, one commit per item, full suite green, no
   clinical over-claiming.
 
