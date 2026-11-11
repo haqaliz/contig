@@ -9,9 +9,8 @@ exact evidence, and `docs/validation/DATA_AND_PARTNER_ACQUISITION.md` for the
 open-data and permission/contact plan.
 
 Status legend: `done` · `provisional` (public-data/agent evidence; partner or
-reviewer still pending, so not calibrated) · `in progress` (release cut,
-artifacts publishing) · `blocked` (needs real data/reviewer/legal) ·
-`decision` (deliberately not building).
+reviewer still pending, so not calibrated) · `blocked` (needs real
+data/reviewer/legal) · `decision` (deliberately not building).
 
 | ID | Milestone | Item | Status |
 |---|---|---|---|
@@ -57,12 +56,12 @@ artifacts publishing) · `blocked` (needs real data/reviewer/legal) ·
 | X-2 | Cross | Streaming/scale mode for large VCF/depth files | done (M1 cap + streaming depth filtering) |
 | X-3 | Cross | Design-partner validation of all defaults | blocked (human gate: 3/5 partners, trust ≥4) |
 | X-4 | Cross | Release 1.1.0 (version bump + release notes) | done |
-| X-4b | Cross | Release 1.2.0 (version bump + release notes + artifacts) | in progress |
+| X-4b | Cross | Release 1.2.0 (version bump + release notes + artifacts) | done |
 | X-5 | Cross | Clinical diagnosis / ACMG adjudication / drug recs | decision |
 
-**Totals:** 31 done · 8 provisional · 1 in progress · 1 blocked · 3 decisions
-(44 rows). Provisional rows are not calibrated; the partner/reviewer ask stays
-open in outreach. The one blocked row is the human validation gate.
+**Totals:** 32 done · 8 provisional · 1 blocked · 3 decisions (44 rows).
+Provisional rows are not calibrated; the partner/reviewer ask stays open in
+outreach. The one blocked row is the human validation gate.
 
 ## Agent-validation follow-ups (2026-11-08)
 

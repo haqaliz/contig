@@ -7,24 +7,24 @@
 # A real pipeline run still needs Nextflow, a Java runtime, and a container runtime;
 # the self-contained commands work without them.
 class Contig < Formula
-  desc "Agentic bioinformatics analyst: the Layer-2 run, self-heal, verify, reproduce engine"
+  desc "Agentic bioinformatics analyst: run, self-heal, verify, reproduce engine"
   homepage "https://github.com/haqaliz/contig"
-  version "1.1.0"
-
   on_macos do
     on_arm do
-      url "https://github.com/haqaliz/contig/releases/download/v1.1.0/contig-macos-arm64"
-      sha256 "5edf61395a1cd398781df3f39e5f2b46a4510a317526bc93556030e597eb6851"
+      url "https://github.com/haqaliz/contig/releases/download/v1.2.0/contig-macos-arm64"
+      sha256 "6e683b431606e27ffb87e202c62c369501ae838b43efef495f41121a1447e8ef"
     end
     on_intel do
-      url "https://github.com/haqaliz/contig/releases/download/v1.1.0/contig-macos-x86_64"
-      sha256 "5cba040492d15da4304ae026a4184ce732c6fcfd4ecd5b4e2b3e1d7c9a22a5a9"
+      url "https://github.com/haqaliz/contig/releases/download/v1.2.0/contig-macos-x86_64"
+      sha256 "1abe47e981fd499afa17bfb2199d7a51b814ef6c2afaf45263b3d32766807437"
     end
   end
 
   on_linux do
-    url "https://github.com/haqaliz/contig/releases/download/v1.1.0/contig-linux-x86_64"
-    sha256 "638bdb0d029ffdd1c0abc104ffc212185b2975c46b9b2fe78438e404660da3a6"
+    on_intel do
+      url "https://github.com/haqaliz/contig/releases/download/v1.2.0/contig-linux-x86_64"
+      sha256 "f404583ea0ab830cbe543374ef0228a273c9014af5fda22cc65fda730332eac2"
+    end
   end
 
   def install
@@ -32,6 +32,6 @@ class Contig < Formula
   end
 
   test do
-    assert_match "1.1.0", shell_output("#{bin}/contig version")
+    assert_match "1.2.0", shell_output("#{bin}/contig version")
   end
 end

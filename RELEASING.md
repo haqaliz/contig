@@ -117,9 +117,10 @@ job ever fails and `contig-macos-x86_64` is missing, build it locally on an Appl
 Silicon machine under Rosetta (the same steps the job runs) and upload it as
 `haqaliz` (not the push-only collaborator).
 
-On v1.1.0 GitHub cancelled both `macos-14` jobs while they were queued (the rest of
-the release — wheel, PyPI, GHCR, Linux/Windows — published normally). The workaround
-is to build the two macOS assets locally and attach them to the release.
+On v1.1.0 and v1.2.0 GitHub cancelled both `macos-14` jobs while they were queued
+(the rest of the release — wheel, PyPI, GHCR, Linux/Windows — published normally).
+The workaround is to build the two macOS assets locally and attach them to the
+release.
 
 ```bash
 # arm64 (native)

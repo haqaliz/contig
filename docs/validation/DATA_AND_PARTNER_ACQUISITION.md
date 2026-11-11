@@ -51,7 +51,7 @@ Those three produce real evidence without asking anyone for anything.
 | M2-3 | Real panel/WES coverage + reviewer | Data + people | nf-core CRAM/BED (open) + a lab's expected coverage | Run the public data now; ask a core facility for one real run |
 | M3-2 | Real lab panel BED + transcript policy | Data + people | PanelApp public panel now; a lab BED via a GLH/core | Build a PanelApp panel now; request one lab BED |
 | M4-3 | 2–3 redacted reports + reviewer workflow | Data + people | Public nf-core MultiQC reports now; partner redacted reports | Collect public examples; ask 2 labs under a redaction agreement |
-| M5-1 | Provider/privacy decision + live eval | User decision + data | Local Ollama + a hosted small OpenAI model | User picks provider/model; run the frozen eval |
+| M5-1 | Provider/privacy decision + live eval | Done (local-only) | Local `qwen2.5:1.5b`: 9/9 after the fidelity guard | No hosted provider; see `M5_LLM_EVAL.md` |
 | M6-4 | Real trio + swap threshold | Open data | GIAB Ashkenazim trio (already in `data/giab/`) | Run the full trio; calibrate IBS0 swap threshold |
 | M7-1b | Real MSI-H/MSS tumor/normal pair | Permission data | TCGA-COAD/READ or CPTAC-COAD (labels open; BAMs controlled); public SRA study alternative | Start dbGaP/EGA collaborator route; search SRA in parallel |
 | M7-2b | Allele-specific LOH segments | Open data | GDC ASCAT allele-specific copy-number segments (TCGA-COAD) | Download and inspect open processed segments |
@@ -59,6 +59,7 @@ Those three produce real evidence without asking anyone for anything.
 | M8-1 | 2 labs + consent/privacy/tenancy/legal | People + legal | Core facilities / GLHs / biotech partners | Do not build; collect demand and legal posture first |
 | X-3 | 3–5 design partners | People | nf-core Slack, Biostars, ABRF CoreMarketplace, warm intros | Send 20 targeted invitations this week |
 | X-4 | Release `1.1.0` | Done | Tag `v1.1.0` pushed 2026-11-08 | Watch the release workflow |
+| X-4b | Release `1.2.0` | Done | Tag `v1.2.0` pushed 2026-11-11; macOS assets uploaded locally | Watch the release workflow |
 
 ---
 

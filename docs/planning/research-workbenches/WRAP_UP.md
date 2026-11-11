@@ -1,11 +1,10 @@
 # Research workbenches wrap-up: where M1–M8 stand
 
 **Status 2026-11-11:** all eight milestones have a shippable v1. The engine,
-CLI, docs, and synthetic tests are in place. The ledger is **31 done · 8
-provisional · 1 in progress · 1 blocked · 3 decisions**: provisional means
-public-data or agent evidence only, not partner/reviewer calibration; the in-
-progress row is the 1.2.0 release. What remains is human validation and the
-requested release artifacts — not unfinished code.
+CLI, docs, and synthetic tests are in place. The ledger is **32 done · 8
+provisional · 1 blocked · 3 decisions**: provisional means public-data or agent
+evidence only, not partner/reviewer calibration. Release **1.2.0** is shipped;
+what remains is human validation — not unfinished code.
 
 No open code row: `BACKLOG.md` is the row-level ledger; `BLOCKED_RUNBOOK.md`
 names the evidence each provisional or blocked row still needs.
