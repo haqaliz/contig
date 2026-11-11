@@ -1,6 +1,6 @@
 [project]
 name = "contig"
-version = "1.1.0"
+version = "1.2.0"
 description = "Agentic bioinformatics analyst: Layer 2 execution/verification/reproducibility engine"
 readme = "README.md"
 requires-python = ">=3.12"

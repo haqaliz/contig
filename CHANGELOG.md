@@ -6,6 +6,8 @@ All notable changes to Contig are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-11
+
 ### Added
 - **Approval-gated assistant actions:** `contig ask --execute N` runs the Nth
   suggested action only after an interactive `y/N` prompt or
