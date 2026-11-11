@@ -57,13 +57,19 @@ export CONTIG_LLM_API_KEY=<key>
 python scripts/llm_eval.py ... --out /tmp/m5_llm_eval_hosted.csv
 ```
 
-## Acceptance for enabling `--llm` by default
+## Decision and acceptance
+
+**Decision 2026-11-11 — local-only default.** No hosted provider is bundled.
+`--llm` is opt-in and requires an explicitly configured local
+OpenAI-compatible endpoint; the deterministic router remains the product. This
+closes M5-1 as a decision, not as a hosted-provider deployment.
+
+Acceptance for the shipped local path:
 
 1. 9/9 preserved on the frozen set (intent, citations, refusal, verdict).
 2. A real redacted bundle from a partner passes the same checks.
-3. Hosted vs local comparison recorded, including latency and cost.
+3. The endpoint is explicitly configured; there is no default provider.
 4. No clinical claim appears in a paraphrase that was not in the grounded answer.
 
-The deterministic router remains the product; the model is optional and falls
-back. Do not enable a hosted default until the redacted-bundle run and the
-provider/privacy check are recorded here.
+Hosted use would need a new explicit provider/privacy decision and a redacted
+bundle run; it is not part of the current defaults.

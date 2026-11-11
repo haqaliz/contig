@@ -1,11 +1,15 @@
 # Research workbenches blocked runbook
 
 > **Acquisition:** `docs/validation/DATA_AND_PARTNER_ACQUISITION.md` names the
-> open datasets, permission routes, and outreach contacts for each blocked row;
+> open datasets, permission routes, and outreach contacts for each row;
 > `docs/validation/acquisition_tracker.csv` is the live tracker.
 
-Each blocked row in `BACKLOG.md` needs evidence before code. This file records
-exactly what to collect and what to change when it arrives.
+> **Closing standard (2026-11-11):** public-data or agent evidence closes a row
+> as `provisional`, never as calibrated. The evidence below is the upgrade path
+> to `done`; provisional rows keep their partner/reviewer ask open.
+
+Each provisional or blocked row in `BACKLOG.md` names the evidence still needed.
+This file records exactly what to collect and what to change when it arrives.
 
 ## M1 — variant workbench
 
@@ -62,6 +66,12 @@ Then: add/adjust templates; decide whether PDF/DOCX is actually needed.
 ## M5 — ask-your-run
 
 ### M5-1: live LLM eval
+**Decision 2026-11-11 — local-only default.** `--llm` requires a configured
+local OpenAI-compatible endpoint; no hosted provider is bundled. Local eval
+2026-11-09: `qwen2.5:1.5b` 9/9 after the fidelity guard. Hosted provider/privacy
+is a future explicit decision, not an open row. The old request is kept for
+reference:
+
 Decide:
 - Hosted vs local model/provider, data terms, cost/latency budget.
 - Whether bundle metadata/text is allowed to leave the machine.
@@ -124,7 +134,8 @@ Then: calibrate the tolerance/definition; keep the definition explicit in output
 ## M8 — cohort
 
 ### M8-1: federated layer
-Collect:
+**Decision 2026-11-11 — PRD-only.** No federated code until two labs ask and
+consent/privacy/tenancy/legal approve. M8-1 is closed as a decision. Collect:
 - At least two labs that explicitly ask for cross-lab frequency.
 - Consent/IRB posture and data residency.
 - A privacy method (k-anonymity threshold or differential privacy).

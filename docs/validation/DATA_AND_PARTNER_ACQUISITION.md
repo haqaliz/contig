@@ -7,6 +7,10 @@ last. Nothing here changes the research-use boundary: no diagnosis, no
 Contig-authored ACMG, no drug/treatment recommendation, and no patient data
 without a redaction agreement.
 
+**Closing standard 2026-11-11:** public-data or agent evidence closes a row as
+`provisional` in the backlog; this matrix remains the path from provisional to
+calibrated.
+
 The companion tracker is `docs/validation/acquisition_tracker.csv`.
 
 ---

@@ -1,6 +1,6 @@
 # Research-workbench decisions
 
-Date: 2026-11-08. These answers close the open product/technical questions for
+Date: 2026-11-11. These answers close the open product/technical questions for
 the remaining research-workbench work. They are the source of truth for the next
 build cycle.
 
@@ -32,8 +32,8 @@ build cycle.
 
 | Question | Decision |
 |---|---|
-| LLM path | **OpenAI small/cheap model as the default**, plus a configurable local OpenAI-compatible endpoint. |
-| Bundle text privacy | Hosted LLM may receive **redacted bundle text** (paths/sample IDs removed). Raw reads never leave the machine. |
+| LLM path | **Local-only default (decided 2026-11-11).** `--llm` uses a configured local OpenAI-compatible endpoint; no hosted provider is bundled. Hosted use would need a new explicit provider/privacy decision. |
+| Bundle text privacy | **No hosted LLM by default.** If a remote endpoint is explicitly configured, only **redacted bundle text** (paths/sample IDs removed) may leave; raw reads never do. |
 | Assistant scope | Keep the deterministic grounded router as the source of truth; the LLM only paraphrases/answers from the provided context. Actions remain approval-gated. |
 | Assistant action execution | **Shipped 2026-11-10.** `contig ask --execute N` runs only an allowlisted `contig` action (`show`, `verify`, `methods`, `report`, `report-check`) after a `y/N` prompt or `--approve-action`; argv-only, no shell, placeholders refused. Not reusing `approval.json` (that remains the self-heal run-state contract). |
 
@@ -46,7 +46,7 @@ build cycle.
 | M6 family | **Multiple families/quads and carrier/couple views shipped**; X/Y/MT basic rules shipped. Carrier/couple views are autosomal only in this slice. |
 | M2 sample QC | **VCF-only sex check shipped** (`--sex-vcf`/`--expected-sex`); relatedness and non-sex sample-identity checks remain deferred. No BAM requirement. |
 | M2 homology caveats | **Curated 33-gene / 13-pair-group list shipped.** Each gene uses one representative transcript (MANE Select, else Ensembl canonical); BED rows are exon-level and partner-specific. The list is not exhaustive; add pairs only with public documentation. |
-| M8 | **PRD + architecture only**: consent, k-anonymity/privacy, tenancy, threat model, legal checklist. No federated code until two labs ask. |
+| M8 | **Decision (2026-11-11): PRD + architecture only.** Consent, k-anonymity/privacy, tenancy, threat model, legal checklist. No federated code until two labs ask and legal/privacy approve. M8-1 is closed as a decision. |
 
 ## Validation
 
@@ -56,18 +56,19 @@ build cycle.
 | Agent validation scope | Task completion, command ergonomics, error messages, documentation gaps, reproducibility. |
 | Agent validation status | **Run 2026-11-08**; four personas. Blockers fixed (panel versioning, cohort dedupe, report HTML check, signed label, evidence columns, ask actions, frequency naming, gene-level readiness). Remaining findings are backlog. |
 | Agent validation limits | Agents **cannot** validate real trust, willingness-to-pay, or messy real-world data. Those still need humans later. |
-| Passing bar | If agents hit blockers, fix them before the dashboard. A future human gate is **≥3/5 complete core tasks and trust ≥4**. |
+| Passing bar | If agents hit blockers, fix them before the dashboard. The human gate is **≥3/5 complete core tasks and trust ≥4**; provisional public-data rows do not count as human validation. |
 | Partner recruitment | **Resume via the outreach kit**: nf-core Slack, warm intros, ABRF core facilities, NHS GLHs, AMP, Biostars/Reddit. Track in `outreach_targets.csv`. |
+| Provisional closure | **Public-data or agent evidence may close a row as `provisional`, never as calibrated.** The partner/reviewer ask stays open; `done` requires the evidence named in `BLOCKED_RUNBOOK.md`. |
 | Dashboard auto-discovery | **Explicit `dashboard/research/manifest.json` remains the default.** Read-only per-run auto-discovery of the newest `runs/<run_id>/research/manifest.json` is **shipped**; no dashboard write/launch actions. |
-| M5 live LLM | **Local eval run 2026-11-09** with `qwen2.5:1.5b`; 9/9 grounding checks pass after the fidelity guard. Hosted small-model default remains pending the redacted-bundle + provider/privacy check. See `docs/validation/M5_LLM_EVAL.md`. |
+| M5 live LLM | **Local-only default decided 2026-11-11.** Local eval 2026-11-09 with `qwen2.5:1.5b`: 9/9 grounding checks after the fidelity guard. No hosted provider; see `docs/validation/M5_LLM_EVAL.md`. |
 
 ## Resulting work order
 
 1. **Agent-partner harness + synthetic validation** — define personas, run the
    task script, fix blockers.
 2. **Read-only dashboard** — all surfaces over static JSON.
-3. **M5 assistant actions/chat** — OpenAI small/cheap + local endpoint, redacted
-   context, approval-gated actions.
+3. **M5 assistant actions/chat** — local-only default, redacted context,
+   approval-gated actions.
 4. **M1 data integrations** — UCSC GRCh37→GRCh38 liftover, optional local VEP
    runner, HPO, CIViC (open-only).
 5. **M6 multiple families/quads**.

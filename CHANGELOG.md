@@ -51,6 +51,14 @@ All notable changes to Contig are recorded here. The format follows
   GRCh38` joins the lifted table. Gap-spanning and reverse-strand variants are
   unmapped, never guessed.
 
+### Changed
+- **Local-only LLM default:** `contig ask --llm` remains opt-in and requires an
+  explicitly configured local OpenAI-compatible endpoint. No hosted provider is
+  bundled; the local `qwen2.5:1.5b` eval is 9/9 with the fidelity guard.
+- **Provisional closure standard:** public-data or agent evidence closes a
+  research-backlog row as `provisional`, never as calibrated; the partner or
+  reviewer ask stays open.
+
 ### Fixed
 - **Trio-subset fixture validity:** `scripts/build_trio_subset.py` now remaps
   multi-allelic `GT` indexes when splitting ALTs, so every biallelic record has

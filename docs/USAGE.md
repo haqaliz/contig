@@ -677,11 +677,13 @@ contig ask r1 "what is the verdict?" --execute 1 --approve-action
   argv-based (no shell), limited to `show`, `verify`, `methods`, `report`, and
   `report-check`, and refuses actions that still contain placeholders such as
   `<vcf>`. `--execute` cannot be combined with `--json`.
-- **Optional LLM:** `--llm` paraphrases the already-grounded answer using an
-  OpenAI-compatible endpoint configured with `CONTIG_LLM_URL`,
-  `CONTIG_LLM_MODEL`, and optional `CONTIG_LLM_API_KEY`. The model is told to
-  rephrase only and to keep the citations; the deterministic answer is the
-  fallback when no model is configured.
+- **Optional LLM:** `--llm` paraphrases the already-grounded answer using a
+  **local** OpenAI-compatible endpoint configured with `CONTIG_LLM_URL`,
+  `CONTIG_LLM_MODEL`, and optional `CONTIG_LLM_API_KEY`. No hosted provider is
+  bundled; a remote endpoint is an explicit opt-in and would receive only
+  redacted bundle text. The model is told to rephrase only and to keep the
+  citations; the deterministic answer is the fallback when no model is
+  configured.
 - **Eval:** `contig ask-eval r1 --cases eval.jsonl --min-accuracy 0.9` runs the
   frozen question/citation set against the deterministic router.
 

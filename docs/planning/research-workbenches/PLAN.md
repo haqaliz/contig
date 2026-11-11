@@ -441,10 +441,11 @@ the existing approval gate.
 
 **Model/training needed**
 
-- Yes — an LLM, but **no training required initially**. Use a hosted chat model
-  or a local instruction model with retrieval + tool calling. The real work is
-  grounding, citation enforcement, and eval. Optional later: fine-tune a small
-  model on the eval set if cost/latency demands it.
+- Yes — an LLM, but **no training required initially**. **Local-only default
+  (2026-11-11):** use a local instruction model with retrieval + tool calling;
+  no hosted provider is bundled. The real work is grounding, citation
+  enforcement, and eval. Optional later: fine-tune a small model on the eval set
+  if cost/latency demands it.
 
 **Acceptance**
 
