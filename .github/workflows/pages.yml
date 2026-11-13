@@ -29,7 +29,7 @@ jobs:
         run: |
           mkdir -p _site/assets
           cp site/index.html site/styles.css _site/
-          cp assets/contig-logo.svg assets/contig-selfheal.svg assets/contig-verify.svg assets/contig-demo.gif _site/assets/
+          cp assets/contig-logo.svg assets/contig-selfheal.svg assets/contig-verify.svg assets/contig-demo.gif assets/research-workbench-1270x760.png _site/assets/
       - uses: actions/configure-pages@v6
         with:
           enablement: true

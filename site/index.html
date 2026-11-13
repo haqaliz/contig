@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Contig — an agentic bioinformatics analyst</title>
-<meta name="description" content="Contig runs the analysis, fixes what breaks, and proves the result: goal to vetted pipeline, self-healing runs, verified outputs, reproducible by default.">
+<title>Contig — the local research workbench for sequencing data</title>
+<meta name="description" content="Contig is a local-first research workbench for sequencing data: run nf-core pipelines, self-heal failures, verify outputs, and explore variant, readiness, report, family, biomarker, and cohort evidence with hashed provenance.">
 <meta name="theme-color" content="#06110d">
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -36,10 +36,10 @@
     <div class="track" aria-hidden="true"></div>
     <div class="wrap hero-inner">
       <img class="hero-mark" src="assets/contig-logo.svg" alt="Contig" width="88" height="66">
-      <p class="chip">MVP · early access</p>
+      <p class="chip">v1.2.0 · research use</p>
       <h1 id="hero-title">Contig</h1>
-      <p class="tagline">An agentic bioinformatics analyst: it runs the analysis, fixes what breaks, and proves the result.</p>
-      <p class="lede">Contig takes raw sequencing data all the way to a <em>verified, reproducible</em> answer: it selects and runs the right pipeline on your own compute, diagnoses and <strong>self-heals</strong> failures, <strong>verifies</strong> the output, and writes a portable record anyone can reproduce.</p>
+      <p class="tagline">The local research workbench for sequencing data.</p>
+      <p class="lede">Contig runs nf-core pipelines on your own compute, diagnoses and <strong>self-heals</strong> failures, <strong>verifies</strong> the output, and turns it into research workbenches: variant evidence, coverage readiness, reports, grounded Q&amp;A, family, biomarkers, and local cohorts. Every result carries citations and hashed provenance. Research use only.</p>
 
       <div class="actions">
         <a class="btn btn-primary" href="https://github.com/haqaliz/contig">View on GitHub</a>
@@ -130,6 +130,11 @@ contig show smoke</code></pre>
         </figure>
       </div>
 
+      <figure>
+        <img src="assets/research-workbench-1270x760.png" alt="Contig's read-only research page: variant evidence with ClinVar and population frequencies above coverage readiness by gene." width="1270" height="760" loading="lazy">
+        <figcaption>Variant evidence + coverage readiness in one read-only research view.</figcaption>
+      </figure>
+
       <figure class="demo">
         <img src="assets/contig-demo.gif" alt="A real terminal capture: a run hits an out-of-memory failure, self-heals, passes QC to a PASS verdict, and produces a signed, reproducible record." width="1200" height="760" loading="lazy">
         <figcaption>One run: OOM → self-heal → PASS verdict → signed, verified record.</figcaption>
@@ -174,12 +179,12 @@ contig show smoke</code></pre>
   <section id="status" aria-labelledby="status-title">
     <div class="wrap">
       <p class="step"><span class="step-num">05</span> Status &amp; limits</p>
-      <h2 id="status-title">MVP engine built; in early access.</h2>
+      <h2 id="status-title">v1.2.0: engine + research workbenches.</h2>
 
       <div class="limits">
         <article>
           <h3>What works today</h3>
-          <p>The Layer-2 core — run → capture → self-heal → verify → reproduce — works end-to-end on <code>nf-core/rnaseq</code>, as a CLI and a local dashboard. The other assays ship a curated pipeline plus an assay-aware QC pack and are being hardened toward the same bar.</p>
+          <p>The Layer-2 core — run → capture → self-heal → verify → reproduce — works end-to-end on <code>nf-core/rnaseq</code>. The 1.2.0 research workbenches add variant evidence, coverage readiness, HTML reports, grounded Q&amp;A, family/trio checks, biomarkers, and local cohort counts. Public-data validation is done; design-partner validation is next.</p>
         </article>
         <article>
           <h3>Verification scope varies by assay</h3>
@@ -202,7 +207,7 @@ contig show smoke</code></pre>
 <footer class="site-foot">
   <div class="wrap foot-inner">
     <p><a href="https://github.com/haqaliz/contig">github.com/haqaliz/contig</a> · <a href="https://github.com/haqaliz/contig/blob/master/LICENSE">Apache-2.0</a> · <a href="https://nowpayments.io/donation?api_key=52f38854-167a-4828-a00f-0424ab7dcc1e" target="_blank" rel="noreferrer noopener">Crypto donation</a></p>
-    <p class="fine">No analytics, no cookies. This page loads nothing from a third party.</p>
+    <p class="fine">Research use only; no diagnosis, ACMG adjudication, or treatment recommendation. No analytics, no cookies. This page loads nothing from a third party.</p>
   </div>
 </footer>
 

@@ -4,12 +4,12 @@
 
 # Contig
 
-**An agentic bioinformatics analyst: it runs the analysis, fixes what breaks, and proves the result.**
+**A local research workbench for sequencing data: it runs the analysis, fixes what breaks, and proves the result.**
 
-Contig takes raw sequencing data all the way to a *verified, reproducible* answer: it selects and runs the right pipeline on your own compute, diagnoses and **self-heals** failures, **verifies** the output, and writes a portable record anyone can reproduce.
+Contig runs nf-core pipelines on your own compute, diagnoses and **self-heals** failures, **verifies** the output, and turns it into research workbenches: variant evidence, coverage readiness, reports, grounded Q&A, family, biomarkers, and local cohorts. Every result carries citations and hashed provenance. Research use only; no diagnosis, ACMG adjudication, or treatment recommendation.
 
 [![Release](https://img.shields.io/github/v/release/haqaliz/contig?color=3fb950&label=release)](https://github.com/haqaliz/contig/releases/latest)
-[![Status](https://img.shields.io/badge/status-MVP%20·%20early%20access-3fb950)](docs/ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-v1.2.0%20%C2%B7%20research%20use-3fb950)](docs/ROADMAP.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Built with uv](https://img.shields.io/badge/built%20with-uv-DE5FE9?logo=astral&logoColor=white)](https://github.com/astral-sh/uv)
