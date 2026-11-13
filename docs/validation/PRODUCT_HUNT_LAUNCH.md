@@ -47,8 +47,8 @@ research workbenches and states the validation status honestly.
 
 - Thumbnail: `assets/contig-logo-240.png` (240×240). The first submit used the
   wide social card, which Product Hunt displayed as the logo; fixed 2026-11-14.
-- Gallery: `assets/research-workbench-1270x760.png`,
-  `assets/contig-watch-1270x760.png`,
+- Gallery (6): `assets/research-workbench-1270x760.png`,
+  `assets/research-ask-1270x760.png`, `assets/contig-watch-1270x760.png`,
   `assets/contig-selfheal-1270x760.png`,
   `assets/contig-verify-1270x760.png`,
   `assets/contig-learn-1270x760.png` (all 1270×760).
